@@ -1,5 +1,6 @@
 import ee
 from google.oauth2.service_account import Credentials
+import os
 
 
 def initialize_earth_engine():
@@ -8,7 +9,7 @@ def initialize_earth_engine():
             "/app/service-account.json",
             scopes=["https://www.googleapis.com/auth/earthengine"],
         )
-        ee.Initialize(credentials)
+        ee.Initialize(credentials, project=os.environ["EARTHENGINE_PROJECT"])
         print("Earth Engine initialized successfully!")
     except Exception as e:
         print(f"Error initializing Earth Engine: {e}")

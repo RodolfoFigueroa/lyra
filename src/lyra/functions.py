@@ -9,9 +9,6 @@ engine = sqlalchemy.engine.create_engine(
 )
 
 
-ee.Initialize(project=os.environ["EARTHENGINE_PROJECT"])
-
-
 def load_tree_coverage_img(bbox: ee.Geometry) -> ee.Image:
     return (
         ee.ImageCollection(

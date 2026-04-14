@@ -22,6 +22,8 @@ def load_tree_coverage_img(bbox: ee.Geometry) -> ee.Image:
 
 
 def calculate(df: gpd.GeoDataFrame) -> dict[str, float]:
+    df = df.to_crs("EPSG:4326")
+
     bbox = ee.Geometry.BBox(*df.total_bounds)
     img = load_tree_coverage_img(bbox)
 

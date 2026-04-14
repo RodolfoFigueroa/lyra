@@ -8,7 +8,8 @@ import geopandas as gpd
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-from lyra.functions import endpoint_map, get_gdf_from_cvegeo
+from lyra.processors import endpoint_map
+from lyra.db import get_gdf_from_cvegeo
 
 
 router = APIRouter()

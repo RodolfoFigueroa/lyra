@@ -15,19 +15,18 @@ def load_tree_coverage_img(bbox: ee.Geometry) -> ee.Image:
     )
 
 
-def calculate(df: gpd.GeoDataFrame) -> dict[str, float]:
+def calculate(df: gpd.GeoDataFrame) -> dict:
     df = df.to_crs("EPSG:4326")
 
     bbox = ee.Geometry.BBox(*df.total_bounds)
     img = load_tree_coverage_img(bbox)
 
-    reducer = ee.Reducer.sum()
-    scale = 25
-
     features = geemap.geopandas_to_ee(df)
     computed = ee.data.computeFeatures(
         {
-            "expression": (img.reduceRegions(features, reducer=reducer, scale=scale)),
+            "expression": (
+                img.reduceRegions(features, reducer=ee.Reducer.sum(), scale=25)
+            ),
             "fileFormat": "PANDAS_DATAFRAME",
         },
     )

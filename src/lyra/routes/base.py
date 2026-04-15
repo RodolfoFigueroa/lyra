@@ -6,9 +6,9 @@ from typing import Any, Callable
 
 import geopandas as gpd
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
 
 from lyra.processors import endpoint_map
+from lyra.routes.models import GeoJSONRequest, CVEGEORequest
 from lyra.db import get_gdf_from_cvegeo
 
 
@@ -16,11 +16,6 @@ router = APIRouter()
 
 _SUPPORTED_SUFFIX = ".gpkg"
 _POLYGON_GEOMETRY_TYPES = {"Polygon", "MultiPolygon"}
-
-
-class CVEGEORequest(BaseModel):
-    cvegeo: list[str] = Field(..., min_length=1)
-    table_name: str = Field(..., min_length=1)
 
 
 @router.post("/{metric}/file")
@@ -43,11 +38,11 @@ async def metric_file(metric: str, file: UploadFile = File(...)) -> dict[str, An
 
 
 @router.post("/{metric}/geojson")
-async def metric_geojson(metric: str, body: dict[str, Any]) -> dict[str, Any]:
+async def metric_geojson(metric: str, body: GeoJSONRequest) -> dict[str, Any]:
     try:
         gdf = gpd.GeoDataFrame.from_features(
-            body.get("features", []),
-            crs=body.get("crs", {}).get("properties", {}).get("name") or "EPSG:4326",
+            body.geojson.features,
+            crs=body.geojson.crs.properties.name,
         )
         # GeoDataFrame.from_features does not restore non-geometry properties
         # that geopandas' to_json embeds inside each feature; they are already

@@ -11,10 +11,14 @@ dependencies = [
 	"geedim>=2.0.0",
 	"geemap>=0.37.2",
 	"geopandas>=1.1.3",
+	"numpy<2",
+	"pandana>=0.7",
+	"pandas-stubs>=3.0.0.260204",
 	"psycopg2>=2.9.11",
 	"python-multipart>=0.0.20",
 	"requests>=2.33.1",
 	"sqlalchemy>=2.0.49",
+	"types-geopandas>=1.1.3.20260408",
 	"uvicorn>=0.34.2",
 ]
 

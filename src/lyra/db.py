@@ -22,4 +22,4 @@ def get_gdf_from_cvegeo(
             conn,
             params={"cvegeos": tuple(cvegeos)},
             geom_col="geometry",
-        )
+        )  # ty:ignore[no-matching-overload]

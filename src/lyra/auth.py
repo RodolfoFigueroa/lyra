@@ -1,12 +1,16 @@
 import ee
 from google.oauth2.service_account import Credentials
 import os
+from pathlib import Path
 
 
 def initialize_earth_engine():
     try:
+        fpath = Path(
+            os.environ.get("SERVICE_ACCOUNT_FILE_PATH", "/app/service-account.json")
+        )
         credentials = Credentials.from_service_account_file(
-            "/app/service-account.json",
+            fpath,
             scopes=["https://www.googleapis.com/auth/earthengine"],
         )
         ee.Initialize(credentials, project=os.environ["EARTHENGINE_PROJECT"])

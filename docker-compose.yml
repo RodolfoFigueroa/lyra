@@ -4,6 +4,6 @@ services:
     ports:
       - 8000:8000
     volumes:
-      - ${SERVICE_ACCOUNT_JSON_PATH}:/app/service-account.json
+      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json
     env_file:
       - .env

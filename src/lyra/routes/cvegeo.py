@@ -1,5 +1,5 @@
 from lyra.db import get_gdf_from_cvegeo
-from lyra.routes.models import CVEGEORequest
+from lyra.models import CVEGEORequest
 from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from lyra.routes.common import _validate_geodataframe, _resolve_metric

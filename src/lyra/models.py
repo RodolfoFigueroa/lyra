@@ -27,4 +27,10 @@ class GeoJSONRequest(BaseModel):
 
 
 class AccessibilityGeoJSONRequest(BaseModel):
-    geojson_agebs: GeoJSON
+    geojson: GeoJSON
+    geojson_public: GeoJSON
+
+
+class JobAccessibilityGeoJSONRequest(BaseModel):
+    geojson: GeoJSON
+    group_patterns: list[str] | None = None

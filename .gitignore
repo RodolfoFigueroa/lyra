@@ -218,3 +218,4 @@ __marimo__/
 # Extra
 *.ipynb
 .DS_Store
+cache/

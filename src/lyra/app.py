@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 import uvicorn
+import os
 
 from contextlib import asynccontextmanager
-from lyra.routes import cvegeo, file, geojson
 from lyra.auth import initialize_earth_engine
 
 
@@ -14,11 +14,20 @@ async def lifespan(app: FastAPI):
     print("Shutting down worker...")
 
 
-app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
-app.include_router(cvegeo.router)
-app.include_router(file.router)
-app.include_router(geojson.router)
-
-
 def main() -> None:
-    uvicorn.run("lyra.app:app", host="0.0.0.0", port=8000, reload=True)
+    initialize_earth_engine()
+
+    # Defer imports until after authenticating with Earth Engine
+    from lyra.routes import cvegeo, file, geojson
+
+    app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
+    app.include_router(cvegeo.router)
+    app.include_router(file.router)
+    app.include_router(geojson.router)
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("LYRA_PORT", 8000)),
+        reload=False,
+    )

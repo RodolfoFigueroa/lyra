@@ -24,3 +24,7 @@ class GeoJSON(BaseModel):
 
 class GeoJSONRequest(BaseModel):
     geojson: GeoJSON
+
+
+class AccessibilityGeoJSONRequest(BaseModel):
+    geojson_agebs: GeoJSON

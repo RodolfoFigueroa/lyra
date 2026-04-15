@@ -1,5 +1,7 @@
+import pandas as pd
 import geopandas as gpd
 from lyra.db import engine
+from typing import Sequence
 from dataclasses import dataclass
 
 
@@ -117,14 +119,19 @@ AMENITIES_DICT = {
 }
 
 
-def get_denue_from_bounds(
-    xmin: float, ymin: float, xmax: float, ymax: float
+def get_geometries_from_bounds(
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    *,
+    columns: Sequence[str],
+    table_name: str,
 ) -> gpd.GeoDataFrame:
     with engine.connect() as conn:
         return gpd.read_postgis(
-            """
-            SELECT codigo_act, per_ocu, geometry
-                FROM denue_05_2025
+            f"""
+            SELECT {", ".join(columns)} FROM {table_name}
             WHERE ST_Intersects(geometry, ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372))
             """,
             conn,
@@ -142,7 +149,14 @@ def load_denue_amenities(df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     xmin, ymin, xmax, ymax = (
         df["geometry"].to_crs("EPSG:6372").buffer(10_000).total_bounds
     )
-    denue_amenities = get_denue_from_bounds(xmin, ymin, xmax, ymax).assign(
+    denue_amenities = get_geometries_from_bounds(
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        columns=["codigo_act", "per_ocu", "geometry"],
+        table_name="denue_05_2025",
+    ).assign(
         num_workers=lambda x: x["per_ocu"].map(
             {
                 "0 a 5 personas": 3,
@@ -170,3 +184,24 @@ def load_denue_amenities(df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     )
 
     return denue_amenities
+
+
+def concat_amenities(
+    df_denue: gpd.GeoDataFrame, df_public_spaces: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
+    df = (
+        pd.concat(
+            [df_denue, df_public_spaces],
+            axis=0,
+            ignore_index=True,
+        )
+        .assign(attraction=0.0)
+        .pipe(lambda df: gpd.GeoDataFrame(df, geometry="geometry", crs=df.crs))
+    )
+
+    for amenity_type in df["amenity"].unique():
+        df.loc[df.amenity == amenity_type, "attraction"] = df.loc[
+            df.amenity == amenity_type
+        ].eval(AMENITIES_DICT[amenity_type].attraction_query)
+
+    return df

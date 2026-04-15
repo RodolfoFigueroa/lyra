@@ -2,7 +2,7 @@ from fastapi import FastAPI
 import uvicorn
 
 from contextlib import asynccontextmanager
-from lyra.routes.base import router
+from lyra.routes import cvegeo, file, geojson
 from lyra.auth import initialize_earth_engine
 
 
@@ -15,7 +15,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
-app.include_router(router)
+app.include_router(cvegeo.router)
+app.include_router(file.router)
+app.include_router(geojson.router)
 
 
 def main() -> None:

@@ -40,6 +40,11 @@ def get_gdf_from_cvegeo(
 async def metric_cvegeo(metric: str, body: CVEGEORequest) -> dict[str, Any]:
     try:
         gdf = get_gdf_from_cvegeo(body.cvegeo)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
     except Exception as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

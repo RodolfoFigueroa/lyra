@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 class CVEGEORequest(BaseModel):
     cvegeo: list[str] = Field(min_length=1)
-    table_name: str = Field(min_length=1)
 
 
 class CRSProperties(BaseModel):

@@ -17,9 +17,9 @@ def get_gdf_from_cvegeo(
         err = f"CVEGEO values must all have the same length, but found lengths: {cvegeo_lengths}"
         raise ValueError(err)
 
-    length_to_table_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
-    table_name = length_to_table_map.get(cvegeo_lengths[0])
-    if table_name is None:
+    length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
+    level = length_to_level_map.get(cvegeo_lengths[0])
+    if level is None:
         err = f"Unsupported CVEGEO length: {cvegeo_lengths[0]}. Supported lengths are: {list(length_to_table_map.keys())}"
         raise ValueError(err)
 
@@ -27,7 +27,7 @@ def get_gdf_from_cvegeo(
         return gpd.read_postgis(
             f"""
                 SELECT cvegeo, ST_Transform(geometry, 4326) AS geometry
-                FROM {table_name}
+                FROM census_2020_{level}
                 WHERE cvegeo IN %(cvegeos)s
                 """,
             conn,

@@ -28,6 +28,6 @@ def main() -> None:
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("LYRA_PORT", 8000)),
+        port=int(os.environ.get("LYRA_PORT", 5219)),
         reload=False,
     )

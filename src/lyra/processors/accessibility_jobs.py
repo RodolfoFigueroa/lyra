@@ -1,10 +1,11 @@
 import geopandas as gpd
 import pandas as pd
 import pandana as pdna
-from lyra.processors.common import (
+from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
+from lyra.functions.load.osm import load_roads_from_bounds
+from lyra.functions.load.db import (
     load_denue_from_bounds,
     load_mesh_from_bounds,
-    load_roads_from_bounds,
 )
 
 
@@ -33,19 +34,7 @@ def compute_accessibility_jobs(
         raise ValueError(err)
 
     denue = (
-        denue.assign(
-            num_workers=lambda x: x["per_ocu"].map(
-                {
-                    "0 a 5 personas": 3,
-                    "6 a 10 personas": 8,
-                    "11 a 30 personas": 20,
-                    "31 a 50 personas": 40,
-                    "51 a 100 personas": 75,
-                    "101 a 250 personas": 175,
-                    "251 y más personas": 500,
-                }
-            )
-        )
+        denue.assign(num_workers=lambda x: x["per_ocu"].map(PER_OCU_TO_NUM_WORKERS_MAP))
         .drop(columns=["per_ocu"])
         .to_crs(crs)
         .assign(
@@ -106,14 +95,13 @@ def compute_accessibility_jobs(
 
 def calculate(df: gpd.GeoDataFrame, group_patterns: list[str] | None = None) -> dict:
     df = df.to_crs("EPSG:6372")
-
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
     df_denue = load_denue_from_bounds(xmin, ymin, xmax, ymax)
     df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax)
 
     nodes, edges = load_roads_from_bounds(
-        xmin, ymin, xmax, ymax, coords_crs="EPSG:6372"
+        xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372"
     )
     return compute_accessibility_jobs(
         df, df_denue, df_mesh, nodes, edges, group_patterns=group_patterns

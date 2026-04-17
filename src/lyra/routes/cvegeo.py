@@ -1,10 +1,28 @@
-from lyra.db import get_gdf_from_cvegeo
+import geopandas as gpd
+from lyra.db import engine
 from lyra.models import CVEGEORequest
 from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from lyra.routes.common import _validate_geodataframe, _resolve_metric
 
 router = APIRouter()
+
+
+def get_gdf_from_cvegeo(
+    cvegeos: list,
+    table_name: str,
+) -> gpd.GeoDataFrame:
+    with engine.connect() as conn:
+        return gpd.read_postgis(
+            f"""
+                SELECT cvegeo, ST_Transform(geometry, 4326) AS geometry
+                FROM {table_name}
+                WHERE cvegeo IN %(cvegeos)s
+                """,
+            conn,
+            params={"cvegeos": tuple(cvegeos)},
+            geom_col="geometry",
+        )  # ty:ignore[no-matching-overload]
 
 
 @router.post("/{metric}/cvegeo")

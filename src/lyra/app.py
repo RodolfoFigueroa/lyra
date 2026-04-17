@@ -16,14 +16,17 @@ async def lifespan(app: FastAPI):
 
 def main() -> None:
     initialize_earth_engine()
+    print("ASD" * 80)
 
     # Defer imports until after authenticating with Earth Engine
-    from lyra.routes import cvegeo, file, geojson
+    from lyra.routes import cvegeo, file, geojson, download, websocket
 
     app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
     app.include_router(cvegeo.router)
     app.include_router(file.router)
     app.include_router(geojson.router)
+    app.include_router(download.router)
+    app.include_router(websocket.router)
 
     uvicorn.run(
         app,

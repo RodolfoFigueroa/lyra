@@ -7,13 +7,13 @@ services:
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json
     env_file:
-      - .env
-    build: .
+      - ../.env
+    build: ..
     develop:
       watch:
         - action: sync
-          path: .           # Your local directory
-          target: /app      # The directory inside the container
+          path: ..
+          target: /app
           ignore:
             - .git/
             - __pycache__/
@@ -35,13 +35,13 @@ services:
     depends_on:
       - redis
     env_file:
-      - .env
-    build: .
+      - ../.env
+    build: ..
     develop:
       watch:
         - action: sync
-          path: .           # Your local directory
-          target: /app      # The directory inside the container
+          path: ..
+          target: /app
           ignore:
             - .git/
             - __pycache__/

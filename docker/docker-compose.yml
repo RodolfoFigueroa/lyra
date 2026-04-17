@@ -1,0 +1,36 @@
+services:
+  lyra:
+    image: rodolfofigueroa/lyra:latest
+    restart: unless-stopped
+    ports:
+      - 5219:5219
+    volumes:
+      - service-account.json:/app/service-account.json
+    environment:
+      - POSTGRES_USER=
+      - POSTGRES_PASSWORD=
+      - POSTGRES_DB=
+      - POSTGRES_HOST=
+      - POSTGRES_PORT=
+      - EARTHENGINE_PROJECT=
+      - CELERY_BROKER_URL=redis://redis:6379/0
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+
+  celery_worker:
+    image: rodolfofigueroa/lyra:latest
+    command: uv run celery -A lyra.worker.celery_app worker --loglevel=info
+    volumes:
+      - service-account.json:/app/service-account.json
+    depends_on:
+      - redis
+    environment:
+      - POSTGRES_USER=bgmog59h
+      - POSTGRES_PASSWORD=6znvtTjXOmNO1DmktwoyhEFgPMTWN6LC
+      - POSTGRES_DB=census_db
+      - POSTGRES_HOST=census.daku.moe
+      - POSTGRES_PORT=48395
+      - EARTHENGINE_PROJECT=ee-ursa-test
+      - CELERY_BROKER_URL=redis://redis:6379/0

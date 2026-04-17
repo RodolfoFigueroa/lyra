@@ -16,7 +16,7 @@ router = APIRouter()
 
 
 @router.post("/accessibility_services/geojson")
-async def metric_accessibility_geojson(
+async def metric_accessibility_services_geojson(
     body: AccessibilityGeoJSONRequest,
 ) -> dict[str, Any]:
     try:

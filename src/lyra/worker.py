@@ -1,4 +1,3 @@
-import geopandas as gpd
 import os
 import json
 import redis
@@ -7,6 +6,8 @@ from lyra.auth import initialize_earth_engine
 import pkgutil
 from typing import Callable
 import importlib
+from lyra.functions.utils import convert_geojson_to_gdf
+from lyra.models import GeoJSON
 
 initialize_earth_engine()
 
@@ -15,18 +16,12 @@ celery_app = Celery("ee_tasks", broker=REDIS_URL, backend=REDIS_URL)
 redis_client = redis.from_url(REDIS_URL)
 
 
-def convert_geojson_to_gdf(geojson: dict):
-    return gpd.GeoDataFrame.from_features(
-        geojson["features"],
-        crs=geojson["crs"]["properties"]["name"],
-    )
-
-
 def make_celery_wrapper(calculate_f: Callable):
-    def wrapper(self, geojson: dict):
+    def wrapper(self, geojson_dict: dict):
         task_id = self.request.id
 
         try:
+            geojson = GeoJSON(**geojson_dict)
             gdf = convert_geojson_to_gdf(geojson)
 
             full_payload = {"status": "success", "result": calculate_f(gdf)}

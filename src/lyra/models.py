@@ -33,3 +33,8 @@ class AccessibilityGeoJSONRequest(BaseModel):
 class JobAccessibilityGeoJSONRequest(BaseModel):
     geojson: GeoJSON
     group_patterns: list[str] | None = None
+
+
+class DynamicRegionRequest(BaseModel):
+    function_name: str
+    geojson: dict

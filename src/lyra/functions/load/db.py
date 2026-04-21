@@ -13,9 +13,12 @@ def load_geometries_from_bounds(
     table_name: str,
 ) -> gpd.GeoDataFrame:
     with engine.connect() as conn:
+        if "geometry" not in columns:
+            columns = list(columns) + ["geometry"]
+
         return gpd.read_postgis(
             f"""
-            SELECT {", ".join(columns)}, geometry FROM {table_name}
+            SELECT {", ".join(columns)} FROM {table_name}
             WHERE ST_Intersects(geometry, ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372))
             """,
             conn,

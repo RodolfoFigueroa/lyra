@@ -1,5 +1,6 @@
 import ee
-from lyra.processors.common import reduce_ee_image_over_gdf_factory
+from lyra.functions.utils import reduce_ee_image_over_gdf_factory
+from lyra.models import GeoJSONRequest
 
 
 def load_tree_coverage_img(bbox: ee.Geometry) -> ee.Image:
@@ -17,3 +18,5 @@ def load_tree_coverage_img(bbox: ee.Geometry) -> ee.Image:
 calculate = reduce_ee_image_over_gdf_factory(
     load_tree_coverage_img, reducer=ee.Reducer.sum(), scale=25
 )
+
+RequestModel = GeoJSONRequest

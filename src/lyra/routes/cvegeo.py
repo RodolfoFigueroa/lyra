@@ -1,15 +1,45 @@
 import geopandas as gpd
-from lyra.db import engine
+from lyra.db import async_engine
+import pandas as pd
 from lyra.models import CVEGEORequest
+import shapely.wkb as wkb
 from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from lyra.routes.common import _validate_geodataframe, _resolve_metric
 import numpy as np
+import sqlalchemy
 
 router = APIRouter()
 
 
-def get_gdf_from_cvegeo(
+# def get_gdf_from_cvegeo(
+#     cvegeos: list,
+# ) -> gpd.GeoDataFrame:
+#     cvegeo_lengths = np.unique([len(cvegeo) for cvegeo in cvegeos])
+#     if len(cvegeo_lengths) > 1:
+#         err = f"CVEGEO values must all have the same length, but found lengths: {cvegeo_lengths}"
+#         raise ValueError(err)
+
+#     length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
+#     level = length_to_level_map.get(cvegeo_lengths[0])
+#     if level is None:
+#         err = f"Unsupported CVEGEO length: {cvegeo_lengths[0]}. Supported lengths are: {list(length_to_level_map.keys())}"
+#         raise ValueError(err)
+
+#     with engine.connect() as conn:
+#         return gpd.read_postgis(
+#             f"""
+#                 SELECT cvegeo, ST_Transform(geometry, 4326) AS geometry
+#                 FROM census_2020_{level}
+#                 WHERE cvegeo IN %(cvegeos)s
+#                 """,
+#             conn,
+#             params={"cvegeos": tuple(cvegeos)},
+#             geom_col="geometry",
+#         )  # ty:ignore[no-matching-overload]
+
+
+async def get_gdf_from_cvegeo(
     cvegeos: list,
 ) -> gpd.GeoDataFrame:
     cvegeo_lengths = np.unique([len(cvegeo) for cvegeo in cvegeos])
@@ -20,26 +50,29 @@ def get_gdf_from_cvegeo(
     length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
     level = length_to_level_map.get(cvegeo_lengths[0])
     if level is None:
-        err = f"Unsupported CVEGEO length: {cvegeo_lengths[0]}. Supported lengths are: {list(length_to_table_map.keys())}"
+        err = f"Unsupported CVEGEO length: {cvegeo_lengths[0]}. Supported lengths are: {list(length_to_level_map.keys())}"
         raise ValueError(err)
 
-    with engine.connect() as conn:
-        return gpd.read_postgis(
-            f"""
-                SELECT cvegeo, ST_Transform(geometry, 4326) AS geometry
-                FROM census_2020_{level}
-                WHERE cvegeo IN %(cvegeos)s
-                """,
-            conn,
-            params={"cvegeos": tuple(cvegeos)},
-            geom_col="geometry",
-        )  # ty:ignore[no-matching-overload]
+    query = sqlalchemy.text(f"""
+        SELECT cvegeo, ST_AsEWKB(ST_Transform(geometry, 4326)) AS geometry
+        FROM census_2020_{level}
+        WHERE cvegeo = ANY(:cvegeos)
+    """)
+
+    async with async_engine.connect() as conn:
+        result = await conn.execute(query, {"cvegeos": cvegeos})
+        rows = result.mappings().all()
+
+    df = pd.DataFrame(rows).assign(
+        geometry=lambda df: df["geometry"].apply(lambda x: wkb.loads(bytes(x)))
+    )
+    return gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
 
 @router.post("/{metric}/cvegeo")
 async def metric_cvegeo(metric: str, body: CVEGEORequest) -> dict[str, Any]:
     try:
-        gdf = get_gdf_from_cvegeo(body.cvegeo)
+        gdf = await get_gdf_from_cvegeo(body.cvegeo)
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

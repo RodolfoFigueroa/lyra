@@ -1,6 +1,7 @@
 import geopandas as gpd
 import pandas as pd
 import pandana as pdna
+from lyra.models import StrictBaseModel, GeoJSON
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.load.osm import load_roads_from_bounds
 from lyra.functions.load.db import (
@@ -106,3 +107,8 @@ def calculate(df: gpd.GeoDataFrame, group_patterns: list[str] | None = None) -> 
     return compute_accessibility_jobs(
         df, df_denue, df_mesh, nodes, edges, group_patterns=group_patterns
     ).to_dict(orient="index")
+
+
+class RequestModel(StrictBaseModel):
+    geojson: GeoJSON
+    group_patterns: list[str] | None = None

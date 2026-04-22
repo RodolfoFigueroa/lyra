@@ -11,15 +11,16 @@ services:
     build: ..
     develop:
       watch:
-        - action: sync
-          path: ..
-          target: /app
+        - action: sync+restart
+          path: .           # Your local directory
+          target: /app      # The directory inside the container
           ignore:
             - .git/
             - __pycache__/
             - .venv/
             - venv/
             - "*.env"
+            - "*.ipynb"
         
 
   redis:
@@ -39,16 +40,16 @@ services:
     build: ..
     develop:
       watch:
-        - action: sync
-          path: ..
-          target: /app
+        - action: sync+restart
+          path: .           # Your local directory
+          target: /app      # The directory inside the container
           ignore:
             - .git/
             - __pycache__/
             - .venv/
             - venv/
             - "*.env"
-
+            - "*.ipynb"
 networks:
   lyra_net:
     name: lyra_net

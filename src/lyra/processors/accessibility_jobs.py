@@ -1,6 +1,7 @@
 import geopandas as gpd
 import pandas as pd
 import pandana as pdna
+from lyra.functions.utils import convert_geojson_to_gdf
 from lyra.models import StrictBaseModel, GeoJSON
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.load.osm import load_roads_from_bounds
@@ -94,7 +95,8 @@ def compute_accessibility_jobs(
     )
 
 
-def calculate(df: gpd.GeoDataFrame, group_patterns: list[str] | None = None) -> dict:
+def calculate(geojson: GeoJSON, group_patterns: list[str] | None = None) -> dict:
+    df = convert_geojson_to_gdf(geojson)
     df = df.to_crs("EPSG:6372")
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 

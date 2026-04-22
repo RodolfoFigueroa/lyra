@@ -11,7 +11,7 @@ services:
     build: .
     develop:
       watch:
-        - action: sync
+        - action: sync+restart
           path: .           # Your local directory
           target: /app      # The directory inside the container
           ignore:
@@ -20,6 +20,7 @@ services:
             - .venv/
             - venv/
             - "*.env"
+            - "*.ipynb"
         
 
   redis:
@@ -39,7 +40,7 @@ services:
     build: .
     develop:
       watch:
-        - action: sync
+        - action: sync+restart
           path: .           # Your local directory
           target: /app      # The directory inside the container
           ignore:
@@ -48,7 +49,7 @@ services:
             - .venv/
             - venv/
             - "*.env"
-
+            - "*.ipynb"
 networks:
   lyra_net:
     name: lyra_net

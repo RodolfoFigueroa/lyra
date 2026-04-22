@@ -1,7 +1,6 @@
 from fastapi import HTTPException, status
 import geopandas as gpd
 from typing import Any, Callable
-from lyra.processors import endpoint_map
 
 
 _POLYGON_GEOMETRY_TYPES = {"Polygon", "MultiPolygon"}
@@ -30,6 +29,7 @@ def _validate_geodataframe(gdf: gpd.GeoDataFrame) -> None:
 
 
 def _resolve_metric(metric: str) -> Callable[[gpd.GeoDataFrame], dict[str, Any]]:
+    endpoint_map = {}
     calculate = endpoint_map.get(metric)
     if calculate is None:
         raise HTTPException(

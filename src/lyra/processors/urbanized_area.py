@@ -1,5 +1,6 @@
 import ee
-from lyra.processors.common import reduce_ee_image_over_gdf_factory
+from lyra.models import GeoJSONRequest
+from lyra.functions.utils import reduce_ee_image_over_gdf_factory
 
 
 def load_urbanized_area_img(bbox: ee.Geometry) -> ee.Image:
@@ -14,3 +15,5 @@ def load_urbanized_area_img(bbox: ee.Geometry) -> ee.Image:
 calculate = reduce_ee_image_over_gdf_factory(
     load_urbanized_area_img, reducer=ee.Reducer.sum(), scale=100
 )
+
+RequestModel = GeoJSONRequest

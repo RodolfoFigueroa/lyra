@@ -1,38 +1,37 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Any, Literal
 
 
-class CVEGEORequest(BaseModel):
+class StrictBaseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CVEGEORequest(StrictBaseModel):
     cvegeo: list[str] = Field(min_length=1)
 
 
-class CRSProperties(BaseModel):
+class CRSProperties(StrictBaseModel):
     name: str = Field(min_length=1)
 
 
-class CRS(BaseModel):
+class CRS(StrictBaseModel):
     type: Literal["name"]
     properties: CRSProperties
 
 
-class GeoJSON(BaseModel):
+class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"]
     features: list[dict[str, Any]] = Field(min_length=1)
     crs: CRS
 
 
-class GeoJSONRequest(BaseModel):
+class GeoJSONRequest(StrictBaseModel):
     geojson: GeoJSON
 
 
-class AccessibilityGeoJSONRequest(BaseModel):
+class ServiceAccessibilityGeoJSONRequest(BaseModel):
     geojson: GeoJSON
     geojson_public: GeoJSON
-
-
-class JobAccessibilityGeoJSONRequest(BaseModel):
-    geojson: GeoJSON
-    group_patterns: list[str] | None = None
 
 
 class DynamicRegionRequest(BaseModel):

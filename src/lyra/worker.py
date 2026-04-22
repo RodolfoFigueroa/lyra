@@ -1,62 +1,55 @@
+from lyra.registry import TASK_REGISTRY
 import os
 import json
 import redis
 from celery import Celery
-from lyra.auth import initialize_earth_engine
-import pkgutil
-from typing import Callable
-import importlib
-from lyra.functions.utils import convert_geojson_to_gdf
-from lyra.models import GeoJSON
+from typing import Callable, Type
+from types import FunctionType
+from pydantic import BaseModel
 
-initialize_earth_engine()
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
 celery_app = Celery("ee_tasks", broker=REDIS_URL, backend=REDIS_URL)
 redis_client = redis.from_url(REDIS_URL)
 
 
-def make_celery_wrapper(calculate_f: Callable):
-    def wrapper(self, geojson_dict: dict):
+def make_celery_wrapper(
+    original_calculate_func: FunctionType, ModelClass: Type[BaseModel]
+) -> Callable:
+    def wrapper(self, validated_dict, *args, **kwargs):
         task_id = self.request.id
 
         try:
-            geojson = GeoJSON(**geojson_dict)
-            gdf = convert_geojson_to_gdf(geojson)
+            reconstructed_model = ModelClass(**validated_dict)
 
-            full_payload = {"status": "success", "result": calculate_f(gdf)}
-            redis_client.setex(f"task_result_{task_id}", 600, json.dumps(full_payload))
-            print(
-                f"Dumped full payload to Redis for download in key: task_result_{task_id}"
-            )
+            # Preserve validated model
+            func_kwargs = {
+                field_name: getattr(reconstructed_model, field_name)
+                for field_name in reconstructed_model.model_fields.keys()
+            }
+            result = original_calculate_func(**func_kwargs)
 
-            notification_payload = {"status": "success", "download_id": task_id}
+            full_payload = {"status": "success", "result": result}
+            redis_client.setex(f"result_data_{task_id}", 600, json.dumps(full_payload))
+
+            notification = {"status": "success", "download_id": task_id}
+
         except Exception as e:
-            notification_payload = {"status": "error", "message": str(e)}
+            notification = {"status": "error", "message": str(e)}
 
+        # Publish the notification
         channel_name = f"task_results_{task_id}"
-        redis_client.publish(channel_name, json.dumps(notification_payload))
+        redis_client.publish(channel_name, json.dumps(notification))
+        return notification
 
-        return notification_payload
-
-    wrapper.__name__ = getattr(calculate_f, "__name__")
+    wrapper.__name__ = original_calculate_func.__name__
     return wrapper
 
 
 def register_tasks():
-    import lyra.processors as processors
-
-    for module_info in pkgutil.iter_modules(processors.__path__):
-        module_name = module_info.name
-
-        full_module_name = f"lyra.processors.{module_name}"
-        module = importlib.import_module(full_module_name)
-
-        if hasattr(module, "calculate") and callable(module.calculate):
-            f = getattr(module, "calculate")
-            f_wrapped = make_celery_wrapper(f)
-            celery_app.task(name=module_name, bind=True)(f_wrapped)
-            print(f"Registered task: {module_name}")
+    for metric_name, info in TASK_REGISTRY.items():
+        wrapped_function = make_celery_wrapper(info["calculate"], info["model"])
+        celery_app.task(name=metric_name, bind=True)(wrapped_function)
 
 
 register_tasks()

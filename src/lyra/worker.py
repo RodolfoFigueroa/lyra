@@ -23,6 +23,12 @@ def make_celery_wrapper(
     conversion_map: dict[str, list[str]],
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
+        processor_map = {
+            "cvegeo_list": load_geojson_from_cvegeos,
+            "met_zone_name": load_geojson_from_met_zone_name,
+            "geojson": lambda x: x,
+        }
+
         task_id = self.request.id
 
         try:
@@ -30,21 +36,11 @@ def make_celery_wrapper(
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
                     payload = validated_dict[param_name]
 
-                    data_type = payload.get("data_type")
-                    data = payload.get("value")
+                    data_type = payload["data_type"]
+                    data = payload["value"]
 
                     # Route to the correct conversion function based on data_type field
-                    if data_type == "cvegeo_list":
-                        raw_geojson = load_geojson_from_cvegeos(data)
-
-                    elif data_type == "met_zone_name":
-                        raw_geojson = load_geojson_from_met_zone_name(data)
-
-                    elif data_type == "geojson":
-                        raw_geojson = data
-                    else:
-                        err = f"Unsupported explicit type: {data_type}"
-                        raise ValueError(err)
+                    raw_geojson = processor_map[data_type](data)
 
                     # Repackage the processed GeoJSON into the wrapped format expected by the reconstructed Pydantic model
                     validated_dict[param_name] = {

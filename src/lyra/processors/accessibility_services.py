@@ -1,4 +1,4 @@
-from lyra.models import GeoJSONOrCVEGEO, GeoJSON
+from lyra.models import GeoJSON, ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.utils import convert_geojson_to_gdf
 from lyra.functions.load.db import (
@@ -308,16 +308,16 @@ def compute_accessibility_services(
     )
 
 
-def calculate(geojson: GeoJSONOrCVEGEO, geojson_public: GeoJSON | None) -> dict:
-    df = convert_geojson_to_gdf(geojson).to_crs("EPSG:6372")
+def calculate(data: ExplicitLocationAPI, data_public: GeoJSON | None) -> dict:
+    df = convert_geojson_to_gdf(data).to_crs("EPSG:6372")
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
-    if geojson_public is None:
+    if data_public is None:
         df_public_spaces = load_osm_features_from_bounds(
             xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372", tags={"leisure": ["park"]}
         )
     else:
-        df_public_spaces = convert_geojson_to_gdf(geojson_public).to_crs("EPSG:6372")
+        df_public_spaces = convert_geojson_to_gdf(data_public).to_crs("EPSG:6372")
 
     df_denue_base = load_denue_from_bounds(xmin, ymin, xmax, ymax)
     df_denue = process_denue_amenities(df_denue_base)

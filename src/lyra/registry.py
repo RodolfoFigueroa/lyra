@@ -1,6 +1,7 @@
 import importlib
 import pkgutil
 
+from lyra.models import ExplicitInputUnion
 import inspect
 from typing import Type
 from pydantic import create_model, ConfigDict, BaseModel
@@ -11,13 +12,16 @@ from typing import get_origin, Annotated, get_args
 TASK_REGISTRY = {}
 
 
-def generate_model_from_func(func: FunctionType) -> tuple[Type[BaseModel], list[str]]:
+def generate_model_from_func(
+    func: FunctionType,
+) -> tuple[Type[BaseModel], dict[str, list[str]]]:
     sig = inspect.signature(func)
     fields = {}
-    params_to_convert = []
+    conversion_map = {}
 
     for name, param in sig.parameters.items():
         annotation = param.annotation
+        origin = get_origin(annotation)
 
         if annotation == inspect._empty:
             raise TypeError(
@@ -25,26 +29,26 @@ def generate_model_from_func(func: FunctionType) -> tuple[Type[BaseModel], list[
                 f"in function '{func.__name__}'."
             )
 
-        if get_origin(annotation) is Annotated:
-            base_type = get_args(annotation)[0]
+        tags_found = []
+        if origin is Annotated:
             metadata = get_args(annotation)[1:]
 
-            if "ACCEPT_CVEGEO" in metadata:
-                params_to_convert.append(name)
+            if "REQUIRE_EXPLICIT_TYPE" in metadata:
+                tags_found.append("REQUIRE_EXPLICIT_TYPE")
 
-                # Inject list of CVEGEO strings as an alternative accepted type for this parameter
-                annotation = base_type | list[str]
+                # Replace GeoJSON with the strict Pydantic Discriminator
+                annotation = ExplicitInputUnion
 
-        if param.default == inspect._empty:
-            default_val = ...
-        else:
-            default_val = param.default
+            if tags_found:
+                conversion_map[name] = tags_found
+
+        default_val = ... if param.default == inspect._empty else param.default
 
         fields[name] = (annotation, default_val)
 
     model_name = f"{func.__name__.capitalize()}RequestModel"
     model = create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
-    return model, params_to_convert
+    return model, conversion_map
 
 
 def discover_tasks():
@@ -76,8 +80,8 @@ def discover_tasks():
             "model": RequestModel,
             "params_to_convert": params_to_convert,
         }
-        print(f"Discovered and registered metric: {module_name}")
 
 
 # Run the discovery process when this file is imported
 discover_tasks()
+print(TASK_REGISTRY)

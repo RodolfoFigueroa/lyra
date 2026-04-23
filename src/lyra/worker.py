@@ -6,7 +6,10 @@ from celery import Celery
 from typing import Callable, Type
 from types import FunctionType
 from pydantic import BaseModel
-from lyra.functions.load.db import load_geojson_from_cvegeos
+from lyra.functions.load.db import (
+    load_geojson_from_cvegeos,
+    load_geojson_from_met_zone_name,
+)
 
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
@@ -17,25 +20,50 @@ redis_client = redis.from_url(REDIS_URL)
 def make_celery_wrapper(
     original_calculate_func: FunctionType,
     ModelClass: Type[BaseModel],
-    conversion_params: list[str],
+    conversion_map: dict[str, list[str]],
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
         task_id = self.request.id
 
         try:
-            # Inject geometries from CVEGEOs into the validated dict before reconstructing the model
-            for param_name in conversion_params:
-                validated_dict[param_name] = load_geojson_from_cvegeos(
-                    validated_dict[param_name]
-                )
+            for param_name, tags in conversion_map.items():
+                if "REQUIRE_EXPLICIT_TYPE" in tags:
+                    payload = validated_dict[param_name]
+
+                    data_type = payload.get("data_type")
+                    data = payload.get("value")
+
+                    # Route to the correct conversion function based on data_type field
+                    if data_type == "cvegeo_list":
+                        raw_geojson = load_geojson_from_cvegeos(data)
+
+                    elif data_type == "met_zone_name":
+                        raw_geojson = load_geojson_from_met_zone_name(data)
+
+                    elif data_type == "geojson":
+                        raw_geojson = data
+                    else:
+                        err = f"Unsupported explicit type: {data_type}"
+                        raise ValueError(err)
+
+                    # Repackage the processed GeoJSON into the wrapped format expected by the reconstructed Pydantic model
+                    validated_dict[param_name] = {
+                        "data_type": "geojson",
+                        "value": raw_geojson,
+                    }
 
             reconstructed_model = ModelClass(**validated_dict)
 
-            # Preserve validated model
-            func_kwargs = {
-                field_name: getattr(reconstructed_model, field_name)
-                for field_name in reconstructed_model.model_fields.keys()
-            }
+            # Massage function kwargs to unwrap the GeoJSON from the discriminator wrapper if necessary
+            func_kwargs = {}
+            for k in reconstructed_model.model_fields.keys():
+                attr = getattr(reconstructed_model, k)
+
+                if hasattr(attr, "data_type") and hasattr(attr, "value"):
+                    func_kwargs[k] = attr.value
+                else:
+                    func_kwargs[k] = attr
+
             result = original_calculate_func(**func_kwargs)
 
             full_payload = {"status": "success", "result": result}

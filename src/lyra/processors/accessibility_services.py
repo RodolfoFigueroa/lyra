@@ -1,4 +1,4 @@
-from lyra.models import GeoJSON
+from lyra.models import GeoJSONOrCVEGEO, GeoJSON
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.utils import convert_geojson_to_gdf
 from lyra.functions.load.db import (
@@ -308,7 +308,7 @@ def compute_accessibility_services(
     )
 
 
-def calculate(geojson: GeoJSON, geojson_public: GeoJSON | None) -> dict:
+def calculate(geojson: GeoJSONOrCVEGEO, geojson_public: GeoJSON | None) -> dict:
     df = convert_geojson_to_gdf(geojson).to_crs("EPSG:6372")
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 

@@ -6,6 +6,7 @@ from celery import Celery
 from typing import Callable, Type
 from types import FunctionType
 from pydantic import BaseModel
+from lyra.functions.load.db import load_geojson_from_cvegeos
 
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
@@ -14,12 +15,20 @@ redis_client = redis.from_url(REDIS_URL)
 
 
 def make_celery_wrapper(
-    original_calculate_func: FunctionType, ModelClass: Type[BaseModel]
+    original_calculate_func: FunctionType,
+    ModelClass: Type[BaseModel],
+    conversion_params: list[str],
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
         task_id = self.request.id
 
         try:
+            # Inject geometries from CVEGEOs into the validated dict before reconstructing the model
+            for param_name in conversion_params:
+                validated_dict[param_name] = load_geojson_from_cvegeos(
+                    validated_dict[param_name]
+                )
+
             reconstructed_model = ModelClass(**validated_dict)
 
             # Preserve validated model
@@ -48,7 +57,9 @@ def make_celery_wrapper(
 
 def register_tasks():
     for metric_name, info in TASK_REGISTRY.items():
-        wrapped_function = make_celery_wrapper(info["calculate"], info["model"])
+        wrapped_function = make_celery_wrapper(
+            info["calculate"], info["model"], info["params_to_convert"]
+        )
         celery_app.task(name=metric_name, bind=True)(wrapped_function)
 
 

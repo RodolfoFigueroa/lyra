@@ -5,31 +5,46 @@ import inspect
 from typing import Type
 from pydantic import create_model, ConfigDict, BaseModel
 from types import FunctionType
+from typing import get_origin, Annotated, get_args
 
 
 TASK_REGISTRY = {}
 
 
-def generate_model_from_func(func: FunctionType) -> Type[BaseModel]:
+def generate_model_from_func(func: FunctionType) -> tuple[Type[BaseModel], list[str]]:
     sig = inspect.signature(func)
     fields = {}
+    params_to_convert = []
 
     for name, param in sig.parameters.items():
-        if param.annotation == inspect._empty:
+        annotation = param.annotation
+
+        if annotation == inspect._empty:
             raise TypeError(
                 f"Missing type hint for parameter '{name}' "
                 f"in function '{func.__name__}'."
             )
+
+        if get_origin(annotation) is Annotated:
+            base_type = get_args(annotation)[0]
+            metadata = get_args(annotation)[1:]
+
+            if "ACCEPT_CVEGEO" in metadata:
+                params_to_convert.append(name)
+
+                # Inject list of CVEGEO strings as an alternative accepted type for this parameter
+                annotation = base_type | list[str]
 
         if param.default == inspect._empty:
             default_val = ...
         else:
             default_val = param.default
 
-        fields[name] = (param.annotation, default_val)
+        fields[name] = (annotation, default_val)
 
     model_name = f"{func.__name__.capitalize()}RequestModel"
-    return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
+    model = create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
+    return model, params_to_convert
 
 
 def discover_tasks():
@@ -41,6 +56,7 @@ def discover_tasks():
     from lyra.auth import initialize_earth_engine
 
     initialize_earth_engine()
+
     import lyra.processors as processors
 
     for _, module_name, _ in pkgutil.iter_modules(processors.__path__):
@@ -53,11 +69,15 @@ def discover_tasks():
             )
             continue
 
-        RequestModel = generate_model_from_func(calc_func)
+        RequestModel, params_to_convert = generate_model_from_func(calc_func)
 
-        TASK_REGISTRY[module_name] = {"calculate": calc_func, "model": RequestModel}
+        TASK_REGISTRY[module_name] = {
+            "calculate": calc_func,
+            "model": RequestModel,
+            "params_to_convert": params_to_convert,
+        }
         print(f"Discovered and registered metric: {module_name}")
 
 
-# Run the discovery process immediately when this file is imported
+# Run the discovery process when this file is imported
 discover_tasks()

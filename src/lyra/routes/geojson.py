@@ -5,54 +5,8 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from lyra.worker import celery_app
 import redis.asyncio as aioredis
-import geopandas as gpd
-from fastapi import HTTPException, status
-from lyra.models import (
-    GeoJSON,
-)
-from lyra.functions.utils import convert_geojson_to_gdf
-from lyra.routes.common import _validate_geodataframe
 
 router = APIRouter()
-
-
-# TODO: Replace with middleware that extracts agebs and passes them to the metric function
-
-
-def _convert_geojson_and_validate(geojson: GeoJSON) -> gpd.GeoDataFrame:
-    try:
-        gdf = convert_geojson_to_gdf(geojson)
-        _validate_geodataframe(gdf)
-        return gdf
-    except Exception as error:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The request body could not be parsed as a GeoDataFrame.",
-        ) from error
-
-
-# @router.post("/accessibility_services/geojson")
-# async def metric_accessibility_services_geojson(
-#     body: ServiceAccessibilityGeoJSONRequest,
-# ) -> dict[str, Any]:
-#     gdf = _convert_geojson_and_validate(body.geojson)
-#     gdf_public_spaces = _convert_geojson_and_validate(body.geojson_public)
-#     return endpoint_map["accessibility_services"](gdf, gdf_public_spaces)
-
-
-# @router.post("/accessibility_jobs/geojson")
-# async def metric_accessibility_jobs_geojson(
-#     body: JobAccessibilityGeoJSONRequest,
-# ) -> dict[str, Any]:
-#     gdf = _convert_geojson_and_validate(body.geojson)
-#     return endpoint_map["accessibility_jobs"](gdf, body.group_patterns)
-
-
-# @router.post("/{metric}/geojson")
-# async def metric_geojson(metric: str, body: GeoJSONRequest) -> dict[str, Any]:
-#     gdf = _convert_geojson_and_validate(body.geojson)
-#     calculate = _resolve_metric(metric)
-#     return calculate(gdf)
 
 
 @router.websocket("/ws/{metric}/geojson")
@@ -95,6 +49,7 @@ async def websocket_route(websocket: WebSocket, metric: str):
         await websocket.send_json(
             {"status": "error", "type": "validation_error", "details": e.errors()}
         )
+        await websocket.close(code=4404)
     except WebSocketDisconnect:
         print("Client disconnected before the job finished.")
     finally:

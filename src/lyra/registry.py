@@ -1,11 +1,35 @@
 import importlib
 import pkgutil
 
-
-from lyra.models import StrictBaseModel
+import inspect
+from typing import Type
+from pydantic import create_model, ConfigDict, BaseModel
+from types import FunctionType
 
 
 TASK_REGISTRY = {}
+
+
+def generate_model_from_func(func: FunctionType) -> Type[BaseModel]:
+    sig = inspect.signature(func)
+    fields = {}
+
+    for name, param in sig.parameters.items():
+        if param.annotation == inspect._empty:
+            raise TypeError(
+                f"Missing type hint for parameter '{name}' "
+                f"in function '{func.__name__}'."
+            )
+
+        if param.default == inspect._empty:
+            default_val = ...
+        else:
+            default_val = param.default
+
+        fields[name] = (param.annotation, default_val)
+
+    model_name = f"{func.__name__.capitalize()}RequestModel"
+    return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
 
 
 def discover_tasks():
@@ -29,18 +53,7 @@ def discover_tasks():
             )
             continue
 
-        RequestModel = getattr(mod, "RequestModel", None)
-        if RequestModel is None:
-            print(
-                f"Skipping `{module_name}` as it does not have a valid 'RequestModel'"
-            )
-            continue
-
-        if not issubclass(RequestModel, StrictBaseModel):
-            print(
-                f"Skipping `{module_name}` as its 'RequestModel' is not a subclass of StrictBaseModel"
-            )
-            continue
+        RequestModel = generate_model_from_func(calc_func)
 
         TASK_REGISTRY[module_name] = {"calculate": calc_func, "model": RequestModel}
         print(f"Discovered and registered metric: {module_name}")

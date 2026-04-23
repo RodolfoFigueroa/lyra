@@ -3,7 +3,8 @@ import geemap
 from typing import Callable, Any
 import geopandas as gpd
 from pyproj import CRS
-from lyra.models import ExplicitLocationAPI, GeoJSON
+from lyra.models.base import GeoJSON
+from lyra.models.wrappers import ExplicitLocationAPI
 
 
 def convert_features_to_gdf(

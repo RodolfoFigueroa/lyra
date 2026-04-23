@@ -2,7 +2,7 @@ import geopandas as gpd
 import pandas as pd
 import pandana as pdna
 from lyra.functions.utils import convert_geojson_to_gdf
-from lyra.models import ExplicitLocationAPI
+from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.load.osm import load_roads_from_bounds
 from lyra.functions.load.db import (

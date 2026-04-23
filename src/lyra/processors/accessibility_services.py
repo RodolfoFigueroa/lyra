@@ -1,4 +1,5 @@
-from lyra.models import GeoJSON, ExplicitLocationAPI
+from lyra.models.base import GeoJSON
+from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.utils import convert_geojson_to_gdf
 from lyra.functions.load.db import (

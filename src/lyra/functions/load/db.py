@@ -1,7 +1,7 @@
 import geopandas as gpd
 from lyra.db import engine
 from typing import Sequence, Literal
-from lyra.models import GeoJSON
+from lyra.models.base import GeoJSON
 import json
 
 
@@ -45,10 +45,10 @@ def load_geometries_from_cvegeos(
     with engine.connect() as conn:
         return gpd.read_postgis(
             f"""
-                SELECT cvegeo, geometry AS geometry
-                FROM census_2020_{level}
-                WHERE cvegeo IN %(cvegeos)s
-                """,
+            SELECT cvegeo, geometry AS geometry
+            FROM census_2020_{level}
+            WHERE cvegeo IN %(cvegeos)s
+            """,
             conn,
             params={"cvegeos": tuple(cvegeos)},
             geom_col="geometry",
@@ -61,7 +61,12 @@ def load_geojson_from_cvegeos(cvegeos: list[str]):
 
 
 def load_geometries_from_met_zone_name(name: str) -> gpd.GeoDataFrame:
-    pass
+    return gpd.read_postgis(
+        """
+        SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
+        FROM census_2020_ageb
+        """
+    )
 
 
 def load_geojson_from_met_zone_name(name: str) -> GeoJSON:

@@ -1,7 +1,7 @@
 import importlib
 import pkgutil
 
-from lyra.models import ExplicitInputUnion
+from lyra.models.wrappers import ExplicitInputUnion
 import inspect
 from typing import Type
 from pydantic import create_model, ConfigDict, BaseModel

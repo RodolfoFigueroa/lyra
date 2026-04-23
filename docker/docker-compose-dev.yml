@@ -12,8 +12,8 @@ services:
     develop:
       watch:
         - action: sync+restart
-          path: .           # Your local directory
-          target: /app      # The directory inside the container
+          path: ..
+          target: /app
           ignore:
             - .git/
             - __pycache__/
@@ -41,8 +41,8 @@ services:
     develop:
       watch:
         - action: sync+restart
-          path: .           # Your local directory
-          target: /app      # The directory inside the container
+          path: ..
+          target: /app
           ignore:
             - .git/
             - __pycache__/

@@ -3,7 +3,7 @@ import geemap
 from typing import Callable, Any
 import geopandas as gpd
 from pyproj import CRS
-from lyra.models import GeoJSON, GeoJSONOrCVEGEO
+from lyra.models import ExplicitLocationAPI, GeoJSON
 
 
 def convert_features_to_gdf(
@@ -24,9 +24,9 @@ def convert_geojson_to_gdf(geojson: GeoJSON) -> gpd.GeoDataFrame:
 
 def reduce_ee_image_over_gdf_factory(
     load_img_func: Callable[[ee.Geometry], ee.Image], *, reducer: ee.Reducer, scale: int
-) -> Callable[[GeoJSONOrCVEGEO], dict[str, float]]:
-    def _f(geojson: GeoJSONOrCVEGEO) -> dict:
-        df = convert_geojson_to_gdf(geojson)
+) -> Callable[[ExplicitLocationAPI], dict[str, float]]:
+    def _f(data: ExplicitLocationAPI) -> dict:
+        df = convert_geojson_to_gdf(data)
         df = df.to_crs("EPSG:4326")
 
         bbox = ee.Geometry.BBox(*df.total_bounds)

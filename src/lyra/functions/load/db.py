@@ -60,6 +60,15 @@ def load_geojson_from_cvegeos(cvegeos: list[str]):
     return GeoJSON(**json.loads(gdf.to_json()))
 
 
+def load_geometries_from_met_zone_name(name: str) -> gpd.GeoDataFrame:
+    pass
+
+
+def load_geojson_from_met_zone_name(name: str) -> GeoJSON:
+    gdf = load_geometries_from_met_zone_name(name)
+    return GeoJSON(**json.loads(gdf.to_json()))
+
+
 def load_denue_from_bounds(
     xmin: float, ymin: float, xmax: float, ymax: float
 ) -> gpd.GeoDataFrame:

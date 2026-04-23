@@ -46,8 +46,12 @@ async def websocket_route(websocket: WebSocket, metric: str):
                 break
 
     except ValidationError as e:
+        clean_errors = [
+            {"loc": err.get("loc"), "msg": err.get("msg"), "type": err.get("type")}
+            for err in e.errors()
+        ]
         await websocket.send_json(
-            {"status": "error", "type": "validation_error", "details": e.errors()}
+            {"status": "error", "type": "validation_error", "details": clean_errors}
         )
         await websocket.close(code=4404)
     except WebSocketDisconnect:

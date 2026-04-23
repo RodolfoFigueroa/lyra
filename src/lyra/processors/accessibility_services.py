@@ -1,4 +1,4 @@
-from lyra.models import GeoJSON, StrictBaseModel
+from lyra.models import GeoJSON
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.utils import convert_geojson_to_gdf
 from lyra.functions.load.db import (
@@ -338,8 +338,3 @@ def calculate(geojson: GeoJSON, geojson_public: GeoJSON | None) -> dict:
     )
 
     return compute_accessibility_services(df, df_amenities, df_mesh, nodes, edges)
-
-
-class RequestModel(StrictBaseModel):
-    geojson: GeoJSON
-    geojson_public: GeoJSON | None = None

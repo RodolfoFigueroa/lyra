@@ -1,3 +1,4 @@
+from sqlalchemy import quoted_name
 import geopandas as gpd
 from lyra.db import engine
 from typing import Sequence, Literal
@@ -17,6 +18,8 @@ def load_geometries_from_bounds(
     with engine.connect() as conn:
         if "geometry" not in columns:
             columns = list(columns) + ["geometry"]
+
+        table_name = quoted_name(table_name, quote=True)
 
         return gpd.read_postgis(
             f"""
@@ -42,11 +45,13 @@ def load_geometries_from_cvegeos(
     length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
     level = length_to_level_map.get(cvegeo_lengths.pop())
 
+    table_name = quoted_name(f"census_2020_{level}", quote=True)
+
     with engine.connect() as conn:
         return gpd.read_postgis(
             f"""
             SELECT cvegeo, geometry AS geometry
-            FROM census_2020_{level}
+            FROM {table_name}
             WHERE cvegeo IN %(cvegeos)s
             """,
             conn,
@@ -75,7 +80,7 @@ def load_geojson_from_met_zone_name(name: str) -> GeoJSON:
 
 
 def load_denue_from_bounds(
-    xmin: float, ymin: float, xmax: float, ymax: float
+    xmin: float, ymin: float, xmax: float, ymax: float, *, table_name: str
 ) -> gpd.GeoDataFrame:
     return load_geometries_from_bounds(
         xmin,
@@ -83,7 +88,7 @@ def load_denue_from_bounds(
         xmax,
         ymax,
         columns=["per_ocu", "codigo_act", "geometry"],
-        table_name="denue_05_2025",
+        table_name=table_name,
     )
 
 

@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, AfterValidator
+from typing import Annotated
 from typing import Any, Literal
 
 
@@ -25,15 +26,23 @@ class GeoJSON(StrictBaseModel):
     crs: CRS
 
 
-class GeoJSONRequest(StrictBaseModel):
-    geojson: GeoJSON
+def validate_cvegeo(
+    value: GeoJSON
+    | list[str],  # Must accept both, but we don't do any validation for GeoJSON
+):
+    if isinstance(value, list):
+        unique_lens = set(len(x) for x in value)
+        if len(unique_lens) > 1:
+            err = "All CVEGEO strings must have the same length."
+            raise ValueError(err)
+
+        allowed_lens = {2, 5, 9, 13, 16}
+        found_len = unique_lens.pop()
+        if found_len not in allowed_lens:
+            err = f"CVEGEO strings must have length in {allowed_lens}, but got length {found_len}."
+            raise ValueError(err)
+
+    return value
 
 
-class ServiceAccessibilityGeoJSONRequest(BaseModel):
-    geojson: GeoJSON
-    geojson_public: GeoJSON
-
-
-class DynamicRegionRequest(BaseModel):
-    function_name: str
-    geojson: dict
+GeoJSONOrCVEGEO = Annotated[GeoJSON, AfterValidator(validate_cvegeo), "ACCEPT_CVEGEO"]

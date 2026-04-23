@@ -1,6 +1,8 @@
 import geopandas as gpd
 from lyra.db import engine
 from typing import Sequence, Literal
+from lyra.models import GeoJSON
+import json
 
 
 def load_geometries_from_bounds(
@@ -30,6 +32,32 @@ def load_geometries_from_bounds(
             },
             geom_col="geometry",
         )
+
+
+def load_geometries_from_cvegeos(
+    cvegeos: list[str],
+) -> gpd.GeoDataFrame:
+    cvegeo_lengths = set(len(cvegeo) for cvegeo in cvegeos)
+
+    length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
+    level = length_to_level_map.get(cvegeo_lengths.pop())
+
+    with engine.connect() as conn:
+        return gpd.read_postgis(
+            f"""
+                SELECT cvegeo, geometry AS geometry
+                FROM census_2020_{level}
+                WHERE cvegeo IN %(cvegeos)s
+                """,
+            conn,
+            params={"cvegeos": tuple(cvegeos)},
+            geom_col="geometry",
+        )  # ty:ignore[no-matching-overload]
+
+
+def load_geojson_from_cvegeos(cvegeos: list[str]):
+    gdf = load_geometries_from_cvegeos(cvegeos)
+    return GeoJSON(**json.loads(gdf.to_json()))
 
 
 def load_denue_from_bounds(

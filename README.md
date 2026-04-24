@@ -1,15 +1,15 @@
-# Metric API
+# Lyra API
 
-This API supports multiple metric prefixes through a single routing system.
-The metric function is resolved from `endpoint_map` in `src/lyra/functions.py`.
+REST and WebSocket API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery tasks backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
 
-Example:
+## Prerequisites
 
-```python
-endpoint_map = {
-		"tree_coverage": calculate,
-		"urban_area": calculate_two,
-}
+- Google Earth Engine service account key saved as a JSON file.
+- A `.env` file in the project root with at least:
+
+```env
+CELERY_BROKER_URL=redis://localhost:6379/0
+EARTHENGINE_PROJECT=your-gee-project-id
 ```
 
 ## Install
@@ -20,80 +20,126 @@ uv sync
 
 ## Run
 
+Start Redis (required for the task queue):
+
 ```bash
-uv run uvicorn lyra-api
+docker run -d -p 6379:6379 redis:alpine
+```
+
+Start the Celery worker (in a separate terminal):
+
+```bash
+uv run celery -A lyra.worker.celery_app worker --loglevel=info
+```
+
+Start the API server:
+
+```bash
+uv run lyra-api
+```
+
+### Docker (recommended)
+
+```bash
+docker compose -f docker/docker-compose-dev.yml up --build
+```
+
+This starts the API (`lyra`), Redis, and the Celery worker together.
+
+## Endpoints
+
+### REST
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/data_types` | List accepted input data types |
+| `GET` | `/metrics` | List available metrics and their parameters |
+| `GET` | `/download_result/{download_id}` | Fetch a completed metric result |
+
+### WebSocket
+
+| Path | Description |
+|------|-------------|
+| `WS /ws/{metric}` | Submit a metric computation request |
+
+Available metrics: `accessibility_jobs`, `accessibility_services`, `tree_coverage`, `urbanized_area`.
+
+## WebSocket Usage
+
+The WebSocket endpoint follows a request/response flow:
+
+1. Connect to `ws://localhost:5219/ws/{metric}`.
+2. Send a JSON payload with a `data` field (GeoJSON or a supported wrapper type).
+3. Receive a `queued` message with a `task_id`.
+4. Receive a `success` message with a `download_id` when computation completes.
+5. Fetch the full result via `GET /download_result/{download_id}`.
+
+Example using the `websockets` library:
+
+```python
+import asyncio, json, websockets
+
+async def run():
+    uri = "ws://localhost:5219/ws/tree_coverage"
+    async with websockets.connect(uri) as ws:
+        payload = {
+            "data": {
+                "data_type": "geojson",
+                "value": {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
+                            },
+                            "properties": {"cvegeo": "110010001001"}
+                        }
+                    ]
+                }
+            }
+        }
+        await ws.send(json.dumps(payload))
+
+        queued = json.loads(await ws.recv())   # {"status": "queued", "task_id": "..."}
+        result = json.loads(await ws.recv())   # {"status": "success", "download_id": "..."}
+        print(queued, result)
+
+asyncio.run(run())
+```
+
+Fetch the result:
+
+```bash
+curl http://localhost:5219/download_result/{download_id}
 ```
 
 ## Documentation
 
-### REST API Documentation
+### REST API
 
-Interactive API documentation is automatically generated and available at:
+Interactive documentation is available while the server is running:
+
 - **Swagger UI**: http://localhost:5219/docs
 - **ReDoc**: http://localhost:5219/redoc
 
-### WebSocket Endpoint Documentation
+### WebSocket API (AsyncAPI)
 
-The WebSocket endpoint is documented using the AsyncAPI specification in [`asyncapi.yaml`](asyncapi.yaml).
+The WebSocket endpoint is documented in [`docs/asyncapi.yaml`](docs/asyncapi.yaml).
 
-To generate interactive HTML documentation:
+To generate a standalone interactive HTML document:
 
 ```bash
 # Install AsyncAPI CLI (requires Node.js)
 npm install -g @asyncapi/cli
 
 # Generate HTML documentation
-asyncapi generate fromTemplate asyncapi.yaml @asyncapi/html-template -o docs/
+asyncapi generate fromTemplate docs/asyncapi.yaml @asyncapi/html-template -o docs/
 ```
 
-This will create an interactive HTML document describing the `/ws/{metric}/geojson` endpoint, including:
-- Available metrics and their parameters
-- Message schemas and examples
-- Error handling and response formats
-
-## Endpoints
-
-All endpoints are dynamic by metric prefix:
-
-- `POST /{metric}/file`
-- `POST /{metric}/geojson`
-- `POST /{metric}/cvegeo`
-
-For example, both of these are valid if configured in `endpoint_map`:
-
-- `POST /tree_coverage/file`
-- `POST /urban_area/file`
-
-## Request Examples
-
-Upload geopackage:
+To validate the spec:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/tree_coverage/file \
-	-F "file=@/path/to/polygons.gpkg"
+asyncapi validate docs/asyncapi.yaml
 ```
-
-GeoJSON body:
-
-```bash
-curl -X POST http://127.0.0.1:8000/tree_coverage/geojson \
-	-H "Content-Type: application/json" \
-	-d '{"type":"FeatureCollection","features":[]}'
-```
-
-CVEGEO body:
-
-```bash
-curl -X POST http://127.0.0.1:8000/tree_coverage/cvegeo \
-	-H "Content-Type: application/json" \
-	-d '{"cvegeo":["010010001"],"table_name":"my_table","crs":"EPSG:4326"}'
-```
-
-## Response
-
-Every metric endpoint returns the dictionary produced by its metric function.
-
-## Validation
-
-The API returns `404` for unknown metric prefixes.
-It returns `400` for malformed inputs, missing `cvegeo`, invalid geometries, or unsupported file formats.

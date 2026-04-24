@@ -9,7 +9,7 @@ import redis.asyncio as aioredis
 router = APIRouter()
 
 
-@router.websocket("/ws/{metric}/geojson")
+@router.websocket("/ws/{metric}")
 async def websocket_route(websocket: WebSocket, metric: str):
     await websocket.accept()
 

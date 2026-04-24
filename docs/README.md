@@ -8,7 +8,7 @@ Interactive documentation is available when the server is running:
 - **ReDoc** (clean HTML): http://localhost:5219/redoc
 
 These are automatically generated from the FastAPI application and include:
-- All REST endpoints (`/data_types`, `/metrics`, `/download-result/{download_id}`)
+- All REST endpoints (`/data_types`, `/metrics`, `/download_result/{download_id}`)
 - Request/response schemas
 - Parameter descriptions
 
@@ -37,7 +37,7 @@ asyncapi generate fromTemplate asyncapi.yaml @asyncapi/html-template -o docs/
 ```
 
 This will create `docs/index.html` with interactive documentation of:
-- Channel: `/ws/{metric}/geojson`
+- Channel: `/ws/{metric}`
 - Available metrics (accessibility_jobs, accessibility_services, tree_coverage, urbanized_area)
 - Message schemas (requests, responses, errors)
 - Example payloads
@@ -54,7 +54,7 @@ asyncapi validate asyncapi.yaml
 
 The `asyncapi.yaml` file documents:
 1. **Server info**: WebSocket connection details
-2. **Channel**: The `/ws/{metric}/geojson` endpoint with path parameters
+2. **Channel**: The `/ws/{metric}` endpoint with path parameters
 3. **Messages**:
    - `MetricRequest`: Client request payload structure
    - `QueuedMessage`: Server confirmation (task queued)

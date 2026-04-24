@@ -25,7 +25,7 @@ servers:
 
 channels:
   metricGeojsonChannel:
-    address: /ws/{metric}/geojson
+    address: /ws/{metric}
     description: |
       Compute a spatial metric over GeoJSON features.
 
@@ -132,7 +132,7 @@ components:
     ResultMessage:
       description: |
         Server signals that computation completed. The full result can be
-        retrieved via GET /download-result/{download_id}.
+        retrieved via GET /download_result/{download_id}.
       payload:
         type: object
         required:
@@ -144,7 +144,7 @@ components:
             const: success
           download_id:
             type: string
-            description: ID used to fetch the full result from GET /download-result/{download_id}.
+            description: ID used to fetch the full result from GET /download_result/{download_id}.
             example: a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789
 
     ErrorMessage:

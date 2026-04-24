@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - asyncapi.yaml
+      - docs/asyncapi.yaml
   pull_request:
     paths:
-      - asyncapi.yaml
+      - docs/asyncapi.yaml
 
 jobs:
   validate-asyncapi:

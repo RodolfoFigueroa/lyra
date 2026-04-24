@@ -23,4 +23,4 @@ jobs:
           node-version: 20
 
       - name: Validate asyncapi.yaml
-        run: npx -y @asyncapi/cli@latest validate asyncapi.yaml
+        run: npx -y @asyncapi/cli@latest validate docs/asyncapi.yaml

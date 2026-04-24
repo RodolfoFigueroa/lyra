@@ -1,0 +1,200 @@
+asyncapi: 3.1.0
+id: urn:lyra:asyncapi:metrics-websocket
+defaultContentType: application/json
+info:
+  title: Lyra Metrics API
+  version: 0.1.0
+  description: |
+    Real-time API for computing accessibility and land-use metrics for spatial units in Mexico.
+
+    This API provides WebSocket-based asynchronous computation of spatial metrics
+    using Earth Engine data and road network analysis.
+  contact:
+    name: Lyra Development Team
+    url: https://github.com/example/lyra
+    email: dev@lyra.local
+  license:
+    name: Unlicense
+
+servers:
+  ws:
+    host: localhost:5219
+    pathname: /
+    protocol: ws
+    description: WebSocket server for metric computation
+
+channels:
+  metricGeojsonChannel:
+    address: /ws/{metric}/geojson
+    description: |
+      Compute a spatial metric over GeoJSON features.
+
+      The metric segment in the address must be one of:
+      accessibility_jobs, accessibility_services, tree_coverage, urbanized_area.
+    messages:
+      MetricRequest:
+        $ref: '#/components/messages/MetricRequest'
+      QueuedMessage:
+        $ref: '#/components/messages/QueuedMessage'
+      ResultMessage:
+        $ref: '#/components/messages/ResultMessage'
+      ErrorMessage:
+        $ref: '#/components/messages/ErrorMessage'
+      ValidationErrorMessage:
+        $ref: '#/components/messages/ValidationErrorMessage'
+
+operations:
+  sendMetricRequest:
+    action: send
+    title: Client sends metric request
+    channel:
+      $ref: '#/channels/metricGeojsonChannel'
+    messages:
+      - $ref: '#/channels/metricGeojsonChannel/messages/MetricRequest'
+
+  receiveMetricResponse:
+    action: receive
+    title: Server sends computation status and results
+    channel:
+      $ref: '#/channels/metricGeojsonChannel'
+    messages:
+      - $ref: '#/channels/metricGeojsonChannel/messages/QueuedMessage'
+      - $ref: '#/channels/metricGeojsonChannel/messages/ResultMessage'
+      - $ref: '#/channels/metricGeojsonChannel/messages/ErrorMessage'
+      - $ref: '#/channels/metricGeojsonChannel/messages/ValidationErrorMessage'
+
+components:
+  messages:
+    MetricRequest:
+      description: |
+        Client request to compute a metric.
+
+        The exact payload structure depends on the metric. All metrics require a
+        `data` field and may have optional parameters like `year` or `group_patterns`.
+      payload:
+        type: object
+        required:
+          - data
+        properties:
+          data:
+            description: |
+              GeoJSON-like data structure containing spatial units.
+
+              Accepted logical type: ExplicitLocationAPI.
+            type: object
+            example:
+              data_type: geojson
+              value:
+                type: FeatureCollection
+                features:
+                  - type: Feature
+                    geometry:
+                      type: Polygon
+                      coordinates: [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
+                    properties:
+                      cvegeo: '110010001001'
+          year:
+            description: |
+              Optional year parameter for metrics that use temporal DENUE data.
+              Valid only for accessibility_jobs and accessibility_services.
+            type: integer
+            enum: [2020, 2021, 2022, 2023, 2024, 2025]
+            example: 2025
+          group_patterns:
+            description: |
+              Optional list of regex patterns for grouping economic activities.
+              Valid only for accessibility_jobs.
+            type: array
+            items:
+              type: string
+            example: ['^62', '^61']
+          data_public:
+            description: |
+              Optional GeoJSON of public spaces.
+              Valid only for accessibility_services.
+            type: object
+
+    QueuedMessage:
+      description: Server acknowledges the request and queues the computation task.
+      payload:
+        type: object
+        required:
+          - status
+          - task_id
+        properties:
+          status:
+            type: string
+            const: queued
+          task_id:
+            type: string
+            example: a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789
+
+    ResultMessage:
+      description: |
+        Server signals that computation completed. The full result can be
+        retrieved via GET /download-result/{download_id}.
+      payload:
+        type: object
+        required:
+          - status
+          - download_id
+        properties:
+          status:
+            type: string
+            const: success
+          download_id:
+            type: string
+            description: ID used to fetch the full result from GET /download-result/{download_id}.
+            example: a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789
+
+    ErrorMessage:
+      description: Server encountered an error before or during processing.
+      payload:
+        type: object
+        required:
+          - status
+          - message
+        properties:
+          status:
+            type: string
+            const: error
+          message:
+            type: string
+            example: Unknown metric
+
+    ValidationErrorMessage:
+      description: Server rejected the request due to validation failure.
+      payload:
+        type: object
+        required:
+          - status
+          - type
+          - details
+        properties:
+          status:
+            type: string
+            const: error
+          type:
+            type: string
+            const: validation_error
+          details:
+            type: array
+            items:
+              type: object
+              required:
+                - loc
+                - msg
+                - type
+              properties:
+                loc:
+                  type: array
+                  items:
+                    type: string
+                msg:
+                  type: string
+                type:
+                  type: string
+            example:
+              - loc: ['data']
+                msg: Field required
+                type: missing

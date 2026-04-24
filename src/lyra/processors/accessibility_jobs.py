@@ -1,8 +1,9 @@
+from typing import Literal
 import geopandas as gpd
 import pandas as pd
 import pandana as pdna
 from lyra.functions.utils import convert_geojson_to_gdf
-from lyra.models import GeoJSON
+from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.load.osm import load_roads_from_bounds
 from lyra.functions.load.db import (
@@ -95,12 +96,22 @@ def compute_accessibility_jobs(
     )
 
 
-def calculate(geojson: GeoJSON, group_patterns: list[str] | None = None) -> dict:
-    df = convert_geojson_to_gdf(geojson)
+METRIC_DESCRIPTION: str = "Computes job accessibility scores for each spatial unit using road network analysis and employment data."
+
+
+def calculate(
+    data: ExplicitLocationAPI,
+    group_patterns: list[str] | None = None,
+    year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
+) -> dict:
+    if year is None:
+        year = 2025
+
+    df = convert_geojson_to_gdf(data)
     df = df.to_crs("EPSG:6372")
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
-    df_denue = load_denue_from_bounds(xmin, ymin, xmax, ymax)
+    df_denue = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
     df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax)
 
     nodes, edges = load_roads_from_bounds(

@@ -23,17 +23,3 @@ class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"]
     features: list[dict[str, Any]] = Field(min_length=1)
     crs: CRS
-
-
-class GeoJSONRequest(StrictBaseModel):
-    geojson: GeoJSON
-
-
-class ServiceAccessibilityGeoJSONRequest(BaseModel):
-    geojson: GeoJSON
-    geojson_public: GeoJSON
-
-
-class DynamicRegionRequest(BaseModel):
-    function_name: str
-    geojson: dict

@@ -6,6 +6,10 @@ from celery import Celery
 from typing import Callable, Type
 from types import FunctionType
 from pydantic import BaseModel
+from lyra.functions.load.db import (
+    load_geojson_from_cvegeos,
+    load_geojson_from_met_zone_name,
+)
 
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
@@ -14,19 +18,48 @@ redis_client = redis.from_url(REDIS_URL)
 
 
 def make_celery_wrapper(
-    original_calculate_func: FunctionType, ModelClass: Type[BaseModel]
+    original_calculate_func: FunctionType,
+    ModelClass: Type[BaseModel],
+    conversion_map: dict[str, list[str]],
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
+        processor_map = {
+            "cvegeo_list": load_geojson_from_cvegeos,
+            "met_zone_name": load_geojson_from_met_zone_name,
+            "geojson": lambda x: x,
+        }
+
         task_id = self.request.id
 
         try:
+            for param_name, tags in conversion_map.items():
+                if "REQUIRE_EXPLICIT_TYPE" in tags:
+                    payload = validated_dict[param_name]
+
+                    data_type = payload["data_type"]
+                    data = payload["value"]
+
+                    # Route to the correct conversion function based on data_type field
+                    raw_geojson = processor_map[data_type](data)
+
+                    # Repackage the processed GeoJSON into the wrapped format expected by the reconstructed Pydantic model
+                    validated_dict[param_name] = {
+                        "data_type": "geojson",
+                        "value": raw_geojson,
+                    }
+
             reconstructed_model = ModelClass(**validated_dict)
 
-            # Preserve validated model
-            func_kwargs = {
-                field_name: getattr(reconstructed_model, field_name)
-                for field_name in reconstructed_model.model_fields.keys()
-            }
+            # Massage function kwargs to unwrap the GeoJSON from the discriminator wrapper if necessary
+            func_kwargs = {}
+            for k in reconstructed_model.model_fields.keys():
+                attr = getattr(reconstructed_model, k)
+
+                if hasattr(attr, "data_type") and hasattr(attr, "value"):
+                    func_kwargs[k] = attr.value
+                else:
+                    func_kwargs[k] = attr
+
             result = original_calculate_func(**func_kwargs)
 
             full_payload = {"status": "success", "result": result}
@@ -48,7 +81,9 @@ def make_celery_wrapper(
 
 def register_tasks():
     for metric_name, info in TASK_REGISTRY.items():
-        wrapped_function = make_celery_wrapper(info["calculate"], info["model"])
+        wrapped_function = make_celery_wrapper(
+            info["calculate"], info["model"], info["params_to_convert"]
+        )
         celery_app.task(name=metric_name, bind=True)(wrapped_function)
 
 

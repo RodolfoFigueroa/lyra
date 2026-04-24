@@ -24,6 +24,33 @@ uv sync
 uv run uvicorn lyra-api
 ```
 
+## Documentation
+
+### REST API Documentation
+
+Interactive API documentation is automatically generated and available at:
+- **Swagger UI**: http://localhost:5219/docs
+- **ReDoc**: http://localhost:5219/redoc
+
+### WebSocket Endpoint Documentation
+
+The WebSocket endpoint is documented using the AsyncAPI specification in [`asyncapi.yaml`](asyncapi.yaml).
+
+To generate interactive HTML documentation:
+
+```bash
+# Install AsyncAPI CLI (requires Node.js)
+npm install -g @asyncapi/cli
+
+# Generate HTML documentation
+asyncapi generate fromTemplate asyncapi.yaml @asyncapi/html-template -o docs/
+```
+
+This will create an interactive HTML document describing the `/ws/{metric}/geojson` endpoint, including:
+- Available metrics and their parameters
+- Message schemas and examples
+- Error handling and response formats
+
 ## Endpoints
 
 All endpoints are dynamic by metric prefix:

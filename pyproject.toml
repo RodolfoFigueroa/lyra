@@ -47,3 +47,9 @@ dev = [
     "ipykernel<7",
     "pre-commit>=4.5.1",
 ]
+
+[tool.asyncapi]
+# AsyncAPI documentation is maintained in asyncapi.yaml
+# To generate HTML documentation:
+#   npm install -g @asyncapi/cli
+#   asyncapi generate fromTemplate asyncapi.yaml @asyncapi/html-template -o docs/

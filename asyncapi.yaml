@@ -1,0 +1,247 @@
+asyncapi: 3.0.0
+info:
+  title: Lyra Metrics API
+  version: 0.1.0
+  description: |
+    Real-time API for computing accessibility and land-use metrics for spatial units in Mexico.
+    
+    This API provides WebSocket-based asynchronous computation of spatial metrics using Earth Engine data and road network analysis.
+  contact:
+    name: Lyra Development Team
+  license:
+    name: Unlicense
+
+servers:
+  ws:
+    host: localhost:5219
+    protocol: ws
+    description: WebSocket server for metric computation
+    url: ws://localhost:5219
+    variables:
+      protocol:
+        default: ws
+        description: Protocol (ws for development, wss for production)
+
+channels:
+  /ws/{metric}/geojson:
+    description: |
+      Compute a spatial metric over GeoJSON features.
+      
+      The metric must be one of: accessibility_jobs, accessibility_services, tree_coverage, urbanized_area.
+      
+      **Flow:**
+      1. Client connects and sends validated request data for the chosen metric
+      2. Server queues the task and returns a task_id
+      3. Server computes the metric asynchronously
+      4. Server sends the result or an error message
+      5. Connection closes
+    
+    parameters:
+      metric:
+        description: |
+          Name of the metric to compute.
+          
+          - `accessibility_jobs`: Job accessibility scores
+          - `accessibility_services`: Service accessibility scores
+          - `tree_coverage`: Tree canopy coverage in m²
+          - `urbanized_area`: Urbanized built-up surface area in m²
+        enum:
+          - accessibility_jobs
+          - accessibility_services
+          - tree_coverage
+          - urbanized_area
+    
+    publish:
+      description: Client sends metric request
+      operationId: sendMetricRequest
+      message:
+        $ref: '#/components/messages/MetricRequest'
+    
+    subscribe:
+      description: Server sends computation status and results
+      operationId: receiveMetricResponse
+      messages:
+        - $ref: '#/components/messages/QueuedMessage'
+        - $ref: '#/components/messages/ResultMessage'
+        - $ref: '#/components/messages/ErrorMessage'
+        - $ref: '#/components/messages/ValidationErrorMessage'
+
+components:
+  messages:
+    MetricRequest:
+      description: |
+        Client request to compute a metric.
+        
+        The exact payload structure depends on the metric. All metrics require a `data` field 
+        (GeoJSON FeatureCollection or equivalent), and may have optional parameters like 
+        `year` or `group_patterns`.
+      payload:
+        type: object
+        required:
+          - data
+        properties:
+          data:
+            description: |
+              GeoJSON-like data structure (FeatureCollection or similar) containing spatial units.
+              
+              Accepted type: ExplicitLocationAPI (discriminated union of wrapper types: geojson, cvegeo_list, met_zone_name)
+            type: object
+            example:
+              type: FeatureCollection
+              crs:
+                properties:
+                  name: 'EPSG:4326'
+              features:
+                - type: Feature
+                  geometry:
+                    type: Polygon
+                    coordinates: [[[lng, lat], [lng, lat], [lng, lat]]]
+                  properties:
+                    cvegeo: '110010001001'
+          year:
+            description: |
+              Optional year parameter for metrics that use temporal DENUE data.
+              
+              Valid only for: accessibility_jobs, accessibility_services
+            type: integer
+            enum: [2020, 2021, 2022, 2023, 2024, 2025]
+            example: 2025
+          group_patterns:
+            description: |
+              Optional list of regex patterns for grouping economic activities.
+              
+              Valid only for: accessibility_jobs
+            type: array
+            items:
+              type: string
+            example: ['^62', '^61']
+          data_public:
+            description: |
+              Optional GeoJSON of public spaces (parks, plazas, etc.).
+              
+              Valid only for: accessibility_services
+            type: object
+            example:
+              type: FeatureCollection
+              features:
+                - type: Feature
+                  geometry:
+                    type: Point
+                    coordinates: [lng, lat]
+
+    QueuedMessage:
+      description: Server acknowledges the request and queues the computation task
+      payload:
+        type: object
+        required:
+          - status
+          - task_id
+        properties:
+          status:
+            type: string
+            const: queued
+            description: Task has been queued for processing
+          task_id:
+            type: string
+            description: Unique task identifier (UUID), can be used to check task status later
+            example: 'a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789'
+
+    ResultMessage:
+      description: |
+        Server returns computed metric results.
+        
+        The result structure is metric-specific. Generally, results are dictionaries 
+        mapping spatial unit identifiers (CVEGEO, etc.) to computed values.
+      payload:
+        type: object
+        required:
+          - status
+          - result
+        properties:
+          status:
+            type: string
+            const: completed
+            description: Computation completed successfully
+          result:
+            type: object
+            description: |
+              Metric-specific result object.
+              
+              - accessibility_jobs: {cvegeo: accessibility_score, ...}
+              - accessibility_services: {cvegeo: accessibility_score, ...}
+              - tree_coverage: {cvegeo: area_m2, ...}
+              - urbanized_area: {cvegeo: area_m2, ...}
+            additionalProperties: true
+            example:
+              '110010001001': 85.5
+              '110010001002': 72.3
+
+    ErrorMessage:
+      description: |
+        Server encountered an error before or during processing.
+        
+        This is sent for unknown metrics, system errors, or client disconnects.
+      payload:
+        type: object
+        required:
+          - status
+          - message
+        properties:
+          status:
+            type: string
+            const: error
+            description: An error occurred
+          message:
+            type: string
+            description: Human-readable error message
+            example: "Unknown metric: 'invalid_metric'"
+
+    ValidationErrorMessage:
+      description: |
+        Server rejected the request due to validation failure.
+        
+        This occurs when the client request does not match the expected schema 
+        for the chosen metric (e.g., missing required field, wrong type).
+      payload:
+        type: object
+        required:
+          - status
+          - type
+          - details
+        properties:
+          status:
+            type: string
+            const: error
+            description: An error occurred
+          type:
+            type: string
+            const: validation_error
+            description: Error type is a validation failure
+          details:
+            type: array
+            description: List of validation errors
+            items:
+              type: object
+              properties:
+                loc:
+                  description: JSON path to the invalid field
+                  oneOf:
+                    - type: array
+                      items:
+                        oneOf:
+                          - type: string
+                          - type: integer
+                    - type: null
+                msg:
+                  type: string
+                  description: Error message
+                type:
+                  type: string
+                  description: Error type (e.g., 'value_error', 'type_error')
+            example:
+              - loc: ['data']
+                msg: 'Field required'
+                type: 'missing'
+              - loc: ['year']
+                msg: 'Input should be 2020, 2021, 2022, 2023, 2024 or 2025'
+                type: 'enum'

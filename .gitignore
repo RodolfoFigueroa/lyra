@@ -219,3 +219,6 @@ __marimo__/
 *.ipynb
 .DS_Store
 cache/
+docs/js/*
+docs/css/*
+docs/index.html

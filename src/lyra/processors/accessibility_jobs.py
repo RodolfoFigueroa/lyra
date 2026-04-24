@@ -1,3 +1,4 @@
+from typing import Literal
 import geopandas as gpd
 import pandas as pd
 import pandana as pdna
@@ -95,20 +96,14 @@ def compute_accessibility_jobs(
     )
 
 
+METRIC_DESCRIPTION: str = "Computes job accessibility scores for each spatial unit using road network analysis and employment data."
+
+
 def calculate(
     data: ExplicitLocationAPI,
     group_patterns: list[str] | None = None,
-    year: int | None = None,
+    year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
 ) -> dict:
-    year_to_table_map = {
-        2020: "denue_2020_11",
-        2021: "denue_2021_11",
-        2022: "denue_2022_11",
-        2023: "denue_2023_11",
-        2024: "denue_2024_11",
-        2025: "denue_2025_05",
-    }
-
     if year is None:
         year = 2025
 
@@ -116,9 +111,7 @@ def calculate(
     df = df.to_crs("EPSG:6372")
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
-    df_denue = load_denue_from_bounds(
-        xmin, ymin, xmax, ymax, table_name=year_to_table_map[year]
-    )
+    df_denue = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
     df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax)
 
     nodes, edges = load_roads_from_bounds(

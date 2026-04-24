@@ -1,5 +1,6 @@
 from sqlalchemy import quoted_name
 import geopandas as gpd
+from lyra.constants import YEAR_TO_DENUE_TABLE_MAP
 from lyra.db import engine
 from typing import Sequence, Literal
 from lyra.models.base import GeoJSON
@@ -80,7 +81,12 @@ def load_geojson_from_met_zone_name(name: str) -> GeoJSON:
 
 
 def load_denue_from_bounds(
-    xmin: float, ymin: float, xmax: float, ymax: float, *, table_name: str
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    *,
+    year: Literal[2020, 2021, 2022, 2023, 2024, 2025],
 ) -> gpd.GeoDataFrame:
     return load_geometries_from_bounds(
         xmin,
@@ -88,7 +94,7 @@ def load_denue_from_bounds(
         xmax,
         ymax,
         columns=["per_ocu", "codigo_act", "geometry"],
-        table_name=table_name,
+        table_name=YEAR_TO_DENUE_TABLE_MAP[year],
     )
 
 

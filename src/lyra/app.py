@@ -18,13 +18,15 @@ def main() -> None:
     initialize_earth_engine()
 
     # Defer imports until after authenticating with Earth Engine
-    from lyra.routes import geojson, download
+    from lyra.routes import data_types, geojson, download, metrics
 
     app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
     # app.include_router(cvegeo.router)
     # app.include_router(file.router)
     app.include_router(geojson.router)
     app.include_router(download.router)
+    app.include_router(data_types.router)
+    app.include_router(metrics.router)
 
     uvicorn.run(
         app,

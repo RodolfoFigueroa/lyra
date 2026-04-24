@@ -14,6 +14,10 @@ def load_tree_coverage_img(bbox: ee.Geometry) -> ee.Image:
     )
 
 
+METRIC_DESCRIPTION: str = (
+    "Computes tree canopy coverage area in square metres for each spatial unit."
+)
+
 calculate = reduce_ee_image_over_gdf_factory(
     load_tree_coverage_img, reducer=ee.Reducer.sum(), scale=25
 )

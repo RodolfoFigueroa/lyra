@@ -1,3 +1,4 @@
+from typing import Literal
 from lyra.models.base import GeoJSON
 from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
@@ -309,7 +310,17 @@ def compute_accessibility_services(
     )
 
 
-def calculate(data: ExplicitLocationAPI, data_public: GeoJSON | None) -> dict:
+METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
+
+
+def calculate(
+    data: ExplicitLocationAPI,
+    data_public: GeoJSON | None,
+    year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
+) -> dict:
+    if year is None:
+        year = 2025
+
     df = convert_geojson_to_gdf(data).to_crs("EPSG:6372")
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
@@ -320,7 +331,7 @@ def calculate(data: ExplicitLocationAPI, data_public: GeoJSON | None) -> dict:
     else:
         df_public_spaces = convert_geojson_to_gdf(data_public).to_crs("EPSG:6372")
 
-    df_denue_base = load_denue_from_bounds(xmin, ymin, xmax, ymax)
+    df_denue_base = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
     df_denue = process_denue_amenities(df_denue_base)
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 

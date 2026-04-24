@@ -1,4 +1,4 @@
-from typing import Literal, Annotated
+from typing import Annotated, ClassVar, Literal
 from pydantic import AfterValidator
 from lyra.models.base import StrictBaseModel
 
@@ -21,5 +21,8 @@ def validate_cvegeos(
 
 
 class CVEGEOListWrapper(StrictBaseModel):
+    DATA_TYPE_DESCRIPTION: ClassVar[str] = (
+        "A list of CVEGEOs. All CVEGEOs must have the same length, which determines their geographic level."
+    )
     data_type: Literal["cvegeo_list"]
     value: Annotated[list[str], AfterValidator(validate_cvegeos)]

@@ -25,10 +25,12 @@ def load_roads_from_bounds(
     )
 
     g = ox.graph_from_bbox(bbox=(xmin, ymin, xmax, ymax), network_type="drive")
+    g = ox.add_edge_speeds(g)
+    g = ox.add_edge_travel_times(g)
     nodes, edges = ox.graph_to_gdfs(g)
 
     nodes = nodes.to_crs(bounds_crs).filter(["geometry"])
-    edges = edges.reset_index()[["u", "v", "length"]]
+    edges = edges.reset_index()[["u", "v", "length", "travel_time"]]
 
     return nodes, edges
 

@@ -19,6 +19,11 @@ from dataclasses import dataclass
 import pandana as pdna
 
 
+LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER = (
+    1 / (50 * 1000 / 3600)
+)  # Assuming an average speed of 50 km/h, convert length in meters to travel time in seconds
+
+
 @dataclass
 class AmenityQuery:
     pob_query: str
@@ -212,13 +217,20 @@ def generate_accessibility_net(
     mesh: gpd.GeoDataFrame,
     nodes: pd.DataFrame,
     edges: pd.DataFrame,
+    *,
+    weight_is_travel_time: bool,
 ) -> pdna.Network:
+    if weight_is_travel_time:
+        scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
+    else:
+        scale = 1.0
+
     net_accessibility = pdna.Network(
         nodes["geometry"].x.copy(),
         nodes["geometry"].y.copy(),
         edges["u"].copy(),
         edges["v"].copy(),
-        edges[["length"]].copy(),
+        edges[["weight"]].copy(),
     )
 
     # Assign POIS to network
@@ -228,9 +240,9 @@ def generate_accessibility_net(
             category=amenity_type,
             x_col=to_gdf["geometry"].centroid.x,
             y_col=to_gdf["geometry"].centroid.y,
-            maxdist=200000,
+            maxdist=200000 * scale,
             maxitems=5,
-            mapping_distance=1000,
+            mapping_distance=1000 * scale,
         )
 
     # Set node properties of destinations
@@ -244,14 +256,23 @@ def generate_accessibility_net(
 
 
 def get_amenities_attraction_and_osmid(
-    net_accessibility: pdna.Network, amenities: gpd.GeoDataFrame, mesh: gpd.GeoDataFrame
+    net_accessibility: pdna.Network,
+    amenities: gpd.GeoDataFrame,
+    mesh: gpd.GeoDataFrame,
+    *,
+    weight_is_travel_time: bool,
 ) -> pd.DataFrame:
+    if weight_is_travel_time:
+        scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
+    else:
+        scale = 1.0
+
     # Add destination properties
     amenities = amenities.assign(
         osmid=lambda df: net_accessibility.get_node_ids(
             x_col=df["geometry"].centroid.x,
             y_col=df["geometry"].centroid.y,
-            mapping_distance=1000,
+            mapping_distance=1000 * scale,
         )
     )
 
@@ -260,7 +281,7 @@ def get_amenities_attraction_and_osmid(
         if not c.startswith("p"):
             continue
         amenities = amenities.merge(
-            net_accessibility.aggregate(1000, "sum", "exp", name=c).rename(c),
+            net_accessibility.aggregate(1000 * scale, "sum", "exp", name=c).rename(c),
             on="osmid",
             how="left",
         )
@@ -275,7 +296,10 @@ def get_amenities_attraction_and_osmid(
 
     # Adjust attraction by discounting opportunities taken by reached population
     return amenities.assign(
-        adj_attraction=lambda df: df["attraction"] / df["reached_population"].where(df["reached_population"] > 1, 1)
+        adj_attraction=lambda df: (
+            df["attraction"]
+            / df["reached_population"].where(df["reached_population"] > 1, 1)
+        )
     )[["osmid", "adj_attraction"]]
 
 
@@ -284,7 +308,14 @@ def compute_accessibility_services(
     amenities: gpd.GeoDataFrame,
     mesh: gpd.GeoDataFrame,
     net_accessibility: pdna.Network,
+    *,
+    weight_is_travel_time: bool,
 ) -> pd.Series:
+    if weight_is_travel_time:
+        scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
+    else:
+        scale = 1.0
+
     # We need to aggregate adjusted attraction for a single node
     destinations = amenities.groupby("osmid")["adj_attraction"].sum()
 
@@ -293,7 +324,7 @@ def compute_accessibility_services(
 
     # Aggregate origin nodes
     mesh = mesh.merge(
-        net_accessibility.aggregate(1000, "sum", "exp", name="attr").rename(
+        net_accessibility.aggregate(1000 * scale, "sum", "exp", name="attr").rename(
             "accessibility"
         ),
         on="osmid",
@@ -309,16 +340,13 @@ def compute_accessibility_services(
     )
 
     # Aggregate over geometries
-    return (
-        gpd.GeoDataFrame(
-            df[["geometry"]].reset_index(names="index")
-            .sjoin(mesh[["geometry", "accessibility_score"]], how="left")
-            .groupby("index")
-            .agg({"accessibility_score": "mean"}),
-        )
-        .rename(columns={"accessibility_score": "accessibility"})
-        ["accessibility"]
-    )
+    return gpd.GeoDataFrame(
+        df[["geometry"]]
+        .reset_index(names="index")
+        .sjoin(mesh[["geometry", "accessibility_score"]], how="left")
+        .groupby("index")
+        .agg({"accessibility_score": "mean"}),
+    ).rename(columns={"accessibility_score": "accessibility"})["accessibility"]
 
 
 METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
@@ -326,11 +354,13 @@ METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatia
 
 def calculate(
     data: ExplicitLocationAPI,
-    data_public: GeoJSON | None=None,
+    data_public: GeoJSON | None = None,
     amenity_groups: list[list[str]] | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
+    edge_weights: Literal["length", "travel_time"] = "length",
 ) -> dict:
     wanted_crs = "EPSG:6372"
+    weight_is_travel_time = edge_weights == "travel_time"
 
     if year is None:
         year = 2025
@@ -350,9 +380,27 @@ def calculate(
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 
     nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=wanted_crs)
+    unwanted_weight = "length" if edge_weights == "travel_time" else "travel_time"
+    edges = edges.drop(columns=[unwanted_weight]).rename(
+        columns={edge_weights: "weight"}
+    )
 
     df_agebs = load_census_from_bounds(
-        xmin, ymin, xmax, ymax, level="ageb", columns=["pobtot", "p_0a2", "p_3a5", "p_6a11", "p_12a14", "p_15a17", "p_18a24", "pob15_64"]
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        level="ageb",
+        columns=[
+            "pobtot",
+            "p_0a2",
+            "p_3a5",
+            "p_6a11",
+            "p_12a14",
+            "p_15a17",
+            "p_18a24",
+            "pob15_64",
+        ],
     )
 
     df_mesh = (
@@ -361,18 +409,39 @@ def calculate(
         .assign(osmid=lambda df: get_osmid_from_nodes(df, nodes))
     )
 
-    net_accessibility = generate_accessibility_net(df_amenities, df_mesh, nodes, edges)
+    net_accessibility = generate_accessibility_net(
+        df_amenities, df_mesh, nodes, edges, weight_is_travel_time=weight_is_travel_time
+    )
 
-    df_amenities = df_amenities.join(get_amenities_attraction_and_osmid(net_accessibility, df_amenities, df_mesh))
+    df_amenities = df_amenities.join(
+        get_amenities_attraction_and_osmid(
+            net_accessibility,
+            df_amenities,
+            df_mesh,
+            weight_is_travel_time=weight_is_travel_time,
+        )
+    )
 
-    accessibility_base = compute_accessibility_services(df, df_amenities, df_mesh, net_accessibility)
-    
+    accessibility_base = compute_accessibility_services(
+        df,
+        df_amenities,
+        df_mesh,
+        net_accessibility,
+        weight_is_travel_time=weight_is_travel_time,
+    )
+
     if amenity_groups is None:
         return accessibility_base.to_dict()
     else:
         cols = [accessibility_base.rename("accessibility")]
         for i, group in enumerate(amenity_groups):
             df_amenities_group = df_amenities.loc[lambda df: df["amenity"].isin(group)]
-            accessibility_group = compute_accessibility_services(df, df_amenities_group, df_mesh, net_accessibility)
+            accessibility_group = compute_accessibility_services(
+                df,
+                df_amenities_group,
+                df_mesh,
+                net_accessibility,
+                weight_is_travel_time=weight_is_travel_time,
+            )
             cols.append(accessibility_group.rename(f"accessibility_{i}"))
         return pd.concat(cols, axis=1).to_dict(orient="index")

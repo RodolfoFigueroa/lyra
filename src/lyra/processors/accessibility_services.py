@@ -31,7 +31,7 @@ class AmenityQuery:
 AMENITIES_DICT = {
     # Salud
     "Hospital general": AmenityQuery(
-        pob_query="POBTOT",
+        pob_query="pobtot",
         denue_query=r"^622",
         # Each worker can attend to 20 patients per day
         attraction_query="num_workers * 20",
@@ -39,7 +39,7 @@ AMENITIES_DICT = {
         importance=0.1,
     ),
     "Consultorios médicos": AmenityQuery(
-        pob_query="POBTOT",
+        pob_query="pobtot",
         denue_query=r"^621",
         # Each worker can attend to 2 patients per hour, 8 hours a day
         attraction_query="num_workers * 2 * 8",
@@ -47,7 +47,7 @@ AMENITIES_DICT = {
         importance=0.05,
     ),
     "Farmacia": AmenityQuery(
-        pob_query="POBTOT",
+        pob_query="pobtot",
         denue_query=r"^46411",
         # Each worker fills 10 prescriptions per hour (daily average), 12 hours a day
         attraction_query="num_workers * 10 * 12",
@@ -56,7 +56,7 @@ AMENITIES_DICT = {
     ),
     # Recreativo
     "Parques recreativos": AmenityQuery(
-        pob_query="POBTOT",
+        pob_query="pobtot",
         denue_query=None,
         # 30 m² per visitor, 2 turnover cycles per day (morning and afternoon/evening)
         attraction_query="area / 30 * 2",
@@ -64,14 +64,14 @@ AMENITIES_DICT = {
         importance=0.05,
     ),
     "Clubs deportivos y de acondicionamiento físico": AmenityQuery(
-        pob_query="P_12A14 + POB15_64",
+        pob_query="p_12a14 + pob15_64",
         denue_query=r"^(71391|71394)",
         attraction_query="num_workers * 50",
         radius=2000,
         importance=0.05,
     ),
     "Cine": AmenityQuery(
-        pob_query="POBTOT",
+        pob_query="pobtot",
         denue_query=r"^51213",
         # 5 workers per screen, 5 movies per day, 25 visitors per movie
         attraction_query="num_workers / 5 * 5 * 25",
@@ -79,7 +79,7 @@ AMENITIES_DICT = {
         importance=0.03,
     ),
     "Otros servicios recreativos": AmenityQuery(
-        pob_query="P_12A14 + POB15_64",
+        pob_query="p_12a14 + pob15_64",
         denue_query=r"^(71399|712|713)",
         # Each worker can attend to 200 visitors per week, distributed across the week
         attraction_query="num_workers * 200 / 7",
@@ -88,7 +88,7 @@ AMENITIES_DICT = {
     ),
     # Educación
     "Guarderia": AmenityQuery(
-        pob_query="P_0A2 + P_3A5",
+        pob_query="p_0a2 + p_3a5",
         denue_query=r"^6244",
         # Each worker can attend to 8 children per day
         attraction_query="num_workers * 8",
@@ -96,35 +96,35 @@ AMENITIES_DICT = {
         importance=0.05,
     ),
     "Educación preescolar": AmenityQuery(
-        pob_query="P_3A5",
+        pob_query="p_3a5",
         denue_query=r"^61111",
         attraction_query="num_workers * 20",
         radius=3000,
         importance=0.15,
     ),
     "Educación primaria": AmenityQuery(
-        pob_query="P_6A11",
+        pob_query="p_6a11",
         denue_query=r"^61112",
         attraction_query="num_workers * 30",
         radius=3000,
         importance=0.15,
     ),
     "Educación secundaria": AmenityQuery(
-        pob_query="P_12A14",
+        pob_query="p_12a14",
         denue_query=r"^(61113|61114)",
         attraction_query="num_workers * 30",
         radius=3000,
         importance=0.15,
     ),
     "Educación media superior": AmenityQuery(
-        pob_query="P_15A17",
+        pob_query="p_15a17",
         denue_query=r"^(61115|61116)",
         attraction_query="num_workers * 30",
         radius=3000,
         importance=0.15,
     ),
     "Educación superior": AmenityQuery(
-        pob_query="P_18A24",
+        pob_query="p_18a24",
         denue_query=r"^(6112|6113)",
         attraction_query="num_workers * 40",
         radius=3000,
@@ -207,13 +207,12 @@ def get_osmid_from_nodes(mesh: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> pd.
     )
 
 
-def compute_accessibility_services(
-    df: gpd.GeoDataFrame,
+def generate_accessibility_net(
     amenities: gpd.GeoDataFrame,
     mesh: gpd.GeoDataFrame,
-    nodes: gpd.GeoDataFrame,
-    edges: gpd.GeoDataFrame,
-):
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+) -> pdna.Network:
     net_accessibility = pdna.Network(
         nodes["geometry"].x.copy(),
         nodes["geometry"].y.copy(),
@@ -223,8 +222,8 @@ def compute_accessibility_services(
     )
 
     # Assign POIS to network
-    for amenity_type in amenities.amenity.unique():
-        to_gdf = amenities[amenities["amenity"] == amenity_type]
+    for amenity_type in amenities["amenity"].unique():
+        to_gdf = amenities.loc[lambda df: df["amenity"] == amenity_type]
         net_accessibility.set_pois(
             category=amenity_type,
             x_col=to_gdf["geometry"].centroid.x,
@@ -234,23 +233,31 @@ def compute_accessibility_services(
             mapping_distance=1000,
         )
 
-    # Add destination properties
-    amenities["osmid"] = net_accessibility.get_node_ids(
-        x_col=amenities["geometry"].centroid.x,
-        y_col=amenities["geometry"].centroid.y,
-        mapping_distance=1000,
-    )
-
     # Set node properties of destinations
-    mesh_osmid = mesh[mesh.osmid.notna()]
+    mesh_osmid = mesh[mesh["osmid"].notna()]
     for c in mesh.columns:
-        if not c.startswith("P"):
+        if not c.startswith("p"):
             continue
         net_accessibility.set(mesh_osmid["osmid"], variable=mesh_osmid[c], name=c)
 
+    return net_accessibility
+
+
+def calculate_adjusted_attraction(
+    net_accessibility: pdna.Network, amenities: gpd.GeoDataFrame, mesh: gpd.GeoDataFrame
+) -> pd.Series:
+    # Add destination properties
+    amenities = amenities.assign(
+        osmid=lambda df: net_accessibility.get_node_ids(
+            x_col=df["geometry"].centroid.x,
+            y_col=df["geometry"].centroid.y,
+            mapping_distance=1000,
+        )
+    )
+
     # Calculate aggregations for population reached for each category
     for c in mesh.columns:
-        if not c.startswith("P"):
+        if not c.startswith("p"):
             continue
         amenities = amenities.merge(
             net_accessibility.aggregate(1000, "sum", "exp", name=c).rename(c),
@@ -259,21 +266,31 @@ def compute_accessibility_services(
         )
 
     # Find reached population relevant for each amenity type
-    amenities["reached_population"] = 0.0
-    for amenity_type in amenities.amenity.unique():
+    amenities = amenities.assign(reached_population=0.0)
+    for amenity_type in amenities["amenity"].unique():
         query = AMENITIES_DICT[amenity_type].pob_query
-        amenities.loc[amenities["amenity"] == amenity_type, "reached_population"] = (
-            amenities.loc[amenities["amenity"] == amenity_type].eval(query)
-        )
+        amenities.loc[
+            lambda df: df["amenity"] == amenity_type, "reached_population"
+        ] = amenities.loc[lambda df: df["amenity"] == amenity_type].eval(query)
 
     # Adjust attraction by discounting opportunities taken by reached population
-    amenities["adj_attraction"] = (
-        amenities.attraction
-        / amenities.reached_population.where(amenities.reached_population > 1, 1)
-    )
+    return amenities.assign(
+        adj_attraction=lambda df: df["attraction"] / df["reached_population"].where(df["reached_population"] > 1, 1)
+    )["adj_attraction"]
 
+
+def compute_accessibility_services(
+    df: gpd.GeoDataFrame,
+    amenities: gpd.GeoDataFrame,
+    mesh: gpd.GeoDataFrame,
+    nodes: gpd.GeoDataFrame,
+    edges: gpd.GeoDataFrame,
+):
+    net_accessibility = generate_accessibility_net(amenities, mesh, nodes, edges)
+    amenities = amenities.assign(adj_attraction=lambda df: calculate_adjusted_attraction(net_accessibility, amenities, mesh))
+    
     # We need to aggregate adjusted attraction for a single node
-    destinations = amenities.groupby("osmid").adj_attraction.sum()
+    destinations = amenities.groupby("osmid")["adj_attraction"].sum()
 
     # Aggregate adjusted attraction for origin nodes
     # Set node properties of destinations
@@ -316,28 +333,29 @@ METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatia
 def calculate(
     data: ExplicitLocationAPI,
     data_public: GeoJSON | None,
+    amenity_groups: list[list[str] | None] | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
 ) -> dict:
+    wanted_crs = "EPSG:6372"
+
     if year is None:
         year = 2025
 
-    df = convert_geojson_to_gdf(data).to_crs("EPSG:6372")
+    df = convert_geojson_to_gdf(data).to_crs(wanted_crs)
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
     if data_public is None:
         df_public_spaces = load_osm_features_from_bounds(
-            xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372", tags={"leisure": ["park"]}
+            xmin, ymin, xmax, ymax, bounds_crs=wanted_crs, tags={"leisure": ["park"]}
         )
     else:
-        df_public_spaces = convert_geojson_to_gdf(data_public).to_crs("EPSG:6372")
+        df_public_spaces = convert_geojson_to_gdf(data_public).to_crs(wanted_crs)
 
     df_denue_base = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
     df_denue = process_denue_amenities(df_denue_base)
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 
-    nodes, edges = load_roads_from_bounds(
-        xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372"
-    )
+    nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=wanted_crs)
 
     df_agebs = load_census_from_bounds(
         xmin, ymin, xmax, ymax, level="ageb", columns=["cvegeo", "pobtot"]

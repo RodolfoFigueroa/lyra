@@ -7,7 +7,6 @@ from celery import Celery
 from typing import Callable, Type
 from types import FunctionType
 from pydantic import BaseModel
-from lyra.logging_config import configure_logging
 from lyra.functions.load.db import (
     load_geojson_from_cvegeos,
     load_geojson_from_met_zone_name,

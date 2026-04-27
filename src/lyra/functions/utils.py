@@ -1,8 +1,7 @@
 import ee
 import geemap
-from typing import Callable, Any
+from typing import Callable
 import geopandas as gpd
-from pyproj import CRS
 from lyra.models.base import GeoJSON
 from lyra.models.wrappers import ExplicitLocationAPI
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict, TypeAdapter
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Any, Literal
 
 
@@ -23,6 +23,7 @@ class PointGeometry(StrictBaseModel):
     type: Literal["Point"]
     coordinates: list[float]
 
+
 class PolygonGeometry(StrictBaseModel):
     type: Literal["Polygon"]
     coordinates: list[list[list[float]]]
@@ -38,6 +39,7 @@ class Feature(StrictBaseModel):
     type: Literal["Feature"]
     geometry: PointGeometry | PolygonGeometry | MultiPolygonGeometry
     properties: dict[str, Any]
+
 
 class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"]

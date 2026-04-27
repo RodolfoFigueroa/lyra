@@ -30,7 +30,7 @@ services:
 
   celery_worker:
     image: lyra:latest
-    command: uv run celery -A lyra.worker.celery_app worker --loglevel=info
+    command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json
     depends_on:

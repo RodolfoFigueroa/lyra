@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, TypeAdapter
 from typing import Any, Literal
 
 
@@ -19,7 +19,27 @@ class CRS(StrictBaseModel):
     properties: CRSProperties
 
 
+class PointGeometry(StrictBaseModel):
+    type: Literal["Point"]
+    coordinates: list[float]
+
+class PolygonGeometry(StrictBaseModel):
+    type: Literal["Polygon"]
+    coordinates: list[list[list[float]]]
+
+
+class MultiPolygonGeometry(StrictBaseModel):
+    type: Literal["MultiPolygon"]
+    coordinates: list[list[list[list[float]]]]
+
+
+class Feature(StrictBaseModel):
+    id: str = Field(min_length=1)
+    type: Literal["Feature"]
+    geometry: PointGeometry | PolygonGeometry | MultiPolygonGeometry
+    properties: dict[str, Any]
+
 class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"]
-    features: list[dict[str, Any]] = Field(min_length=1)
+    features: list[Feature] = Field(min_length=1)
     crs: CRS

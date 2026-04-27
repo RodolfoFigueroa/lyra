@@ -1,11 +1,13 @@
 from lyra.registry import TASK_REGISTRY
 import os
 import json
+import logging
 import redis
 from celery import Celery
 from typing import Callable, Type
 from types import FunctionType
 from pydantic import BaseModel
+from lyra.logging_config import configure_logging
 from lyra.functions.load.db import (
     load_geojson_from_cvegeos,
     load_geojson_from_met_zone_name,
@@ -13,6 +15,7 @@ from lyra.functions.load.db import (
 
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
+logger = logging.getLogger(__name__)
 celery_app = Celery("ee_tasks", broker=REDIS_URL, backend=REDIS_URL)
 redis_client = redis.from_url(REDIS_URL)
 
@@ -68,6 +71,11 @@ def make_celery_wrapper(
             notification = {"status": "success", "download_id": task_id}
 
         except Exception as e:
+            logger.exception(
+                "Celery task %s failed while executing metric %s",
+                task_id,
+                getattr(self, "name", original_calculate_func.__module__),
+            )
             notification = {"status": "error", "message": str(e)}
 
         # Publish the notification

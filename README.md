@@ -12,6 +12,15 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 EARTHENGINE_PROJECT=your-gee-project-id
 ```
 
+Optional logging settings:
+
+```env
+LYRA_LOG_LEVEL=INFO
+LYRA_LOG_FILE=logs/lyra.log
+```
+
+If `LYRA_LOG_FILE` is set, Lyra writes its internal logs to that file instead of standard output.
+
 ## Install
 
 ```bash

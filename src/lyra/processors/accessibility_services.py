@@ -188,11 +188,11 @@ def merge_mesh_and_census(
         .drop(columns=["ageb_area", "geometry"])
     )
     for c in mesh_agg.columns:
-        if c in {"area_fraction", "CODIGO"}:
+        if c in {"area_fraction", "codigo"}:
             continue
         mesh_agg[c] = mesh_agg[c] * mesh_agg["area_fraction"]
-    mesh_agg = mesh_agg.drop(columns="area_fraction").groupby("CODIGO").sum()
-    return mesh.merge(mesh_agg, on="CODIGO", how="left").fillna(0.0)
+    mesh_agg = mesh_agg.drop(columns="area_fraction").groupby("codigo").sum()
+    return mesh.merge(mesh_agg, on="codigo", how="left").fillna(0.0)
 
 
 def get_osmid_from_nodes(mesh: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> pd.Series:
@@ -243,9 +243,9 @@ def generate_accessibility_net(
     return net_accessibility
 
 
-def calculate_adjusted_attraction(
+def get_amenities_attraction_and_osmid(
     net_accessibility: pdna.Network, amenities: gpd.GeoDataFrame, mesh: gpd.GeoDataFrame
-) -> pd.Series:
+) -> pd.DataFrame:
     # Add destination properties
     amenities = amenities.assign(
         osmid=lambda df: net_accessibility.get_node_ids(
@@ -276,23 +276,18 @@ def calculate_adjusted_attraction(
     # Adjust attraction by discounting opportunities taken by reached population
     return amenities.assign(
         adj_attraction=lambda df: df["attraction"] / df["reached_population"].where(df["reached_population"] > 1, 1)
-    )["adj_attraction"]
+    )[["osmid", "adj_attraction"]]
 
 
 def compute_accessibility_services(
     df: gpd.GeoDataFrame,
     amenities: gpd.GeoDataFrame,
     mesh: gpd.GeoDataFrame,
-    nodes: gpd.GeoDataFrame,
-    edges: gpd.GeoDataFrame,
-):
-    net_accessibility = generate_accessibility_net(amenities, mesh, nodes, edges)
-    amenities = amenities.assign(adj_attraction=lambda df: calculate_adjusted_attraction(net_accessibility, amenities, mesh))
-    
+    net_accessibility: pdna.Network,
+) -> pd.Series:
     # We need to aggregate adjusted attraction for a single node
     destinations = amenities.groupby("osmid")["adj_attraction"].sum()
 
-    # Aggregate adjusted attraction for origin nodes
     # Set node properties of destinations
     net_accessibility.set(destinations.index, variable=destinations.values, name="attr")
 
@@ -316,14 +311,13 @@ def compute_accessibility_services(
     # Aggregate over geometries
     return (
         gpd.GeoDataFrame(
-            df[["geometry"]]
+            df[["geometry"]].reset_index(names="index")
             .sjoin(mesh[["geometry", "accessibility_score"]], how="left")
-            .groupby(["ENTIDAD", "MUN", "LOC", "AGEB"])
+            .groupby("index")
             .agg({"accessibility_score": "mean"}),
         )
-        .reset_index()
         .rename(columns={"accessibility_score": "accessibility"})
-        .set_index(["ENTIDAD", "MUN", "LOC", "AGEB"])
+        ["accessibility"]
     )
 
 
@@ -332,8 +326,8 @@ METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatia
 
 def calculate(
     data: ExplicitLocationAPI,
-    data_public: GeoJSON | None,
-    amenity_groups: list[list[str] | None] | None = None,
+    data_public: GeoJSON | None=None,
+    amenity_groups: list[list[str]] | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
 ) -> dict:
     wanted_crs = "EPSG:6372"
@@ -358,7 +352,7 @@ def calculate(
     nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=wanted_crs)
 
     df_agebs = load_census_from_bounds(
-        xmin, ymin, xmax, ymax, level="ageb", columns=["cvegeo", "pobtot"]
+        xmin, ymin, xmax, ymax, level="ageb", columns=["pobtot", "p_0a2", "p_3a5", "p_6a11", "p_12a14", "p_15a17", "p_18a24", "pob15_64"]
     )
 
     df_mesh = (
@@ -367,4 +361,18 @@ def calculate(
         .assign(osmid=lambda df: get_osmid_from_nodes(df, nodes))
     )
 
-    return compute_accessibility_services(df, df_amenities, df_mesh, nodes, edges)
+    net_accessibility = generate_accessibility_net(df_amenities, df_mesh, nodes, edges)
+
+    df_amenities = df_amenities.join(get_amenities_attraction_and_osmid(net_accessibility, df_amenities, df_mesh))
+
+    accessibility_base = compute_accessibility_services(df, df_amenities, df_mesh, net_accessibility)
+    
+    if amenity_groups is None:
+        return accessibility_base.to_dict()
+    else:
+        cols = [accessibility_base.rename("accessibility")]
+        for i, group in enumerate(amenity_groups):
+            df_amenities_group = df_amenities.loc[lambda df: df["amenity"].isin(group)]
+            accessibility_group = compute_accessibility_services(df, df_amenities_group, df_mesh, net_accessibility)
+            cols.append(accessibility_group.rename(f"accessibility_{i}"))
+        return pd.concat(cols, axis=1).to_dict(orient="index")

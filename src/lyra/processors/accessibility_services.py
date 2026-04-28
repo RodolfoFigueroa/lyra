@@ -1,8 +1,10 @@
-from typing import Literal
+from typing import Annotated, Literal
+from pydantic import Field
 from lyra.models.base import GeoJSON
 from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.utils import convert_geojson_to_gdf
+from lyra.models.processors.accessibility_services import AmenityGroupModel
 from lyra.functions.load.db import (
     load_denue_from_bounds,
     load_mesh_from_bounds,
@@ -14,128 +16,14 @@ from lyra.functions.load.osm import (
 )
 import numpy as np
 import pandas as pd
+from lyra.constants import AMENITIES_DICT
 import geopandas as gpd
-from dataclasses import dataclass
 import pandana as pdna
 
 
 LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER = (
     1 / (50 * 1000 / 3600)
 )  # Assuming an average speed of 50 km/h, convert length in meters to travel time in seconds
-
-
-@dataclass
-class AmenityQuery:
-    pob_query: str
-    denue_query: str | None
-    attraction_query: str
-    radius: float
-    importance: float
-
-
-AMENITIES_DICT = {
-    # Salud
-    "Hospital general": AmenityQuery(
-        pob_query="pobtot",
-        denue_query=r"^622",
-        # Each worker can attend to 20 patients per day
-        attraction_query="num_workers * 20",
-        radius=5000,
-        importance=0.1,
-    ),
-    "Consultorios médicos": AmenityQuery(
-        pob_query="pobtot",
-        denue_query=r"^621",
-        # Each worker can attend to 2 patients per hour, 8 hours a day
-        attraction_query="num_workers * 2 * 8",
-        radius=2000,
-        importance=0.05,
-    ),
-    "Farmacia": AmenityQuery(
-        pob_query="pobtot",
-        denue_query=r"^46411",
-        # Each worker fills 10 prescriptions per hour (daily average), 12 hours a day
-        attraction_query="num_workers * 10 * 12",
-        radius=1000,
-        importance=0.05,
-    ),
-    # Recreativo
-    "Parques recreativos": AmenityQuery(
-        pob_query="pobtot",
-        denue_query=None,
-        # 30 m² per visitor, 2 turnover cycles per day (morning and afternoon/evening)
-        attraction_query="area / 30 * 2",
-        radius=3000,
-        importance=0.05,
-    ),
-    "Clubs deportivos y de acondicionamiento físico": AmenityQuery(
-        pob_query="p_12a14 + pob15_64",
-        denue_query=r"^(71391|71394)",
-        attraction_query="num_workers * 50",
-        radius=2000,
-        importance=0.05,
-    ),
-    "Cine": AmenityQuery(
-        pob_query="pobtot",
-        denue_query=r"^51213",
-        # 5 workers per screen, 5 movies per day, 25 visitors per movie
-        attraction_query="num_workers / 5 * 5 * 25",
-        radius=5000,
-        importance=0.03,
-    ),
-    "Otros servicios recreativos": AmenityQuery(
-        pob_query="p_12a14 + pob15_64",
-        denue_query=r"^(71399|712|713)",
-        # Each worker can attend to 200 visitors per week, distributed across the week
-        attraction_query="num_workers * 200 / 7",
-        radius=3000,
-        importance=0.02,
-    ),
-    # Educación
-    "Guarderia": AmenityQuery(
-        pob_query="p_0a2 + p_3a5",
-        denue_query=r"^6244",
-        # Each worker can attend to 8 children per day
-        attraction_query="num_workers * 8",
-        radius=3000,
-        importance=0.05,
-    ),
-    "Educación preescolar": AmenityQuery(
-        pob_query="p_3a5",
-        denue_query=r"^61111",
-        attraction_query="num_workers * 20",
-        radius=3000,
-        importance=0.15,
-    ),
-    "Educación primaria": AmenityQuery(
-        pob_query="p_6a11",
-        denue_query=r"^61112",
-        attraction_query="num_workers * 30",
-        radius=3000,
-        importance=0.15,
-    ),
-    "Educación secundaria": AmenityQuery(
-        pob_query="p_12a14",
-        denue_query=r"^(61113|61114)",
-        attraction_query="num_workers * 30",
-        radius=3000,
-        importance=0.15,
-    ),
-    "Educación media superior": AmenityQuery(
-        pob_query="p_15a17",
-        denue_query=r"^(61115|61116)",
-        attraction_query="num_workers * 30",
-        radius=3000,
-        importance=0.15,
-    ),
-    "Educación superior": AmenityQuery(
-        pob_query="p_18a24",
-        denue_query=r"^(6112|6113)",
-        attraction_query="num_workers * 40",
-        radius=3000,
-        importance=0.15,
-    ),
-}
 
 
 def process_denue_amenities(df_denue: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -213,37 +101,17 @@ def get_osmid_from_nodes(mesh: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> pd.
 
 
 def generate_accessibility_net(
-    amenities: gpd.GeoDataFrame,
     mesh: gpd.GeoDataFrame,
     nodes: pd.DataFrame,
     edges: pd.DataFrame,
-    *,
-    weight_is_travel_time: bool,
 ) -> pdna.Network:
-    if weight_is_travel_time:
-        scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
-    else:
-        scale = 1.0
-
     net_accessibility = pdna.Network(
         nodes["geometry"].x.copy(),
         nodes["geometry"].y.copy(),
         edges["u"].copy(),
         edges["v"].copy(),
-        edges[["weight"]].copy(),
+        edges[["length", "travel_time"]].copy(),
     )
-
-    # Assign POIS to network
-    for amenity_type in amenities["amenity"].unique():
-        to_gdf = amenities.loc[lambda df: df["amenity"] == amenity_type]
-        net_accessibility.set_pois(
-            category=amenity_type,
-            x_col=to_gdf["geometry"].centroid.x,
-            y_col=to_gdf["geometry"].centroid.y,
-            maxdist=200000 * scale,
-            maxitems=5,
-            mapping_distance=1000 * scale,
-        )
 
     # Set node properties of destinations
     mesh_osmid = mesh[mesh["osmid"].notna()]
@@ -261,19 +129,24 @@ def get_amenities_attraction_and_osmid(
     mesh: gpd.GeoDataFrame,
     *,
     weight_is_travel_time: bool,
-    max_dist_meters: float
+    max_dist_meters: float,
 ) -> pd.DataFrame:
     if weight_is_travel_time:
         scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
+        impedance = "travel_time"
     else:
         scale = 1.0
+        impedance = "length"
 
     # Add destination properties
     amenities = amenities.assign(
         osmid=lambda df: net_accessibility.get_node_ids(
             x_col=df["geometry"].centroid.x,
             y_col=df["geometry"].centroid.y,
-            mapping_distance=1000 * scale,
+            # Despite what pandana documentation says, this mapping distance is
+            # just standard Euclidean, not based on network impedance. Thus, we
+            # don't need to scale it.
+            mapping_distance=1000,
         )
     )
 
@@ -281,10 +154,30 @@ def get_amenities_attraction_and_osmid(
     for c in mesh.columns:
         if not c.startswith("p"):
             continue
-        amenities = amenities.merge(
-            net_accessibility.aggregate(max_dist_meters * scale, "sum", "exp", name=c).rename(c),
-            on="osmid",
-            how="left",
+        aggregated = (
+            net_accessibility.aggregate(
+                max_dist_meters * scale,
+                type="sum",
+                decay="exp",
+                name=c,
+                imp_name=impedance,
+            )
+            .rename(c)
+            .reset_index()
+        )
+
+        if aggregated["osmid"].duplicated().any():
+            err = f"Duplicated osmids found in aggregated accessibility network for column {c}. This should never happen."
+            raise ValueError(err)
+
+        amenities = (
+            amenities.reset_index(names="amenity_index")
+            .merge(
+                aggregated,
+                on="osmid",
+                how="left",
+            )
+            .set_index("amenity_index")
         )
 
     # Find reached population relevant for each amenity type
@@ -315,8 +208,10 @@ def compute_accessibility_services(
 ) -> pd.Series:
     if weight_is_travel_time:
         scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
+        impedance = "travel_time"
     else:
         scale = 1.0
+        impedance = "length"
 
     # We need to aggregate adjusted attraction for a single node
     destinations = amenities.groupby("osmid")["adj_attraction"].sum()
@@ -326,9 +221,13 @@ def compute_accessibility_services(
 
     # Aggregate origin nodes
     mesh = mesh.merge(
-        net_accessibility.aggregate(max_dist_meters * scale, "sum", "exp", name="attr").rename(
-            "accessibility"
-        ),
+        net_accessibility.aggregate(
+            max_dist_meters * scale,
+            type="sum",
+            decay="exp",
+            name="attr",
+            imp_name=impedance,
+        ).rename("accessibility"),
         on="osmid",
         how="left",
     )
@@ -351,17 +250,45 @@ def compute_accessibility_services(
     ).rename(columns={"accessibility_score": "accessibility"})["accessibility"]
 
 
-METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
+def process_amenities_and_compute_accessibility(
+    df: gpd.GeoDataFrame,
+    df_amenities: gpd.GeoDataFrame,
+    df_mesh: gpd.GeoDataFrame,
+    net_accessibility: pdna.Network,
+    *,
+    weight_is_travel_time: bool,
+    max_dist_meters: float,
+) -> pd.Series:
+    temp = get_amenities_attraction_and_osmid(
+        net_accessibility,
+        df_amenities,
+        df_mesh,
+        weight_is_travel_time=weight_is_travel_time,
+        max_dist_meters=max_dist_meters,
+    )
+
+    df_amenities = df_amenities.join(temp)
+
+    return compute_accessibility_services(
+        df,
+        df_amenities,
+        df_mesh,
+        net_accessibility,
+        weight_is_travel_time=weight_is_travel_time,
+        max_dist_meters=max_dist_meters,
+    )
 
 
-def calculate(
-    data: ExplicitLocationAPI,
-    data_public: GeoJSON | None = None,
-    amenity_groups: list[list[str]] | None = None,
-    year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
-    edge_weights: Literal["length", "travel_time"] = "length",
-    max_weight: float = 1000,
-) -> dict:
+def calculate_for_single_amenity_group(
+    df: gpd.GeoDataFrame,
+    df_amenities: gpd.GeoDataFrame,
+    df_mesh: gpd.GeoDataFrame,
+    net_accessibility: pdna.Network,
+    edge_weights: Literal["length", "travel_time"],
+    max_weight: float,
+) -> pd.Series:
+    weight_is_travel_time = edge_weights == "travel_time"
+
     # Always use the threshold in meters, since each function that uses the threshold will convert it to travel time if needed
     if edge_weights == "length":
         max_dist_meters = max_weight
@@ -369,8 +296,34 @@ def calculate(
         # In this case max_weight is in seconds
         max_dist_meters = max_weight / LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
 
+    return process_amenities_and_compute_accessibility(
+        df,
+        df_amenities,
+        df_mesh,
+        net_accessibility,
+        weight_is_travel_time=weight_is_travel_time,
+        max_dist_meters=max_dist_meters,
+    )
+
+
+METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
+
+
+def calculate(
+    data: ExplicitLocationAPI,
+    data_public: GeoJSON | None = None,
+    amenity_groups: dict[Annotated[str, Field(max_length=64)], AmenityGroupModel] | None = None,
+    year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
+) -> dict:
+    if amenity_groups is None:
+        amenity_groups = {
+            "default": AmenityGroupModel(
+                edge_weights="length",
+                max_weight=1000,
+            )
+        }
+
     wanted_crs = "EPSG:6372"
-    weight_is_travel_time = edge_weights == "travel_time"
 
     if year is None:
         year = 2025
@@ -383,17 +336,18 @@ def calculate(
             xmin, ymin, xmax, ymax, bounds_crs=wanted_crs, tags={"leisure": ["park"]}
         )
     else:
-        df_public_spaces = convert_geojson_to_gdf(data_public).to_crs(wanted_crs)
+        df_public_spaces = (
+            convert_geojson_to_gdf(data_public)[["area", "geometry"]]
+            .to_crs(wanted_crs)
+            .assign(amenity="recreativo_parque")
+        )
 
-    df_denue = process_denue_amenities(load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year))
+    df_denue = process_denue_amenities(
+        load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
+    )
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 
     nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=wanted_crs)
-    
-    unwanted_weight = "length" if edge_weights == "travel_time" else "travel_time"
-    edges = edges.drop(columns=[unwanted_weight]).rename(
-        columns={edge_weights: "weight"}
-    )
 
     df_agebs = load_census_from_bounds(
         xmin,
@@ -420,41 +374,32 @@ def calculate(
     )
 
     net_accessibility = generate_accessibility_net(
-        df_amenities, df_mesh, nodes, edges, weight_is_travel_time=weight_is_travel_time
-    )
-
-    df_amenities = df_amenities.join(
-        get_amenities_attraction_and_osmid(
-            net_accessibility,
-            df_amenities,
-            df_mesh,
-            weight_is_travel_time=weight_is_travel_time,
-            max_dist_meters=max_dist_meters
-        )
-    )
-
-    accessibility_base = compute_accessibility_services(
-        df,
-        df_amenities,
         df_mesh,
-        net_accessibility,
-        weight_is_travel_time=weight_is_travel_time,
-        max_dist_meters=max_dist_meters
+        nodes,
+        edges,
     )
 
-    if amenity_groups is None:
-        return accessibility_base.to_dict()
-    else:
-        cols = [accessibility_base.rename("accessibility")]
-        for i, group in enumerate(amenity_groups):
-            df_amenities_group = df_amenities.loc[lambda df: df["amenity"].isin(group)]
-            accessibility_group = compute_accessibility_services(
-                df,
-                df_amenities_group,
-                df_mesh,
-                net_accessibility,
-                weight_is_travel_time=weight_is_travel_time,
-                max_dist_meters=max_dist_meters
-            )
-            cols.append(accessibility_group.rename(f"accessibility_{i}"))
-        return pd.concat(cols, axis=1).to_dict(orient="index")
+    cols = []
+    for key, group in amenity_groups.items():
+        group_amenities = [
+            amenity.value for amenity in group.amenities
+        ]
+        df_amenities_group = df_amenities.loc[
+            lambda df: df["amenity"].isin(group_amenities)
+        ]
+
+        if len(df_amenities_group) == 0:
+            err = f"No amenities found for group {key} with categories {group_amenities}"
+            raise ValueError(err)
+
+        accessibility_group = calculate_for_single_amenity_group(
+            df,
+            df_amenities_group,
+            df_mesh,
+            net_accessibility,
+            edge_weights=group.edge_weights,
+            max_weight=group.max_weight,
+        )
+        cols.append(accessibility_group.rename(f"accessibility_{key}"))
+
+    return pd.concat(cols, axis=1).to_dict(orient="index")

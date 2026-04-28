@@ -366,6 +366,7 @@ def calculate(
     if edge_weights == "length":
         max_dist_meters = max_weight
     else:
+        # In this case max_weight is in seconds
         max_dist_meters = max_weight / LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
 
     wanted_crs = "EPSG:6372"
@@ -384,11 +385,11 @@ def calculate(
     else:
         df_public_spaces = convert_geojson_to_gdf(data_public).to_crs(wanted_crs)
 
-    df_denue_base = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
-    df_denue = process_denue_amenities(df_denue_base)
+    df_denue = process_denue_amenities(load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year))
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 
     nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=wanted_crs)
+    
     unwanted_weight = "length" if edge_weights == "travel_time" else "travel_time"
     edges = edges.drop(columns=[unwanted_weight]).rename(
         columns={edge_weights: "weight"}

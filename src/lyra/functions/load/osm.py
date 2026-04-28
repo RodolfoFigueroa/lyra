@@ -1,6 +1,7 @@
 import geopandas as gpd
 import osmnx as ox
 from pyproj import CRS, Transformer
+import pandana as pdna
 
 
 def _project_bounds_to_latlon(
@@ -33,6 +34,19 @@ def load_roads_from_bounds(
     edges = edges.reset_index()[["u", "v", "length", "travel_time"]]
 
     return nodes, edges
+
+
+def load_accessibility_net_from_bounds(
+    xmin: float, ymin: float, xmax: float, ymax: float, *, bounds_crs: str | CRS
+) -> pdna.Network:
+    nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=bounds_crs)
+    return pdna.Network(
+        nodes["geometry"].x.copy(),
+        nodes["geometry"].y.copy(),
+        edges["u"].copy(),
+        edges["v"].copy(),
+        edges[["length", "travel_time"]].copy(),
+    )
 
 
 def load_osm_features_from_bounds(

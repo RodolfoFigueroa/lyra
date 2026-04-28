@@ -2,7 +2,6 @@ from typing import Annotated, Literal
 from pydantic import Field
 from lyra.models.base import GeoJSON
 from lyra.models.wrappers import ExplicitLocationAPI
-from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.utils import convert_geojson_to_gdf
 from lyra.models.processors.accessibility_services import AmenityGroupModel
 from lyra.functions.load.db import (
@@ -11,12 +10,12 @@ from lyra.functions.load.db import (
     load_census_from_bounds,
 )
 from lyra.functions.load.osm import (
-    load_roads_from_bounds,
     load_osm_features_from_bounds,
+    load_accessibility_net_from_bounds,
 )
 import numpy as np
 import pandas as pd
-from lyra.constants import AMENITIES_DICT
+from lyra.constants import AMENITIES_DICT, PER_OCU_TO_NUM_WORKERS_MAP
 import geopandas as gpd
 import pandana as pdna
 
@@ -88,31 +87,10 @@ def merge_mesh_and_census(
     return mesh.merge(mesh_agg, on="codigo", how="left").fillna(0.0)
 
 
-def get_osmid_from_nodes(mesh: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> pd.Series:
-    return (
-        mesh[["geometry"]]
-        .reset_index(names="index")
-        .sjoin(nodes, how="inner", predicate="contains")
-        .merge(nodes, on="osmid")
-        .assign(cent_dist=lambda df: df.geometry_x.centroid.distance(df.geometry_y))
-        .loc[lambda df: df.groupby("index").cent_dist.idxmin()]
-        .set_index("index")["osmid"]
-    )
-
-
-def generate_accessibility_net(
+def update_net_with_mesh(
+    net_accessibility: pdna.Network,
     mesh: gpd.GeoDataFrame,
-    nodes: pd.DataFrame,
-    edges: pd.DataFrame,
-) -> pdna.Network:
-    net_accessibility = pdna.Network(
-        nodes["geometry"].x.copy(),
-        nodes["geometry"].y.copy(),
-        edges["u"].copy(),
-        edges["v"].copy(),
-        edges[["length", "travel_time"]].copy(),
-    )
-
+) -> None:
     # Set node properties of destinations
     mesh_osmid = mesh[mesh["osmid"].notna()]
     for c in mesh.columns:
@@ -120,19 +98,20 @@ def generate_accessibility_net(
             continue
         net_accessibility.set(mesh_osmid["osmid"], variable=mesh_osmid[c], name=c)
 
-    return net_accessibility
 
-
-def get_amenities_osmid(
-    amenities: gpd.GeoDataFrame, net_accessibility: pdna.Network
+def get_geometries_osmid(
+    geometries: gpd.GeoDataFrame,
+    net_accessibility: pdna.Network,
+    *,
+    mapping_distance: float = 1000,
 ) -> pd.Series:
     return net_accessibility.get_node_ids(
-        x_col=amenities["geometry"].centroid.x,
-        y_col=amenities["geometry"].centroid.y,
+        x_col=geometries["geometry"].centroid.x,
+        y_col=geometries["geometry"].centroid.y,
         # Despite what pandana documentation says, this mapping distance is
         # just standard Euclidean, not based on network impedance. Thus, we
         # don't need to scale it.
-        mapping_distance=1000,
+        mapping_distance=mapping_distance,
     )
 
 
@@ -248,7 +227,7 @@ def calculate_for_single_amenity_group(
     df_amenities_processed = amenities.loc[
         lambda df: df["amenity"].isin(group_amenities)
     ].assign(
-        osmid=lambda df: get_amenities_osmid(df, net_accessibility),
+        osmid=lambda df: get_geometries_osmid(df, net_accessibility),
         adj_attraction=lambda df: get_amenities_adjusted_attraction(
             net_accessibility,
             df,
@@ -310,8 +289,6 @@ def calculate(
     )
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 
-    nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=wanted_crs)
-
     df_agebs = load_census_from_bounds(
         xmin,
         ymin,
@@ -330,17 +307,17 @@ def calculate(
         ],
     )
 
+    net_accessibility = load_accessibility_net_from_bounds(
+        xmin, ymin, xmax, ymax, bounds_crs=wanted_crs
+    )
+
     df_mesh = (
         load_mesh_from_bounds(xmin, ymin, xmax, ymax, level=9)
         .pipe(merge_mesh_and_census, agebs=df_agebs)
-        .assign(osmid=lambda df: get_osmid_from_nodes(df, nodes))
+        .assign(osmid=lambda df: get_geometries_osmid(df, net_accessibility))
     )
 
-    net_accessibility = generate_accessibility_net(
-        df_mesh,
-        nodes,
-        edges,
-    )
+    update_net_with_mesh(net_accessibility, df_mesh)
 
     cols = []
     for key, group in amenity_groups.items():

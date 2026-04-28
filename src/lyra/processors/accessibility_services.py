@@ -123,44 +123,38 @@ def generate_accessibility_net(
     return net_accessibility
 
 
-def get_amenities_attraction_and_osmid(
+def get_amenities_osmid(
+    amenities: gpd.GeoDataFrame, net_accessibility: pdna.Network
+) -> pd.Series:
+    return net_accessibility.get_node_ids(
+        x_col=amenities["geometry"].centroid.x,
+        y_col=amenities["geometry"].centroid.y,
+        # Despite what pandana documentation says, this mapping distance is
+        # just standard Euclidean, not based on network impedance. Thus, we
+        # don't need to scale it.
+        mapping_distance=1000,
+    )
+
+
+def get_amenities_adjusted_attraction(
     net_accessibility: pdna.Network,
     amenities: gpd.GeoDataFrame,
     mesh: gpd.GeoDataFrame,
     *,
-    weight_is_travel_time: bool,
-    max_dist_meters: float,
-) -> pd.DataFrame:
-    if weight_is_travel_time:
-        scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
-        impedance = "travel_time"
-    else:
-        scale = 1.0
-        impedance = "length"
-
-    # Add destination properties
-    amenities = amenities.assign(
-        osmid=lambda df: net_accessibility.get_node_ids(
-            x_col=df["geometry"].centroid.x,
-            y_col=df["geometry"].centroid.y,
-            # Despite what pandana documentation says, this mapping distance is
-            # just standard Euclidean, not based on network impedance. Thus, we
-            # don't need to scale it.
-            mapping_distance=1000,
-        )
-    )
-
+    edge_weights: Literal["length", "travel_time"],
+    max_weight: float,
+) -> pd.Series:
     # Calculate aggregations for population reached for each category
     for c in mesh.columns:
         if not c.startswith("p"):
             continue
         aggregated = (
             net_accessibility.aggregate(
-                max_dist_meters * scale,
+                max_weight,
                 type="sum",
                 decay="exp",
                 name=c,
-                imp_name=impedance,
+                imp_name=edge_weights,
             )
             .rename(c)
             .reset_index()
@@ -194,7 +188,7 @@ def get_amenities_attraction_and_osmid(
             df["attraction"]
             / df["reached_population"].where(df["reached_population"] > 1, 1)
         )
-    )[["osmid", "adj_attraction"]]
+    )["adj_attraction"]
 
 
 def compute_accessibility_services(
@@ -203,16 +197,9 @@ def compute_accessibility_services(
     mesh: gpd.GeoDataFrame,
     net_accessibility: pdna.Network,
     *,
-    weight_is_travel_time: bool,
-    max_dist_meters: float,
+    edge_weights: Literal["length", "travel_time"],
+    max_weight: float,
 ) -> pd.Series:
-    if weight_is_travel_time:
-        scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
-        impedance = "travel_time"
-    else:
-        scale = 1.0
-        impedance = "length"
-
     # We need to aggregate adjusted attraction for a single node
     destinations = amenities.groupby("osmid")["adj_attraction"].sum()
 
@@ -222,11 +209,11 @@ def compute_accessibility_services(
     # Aggregate origin nodes
     mesh = mesh.merge(
         net_accessibility.aggregate(
-            max_dist_meters * scale,
+            max_weight,
             type="sum",
             decay="exp",
             name="attr",
-            imp_name=impedance,
+            imp_name=edge_weights,
         ).rename("accessibility"),
         on="osmid",
         how="left",
@@ -250,59 +237,34 @@ def compute_accessibility_services(
     ).rename(columns={"accessibility_score": "accessibility"})["accessibility"]
 
 
-def process_amenities_and_compute_accessibility(
+def calculate_for_single_amenity_group(
+    group: AmenityGroupModel,
     df: gpd.GeoDataFrame,
-    df_amenities: gpd.GeoDataFrame,
-    df_mesh: gpd.GeoDataFrame,
+    amenities: gpd.GeoDataFrame,
+    mesh: gpd.GeoDataFrame,
     net_accessibility: pdna.Network,
-    *,
-    weight_is_travel_time: bool,
-    max_dist_meters: float,
 ) -> pd.Series:
-    temp = get_amenities_attraction_and_osmid(
-        net_accessibility,
-        df_amenities,
-        df_mesh,
-        weight_is_travel_time=weight_is_travel_time,
-        max_dist_meters=max_dist_meters,
+    group_amenities = [amenity.value for amenity in group.amenities]
+    df_amenities_processed = amenities.loc[
+        lambda df: df["amenity"].isin(group_amenities)
+    ].assign(
+        osmid=lambda df: get_amenities_osmid(df, net_accessibility),
+        adj_attraction=lambda df: get_amenities_adjusted_attraction(
+            net_accessibility,
+            df,
+            mesh,
+            edge_weights=group.edge_weights,
+            max_weight=group.max_weight,
+        ),
     )
-
-    df_amenities = df_amenities.join(temp)
 
     return compute_accessibility_services(
         df,
-        df_amenities,
-        df_mesh,
+        df_amenities_processed,
+        mesh,
         net_accessibility,
-        weight_is_travel_time=weight_is_travel_time,
-        max_dist_meters=max_dist_meters,
-    )
-
-
-def calculate_for_single_amenity_group(
-    df: gpd.GeoDataFrame,
-    df_amenities: gpd.GeoDataFrame,
-    df_mesh: gpd.GeoDataFrame,
-    net_accessibility: pdna.Network,
-    edge_weights: Literal["length", "travel_time"],
-    max_weight: float,
-) -> pd.Series:
-    weight_is_travel_time = edge_weights == "travel_time"
-
-    # Always use the threshold in meters, since each function that uses the threshold will convert it to travel time if needed
-    if edge_weights == "length":
-        max_dist_meters = max_weight
-    else:
-        # In this case max_weight is in seconds
-        max_dist_meters = max_weight / LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
-
-    return process_amenities_and_compute_accessibility(
-        df,
-        df_amenities,
-        df_mesh,
-        net_accessibility,
-        weight_is_travel_time=weight_is_travel_time,
-        max_dist_meters=max_dist_meters,
+        edge_weights=group.edge_weights,
+        max_weight=group.max_weight,
     )
 
 
@@ -312,7 +274,8 @@ METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatia
 def calculate(
     data: ExplicitLocationAPI,
     data_public: GeoJSON | None = None,
-    amenity_groups: dict[Annotated[str, Field(max_length=64)], AmenityGroupModel] | None = None,
+    amenity_groups: dict[Annotated[str, Field(max_length=64)], AmenityGroupModel]
+    | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
 ) -> dict:
     if amenity_groups is None:
@@ -381,24 +344,12 @@ def calculate(
 
     cols = []
     for key, group in amenity_groups.items():
-        group_amenities = [
-            amenity.value for amenity in group.amenities
-        ]
-        df_amenities_group = df_amenities.loc[
-            lambda df: df["amenity"].isin(group_amenities)
-        ]
-
-        if len(df_amenities_group) == 0:
-            err = f"No amenities found for group {key} with categories {group_amenities}"
-            raise ValueError(err)
-
         accessibility_group = calculate_for_single_amenity_group(
+            group,
             df,
-            df_amenities_group,
+            df_amenities,
             df_mesh,
             net_accessibility,
-            edge_weights=group.edge_weights,
-            max_weight=group.max_weight,
         )
         cols.append(accessibility_group.rename(f"accessibility_{key}"))
 

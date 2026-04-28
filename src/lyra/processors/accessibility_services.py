@@ -261,6 +261,7 @@ def get_amenities_attraction_and_osmid(
     mesh: gpd.GeoDataFrame,
     *,
     weight_is_travel_time: bool,
+    max_dist_meters: float
 ) -> pd.DataFrame:
     if weight_is_travel_time:
         scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
@@ -281,7 +282,7 @@ def get_amenities_attraction_and_osmid(
         if not c.startswith("p"):
             continue
         amenities = amenities.merge(
-            net_accessibility.aggregate(1000 * scale, "sum", "exp", name=c).rename(c),
+            net_accessibility.aggregate(max_dist_meters * scale, "sum", "exp", name=c).rename(c),
             on="osmid",
             how="left",
         )
@@ -310,6 +311,7 @@ def compute_accessibility_services(
     net_accessibility: pdna.Network,
     *,
     weight_is_travel_time: bool,
+    max_dist_meters: float,
 ) -> pd.Series:
     if weight_is_travel_time:
         scale = LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
@@ -324,7 +326,7 @@ def compute_accessibility_services(
 
     # Aggregate origin nodes
     mesh = mesh.merge(
-        net_accessibility.aggregate(1000 * scale, "sum", "exp", name="attr").rename(
+        net_accessibility.aggregate(max_dist_meters * scale, "sum", "exp", name="attr").rename(
             "accessibility"
         ),
         on="osmid",
@@ -358,7 +360,14 @@ def calculate(
     amenity_groups: list[list[str]] | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
     edge_weights: Literal["length", "travel_time"] = "length",
+    max_weight: float = 1000,
 ) -> dict:
+    # Always use the threshold in meters, since each function that uses the threshold will convert it to travel time if needed
+    if edge_weights == "length":
+        max_dist_meters = max_weight
+    else:
+        max_dist_meters = max_weight / LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER
+
     wanted_crs = "EPSG:6372"
     weight_is_travel_time = edge_weights == "travel_time"
 
@@ -419,6 +428,7 @@ def calculate(
             df_amenities,
             df_mesh,
             weight_is_travel_time=weight_is_travel_time,
+            max_dist_meters=max_dist_meters
         )
     )
 
@@ -428,6 +438,7 @@ def calculate(
         df_mesh,
         net_accessibility,
         weight_is_travel_time=weight_is_travel_time,
+        max_dist_meters=max_dist_meters
     )
 
     if amenity_groups is None:
@@ -442,6 +453,7 @@ def calculate(
                 df_mesh,
                 net_accessibility,
                 weight_is_travel_time=weight_is_travel_time,
+                max_dist_meters=max_dist_meters
             )
             cols.append(accessibility_group.rename(f"accessibility_{i}"))
         return pd.concat(cols, axis=1).to_dict(orient="index")

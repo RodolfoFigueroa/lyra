@@ -1,5 +1,4 @@
-from typing import Annotated, Literal
-from pydantic import Field
+from typing import Literal
 from lyra.models.base import GeoJSON
 from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.functions.utils import convert_geojson_to_gdf
@@ -216,55 +215,20 @@ def compute_accessibility_services(
     ).rename(columns={"accessibility_score": "accessibility"})["accessibility"]
 
 
-def calculate_for_single_amenity_group(
-    group: AmenityGroupModel,
-    df: gpd.GeoDataFrame,
-    amenities: gpd.GeoDataFrame,
-    mesh: gpd.GeoDataFrame,
-    net_accessibility: pdna.Network,
-) -> pd.Series:
-    group_amenities = [amenity.value for amenity in group.amenities]
-    df_amenities_processed = amenities.loc[
-        lambda df: df["amenity"].isin(group_amenities)
-    ].assign(
-        osmid=lambda df: get_geometries_osmid(df, net_accessibility),
-        adj_attraction=lambda df: get_amenities_adjusted_attraction(
-            net_accessibility,
-            df,
-            mesh,
-            edge_weights=group.edge_weights,
-            max_weight=group.max_weight,
-        ),
-    )
-
-    return compute_accessibility_services(
-        df,
-        df_amenities_processed,
-        mesh,
-        net_accessibility,
-        edge_weights=group.edge_weights,
-        max_weight=group.max_weight,
-    )
-
-
 METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
+ITEMS_DEFAULT = {
+    "default": AmenityGroupModel(
+        edge_weights="length",
+        max_weight=1000,
+    )
+}
 
 
-def calculate(
+def calculate_prepare(
     data: ExplicitLocationAPI,
     data_public: GeoJSON | None = None,
-    amenity_groups: dict[Annotated[str, Field(max_length=64)], AmenityGroupModel]
-    | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
 ) -> dict:
-    if amenity_groups is None:
-        amenity_groups = {
-            "default": AmenityGroupModel(
-                edge_weights="length",
-                max_weight=1000,
-            )
-        }
-
     wanted_crs = "EPSG:6372"
 
     if year is None:
@@ -287,6 +251,7 @@ def calculate(
     df_denue = process_denue_amenities(
         load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
     )
+
     df_amenities = concat_amenities(df_denue, df_public_spaces)
 
     df_agebs = load_census_from_bounds(
@@ -319,15 +284,48 @@ def calculate(
 
     update_net_with_mesh(net_accessibility, df_mesh)
 
-    cols = []
-    for key, group in amenity_groups.items():
-        accessibility_group = calculate_for_single_amenity_group(
-            group,
-            df,
-            df_amenities,
-            df_mesh,
-            net_accessibility,
-        )
-        cols.append(accessibility_group.rename(f"accessibility_{key}"))
+    return {
+        "df": df,
+        "amenities": df_amenities,
+        "mesh": df_mesh,
+        "net_accessibility": net_accessibility,
+    }
 
-    return pd.concat(cols, axis=1).to_dict(orient="index")
+
+def calculate_for_items(
+    item_key: str,
+    item: AmenityGroupModel,
+    *,
+    df: gpd.GeoDataFrame,
+    amenities: gpd.GeoDataFrame,
+    mesh: gpd.GeoDataFrame,
+    net_accessibility: pdna.Network,
+) -> pd.Series:
+    group_amenities = [amenity.value for amenity in item.amenities]
+    df_amenities_processed = amenities.loc[
+        lambda df: df["amenity"].isin(group_amenities)
+    ].assign(
+        osmid=lambda df: get_geometries_osmid(df, net_accessibility),
+        adj_attraction=lambda df: get_amenities_adjusted_attraction(
+            net_accessibility,
+            df,
+            mesh,
+            edge_weights=item.edge_weights,
+            max_weight=item.max_weight,
+        ),
+    )
+
+    return compute_accessibility_services(
+        df,
+        df_amenities_processed,
+        mesh,
+        net_accessibility,
+        edge_weights=item.edge_weights,
+        max_weight=item.max_weight,
+    ).rename(f"accessibility_{item_key}")
+
+
+def calculate_aggregate(
+    results: list[tuple[str, pd.Series]],
+) -> dict:
+    return pd.concat([result for _, result in results], axis=1).to_dict(orient="index")

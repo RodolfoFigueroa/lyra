@@ -24,16 +24,57 @@ servers:
     description: WebSocket server for metric computation
 
 channels:
-  metricGeojsonChannel:
-    address: /ws/{metric}
-    description: |
-      Compute a spatial metric over GeoJSON features.
-
-      The metric segment in the address must be one of:
-      accessibility_jobs, accessibility_services, tree_coverage, urbanized_area.
+  treeCoverageChannel:
+    address: /ws/tree_coverage
+    description: Compute tree canopy coverage area in square metres for each spatial unit.
     messages:
-      MetricRequest:
-        $ref: '#/components/messages/MetricRequest'
+      TreeCoverageRequest:
+        $ref: '#/components/messages/TreeCoverageRequest'
+      QueuedMessage:
+        $ref: '#/components/messages/QueuedMessage'
+      ResultMessage:
+        $ref: '#/components/messages/ResultMessage'
+      ErrorMessage:
+        $ref: '#/components/messages/ErrorMessage'
+      ValidationErrorMessage:
+        $ref: '#/components/messages/ValidationErrorMessage'
+
+  urbanizedAreaChannel:
+    address: /ws/urbanized_area
+    description: Compute urbanized built-up surface area in square metres for each spatial unit.
+    messages:
+      UrbanizedAreaRequest:
+        $ref: '#/components/messages/UrbanizedAreaRequest'
+      QueuedMessage:
+        $ref: '#/components/messages/QueuedMessage'
+      ResultMessage:
+        $ref: '#/components/messages/ResultMessage'
+      ErrorMessage:
+        $ref: '#/components/messages/ErrorMessage'
+      ValidationErrorMessage:
+        $ref: '#/components/messages/ValidationErrorMessage'
+
+  accessibilityJobsChannel:
+    address: /ws/accessibility_jobs
+    description: Compute job accessibility scores for each spatial unit using road network analysis and employment data.
+    messages:
+      AccessibilityJobsRequest:
+        $ref: '#/components/messages/AccessibilityJobsRequest'
+      QueuedMessage:
+        $ref: '#/components/messages/QueuedMessage'
+      ResultMessage:
+        $ref: '#/components/messages/ResultMessage'
+      ErrorMessage:
+        $ref: '#/components/messages/ErrorMessage'
+      ValidationErrorMessage:
+        $ref: '#/components/messages/ValidationErrorMessage'
+
+  accessibilityServicesChannel:
+    address: /ws/accessibility_services
+    description: Compute service accessibility scores for each spatial unit using road network analysis and amenity data.
+    messages:
+      AccessibilityServicesRequest:
+        $ref: '#/components/messages/AccessibilityServicesRequest'
       QueuedMessage:
         $ref: '#/components/messages/QueuedMessage'
       ResultMessage:
@@ -44,33 +85,86 @@ channels:
         $ref: '#/components/messages/ValidationErrorMessage'
 
 operations:
-  sendMetricRequest:
+  sendTreeCoverageRequest:
     action: send
-    title: Client sends metric request
+    title: Client sends tree coverage request
     channel:
-      $ref: '#/channels/metricGeojsonChannel'
+      $ref: '#/channels/treeCoverageChannel'
     messages:
-      - $ref: '#/channels/metricGeojsonChannel/messages/MetricRequest'
+      - $ref: '#/channels/treeCoverageChannel/messages/TreeCoverageRequest'
 
-  receiveMetricResponse:
+  receiveTreeCoverageResponse:
     action: receive
-    title: Server sends computation status and results
+    title: Server sends tree coverage computation status and results
     channel:
-      $ref: '#/channels/metricGeojsonChannel'
+      $ref: '#/channels/treeCoverageChannel'
     messages:
-      - $ref: '#/channels/metricGeojsonChannel/messages/QueuedMessage'
-      - $ref: '#/channels/metricGeojsonChannel/messages/ResultMessage'
-      - $ref: '#/channels/metricGeojsonChannel/messages/ErrorMessage'
-      - $ref: '#/channels/metricGeojsonChannel/messages/ValidationErrorMessage'
+      - $ref: '#/channels/treeCoverageChannel/messages/QueuedMessage'
+      - $ref: '#/channels/treeCoverageChannel/messages/ResultMessage'
+      - $ref: '#/channels/treeCoverageChannel/messages/ErrorMessage'
+      - $ref: '#/channels/treeCoverageChannel/messages/ValidationErrorMessage'
+
+  sendUrbanizedAreaRequest:
+    action: send
+    title: Client sends urbanized area request
+    channel:
+      $ref: '#/channels/urbanizedAreaChannel'
+    messages:
+      - $ref: '#/channels/urbanizedAreaChannel/messages/UrbanizedAreaRequest'
+
+  receiveUrbanizedAreaResponse:
+    action: receive
+    title: Server sends urbanized area computation status and results
+    channel:
+      $ref: '#/channels/urbanizedAreaChannel'
+    messages:
+      - $ref: '#/channels/urbanizedAreaChannel/messages/QueuedMessage'
+      - $ref: '#/channels/urbanizedAreaChannel/messages/ResultMessage'
+      - $ref: '#/channels/urbanizedAreaChannel/messages/ErrorMessage'
+      - $ref: '#/channels/urbanizedAreaChannel/messages/ValidationErrorMessage'
+
+  sendAccessibilityJobsRequest:
+    action: send
+    title: Client sends accessibility jobs request
+    channel:
+      $ref: '#/channels/accessibilityJobsChannel'
+    messages:
+      - $ref: '#/channels/accessibilityJobsChannel/messages/AccessibilityJobsRequest'
+
+  receiveAccessibilityJobsResponse:
+    action: receive
+    title: Server sends accessibility jobs computation status and results
+    channel:
+      $ref: '#/channels/accessibilityJobsChannel'
+    messages:
+      - $ref: '#/channels/accessibilityJobsChannel/messages/QueuedMessage'
+      - $ref: '#/channels/accessibilityJobsChannel/messages/ResultMessage'
+      - $ref: '#/channels/accessibilityJobsChannel/messages/ErrorMessage'
+      - $ref: '#/channels/accessibilityJobsChannel/messages/ValidationErrorMessage'
+
+  sendAccessibilityServicesRequest:
+    action: send
+    title: Client sends accessibility services request
+    channel:
+      $ref: '#/channels/accessibilityServicesChannel'
+    messages:
+      - $ref: '#/channels/accessibilityServicesChannel/messages/AccessibilityServicesRequest'
+
+  receiveAccessibilityServicesResponse:
+    action: receive
+    title: Server sends accessibility services computation status and results
+    channel:
+      $ref: '#/channels/accessibilityServicesChannel'
+    messages:
+      - $ref: '#/channels/accessibilityServicesChannel/messages/QueuedMessage'
+      - $ref: '#/channels/accessibilityServicesChannel/messages/ResultMessage'
+      - $ref: '#/channels/accessibilityServicesChannel/messages/ErrorMessage'
+      - $ref: '#/channels/accessibilityServicesChannel/messages/ValidationErrorMessage'
 
 components:
   messages:
-    MetricRequest:
-      description: |
-        Client request to compute a metric.
-
-        The exact payload structure depends on the metric. All metrics require a
-        `data` field and may have optional parameters like `year` or `group_patterns`.
+    TreeCoverageRequest:
+      description: Client request to compute tree canopy coverage.
       payload:
         type: object
         required:
@@ -78,41 +172,94 @@ components:
         properties:
           data:
             description: |
-              GeoJSON-like data structure containing spatial units.
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+            oneOf:
+              - $ref: '#/components/schemas/GeoJSONWrapper'
+              - $ref: '#/components/schemas/CVEGEOListWrapper'
+              - $ref: '#/components/schemas/MetZoneNameWrapper'
+            discriminator: data_type
 
-              Accepted logical type: ExplicitLocationAPI.
-            type: object
-            example:
-              data_type: geojson
-              value:
-                type: FeatureCollection
-                features:
-                  - type: Feature
-                    geometry:
-                      type: Polygon
-                      coordinates: [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
-                    properties:
-                      cvegeo: '110010001001'
-          year:
+    UrbanizedAreaRequest:
+      description: Client request to compute urbanized built-up surface area.
+      payload:
+        type: object
+        required:
+          - data
+        properties:
+          data:
             description: |
-              Optional year parameter for metrics that use temporal DENUE data.
-              Valid only for accessibility_jobs and accessibility_services.
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+            oneOf:
+              - $ref: '#/components/schemas/GeoJSONWrapper'
+              - $ref: '#/components/schemas/CVEGEOListWrapper'
+              - $ref: '#/components/schemas/MetZoneNameWrapper'
+            discriminator: data_type
+
+    AccessibilityJobsRequest:
+      description: Client request to compute job accessibility scores.
+      payload:
+        type: object
+        required:
+          - data
+        properties:
+          data:
+            description: |
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+            oneOf:
+              - $ref: '#/components/schemas/GeoJSONWrapper'
+              - $ref: '#/components/schemas/CVEGEOListWrapper'
+              - $ref: '#/components/schemas/MetZoneNameWrapper'
+            discriminator: data_type
+          year:
+            description: DENUE snapshot year. Defaults to 2025 when omitted.
             type: integer
             enum: [2020, 2021, 2022, 2023, 2024, 2025]
             example: 2025
-          group_patterns:
+          items:
             description: |
-              Optional list of regex patterns for grouping economic activities.
-              Valid only for accessibility_jobs.
-            type: array
-            items:
-              type: string
-            example: ['^62', '^61']
+              Named job groups. Each key is a group name; each value configures
+              the economic activity filter and routing parameters for that group.
+              When omitted, a single default group (all activities, drive network,
+              1000 m) is used.
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/JobGroupModel'
+
+    AccessibilityServicesRequest:
+      description: Client request to compute service accessibility scores.
+      payload:
+        type: object
+        required:
+          - data
+        properties:
+          data:
+            description: |
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+            oneOf:
+              - $ref: '#/components/schemas/GeoJSONWrapper'
+              - $ref: '#/components/schemas/CVEGEOListWrapper'
+              - $ref: '#/components/schemas/MetZoneNameWrapper'
+            discriminator: data_type
+          year:
+            description: DENUE snapshot year. Defaults to 2025 when omitted.
+            type: integer
+            enum: [2020, 2021, 2022, 2023, 2024, 2025]
+            example: 2025
           data_public:
             description: |
-              Optional GeoJSON of public spaces.
-              Valid only for accessibility_services.
+              GeoJSON FeatureCollection of public spaces (parks). When omitted,
+              parks are fetched from OpenStreetMap. Features must include an
+              `area` property (in square metres).
+            $ref: '#/components/schemas/GeoJSONValue'
+          items:
+            description: |
+              Named amenity groups. Each key is a group name; each value configures
+              which amenities to include and the routing parameters for that group.
+              When omitted, a single default group (all amenities, drive network,
+              1000 m) is used.
             type: object
+            additionalProperties:
+              $ref: '#/components/schemas/AmenityGroupModel'
 
     QueuedMessage:
       description: Server acknowledges the request and queues the computation task.
@@ -198,3 +345,241 @@ components:
               - loc: ['data']
                 msg: Field required
                 type: missing
+
+  schemas:
+    GeoJSONValue:
+      description: A GeoJSON FeatureCollection with a CRS declaration.
+      type: object
+      required:
+        - type
+        - features
+        - crs
+      properties:
+        type:
+          type: string
+          const: FeatureCollection
+        features:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [id, type, geometry, properties]
+            properties:
+              id:
+                type: string
+                minLength: 1
+              type:
+                type: string
+                const: Feature
+              geometry:
+                oneOf:
+                  - type: object
+                    required: [type, coordinates]
+                    properties:
+                      type:
+                        type: string
+                        const: Point
+                      coordinates:
+                        type: array
+                        items:
+                          type: number
+                  - type: object
+                    required: [type, coordinates]
+                    properties:
+                      type:
+                        type: string
+                        const: Polygon
+                      coordinates:
+                        type: array
+                        items:
+                          type: array
+                          items:
+                            type: array
+                            items:
+                              type: number
+                  - type: object
+                    required: [type, coordinates]
+                    properties:
+                      type:
+                        type: string
+                        const: MultiPolygon
+                      coordinates:
+                        type: array
+                        items:
+                          type: array
+                          items:
+                            type: array
+                            items:
+                              type: array
+                              items:
+                                type: number
+              properties:
+                type: object
+        crs:
+          type: object
+          required: [type, properties]
+          properties:
+            type:
+              type: string
+              const: name
+            properties:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+      example:
+        type: FeatureCollection
+        crs:
+          type: name
+          properties:
+            name: urn:ogc:def:crs:EPSG::6372
+        features:
+          - id: '110010001001'
+            type: Feature
+            geometry:
+              type: Polygon
+              coordinates: [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
+            properties:
+              cvegeo: '110010001001'
+
+    GeoJSONWrapper:
+      description: A GeoJSON FeatureCollection wrapped with a data_type discriminator.
+      type: object
+      required: [data_type, value]
+      properties:
+        data_type:
+          type: string
+          const: geojson
+        value:
+          $ref: '#/components/schemas/GeoJSONValue'
+      example:
+        data_type: geojson
+        value:
+          type: FeatureCollection
+          crs:
+            type: name
+            properties:
+              name: urn:ogc:def:crs:EPSG::6372
+          features:
+            - id: '110010001001'
+              type: Feature
+              geometry:
+                type: Polygon
+                coordinates: [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
+              properties:
+                cvegeo: '110010001001'
+
+    CVEGEOListWrapper:
+      description: |
+        A list of CVEGEO codes. All codes must have the same length,
+        which determines the geographic level (2=state, 5=municipality,
+        9=locality, 13=AGEB, 16=block).
+      type: object
+      required: [data_type, value]
+      properties:
+        data_type:
+          type: string
+          const: cvegeo_list
+        value:
+          type: array
+          minItems: 1
+          items:
+            type: string
+      example:
+        data_type: cvegeo_list
+        value: ['0900100010010']
+
+    MetZoneNameWrapper:
+      description: The name of a metropolitan zone.
+      type: object
+      required: [data_type, value]
+      properties:
+        data_type:
+          type: string
+          const: met_zone_name
+        value:
+          type: string
+          minLength: 1
+      example:
+        data_type: met_zone_name
+        value: Valle de México
+
+    JobGroupModel:
+      description: |
+        Configuration for a job accessibility group in accessibility_jobs.
+        Specifies the economic activity pattern, network type, and routing
+        parameters.
+      type: object
+      required: [edge_weights, max_weight, network_type]
+      properties:
+        pattern:
+          description: |
+            Regex pattern matched against the 6-digit DENUE economic activity
+            code (codigo_act). Defaults to `\d{6}` (all activities).
+          type: string
+          default: '\d{6}'
+          example: '^62'
+        edge_weights:
+          description: Edge cost used by the network routing algorithm.
+          type: string
+          enum: [length, travel_time]
+        max_weight:
+          description: Maximum cumulative edge weight (metres or seconds) for accessibility aggregation.
+          type: number
+          example: 1000
+        network_type:
+          description: Road network type.
+          type: string
+          enum: [drive, walk]
+      example:
+        pattern: '^62'
+        edge_weights: length
+        max_weight: 1000
+        network_type: drive
+
+    AmenityGroupModel:
+      description: |
+        Configuration for an amenity accessibility group in accessibility_services.
+        Specifies which amenities to include and the routing parameters for
+        attraction and accessibility aggregation.
+      type: object
+      required:
+        - attraction_edge_weights
+        - attraction_max_weight
+        - accessibility_edge_weights
+        - accessibility_max_weight
+        - network_type
+      properties:
+        amenities:
+          description: List of amenity types to include. Defaults to all available types.
+          type: array
+          items:
+            type: string
+        attraction_edge_weights:
+          description: Edge cost for computing amenity attraction scores.
+          type: string
+          enum: [length, travel_time]
+        attraction_max_weight:
+          description: Maximum cumulative edge weight for attraction aggregation.
+          type: number
+          example: 1000
+        accessibility_edge_weights:
+          description: Edge cost for computing spatial unit accessibility scores.
+          type: string
+          enum: [length, travel_time]
+        accessibility_max_weight:
+          description: Maximum cumulative edge weight for accessibility aggregation.
+          type: number
+          example: 1000
+        network_type:
+          description: Road network type.
+          type: string
+          enum: [drive, walk]
+      example:
+        attraction_edge_weights: length
+        attraction_max_weight: 1000
+        accessibility_edge_weights: length
+        accessibility_max_weight: 1000
+        network_type: drive

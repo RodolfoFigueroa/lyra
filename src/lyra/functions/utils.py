@@ -22,8 +22,7 @@ def reduce_ee_image_over_gdf_factory(
     load_img_func: Callable[[ee.Geometry], ee.Image], *, reducer: ee.Reducer, scale: int
 ) -> Callable[[ExplicitLocationAPI], dict[str, float]]:
     def _f(data: ExplicitLocationAPI) -> dict:
-        df = convert_geojson_to_gdf(data)
-        df = df.to_crs("EPSG:4326")
+        df = convert_geojson_to_gdf(data)[["geometry"]].reset_index(names="orig_index").to_crs("EPSG:4326")
 
         bbox = ee.Geometry.BBox(*df.total_bounds)
         img = load_img_func(bbox)
@@ -39,13 +38,7 @@ def reduce_ee_image_over_gdf_factory(
         )
 
         # TODO: Temporary fix until ty respects annotated over inferred types
-        gdf = gpd.GeoDataFrame(computed)
-        return (
-            gdf[["cvegeo", "sum"]]
-            .rename(columns={"sum": "area_m2"})
-            .set_index("cvegeo")["area_m2"]
-            .to_dict()
-        )
+        return pd.DataFrame(computed[["orig_index", "sum"]]).set_index("orig_index")["sum"].to_dict()
 
     return _f
 

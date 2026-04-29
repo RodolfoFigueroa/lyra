@@ -3,43 +3,27 @@ import geopandas as gpd
 import pandas as pd
 import pandana as pdna
 from lyra.functions.utils import convert_geojson_to_gdf
+from lyra.models.processors.accessibility_jobs import RegexPattern, JobGroupModel
 from lyra.models.wrappers import ExplicitLocationAPI
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
-from lyra.functions.load.osm import load_roads_from_bounds
+from lyra.functions.load.osm import (
+    load_roads_from_bounds,
+    load_accessibility_net_from_bounds,
+)
 from lyra.functions.load.db import (
     load_denue_from_bounds,
     load_mesh_from_bounds,
 )
+from pydantic import Field
+from typing import Annotated
 
 
-def compute_accessibility_jobs(
-    df: gpd.GeoDataFrame,
-    denue: gpd.GeoDataFrame,
-    mesh: gpd.GeoDataFrame,
-    nodes: gpd.GeoDataFrame,
-    edges: gpd.GeoDataFrame,
-    *,
-    group_patterns: list[str] | None = None,
-) -> pd.DataFrame:
-    mesh = mesh[["geometry"]]
-
-    net_accessibility = pdna.Network(
-        nodes["geometry"].x.copy(),
-        nodes["geometry"].y.copy(),
-        edges["u"].copy(),
-        edges["v"].copy(),
-        edges[["length"]].copy(),
-    )
-
-    crs = df.crs
-    if crs is None:
-        err = "AGEBs GeoDataFrame must have a defined CRS."
-        raise ValueError(err)
-
-    denue = (
+def process_denue(
+    denue: gpd.GeoDataFrame, net_accessibility: pdna.Network
+) -> gpd.GeoDataFrame:
+    return (
         denue.assign(num_workers=lambda x: x["per_ocu"].map(PER_OCU_TO_NUM_WORKERS_MAP))
         .drop(columns=["per_ocu"])
-        .to_crs(crs)
         .assign(
             osmid=lambda df: net_accessibility.get_node_ids(
                 df["geometry"].x, df["geometry"].y, mapping_distance=1000
@@ -47,6 +31,17 @@ def compute_accessibility_jobs(
         )
     )
 
+
+def compute_accessibility_jobs(
+    df: gpd.GeoDataFrame,
+    denue: gpd.GeoDataFrame,
+    mesh: gpd.GeoDataFrame,
+    net_accessibility: pdna.Network,
+    *,
+    max_weight: float,
+    edge_weights: Literal["length", "travel_time"],
+    group_patterns: list[RegexPattern] | None = None,
+) -> pd.DataFrame:
     denue_osmid = denue.groupby("osmid")["num_workers"].sum()
     net_accessibility.set(denue_osmid.index, variable=denue_osmid.values, name="jobs")
 
@@ -63,24 +58,28 @@ def compute_accessibility_jobs(
                 name=f"jobs_{i}",
             )
 
-    mesh = mesh.assign(
-        osmid=lambda df: net_accessibility.get_node_ids(
-            df["geometry"].centroid.x,
-            df["geometry"].centroid.y,
-            mapping_distance=1000,
+    mesh = (
+        mesh[["geometry"]]
+        .assign(
+            osmid=lambda df: net_accessibility.get_node_ids(
+                df["geometry"].centroid.x,
+                df["geometry"].centroid.y,
+                mapping_distance=1000,
+            )
         )
-    ).merge(
-        net_accessibility.aggregate(20000, "sum", "exp", name="jobs")
-        .rename("jobs")
-        .fillna(0),
-        on="osmid",
-        how="left",
+        .merge(
+            net_accessibility.aggregate(max_weight, "sum", "exp", name="jobs")
+            .rename("jobs")
+            .fillna(0),
+            on="osmid",
+            how="left",
+        )
     )
 
     if group_patterns is not None:
         for i in range(len(group_patterns)):
             mesh = mesh.merge(
-                net_accessibility.aggregate(20000, "sum", "exp", name=f"jobs_{i}")
+                net_accessibility.aggregate(max_weight, "sum", "exp", name=f"jobs_{i}")
                 .rename(f"jobs_{i}")
                 .fillna(0),
                 on="osmid",
@@ -101,17 +100,35 @@ METRIC_DESCRIPTION: str = "Computes job accessibility scores for each spatial un
 
 def calculate(
     data: ExplicitLocationAPI,
-    group_patterns: list[str] | None = None,
+    job_groups: dict[Annotated[str, Field(max_length=64)], JobGroupModel] | None = None,
     year: Literal[2020, 2021, 2022, 2023, 2024, 2025] | None = None,
 ) -> dict:
+    wanted_crs = "EPSG:6372"
+
+    if job_groups is None:
+        job_groups = {
+            "default": JobGroupModel(
+                edge_weights="length",
+                max_weight=1000,
+            )
+        }
+
     if year is None:
         year = 2025
 
     df = convert_geojson_to_gdf(data)
-    df = df.to_crs("EPSG:6372")
+    df = df.to_crs(wanted_crs)
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
-    df_denue = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
+    net_accessibility = load_accessibility_net_from_bounds(
+        xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372"
+    )
+
+    df_denue = load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year).to_crs(
+        wanted_crs
+    )
+    df_denue = process_denue(df_denue, net_accessibility)
+
     df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax)
 
     nodes, edges = load_roads_from_bounds(

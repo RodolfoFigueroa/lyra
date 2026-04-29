@@ -133,3 +133,5 @@ AMENITIES_DICT = {
         importance=0.15,
     ),
 }
+
+WALK_SPEED_KPH = 5  # Average walking speed in kilometers per hour

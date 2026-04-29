@@ -21,3 +21,4 @@ class JobGroupModel(StrictBaseModel):
     pattern: RegexPattern = r"\d{6}"
     edge_weights: Literal["length", "travel_time"]
     max_weight: float
+    network_type: Literal["drive", "walk"]

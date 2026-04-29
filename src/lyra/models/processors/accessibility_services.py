@@ -14,5 +14,8 @@ AmenityEnum = StrEnum(
 
 class AmenityGroupModel(StrictBaseModel):
     amenities: list[AmenityEnum] = Field(default_factory=lambda: list(AmenityEnum))
-    edge_weights: Literal["length", "travel_time"]
-    max_weight: float
+    attraction_edge_weights: Literal["length", "travel_time"]
+    attraction_max_weight: float
+    accessibility_edge_weights: Literal["length", "travel_time"]
+    accessibility_max_weight: float
+    network_type: Literal["walk", "drive"]

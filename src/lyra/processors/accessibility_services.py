@@ -8,6 +8,7 @@ from lyra.functions.load.db import (
     load_mesh_from_bounds,
     load_census_from_bounds,
 )
+from lyra.functions.utils import get_geometries_osmid
 from lyra.functions.load.osm import (
     load_osm_features_from_bounds,
     load_accessibility_net_from_bounds,
@@ -96,22 +97,6 @@ def update_net_with_mesh(
         if not c.startswith("p"):
             continue
         net_accessibility.set(mesh_osmid["osmid"], variable=mesh_osmid[c], name=c)
-
-
-def get_geometries_osmid(
-    geometries: gpd.GeoDataFrame,
-    net_accessibility: pdna.Network,
-    *,
-    mapping_distance: float = 1000,
-) -> pd.Series:
-    return net_accessibility.get_node_ids(
-        x_col=geometries["geometry"].centroid.x,
-        y_col=geometries["geometry"].centroid.y,
-        # Despite what pandana documentation says, this mapping distance is
-        # just standard Euclidean, not based on network impedance. Thus, we
-        # don't need to scale it.
-        mapping_distance=mapping_distance,
-    )
 
 
 def get_amenities_adjusted_attraction(
@@ -218,8 +203,11 @@ def compute_accessibility_services(
 METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
 ITEMS_DEFAULT = {
     "default": AmenityGroupModel(
-        edge_weights="length",
-        max_weight=1000,
+        attraction_edge_weights="length",
+        attraction_max_weight=1000,
+        accessibility_edge_weights="length",
+        accessibility_max_weight=1000,
+        network_type="drive"
     )
 }
 
@@ -272,23 +260,27 @@ def calculate_prepare(
         ],
     )
 
-    net_accessibility = load_accessibility_net_from_bounds(
-        xmin, ymin, xmax, ymax, bounds_crs=wanted_crs
-    )
+    df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax, level=9).pipe(merge_mesh_and_census, agebs=df_agebs)
 
-    df_mesh = (
-        load_mesh_from_bounds(xmin, ymin, xmax, ymax, level=9)
-        .pipe(merge_mesh_and_census, agebs=df_agebs)
-        .assign(osmid=lambda df: get_geometries_osmid(df, net_accessibility))
-    )
+    out_map = {}
+    for network_type in ("walk", "drive"):
+        net_accessibility = load_accessibility_net_from_bounds(
+            xmin, ymin, xmax, ymax, bounds_crs=wanted_crs, network_type=network_type
+        )
 
-    update_net_with_mesh(net_accessibility, df_mesh)
+        df_mesh_type = (
+            df_mesh
+            .assign(osmid=lambda df: get_geometries_osmid(df, net_accessibility))
+        )
+
+        update_net_with_mesh(net_accessibility, df_mesh_type)
+        out_map[f"net_accessibility_{network_type}"] = net_accessibility
+        out_map[f"mesh_{network_type}"] = df_mesh_type
 
     return {
         "df": df,
         "amenities": df_amenities,
-        "mesh": df_mesh,
-        "net_accessibility": net_accessibility,
+        **out_map,
     }
 
 
@@ -298,9 +290,18 @@ def calculate_for_items(
     *,
     df: gpd.GeoDataFrame,
     amenities: gpd.GeoDataFrame,
-    mesh: gpd.GeoDataFrame,
-    net_accessibility: pdna.Network,
+    mesh_walk: gpd.GeoDataFrame,
+    mesh_drive: gpd.GeoDataFrame,
+    net_accessibility_walk: pdna.Network,
+    net_accessibility_drive: pdna.Network,
 ) -> pd.Series:
+    if item.network_type == "walk":
+        mesh = mesh_walk
+        net_accessibility = net_accessibility_walk
+    else:
+        mesh = mesh_drive
+        net_accessibility = net_accessibility_drive
+
     group_amenities = [amenity.value for amenity in item.amenities]
     df_amenities_processed = amenities.loc[
         lambda df: df["amenity"].isin(group_amenities)
@@ -310,8 +311,8 @@ def calculate_for_items(
             net_accessibility,
             df,
             mesh,
-            edge_weights=item.edge_weights,
-            max_weight=item.max_weight,
+            edge_weights=item.attraction_edge_weights,
+            max_weight=item.attraction_max_weight,
         ),
     )
 
@@ -320,8 +321,8 @@ def calculate_for_items(
         df_amenities_processed,
         mesh,
         net_accessibility,
-        edge_weights=item.edge_weights,
-        max_weight=item.max_weight,
+        edge_weights=item.accessibility_edge_weights,
+        max_weight=item.accessibility_max_weight,
     ).rename(f"accessibility_{item_key}")
 
 

@@ -66,21 +66,31 @@ def load_geojson_from_cvegeos(cvegeos: list[str]):
     return GeoJSON(**json.loads(gdf.to_json()))
 
 
-def load_geometries_from_met_zone_name(name: str) -> gpd.GeoDataFrame:
-    return gpd.read_postgis(
-        """
-        SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
-        FROM census_2020_ageb
-        """
-    )
+# TODO: Import levels other than AGEB
+def load_geometries_from_met_zone_code(code: str) -> gpd.GeoDataFrame:
+    with engine.connect() as conn:
+        return gpd.read_postgis(
+            """
+            SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
+                FROM census_2020_ageb
+            INNER JOIN census_2020_mun
+                ON census_2020_ageb.cve_mun = census_2020_mun.cvegeo
+            INNER JOIN metropoli_2020
+                ON census_2020_mun.cve_met = metropoli_2020.cve_met
+            WHERE metropoli_2020.cve_met = %(code)s
+            """,
+            conn,
+            params={"code": code},
+            geom_col="geometry",
+        )
 
 
-def load_geojson_from_met_zone_name(name: str) -> GeoJSON:
-    gdf = load_geometries_from_met_zone_name(name)
+def load_geojson_from_met_zone_code(code: str) -> GeoJSON:
+    gdf = load_geometries_from_met_zone_code(code)
     return GeoJSON(**json.loads(gdf.to_json()))
 
 
-def load_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
+def get_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
     """Return (cve_met, nom_met) for the closest matching metropolitan zone name.
 
     Uses PostgreSQL trigram similarity (pg_trgm extension required).

@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, HTTPException
 
-from lyra.functions.load.db import load_met_zone_code_from_name
+from lyra.functions.load.db import get_met_zone_code_from_name
 from lyra.models.base import MetZoneCodeResponse
 
 router = APIRouter()
@@ -9,7 +9,7 @@ router = APIRouter()
 
 @router.get("/met_zone_code", response_model=MetZoneCodeResponse)
 async def get_met_zone_code(name: str) -> MetZoneCodeResponse:
-    result = await asyncio.to_thread(load_met_zone_code_from_name, name)
+    result = await asyncio.to_thread(get_met_zone_code_from_name, name)
 
     if result is None:
         raise HTTPException(status_code=404, detail="No metropolitan zone matched the given name.")

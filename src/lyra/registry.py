@@ -23,6 +23,7 @@ class MetricInfo(TypedDict):
     name: str
     description: str
     parameters: list[MetricParameterInfo]
+    returns_file: bool
 
 
 def generate_model_from_func(
@@ -196,6 +197,11 @@ def _get_annotation_display_name(annotation) -> str:
     return cleaned
 
 
+def get_metric_info(name: str) -> MetricInfo | None:
+    all_metrics = get_metrics_info()
+    return next((m for m in all_metrics if m["name"] == name), None)
+
+
 def get_metrics_info() -> list[MetricInfo]:
     result = []
     for name, entry in TASK_REGISTRY.items():
@@ -233,6 +239,7 @@ def get_metrics_info() -> list[MetricInfo]:
                 "name": name,
                 "description": entry["description"],
                 "parameters": parameters,
+                "returns_file": entry.get("returns_file", False),
             }
         )
     return result

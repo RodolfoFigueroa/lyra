@@ -9,7 +9,7 @@ from types import FunctionType
 from pydantic import BaseModel
 from lyra.functions.load.db import (
     load_geojson_from_cvegeos,
-    load_geojson_from_met_zone_name,
+    load_geojson_from_met_zone_code,
 )
 
 
@@ -19,48 +19,54 @@ celery_app = Celery("ee_tasks", broker=REDIS_URL, backend=REDIS_URL)
 redis_client = redis.from_url(REDIS_URL)
 
 
+def convert_explicit_type(payload: dict) -> dict:
+    processor_map = {
+        "cvegeo_list": load_geojson_from_cvegeos,
+        "met_zone_code": load_geojson_from_met_zone_code,
+        "geojson": lambda x: x,
+    }
+
+    data_type = payload["data_type"]
+    data = payload["value"]
+
+    # Route to the correct conversion function based on data_type field
+    raw_geojson = processor_map[data_type](data)
+
+    # Repackage the processed GeoJSON into the wrapped format expected by the reconstructed Pydantic model
+    return {
+        "data_type": "geojson",
+        "value": raw_geojson,
+    }
+
+
+def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
+    # Massage function kwargs to unwrap the GeoJSON from the discriminator wrapper if necessary
+    func_kwargs = {}
+    for k in reconstructed_model.model_fields.keys():
+        attr = getattr(reconstructed_model, k)
+
+        if hasattr(attr, "data_type") and hasattr(attr, "value"):
+            func_kwargs[k] = attr.value
+        else:
+            func_kwargs[k] = attr
+    return func_kwargs
+
+
 def make_celery_wrapper(
     original_calculate_func: FunctionType,
     ModelClass: Type[BaseModel],
     conversion_map: dict[str, list[str]],
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
-        processor_map = {
-            "cvegeo_list": load_geojson_from_cvegeos,
-            "met_zone_name": load_geojson_from_met_zone_name,
-            "geojson": lambda x: x,
-        }
-
         task_id = self.request.id
 
         try:
             for param_name, tags in conversion_map.items():
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    payload = validated_dict[param_name]
-
-                    data_type = payload["data_type"]
-                    data = payload["value"]
-
-                    # Route to the correct conversion function based on data_type field
-                    raw_geojson = processor_map[data_type](data)
-
-                    # Repackage the processed GeoJSON into the wrapped format expected by the reconstructed Pydantic model
-                    validated_dict[param_name] = {
-                        "data_type": "geojson",
-                        "value": raw_geojson,
-                    }
+                    validated_dict[param_name] = convert_explicit_type(validated_dict[param_name])
 
             reconstructed_model = ModelClass(**validated_dict)
-
-            # Massage function kwargs to unwrap the GeoJSON from the discriminator wrapper if necessary
-            func_kwargs = {}
-            for k in reconstructed_model.model_fields.keys():
-                attr = getattr(reconstructed_model, k)
-
-                if hasattr(attr, "data_type") and hasattr(attr, "value"):
-                    func_kwargs[k] = attr.value
-                else:
-                    func_kwargs[k] = attr
+            func_kwargs = rebuild_function_kwargs(reconstructed_model)
 
             result = original_calculate_func(**func_kwargs)
 
@@ -92,39 +98,15 @@ def make_celery_wrapper_file(
     conversion_map: dict[str, list[str]],
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
-        processor_map = {
-            "cvegeo_list": load_geojson_from_cvegeos,
-            "met_zone_name": load_geojson_from_met_zone_name,
-            "geojson": lambda x: x,
-        }
-
         task_id = self.request.id
 
         try:
             for param_name, tags in conversion_map.items():
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    payload = validated_dict[param_name]
-
-                    data_type = payload["data_type"]
-                    data = payload["value"]
-
-                    raw_geojson = processor_map[data_type](data)
-
-                    validated_dict[param_name] = {
-                        "data_type": "geojson",
-                        "value": raw_geojson,
-                    }
+                    validated_dict[param_name] = convert_explicit_type(validated_dict[param_name])
 
             reconstructed_model = ModelClass(**validated_dict)
-
-            func_kwargs = {}
-            for k in reconstructed_model.model_fields.keys():
-                attr = getattr(reconstructed_model, k)
-
-                if hasattr(attr, "data_type") and hasattr(attr, "value"):
-                    func_kwargs[k] = attr.value
-                else:
-                    func_kwargs[k] = attr
+            func_kwargs = rebuild_function_kwargs(reconstructed_model)
 
             file_path = original_calculate_func(**func_kwargs)
 
@@ -162,39 +144,15 @@ def make_celery_wrapper_batched(
     items_default,
 ) -> Callable:
     def wrapper(self, validated_dict, *args, **kwargs):
-        processor_map = {
-            "cvegeo_list": load_geojson_from_cvegeos,
-            "met_zone_name": load_geojson_from_met_zone_name,
-            "geojson": lambda x: x,
-        }
-
         task_id = self.request.id
 
         try:
             for param_name, tags in conversion_map.items():
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    payload = validated_dict[param_name]
-
-                    data_type = payload["data_type"]
-                    data = payload["value"]
-
-                    raw_geojson = processor_map[data_type](data)
-
-                    validated_dict[param_name] = {
-                        "data_type": "geojson",
-                        "value": raw_geojson,
-                    }
+                    validated_dict[param_name] = convert_explicit_type(validated_dict[param_name])
 
             reconstructed_model = ModelClass(**validated_dict)
-
-            func_kwargs = {}
-            for k in reconstructed_model.model_fields.keys():
-                attr = getattr(reconstructed_model, k)
-
-                if hasattr(attr, "data_type") and hasattr(attr, "value"):
-                    func_kwargs[k] = attr.value
-                else:
-                    func_kwargs[k] = attr
+            func_kwargs = rebuild_function_kwargs(reconstructed_model)
 
             items_dict = func_kwargs.pop("items", None) or items_default
             if items_dict is None:

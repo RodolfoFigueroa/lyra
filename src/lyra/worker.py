@@ -86,6 +86,73 @@ def make_celery_wrapper(
     return wrapper
 
 
+def make_celery_wrapper_file(
+    original_calculate_func: FunctionType,
+    ModelClass: Type[BaseModel],
+    conversion_map: dict[str, list[str]],
+) -> Callable:
+    def wrapper(self, validated_dict, *args, **kwargs):
+        processor_map = {
+            "cvegeo_list": load_geojson_from_cvegeos,
+            "met_zone_name": load_geojson_from_met_zone_name,
+            "geojson": lambda x: x,
+        }
+
+        task_id = self.request.id
+
+        try:
+            for param_name, tags in conversion_map.items():
+                if "REQUIRE_EXPLICIT_TYPE" in tags:
+                    payload = validated_dict[param_name]
+
+                    data_type = payload["data_type"]
+                    data = payload["value"]
+
+                    raw_geojson = processor_map[data_type](data)
+
+                    validated_dict[param_name] = {
+                        "data_type": "geojson",
+                        "value": raw_geojson,
+                    }
+
+            reconstructed_model = ModelClass(**validated_dict)
+
+            func_kwargs = {}
+            for k in reconstructed_model.model_fields.keys():
+                attr = getattr(reconstructed_model, k)
+
+                if hasattr(attr, "data_type") and hasattr(attr, "value"):
+                    func_kwargs[k] = attr.value
+                else:
+                    func_kwargs[k] = attr
+
+            file_path = original_calculate_func(**func_kwargs)
+
+            full_payload = {
+                "status": "success",
+                "result_type": "file",
+                "file_path": str(file_path),
+            }
+            redis_client.setex(f"result_data_{task_id}", 600, json.dumps(full_payload))
+
+            notification = {"status": "success", "download_id": task_id}
+
+        except Exception as e:
+            logger.exception(
+                "Celery task %s failed while executing metric %s",
+                task_id,
+                getattr(self, "name", original_calculate_func.__module__),
+            )
+            notification = {"status": "error", "message": str(e)}
+
+        channel_name = f"task_results_{task_id}"
+        redis_client.publish(channel_name, json.dumps(notification))
+        return notification
+
+    wrapper.__name__ = original_calculate_func.__name__
+    return wrapper
+
+
 def make_celery_wrapper_batched(
     prepare_func: FunctionType,
     for_items_func: FunctionType,
@@ -175,6 +242,10 @@ def register_tasks():
                 info["model"],
                 info["params_to_convert"],
                 info["items_default"],
+            )
+        elif info["returns_file"]:
+            wrapped_function = make_celery_wrapper_file(
+                info["calculate"], info["model"], info["params_to_convert"]
             )
         else:
             wrapped_function = make_celery_wrapper(

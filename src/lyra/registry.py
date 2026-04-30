@@ -137,6 +137,8 @@ def discover_tasks():
                 "METRIC_DESCRIPTION module-level string constant."
             )
 
+        returns_file = getattr(mod, "RETURNS_FILE", False)
+
         if has_single:
             assert callable(calc_func)
             RequestModel, params_to_convert = generate_model_from_func(calc_func)
@@ -146,6 +148,7 @@ def discover_tasks():
                 "params_to_convert": params_to_convert,
                 "description": description.strip(),
                 "is_batched": False,
+                "returns_file": returns_file,
             }
         else:
             assert (
@@ -170,6 +173,7 @@ def discover_tasks():
                 "params_to_convert": params_to_convert,
                 "description": description.strip(),
                 "is_batched": True,
+                "returns_file": False,
             }
 
 

@@ -122,10 +122,11 @@ def calculate_for_items(
     )
 
     return pd.DataFrame(
-        df[["cvegeo", "geometry"]]
+        df[["geometry"]]
+        .reset_index(names="orig_index")
         .sjoin(mesh, how="left")
         .drop(columns=[osmid_col, "index_right", "geometry"])
-        .groupby("cvegeo")
+        .groupby("orig_index")
         .mean()[f"jobs_{item_key}"]
     )
 

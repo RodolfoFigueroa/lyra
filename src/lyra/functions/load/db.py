@@ -82,7 +82,7 @@ def load_geometries_from_met_zone_code(code: str) -> gpd.GeoDataFrame:
             conn,
             params={"code": code},
             geom_col="geometry",
-        )
+        ).set_index("cvegeo")
 
 
 def load_geojson_from_met_zone_code(code: str) -> GeoJSON:

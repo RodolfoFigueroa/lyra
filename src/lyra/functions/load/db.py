@@ -1,4 +1,4 @@
-from sqlalchemy import quoted_name
+from sqlalchemy import quoted_name, text
 import geopandas as gpd
 from lyra.constants import YEAR_TO_DENUE_TABLE_MAP
 from lyra.db import engine
@@ -66,18 +66,59 @@ def load_geojson_from_cvegeos(cvegeos: list[str]):
     return GeoJSON(**json.loads(gdf.to_json()))
 
 
-def load_geometries_from_met_zone_name(name: str) -> gpd.GeoDataFrame:
-    return gpd.read_postgis(
-        """
-        SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
-        FROM census_2020_ageb
-        """
-    )
+# TODO: Import levels other than AGEB
+def load_geometries_from_met_zone_code(code: str) -> gpd.GeoDataFrame:
+    with engine.connect() as conn:
+        return gpd.read_postgis(
+            """
+            SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
+                FROM census_2020_ageb
+            INNER JOIN census_2020_mun
+                ON census_2020_ageb.cve_mun = census_2020_mun.cvegeo
+            INNER JOIN metropoli_2020
+                ON census_2020_mun.cve_met = metropoli_2020.cve_met
+            WHERE metropoli_2020.cve_met = %(code)s
+            """,
+            conn,
+            params={"code": code},
+            geom_col="geometry",
+        )
 
 
-def load_geojson_from_met_zone_name(name: str) -> GeoJSON:
-    gdf = load_geometries_from_met_zone_name(name)
+def load_geojson_from_met_zone_code(code: str) -> GeoJSON:
+    gdf = load_geometries_from_met_zone_code(code)
     return GeoJSON(**json.loads(gdf.to_json()))
+
+
+def get_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
+    """Return (cve_met, nom_met) for the closest matching metropolitan zone name.
+
+    Uses PostgreSQL trigram similarity (pg_trgm extension required).
+    Returns None if no zone exceeds the similarity threshold.
+
+    Args:
+        name: The (possibly misspelled) metropolitan zone name to search for.
+
+    Returns:
+        A tuple of (cve_met, nom_met) for the best match, or None.
+    """
+    # Requires: CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT cve_met, nom_met FROM metropoli_2020
+                WHERE similarity(nom_met, :name) > 0.3
+                ORDER BY similarity(nom_met, :name) DESC
+                LIMIT 1
+                """
+            ),
+            {"name": name},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return row.cve_met, row.nom_met
 
 
 def load_denue_from_bounds(

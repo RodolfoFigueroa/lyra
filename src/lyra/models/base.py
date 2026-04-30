@@ -45,3 +45,8 @@ class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"]
     features: list[Feature] = Field(min_length=1)
     crs: CRS
+
+
+class MetZoneCodeResponse(StrictBaseModel):
+    cve_met: str
+    nom_met: str

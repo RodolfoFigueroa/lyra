@@ -23,6 +23,7 @@ class MetricInfo(TypedDict):
     name: str
     description: str
     parameters: list[MetricParameterInfo]
+    returns_file: bool
 
 
 def generate_model_from_func(
@@ -137,6 +138,8 @@ def discover_tasks():
                 "METRIC_DESCRIPTION module-level string constant."
             )
 
+        returns_file = getattr(mod, "RETURNS_FILE", False)
+
         if has_single:
             assert callable(calc_func)
             RequestModel, params_to_convert = generate_model_from_func(calc_func)
@@ -146,6 +149,7 @@ def discover_tasks():
                 "params_to_convert": params_to_convert,
                 "description": description.strip(),
                 "is_batched": False,
+                "returns_file": returns_file,
             }
         else:
             assert (
@@ -170,6 +174,7 @@ def discover_tasks():
                 "params_to_convert": params_to_convert,
                 "description": description.strip(),
                 "is_batched": True,
+                "returns_file": False,
             }
 
 
@@ -190,6 +195,11 @@ def _get_annotation_display_name(annotation) -> str:
     # Replace patterns like "word.word.word" with just "word" (the last component)
     cleaned = re.sub(r"(\w+\.)+", "", type_str)
     return cleaned
+
+
+def get_metric_info(name: str) -> MetricInfo | None:
+    all_metrics = get_metrics_info()
+    return next((m for m in all_metrics if m["name"] == name), None)
 
 
 def get_metrics_info() -> list[MetricInfo]:
@@ -229,6 +239,7 @@ def get_metrics_info() -> list[MetricInfo]:
                 "name": name,
                 "description": entry["description"],
                 "parameters": parameters,
+                "returns_file": entry.get("returns_file", False),
             }
         )
     return result

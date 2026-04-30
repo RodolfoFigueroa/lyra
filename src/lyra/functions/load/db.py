@@ -1,4 +1,4 @@
-from sqlalchemy import quoted_name
+from sqlalchemy import quoted_name, text
 import geopandas as gpd
 from lyra.constants import YEAR_TO_DENUE_TABLE_MAP
 from lyra.db import engine
@@ -78,6 +78,37 @@ def load_geometries_from_met_zone_name(name: str) -> gpd.GeoDataFrame:
 def load_geojson_from_met_zone_name(name: str) -> GeoJSON:
     gdf = load_geometries_from_met_zone_name(name)
     return GeoJSON(**json.loads(gdf.to_json()))
+
+
+def load_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
+    """Return (cve_met, nom_met) for the closest matching metropolitan zone name.
+
+    Uses PostgreSQL trigram similarity (pg_trgm extension required).
+    Returns None if no zone exceeds the similarity threshold.
+
+    Args:
+        name: The (possibly misspelled) metropolitan zone name to search for.
+
+    Returns:
+        A tuple of (cve_met, nom_met) for the best match, or None.
+    """
+    # Requires: CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT cve_met, nom_met FROM metropoli_2020
+                WHERE similarity(nom_met, :name) > 0.3
+                ORDER BY similarity(nom_met, :name) DESC
+                LIMIT 1
+                """
+            ),
+            {"name": name},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return row.cve_met, row.nom_met
 
 
 def load_denue_from_bounds(

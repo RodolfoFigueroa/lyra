@@ -48,6 +48,10 @@ dev = [
     "pre-commit>=4.5.1",
 ]
 
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D", "PLR0913", "COM812", "ANN401", "PLR2004"]
+
 [tool.asyncapi]
 # AsyncAPI documentation is maintained in asyncapi.yaml
 # To generate HTML documentation:

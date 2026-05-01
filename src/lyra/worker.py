@@ -1,17 +1,18 @@
-from lyra.registry import TASK_REGISTRY
-import os
 import json
 import logging
-import redis
-from celery import Celery
-from typing import Callable, Type
+import os
+from collections.abc import Callable
 from types import FunctionType
+
+import redis
+from celery import Celery, Task
 from pydantic import BaseModel
+
 from lyra.functions.load.db import (
     load_geojson_from_cvegeos,
     load_geojson_from_met_zone_code,
 )
-
+from lyra.registry import TASK_REGISTRY
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
 logger = logging.getLogger(__name__)
@@ -32,7 +33,8 @@ def convert_explicit_type(payload: dict) -> dict:
     # Route to the correct conversion function based on data_type field
     raw_geojson = processor_map[data_type](data)
 
-    # Repackage the processed GeoJSON into the wrapped format expected by the reconstructed Pydantic model
+    # Repackage the processed GeoJSON into the wrapped format expected by the
+    # reconstructed Pydantic model
     return {
         "data_type": "geojson",
         "value": raw_geojson,
@@ -40,9 +42,10 @@ def convert_explicit_type(payload: dict) -> dict:
 
 
 def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
-    # Massage function kwargs to unwrap the GeoJSON from the discriminator wrapper if necessary
+    # Massage function kwargs to unwrap the GeoJSON from the discriminator
+    # wrapper if necessary
     func_kwargs = {}
-    for k in reconstructed_model.model_fields.keys():
+    for k in reconstructed_model.model_fields:
         attr = getattr(reconstructed_model, k)
 
         if hasattr(attr, "data_type") and hasattr(attr, "value"):
@@ -54,16 +57,18 @@ def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
 
 def make_celery_wrapper(
     original_calculate_func: FunctionType,
-    ModelClass: Type[BaseModel],
+    ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
 ) -> Callable:
-    def wrapper(self, validated_dict, *args, **kwargs):
+    def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
         task_id = self.request.id
 
         try:
             for param_name, tags in conversion_map.items():
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    validated_dict[param_name] = convert_explicit_type(validated_dict[param_name])
+                    validated_dict[param_name] = convert_explicit_type(
+                        validated_dict[param_name],
+                    )
 
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
@@ -94,16 +99,18 @@ def make_celery_wrapper(
 
 def make_celery_wrapper_file(
     original_calculate_func: FunctionType,
-    ModelClass: Type[BaseModel],
+    ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
 ) -> Callable:
-    def wrapper(self, validated_dict, *args, **kwargs):
+    def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
         task_id = self.request.id
 
         try:
             for param_name, tags in conversion_map.items():
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    validated_dict[param_name] = convert_explicit_type(validated_dict[param_name])
+                    validated_dict[param_name] = convert_explicit_type(
+                        validated_dict[param_name],
+                    )
 
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
@@ -139,26 +146,30 @@ def make_celery_wrapper_batched(
     prepare_func: FunctionType,
     for_items_func: FunctionType,
     aggregate_func: FunctionType,
-    ModelClass: Type[BaseModel],
+    ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
-    items_default,
+    items_default: dict,
 ) -> Callable:
-    def wrapper(self, validated_dict, *args, **kwargs):
+    def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
+
         task_id = self.request.id
 
         try:
             for param_name, tags in conversion_map.items():
                 if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    validated_dict[param_name] = convert_explicit_type(validated_dict[param_name])
+                    validated_dict[param_name] = convert_explicit_type(
+                        validated_dict[param_name],
+                    )
 
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
 
             items_dict = func_kwargs.pop("items", None) or items_default
             if items_dict is None:
-                raise ValueError(
+                err = (
                     "No items provided and no ITEMS_DEFAULT defined for this processor."
                 )
+                raise ValueError(err)
 
             prepared = prepare_func(**func_kwargs)
 
@@ -190,7 +201,7 @@ def make_celery_wrapper_batched(
     return wrapper
 
 
-def register_tasks():
+def register_tasks() -> None:
     for metric_name, info in TASK_REGISTRY.items():
         if info["is_batched"]:
             wrapped_function = make_celery_wrapper_batched(
@@ -203,11 +214,15 @@ def register_tasks():
             )
         elif info["returns_file"]:
             wrapped_function = make_celery_wrapper_file(
-                info["calculate"], info["model"], info["params_to_convert"]
+                info["calculate"],
+                info["model"],
+                info["params_to_convert"],
             )
         else:
             wrapped_function = make_celery_wrapper(
-                info["calculate"], info["model"], info["params_to_convert"]
+                info["calculate"],
+                info["model"],
+                info["params_to_convert"],
             )
         celery_app.task(name=metric_name, bind=True)(wrapped_function)
 

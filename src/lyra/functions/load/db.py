@@ -1,10 +1,13 @@
-from sqlalchemy import quoted_name, text
+import json
+from collections.abc import Sequence
+from typing import Literal
+
 import geopandas as gpd
+from sqlalchemy import quoted_name, text
+
 from lyra.constants import YEAR_TO_DENUE_TABLE_MAP
 from lyra.db import engine
-from typing import Sequence, Literal
 from lyra.models.base import GeoJSON
-import json
 
 
 def load_geometries_from_bounds(
@@ -18,15 +21,18 @@ def load_geometries_from_bounds(
 ) -> gpd.GeoDataFrame:
     with engine.connect() as conn:
         if "geometry" not in columns:
-            columns = list(columns) + ["geometry"]
+            columns = [*list(columns), "geometry"]
 
         table_name = quoted_name(table_name, quote=True)
 
         return gpd.read_postgis(
             f"""
             SELECT {", ".join(columns)} FROM {table_name}
-            WHERE ST_Intersects(geometry, ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372))
-            """,
+            WHERE ST_Intersects(
+                geometry,
+                ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372)
+            )
+            """,  # noqa: S608
             conn,
             params={
                 "xmin": xmin,
@@ -41,7 +47,7 @@ def load_geometries_from_bounds(
 def load_geometries_from_cvegeos(
     cvegeos: list[str],
 ) -> gpd.GeoDataFrame:
-    cvegeo_lengths = set(len(cvegeo) for cvegeo in cvegeos)
+    cvegeo_lengths = {len(cvegeo) for cvegeo in cvegeos}
 
     length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
     level = length_to_level_map.get(cvegeo_lengths.pop())
@@ -54,14 +60,14 @@ def load_geometries_from_cvegeos(
             SELECT cvegeo, geometry AS geometry
             FROM {table_name}
             WHERE cvegeo IN %(cvegeos)s
-            """,
+            """,  # noqa: S608
             conn,
             params={"cvegeos": tuple(cvegeos)},
             geom_col="geometry",
         )  # ty:ignore[no-matching-overload]
 
 
-def load_geojson_from_cvegeos(cvegeos: list[str]):
+def load_geojson_from_cvegeos(cvegeos: list[str]) -> GeoJSON:
     gdf = load_geometries_from_cvegeos(cvegeos)
     return GeoJSON(**json.loads(gdf.to_json()))
 
@@ -111,7 +117,7 @@ def get_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
                 WHERE similarity(nom_met, :name) > 0.3
                 ORDER BY similarity(nom_met, :name) DESC
                 LIMIT 1
-                """
+                """,
             ),
             {"name": name},
         )

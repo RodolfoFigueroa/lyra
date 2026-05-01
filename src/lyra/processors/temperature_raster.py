@@ -1,10 +1,12 @@
-from uuid import uuid4
-import geemap
-from typing import Literal
-from lyra.models.wrappers import ExplicitLocationAPI
-import ee
-from lyra.functions.utils import get_season_date_range, convert_geojson_to_gdf
 from pathlib import Path
+from typing import Literal
+from uuid import uuid4
+
+import ee
+import geemap
+
+from lyra.functions.utils import convert_geojson_to_gdf, get_season_date_range
+from lyra.models.wrappers import ExplicitLocationAPI
 
 
 def fmask(image: ee.image.Image) -> ee.image.Image:
@@ -18,7 +20,8 @@ def fmask(image: ee.image.Image) -> ee.image.Image:
     Returns
     -------
     ee.Image
-        The resultant cloud mask image with binary values. A 0 indicates that a cloud was present.
+        The resultant cloud mask image with binary values. A 0 indicates that a
+        cloud was present.
     """
 
     qa = image.select("QA_PIXEL")
@@ -58,15 +61,32 @@ def reduce_landsat_collection(
         .clip(bounds)
     )
 
-METRIC_DESCRIPTION: str = "Average surface temperature in degrees Celsius, derived from Landsat 9 thermal band (Band 10)."
+
+METRIC_DESCRIPTION: str = (
+    "Average surface temperature in degrees Celsius, derived from Landsat 9 "
+    "thermal band (Band 10)."
+)
 RETURNS_FILE = True
 
 
-def calculate(data: ExplicitLocationAPI, year: Literal[2024, 2025], season: Literal["spring", "summer", "autumn", "winter"]) -> str:
-    bbox = ee.Geometry.BBox(*convert_geojson_to_gdf(data).to_crs("EPSG:4326").total_bounds)
+def calculate(
+    data: ExplicitLocationAPI,
+    year: Literal[2024, 2025],
+    season: Literal["spring", "summer", "autumn", "winter"],
+) -> str:
+    bbox = ee.Geometry.BBox(
+        *convert_geojson_to_gdf(data).to_crs("EPSG:4326").total_bounds,
+    )
 
     start_date, end_date = get_season_date_range(season, year)
     img = reduce_landsat_collection(bbox, start_date, end_date)
     fpath = Path("/lyra_cache") / f"{uuid4().hex}.tif"
-    geemap.download_ee_image(img, fpath, region=bbox, crs="EPSG:4326", scale=30, resampling="near")
+    geemap.download_ee_image(
+        img,
+        fpath,
+        region=bbox,
+        crs="EPSG:4326",
+        scale=30,
+        resampling="near",
+    )
     return str(fpath)

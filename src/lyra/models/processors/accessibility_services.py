@@ -3,8 +3,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from lyra.models.base import StrictBaseModel
 from lyra.constants import AMENITIES_DICT
+from lyra.models.base import StrictBaseModel
 
 AmenityEnum = StrEnum(
     "AmenityEnum",

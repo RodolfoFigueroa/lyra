@@ -1,21 +1,24 @@
-from pydantic import ValidationError
-import os
-from lyra.registry import TASK_REGISTRY
+import contextlib
 import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from lyra.worker import celery_app
+import os
+
 import redis.asyncio as aioredis
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
+
+from lyra.registry import TASK_REGISTRY
+from lyra.worker import celery_app
 
 router = APIRouter()
 
 
 @router.websocket("/ws/{metric}")
-async def websocket_route(websocket: WebSocket, metric: str):
+async def websocket_route(websocket: WebSocket, metric: str) -> None:
     await websocket.accept()
 
     if metric not in TASK_REGISTRY:
         await websocket.send_json(
-            {"status": "error", "message": f"Unknown metric: '{metric}'"}
+            {"status": "error", "message": f"Unknown metric: '{metric}'"},
         )
         await websocket.close(code=4404)
         return
@@ -24,11 +27,12 @@ async def websocket_route(websocket: WebSocket, metric: str):
     pubsub = redis_client.pubsub()
 
     try:
-        RequestModel = TASK_REGISTRY[metric]["model"]
+        RequestModel = TASK_REGISTRY[metric]["model"]  # noqa: N806
 
         raw_json = await websocket.receive_json()
 
-        # Raises ValidationError if the input doesn't match the expected schema for this metric
+        # Raises ValidationError if the input doesn't match the expected schema
+        # for this metric
         validated_data = RequestModel(**raw_json)
 
         task = celery_app.send_task(metric, args=[validated_data.model_dump()])
@@ -51,16 +55,14 @@ async def websocket_route(websocket: WebSocket, metric: str):
             for err in e.errors()
         ]
         await websocket.send_json(
-            {"status": "error", "type": "validation_error", "details": clean_errors}
+            {"status": "error", "type": "validation_error", "details": clean_errors},
         )
         await websocket.close(code=4404)
     except WebSocketDisconnect:
-        print("Client disconnected before the job finished.")
+        pass
     finally:
         await pubsub.unsubscribe()
         await pubsub.close()
 
-        try:
+        with contextlib.suppress(RuntimeError):
             await websocket.close()
-        except RuntimeError:
-            pass

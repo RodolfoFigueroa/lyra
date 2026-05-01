@@ -1,5 +1,6 @@
 from typing import ClassVar, Literal
-from lyra.models.base import StrictBaseModel, GeoJSON
+
+from lyra.models.base import GeoJSON, StrictBaseModel
 
 
 class GeoJSONWrapper(StrictBaseModel):

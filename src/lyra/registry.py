@@ -1,14 +1,14 @@
 import importlib
+import inspect
 import pkgutil
 import re
+from types import FunctionType
+from typing import Annotated, Any, get_args, get_origin
+
+from pydantic import BaseModel, ConfigDict, create_model
+from typing_extensions import TypedDict
 
 from lyra.models.wrappers import ExplicitInputUnion, ExplicitLocationAPI
-import inspect
-from typing import Annotated, Type, get_args, get_origin
-from typing_extensions import TypedDict
-from pydantic import create_model, ConfigDict, BaseModel
-from types import FunctionType
-
 
 TASK_REGISTRY = {}
 
@@ -30,7 +30,7 @@ def generate_model_from_func(
     func: FunctionType,
     extra_fields: dict[str, tuple] | None = None,
     model_name: str | None = None,
-) -> tuple[Type[BaseModel], dict[str, list[str]]]:
+) -> tuple[type[BaseModel], dict[str, list[str]]]:
     sig = inspect.signature(func)
     fields = {}
     conversion_map = {}
@@ -39,11 +39,12 @@ def generate_model_from_func(
         annotation = param.annotation
         origin = get_origin(annotation)
 
-        if annotation == inspect._empty:
-            raise TypeError(
-                f"Missing type hint for parameter '{name}' "
-                f"in function '{func.__name__}'."
+        if annotation == inspect.Parameter.empty:
+            err = (
+                f"Missing type hint for parameter '{name}' in function "
+                f"'{func.__name__}'."
             )
+            raise TypeError(err)
 
         tags_found = []
         if origin is Annotated:
@@ -58,7 +59,7 @@ def generate_model_from_func(
             if tags_found:
                 conversion_map[name] = tags_found
 
-        default_val = ... if param.default == inspect._empty else param.default
+        default_val = ... if param.default == inspect.Parameter.empty else param.default
 
         fields[name] = (annotation, default_val)
 
@@ -67,39 +68,43 @@ def generate_model_from_func(
 
     effective_model_name = model_name or f"{func.__name__.capitalize()}RequestModel"
     model = create_model(
-        effective_model_name, __config__=ConfigDict(extra="forbid"), **fields
+        effective_model_name,
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
     )
     return model, conversion_map
 
 
-def _get_items_type_from_for_items_func(for_items_func: FunctionType):
+def _get_items_type_from_for_items_func(for_items_func: FunctionType) -> Any:
     """Extract the item type annotation from calculate_for_items' second parameter."""
     params = list(inspect.signature(for_items_func).parameters.values())
     if len(params) < 2:
-        raise TypeError(
+        err = (
             f"'{for_items_func.__name__}' must have at least 2 parameters: "
-            "item_key: str, item: <ItemType>"
+            "item_key: str, item: <ItemType>",
         )
+        raise TypeError(err)
     item_param = params[1]
-    if item_param.annotation == inspect._empty:
-        raise TypeError(
+    if item_param.annotation == inspect.Parameter.empty:
+        err = (
             f"Missing type hint for parameter '{item_param.name}' "
-            f"in function '{for_items_func.__name__}'."
+            f"in function '{for_items_func.__name__}'.",
         )
+        raise TypeError(err)
     return item_param.annotation
 
 
-def discover_tasks():
+def discover_tasks() -> None:
     # Prevent running the discovery loop multiple times if imported in multiple places
     if TASK_REGISTRY:
         return
 
     # Defer auth only if necessary
-    from lyra.auth import initialize_earth_engine
+    from lyra.auth import initialize_earth_engine  # noqa: PLC0415
 
     initialize_earth_engine()
 
-    import lyra.processors as processors
+    from lyra import processors  # noqa: PLC0415
 
     for _, module_name, _ in pkgutil.iter_modules(processors.__path__):
         mod = importlib.import_module(f"lyra.processors.{module_name}")
@@ -117,32 +122,42 @@ def discover_tasks():
         )
 
         if has_single and has_batched:
-            raise RuntimeError(
+            err = (
                 f"Processor '{module_name}' defines both 'calculate' and the batched "
                 "pattern (calculate_prepare/calculate_for_items/calculate_aggregate). "
-                "A module must define only one."
+                "A module must define only one.",
             )
+            raise RuntimeError(err)
 
         if not has_single and not has_batched:
             print(
                 f"Skipping `{module_name}` as it does not have a callable 'calculate' "
-                "function or the batched pattern (calculate_prepare/calculate_for_items/"
-                "calculate_aggregate)."
+                "function or the batched pattern (calculate_prepare/"
+                "calculate_for_items/calculate_aggregate).",
             )
             continue
 
         description = getattr(mod, "METRIC_DESCRIPTION", None)
         if not isinstance(description, str) or not description.strip():
-            raise RuntimeError(
+            err = (
                 f"Processor '{module_name}' must define a non-empty "
-                "METRIC_DESCRIPTION module-level string constant."
+                "METRIC_DESCRIPTION module-level string constant.",
             )
+            raise RuntimeError(err)
 
         returns_file = getattr(mod, "RETURNS_FILE", False)
 
         if has_single:
-            assert callable(calc_func)
-            RequestModel, params_to_convert = generate_model_from_func(calc_func)
+            # ty complains if we don't explicitly check for callable here, even
+            # though we do above
+            if not callable(calc_func):
+                err = (
+                    f"Processor '{module_name}' must define a callable 'calculate' "
+                    "function.",
+                )
+                raise RuntimeError(err)
+
+            RequestModel, params_to_convert = generate_model_from_func(calc_func)  # noqa: N806
             TASK_REGISTRY[module_name] = {
                 "calculate": calc_func,
                 "model": RequestModel,
@@ -152,14 +167,21 @@ def discover_tasks():
                 "returns_file": returns_file,
             }
         else:
-            assert (
+            if not (
                 callable(prepare_func)
                 and callable(for_items_func)
                 and callable(aggregate_func)
-            )
+            ):
+                err = (
+                    f"Processor '{module_name}' must define callable functions for the "
+                    "batched pattern: 'calculate_prepare', 'calculate_for_items', and "
+                    "'calculate_aggregate'."
+                )
+                raise RuntimeError(err)
+
             item_type = _get_items_type_from_for_items_func(for_items_func)
             items_annotation = dict[str, item_type] | None
-            RequestModel, params_to_convert = generate_model_from_func(
+            RequestModel, params_to_convert = generate_model_from_func(  # noqa: N806
                 prepare_func,
                 extra_fields={"items": (items_annotation, None)},
                 model_name=f"{module_name.capitalize()}RequestModel",
@@ -178,7 +200,7 @@ def discover_tasks():
             }
 
 
-def _get_annotation_display_name(annotation) -> str:
+def _get_annotation_display_name(annotation: Any) -> str:
     """Convert a parameter annotation to a human-readable type name.
 
     Strips module prefixes and returns just the class/type name.
@@ -193,8 +215,7 @@ def _get_annotation_display_name(annotation) -> str:
     # Convert to string and strip module prefixes (e.g., typing.Optional -> Optional)
     type_str = str(annotation)
     # Replace patterns like "word.word.word" with just "word" (the last component)
-    cleaned = re.sub(r"(\w+\.)+", "", type_str)
-    return cleaned
+    return re.sub(r"(\w+\.)+", "", type_str)
 
 
 def get_metric_info(name: str) -> MetricInfo | None:
@@ -213,7 +234,7 @@ def get_metrics_info() -> list[MetricInfo]:
                     "required": param.default is inspect.Parameter.empty,
                 }
                 for param_name, param in inspect.signature(
-                    entry["calculate"]
+                    entry["calculate"],
                 ).parameters.items()
             ]
         else:
@@ -224,7 +245,7 @@ def get_metrics_info() -> list[MetricInfo]:
                     "required": param.default is inspect.Parameter.empty,
                 }
                 for param_name, param in inspect.signature(
-                    entry["calculate_prepare"]
+                    entry["calculate_prepare"],
                 ).parameters.items()
             ]
             parameters.append(
@@ -232,7 +253,7 @@ def get_metrics_info() -> list[MetricInfo]:
                     "name": "items",
                     "type": _get_annotation_display_name(entry["items_annotation"]),
                     "required": False,
-                }
+                },
             )
         result.append(
             {
@@ -240,7 +261,7 @@ def get_metrics_info() -> list[MetricInfo]:
                 "description": entry["description"],
                 "parameters": parameters,
                 "returns_file": entry.get("returns_file", False),
-            }
+            },
         )
     return result
 

@@ -5,9 +5,9 @@ import inspect
 import pkgutil
 from types import UnionType
 from typing import Annotated, Literal, get_args, get_origin
-from typing_extensions import TypedDict
 
 from pydantic import Field
+from typing_extensions import TypedDict
 
 from lyra.models.base import GeoJSON, StrictBaseModel
 
@@ -21,7 +21,8 @@ def _discover_wrapper_classes() -> list[type[StrictBaseModel]]:
     classes: list[type[StrictBaseModel]] = []
 
     for module_info in sorted(
-        pkgutil.iter_modules(__path__), key=lambda item: item.name
+        pkgutil.iter_modules(__path__),
+        key=lambda item: item.name,
     ):
         if module_info.ispkg:
             continue
@@ -99,16 +100,16 @@ for _cls in class_list:
     globals()[_cls.__name__] = _cls
 
 if not class_list:
-    raise RuntimeError("No wrapper classes were discovered in lyra.models.wrappers.")
+    err = "No wrapper classes were discovered in lyra.models.wrappers."
+    raise RuntimeError(err)
 
 _union_type = class_list[0]
 for _cls in class_list[1:]:
     _union_type = _union_type | _cls
 
 if not isinstance(_union_type, UnionType) and _union_type not in class_list:
-    raise RuntimeError(
-        "Unable to construct ExplicitInputUnion from discovered wrappers."
-    )
+    err = "Unable to construct ExplicitInputUnion from discovered wrappers."
+    raise RuntimeError(err)
 
 ExplicitInputUnion = Annotated[_union_type, Field(discriminator="data_type")]  # ty:ignore[invalid-type-form]
 ExplicitLocationAPI = Annotated[GeoJSON, "REQUIRE_EXPLICIT_TYPE"]

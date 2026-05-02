@@ -45,4 +45,5 @@ def main() -> None:
         host="0.0.0.0",
         port=int(os.environ.get("LYRA_PORT", "5219")),
         reload=False,
+        ws_max_size=5_000_000,
     )

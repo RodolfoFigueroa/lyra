@@ -41,10 +41,22 @@ class Feature(StrictBaseModel):
     geometry: PointGeometry | PolygonGeometry | MultiPolygonGeometry
     properties: dict[str, Any]
 
+class FeatureNoMultiPolygon(StrictBaseModel):
+    id: str = Field(min_length=1)
+    type: Literal["Feature"]
+    geometry: PointGeometry | PolygonGeometry
+    properties: dict[str, Any]
+
 
 class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"]
     features: list[Feature] = Field(min_length=1)
+    crs: CRS
+
+
+class SingleGeoJSON(StrictBaseModel):
+    type: Literal["FeatureCollection"]
+    features: list[FeatureNoMultiPolygon] = Field(min_length=1, max_length=1)
     crs: CRS
 
 

@@ -1,3 +1,4 @@
+import shapely
 import calendar
 import re
 from collections.abc import Callable, Iterator
@@ -138,3 +139,7 @@ def get_season_date_range(
         raise ValueError(err)
 
     return start, end
+
+
+def convert_polygon_to_ee(polygon: shapely.Polygon) -> ee.Geometry:
+    return ee.Geometry.Polygon(list(polygon.exterior.coords))

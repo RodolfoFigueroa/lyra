@@ -3,15 +3,13 @@ import logging
 import os
 from collections.abc import Callable
 from types import FunctionType
+from typing import Literal
 
 import redis
 from celery import Celery, Task
 from pydantic import BaseModel
 
-from lyra.functions.load.db import (
-    load_geojson_from_cvegeos,
-    load_geojson_from_met_zone_code,
-)
+from lyra.converters import converter_map
 from lyra.registry import TASK_REGISTRY
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
@@ -20,18 +18,16 @@ celery_app = Celery("ee_tasks", broker=REDIS_URL, backend=REDIS_URL)
 redis_client = redis.from_url(REDIS_URL)
 
 
-def convert_explicit_type(payload: dict) -> dict:
-    processor_map = {
-        "cvegeo_list": load_geojson_from_cvegeos,
-        "met_zone_code": load_geojson_from_met_zone_code,
-        "geojson": lambda x: x,
-    }
-
-    data_type = payload["data_type"]
+def convert_explicit_type(
+    payload: dict, *, request_type: Literal["location", "bounds"]
+) -> dict:
     data = payload["value"]
+    data_type = payload["data_type"]
+
+    converter = converter_map[request_type][data_type]
 
     # Route to the correct conversion function based on data_type field
-    raw_geojson = processor_map[data_type](data)
+    raw_geojson = converter(data)
 
     # Repackage the processed GeoJSON into the wrapped format expected by the
     # reconstructed Pydantic model
@@ -55,6 +51,21 @@ def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
     return func_kwargs
 
 
+def update_validated_dict_with_converted_types(
+    validated_dict: dict,
+    conversion_map: dict[str, list[str]],
+) -> None:
+    for param_name, tags in conversion_map.items():
+        if "REQUIRE_EXPLICIT_TYPE" in tags:
+            request_type = "location"
+        elif "REQUIRE_EXPLICIT_BOUNDS_TYPE" in tags:
+            request_type = "bounds"
+
+        validated_dict[param_name] = convert_explicit_type(
+            validated_dict[param_name], request_type=request_type
+        )
+
+
 def make_celery_wrapper(
     original_calculate_func: FunctionType,
     ModelClass: type[BaseModel],  # noqa: N803
@@ -64,11 +75,7 @@ def make_celery_wrapper(
         task_id = self.request.id
 
         try:
-            for param_name, tags in conversion_map.items():
-                if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    validated_dict[param_name] = convert_explicit_type(
-                        validated_dict[param_name],
-                    )
+            update_validated_dict_with_converted_types(validated_dict, conversion_map)
 
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
@@ -86,7 +93,7 @@ def make_celery_wrapper(
                 task_id,
                 getattr(self, "name", original_calculate_func.__module__),
             )
-            notification = {"status": "error", "message": str(e)}
+            notification = {"status": "error", "error_type": "worker", "message": str(e)}
 
         # Publish the notification
         channel_name = f"task_results_{task_id}"
@@ -106,11 +113,7 @@ def make_celery_wrapper_file(
         task_id = self.request.id
 
         try:
-            for param_name, tags in conversion_map.items():
-                if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    validated_dict[param_name] = convert_explicit_type(
-                        validated_dict[param_name],
-                    )
+            update_validated_dict_with_converted_types(validated_dict, conversion_map)
 
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
@@ -132,7 +135,7 @@ def make_celery_wrapper_file(
                 task_id,
                 getattr(self, "name", original_calculate_func.__module__),
             )
-            notification = {"status": "error", "message": str(e)}
+            notification = {"status": "error", "error_type": "worker", "message": str(e)}
 
         channel_name = f"task_results_{task_id}"
         redis_client.publish(channel_name, json.dumps(notification))
@@ -155,11 +158,7 @@ def make_celery_wrapper_batched(
         task_id = self.request.id
 
         try:
-            for param_name, tags in conversion_map.items():
-                if "REQUIRE_EXPLICIT_TYPE" in tags:
-                    validated_dict[param_name] = convert_explicit_type(
-                        validated_dict[param_name],
-                    )
+            update_validated_dict_with_converted_types(validated_dict, conversion_map)
 
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
@@ -191,7 +190,7 @@ def make_celery_wrapper_batched(
                 task_id,
                 getattr(self, "name", prepare_func.__module__),
             )
-            notification = {"status": "error", "message": str(e)}
+            notification = {"status": "error", "error_type": "worker", "message": str(e)}
 
         channel_name = f"task_results_{task_id}"
         redis_client.publish(channel_name, json.dumps(notification))

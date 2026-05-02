@@ -8,7 +8,11 @@ from typing import Annotated, Any, get_args, get_origin
 from pydantic import BaseModel, ConfigDict, create_model
 from typing_extensions import TypedDict
 
-from lyra.models.wrappers import ExplicitInputUnion, ExplicitLocationAPI
+from lyra.models.wrappers import (
+    ExplicitBoundsUnion,
+    ExplicitLocationAPI,
+    ExplicitLocationUnion,
+)
 
 TASK_REGISTRY = {}
 
@@ -54,7 +58,12 @@ def generate_model_from_func(
                 tags_found.append("REQUIRE_EXPLICIT_TYPE")
 
                 # Replace GeoJSON with the strict Pydantic Discriminator
-                annotation = ExplicitInputUnion
+                annotation = ExplicitLocationUnion
+            elif "REQUIRE_EXPLICIT_BOUNDS_TYPE" in metadata:
+                tags_found.append("REQUIRE_EXPLICIT_BOUNDS_TYPE")
+
+                # Replace GeoJSON with the strict Pydantic Discriminator
+                annotation = ExplicitBoundsUnion
 
             if tags_found:
                 conversion_map[name] = tags_found
@@ -227,34 +236,31 @@ def get_metrics_info() -> list[MetricInfo]:
     result = []
     for name, entry in TASK_REGISTRY.items():
         if not entry["is_batched"]:
-            parameters = [
-                {
-                    "name": param_name,
-                    "type": _get_annotation_display_name(param.annotation),
-                    "required": param.default is inspect.Parameter.empty,
-                }
-                for param_name, param in inspect.signature(
-                    entry["calculate"],
-                ).parameters.items()
-            ]
+            param_source = entry["calculate"]
+            parameters = []
         else:
+            param_source = entry["calculate_prepare"]
             parameters = [
-                {
-                    "name": param_name,
-                    "type": _get_annotation_display_name(param.annotation),
-                    "required": param.default is inspect.Parameter.empty,
-                }
-                for param_name, param in inspect.signature(
-                    entry["calculate_prepare"],
-                ).parameters.items()
-            ]
-            parameters.append(
                 {
                     "name": "items",
                     "type": _get_annotation_display_name(entry["items_annotation"]),
                     "required": False,
                 },
-            )
+            ]
+
+        parameters.extend(
+            [
+                {
+                    "name": param_name,
+                    "type": _get_annotation_display_name(param.annotation),
+                    "required": param.default is inspect.Parameter.empty,
+                }
+                for param_name, param in inspect.signature(
+                    param_source,
+                ).parameters.items()
+            ]
+        )
+
         result.append(
             {
                 "name": name,

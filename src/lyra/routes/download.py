@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 router = APIRouter()
 
 
-@router.get("/download_result/{download_id}")
+@router.get("/download_result/{download_id}", response_model=None)
 async def download_result(
     download_id: str, background_tasks: BackgroundTasks
 ) -> FileResponse | dict:

@@ -54,8 +54,15 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
             {"loc": err.get("loc"), "msg": err.get("msg"), "type": err.get("type")}
             for err in e.errors()
         ]
+
+        error_message = "Input validation error: "
+        for i in range(min(len(clean_errors), 5)):
+            error_message += f"\n - {clean_errors[i]}"
+        if len(clean_errors) > 5:
+            error_message += f"\n - ... and {len(clean_errors) - 5} more errors."
+
         await websocket.send_json(
-            {"status": "error", "type": "validation_error", "details": clean_errors},
+            {"status": "error", "error_type": "validation", "message": error_message},
         )
         await websocket.close(code=4404)
     except WebSocketDisconnect:

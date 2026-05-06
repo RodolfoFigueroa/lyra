@@ -2,11 +2,14 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-import ee
 import geemap
 
 from lyra.functions.temperature import reduce_landsat_collection
-from lyra.functions.utils import convert_geojson_to_gdf, get_season_date_range, convert_polygon_to_ee
+from lyra.functions.utils import (
+    convert_geojson_to_gdf,
+    convert_polygon_to_ee,
+    get_season_date_range,
+)
 from lyra.models.processors.temperature import AllowedLandsatYears
 from lyra.models.wrappers import ExplicitBoundsAPI
 

@@ -1,4 +1,3 @@
-import shapely
 import calendar
 import re
 from collections.abc import Callable, Iterator
@@ -9,6 +8,7 @@ import geemap
 import geopandas as gpd
 import pandana as pdna
 import pandas as pd
+import shapely
 
 from lyra.models.base import GeoJSON
 from lyra.models.wrappers import ExplicitLocationAPI

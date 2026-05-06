@@ -41,6 +41,7 @@ class Feature(StrictBaseModel):
     geometry: PointGeometry | PolygonGeometry | MultiPolygonGeometry
     properties: dict[str, Any]
 
+
 class FeatureNoMultiPolygon(StrictBaseModel):
     id: str = Field(min_length=1)
     type: Literal["Feature"]

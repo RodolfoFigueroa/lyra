@@ -93,7 +93,11 @@ def make_celery_wrapper(
                 task_id,
                 getattr(self, "name", original_calculate_func.__module__),
             )
-            notification = {"status": "error", "error_type": "worker", "message": str(e)}
+            notification = {
+                "status": "error",
+                "error_type": "worker",
+                "message": str(e),
+            }
 
         # Publish the notification
         channel_name = f"task_results_{task_id}"
@@ -135,7 +139,11 @@ def make_celery_wrapper_file(
                 task_id,
                 getattr(self, "name", original_calculate_func.__module__),
             )
-            notification = {"status": "error", "error_type": "worker", "message": str(e)}
+            notification = {
+                "status": "error",
+                "error_type": "worker",
+                "message": str(e),
+            }
 
         channel_name = f"task_results_{task_id}"
         redis_client.publish(channel_name, json.dumps(notification))
@@ -190,7 +198,11 @@ def make_celery_wrapper_batched(
                 task_id,
                 getattr(self, "name", prepare_func.__module__),
             )
-            notification = {"status": "error", "error_type": "worker", "message": str(e)}
+            notification = {
+                "status": "error",
+                "error_type": "worker",
+                "message": str(e),
+            }
 
         channel_name = f"task_results_{task_id}"
         redis_client.publish(channel_name, json.dumps(notification))

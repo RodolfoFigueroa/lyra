@@ -1,0 +1,36 @@
+services:
+  lyra:
+    image: rodolfofigueroa/lyra:latest
+    restart: unless-stopped
+    ports:
+      - 5219:5219
+    volumes:
+      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
+      - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
+    networks:
+      - lyra_net
+    env_file: ".env"    
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    networks:
+      - lyra_net
+
+  celery_worker:
+    image: rodolfofigueroa/lyra:latest
+    command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
+    volumes:
+      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
+      - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
+    networks:
+      - lyra_net
+    depends_on:
+      - redis
+    env_file: ".env"
+
+
+networks:
+  lyra_net:
+    name: lyra_net
+    driver: bridge

@@ -13,6 +13,6 @@ RUN uv sync --frozen --no-dev
 
 COPY . .
 
-EXPOSE 8000
+EXPOSE 5219
 
-CMD ["uv", "run", "--no-dev", "--frozen", "lyra-api"]
+CMD ["uv", "run", "--no-dev", "--frozen", "lyra"]

@@ -30,7 +30,7 @@ dependencies = [
 
 
 [project.scripts]
-lyra-api = "lyra.app:main"
+lyra = "lyra.app:main"
 
 [build-system]
 requires = ["hatchling>=1.27.0"]
@@ -53,11 +53,5 @@ dev = [
 select = ["ALL"]
 ignore = ["D", "PLR0913", "COM812", "ANN401", "PLR2004", "S104"]
 
-[tool.asyncapi]
-
 [tool.uv.sources]
 lyra-api = { git = "https://github.com/RodolfoFigueroa/lyra-api" }
-# AsyncAPI documentation is maintained in asyncapi.yaml
-# To generate HTML documentation:
-#   npm install -g @asyncapi/cli
-#   asyncapi generate fromTemplate asyncapi.yaml @asyncapi/html-template -o docs/

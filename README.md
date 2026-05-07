@@ -44,7 +44,7 @@ uv run celery -A lyra.worker.celery_app worker --loglevel=info
 Start the API server:
 
 ```bash
-uv run lyra-api
+uv run lyra
 ```
 
 ### Docker (recommended)

@@ -84,6 +84,36 @@ channels:
       ValidationErrorMessage:
         $ref: '#/components/messages/ValidationErrorMessage'
 
+  temperatureChannel:
+    address: /ws/temperature
+    description: Compute average surface temperature in degrees Celsius (derived from Landsat 9 Band 10) for each spatial unit.
+    messages:
+      TemperatureRequest:
+        $ref: '#/components/messages/TemperatureRequest'
+      QueuedMessage:
+        $ref: '#/components/messages/QueuedMessage'
+      ResultMessage:
+        $ref: '#/components/messages/ResultMessage'
+      ErrorMessage:
+        $ref: '#/components/messages/ErrorMessage'
+      ValidationErrorMessage:
+        $ref: '#/components/messages/ValidationErrorMessage'
+
+  temperatureRasterChannel:
+    address: /ws/temperature_raster
+    description: Download a surface temperature GeoTIFF raster (degrees Celsius, Landsat 9 Band 10) for a bounding area. The result is a file retrieved via GET /download_result/{download_id}.
+    messages:
+      TemperatureRasterRequest:
+        $ref: '#/components/messages/TemperatureRasterRequest'
+      QueuedMessage:
+        $ref: '#/components/messages/QueuedMessage'
+      ResultMessage:
+        $ref: '#/components/messages/ResultMessage'
+      ErrorMessage:
+        $ref: '#/components/messages/ErrorMessage'
+      ValidationErrorMessage:
+        $ref: '#/components/messages/ValidationErrorMessage'
+
 operations:
   sendTreeCoverageRequest:
     action: send
@@ -161,6 +191,44 @@ operations:
       - $ref: '#/channels/accessibilityServicesChannel/messages/ErrorMessage'
       - $ref: '#/channels/accessibilityServicesChannel/messages/ValidationErrorMessage'
 
+  sendTemperatureRequest:
+    action: send
+    title: Client sends temperature request
+    channel:
+      $ref: '#/channels/temperatureChannel'
+    messages:
+      - $ref: '#/channels/temperatureChannel/messages/TemperatureRequest'
+
+  receiveTemperatureResponse:
+    action: receive
+    title: Server sends temperature computation status and results
+    channel:
+      $ref: '#/channels/temperatureChannel'
+    messages:
+      - $ref: '#/channels/temperatureChannel/messages/QueuedMessage'
+      - $ref: '#/channels/temperatureChannel/messages/ResultMessage'
+      - $ref: '#/channels/temperatureChannel/messages/ErrorMessage'
+      - $ref: '#/channels/temperatureChannel/messages/ValidationErrorMessage'
+
+  sendTemperatureRasterRequest:
+    action: send
+    title: Client sends temperature raster request
+    channel:
+      $ref: '#/channels/temperatureRasterChannel'
+    messages:
+      - $ref: '#/channels/temperatureRasterChannel/messages/TemperatureRasterRequest'
+
+  receiveTemperatureRasterResponse:
+    action: receive
+    title: Server sends temperature raster computation status and file download ID
+    channel:
+      $ref: '#/channels/temperatureRasterChannel'
+    messages:
+      - $ref: '#/channels/temperatureRasterChannel/messages/QueuedMessage'
+      - $ref: '#/channels/temperatureRasterChannel/messages/ResultMessage'
+      - $ref: '#/channels/temperatureRasterChannel/messages/ErrorMessage'
+      - $ref: '#/channels/temperatureRasterChannel/messages/ValidationErrorMessage'
+
 components:
   messages:
     TreeCoverageRequest:
@@ -172,11 +240,11 @@ components:
         properties:
           data:
             description: |
-              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_code.
             oneOf:
               - $ref: '#/components/schemas/GeoJSONWrapper'
               - $ref: '#/components/schemas/CVEGEOListWrapper'
-              - $ref: '#/components/schemas/MetZoneNameWrapper'
+              - $ref: '#/components/schemas/MetZoneCodeWrapper'
             discriminator: data_type
 
     UrbanizedAreaRequest:
@@ -188,11 +256,11 @@ components:
         properties:
           data:
             description: |
-              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_code.
             oneOf:
               - $ref: '#/components/schemas/GeoJSONWrapper'
               - $ref: '#/components/schemas/CVEGEOListWrapper'
-              - $ref: '#/components/schemas/MetZoneNameWrapper'
+              - $ref: '#/components/schemas/MetZoneCodeWrapper'
             discriminator: data_type
 
     AccessibilityJobsRequest:
@@ -204,11 +272,11 @@ components:
         properties:
           data:
             description: |
-              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_code.
             oneOf:
               - $ref: '#/components/schemas/GeoJSONWrapper'
               - $ref: '#/components/schemas/CVEGEOListWrapper'
-              - $ref: '#/components/schemas/MetZoneNameWrapper'
+              - $ref: '#/components/schemas/MetZoneCodeWrapper'
             discriminator: data_type
           year:
             description: DENUE snapshot year. Defaults to 2025 when omitted.
@@ -234,11 +302,11 @@ components:
         properties:
           data:
             description: |
-              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_name.
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_code.
             oneOf:
               - $ref: '#/components/schemas/GeoJSONWrapper'
               - $ref: '#/components/schemas/CVEGEOListWrapper'
-              - $ref: '#/components/schemas/MetZoneNameWrapper'
+              - $ref: '#/components/schemas/MetZoneCodeWrapper'
             discriminator: data_type
           year:
             description: DENUE snapshot year. Defaults to 2025 when omitted.
@@ -260,6 +328,67 @@ components:
             type: object
             additionalProperties:
               $ref: '#/components/schemas/AmenityGroupModel'
+
+    TemperatureRequest:
+      description: Client request to compute average surface temperature per spatial unit.
+      payload:
+        type: object
+        required:
+          - data
+          - year
+          - season
+        properties:
+          data:
+            description: |
+              Input spatial data. Accepts geojson, cvegeo_list, or met_zone_code.
+            oneOf:
+              - $ref: '#/components/schemas/GeoJSONWrapper'
+              - $ref: '#/components/schemas/CVEGEOListWrapper'
+              - $ref: '#/components/schemas/MetZoneCodeWrapper'
+            discriminator: data_type
+          year:
+            description: Landsat 9 acquisition year.
+            type: integer
+            enum: [2022, 2023, 2024, 2025]
+            example: 2024
+          season:
+            description: Season of the year for the Landsat composite.
+            type: string
+            enum: [spring, summer, autumn, winter]
+            example: summer
+
+    TemperatureRasterRequest:
+      description: |
+        Client request to download a surface temperature GeoTIFF raster.
+        The bounding geometry must be a single polygon (no MultiPolygon).
+        On success, the ResultMessage carries a download_id used to fetch the
+        GeoTIFF via GET /download_result/{download_id}.
+      payload:
+        type: object
+        required:
+          - data
+          - year
+          - season
+        properties:
+          data:
+            description: |
+              Bounding area. Accepts a single-feature geojson (no MultiPolygon),
+              cvegeo_list, or met_zone_code.
+            oneOf:
+              - $ref: '#/components/schemas/GeoJSONWrapper'
+              - $ref: '#/components/schemas/CVEGEOListWrapper'
+              - $ref: '#/components/schemas/MetZoneCodeWrapper'
+            discriminator: data_type
+          year:
+            description: Landsat 9 acquisition year.
+            type: integer
+            enum: [2022, 2023, 2024, 2025]
+            example: 2024
+          season:
+            description: Season of the year for the Landsat composite.
+            type: string
+            enum: [spring, summer, autumn, winter]
+            example: summer
 
     QueuedMessage:
       description: Server acknowledges the request and queues the computation task.
@@ -315,36 +444,20 @@ components:
         type: object
         required:
           - status
-          - type
-          - details
+          - error_type
+          - message
         properties:
           status:
             type: string
             const: error
-          type:
+          error_type:
             type: string
-            const: validation_error
-          details:
-            type: array
-            items:
-              type: object
-              required:
-                - loc
-                - msg
-                - type
-              properties:
-                loc:
-                  type: array
-                  items:
-                    type: string
-                msg:
-                  type: string
-                type:
-                  type: string
-            example:
-              - loc: ['data']
-                msg: Field required
-                type: missing
+            const: validation
+          message:
+            type: string
+            example: |
+              Input validation error:
+               - {'loc': ('data',), 'msg': 'Field required', 'type': 'missing'}
 
   schemas:
     GeoJSONValue:
@@ -491,20 +604,20 @@ components:
         data_type: cvegeo_list
         value: ['0900100010010']
 
-    MetZoneNameWrapper:
-      description: The name of a metropolitan zone.
+    MetZoneCodeWrapper:
+      description: The code of a metropolitan zone.
       type: object
       required: [data_type, value]
       properties:
         data_type:
           type: string
-          const: met_zone_name
+          const: met_zone_code
         value:
           type: string
           minLength: 1
       example:
-        data_type: met_zone_name
-        value: Valle de México
+        data_type: met_zone_code
+        value: '09.1'
 
     JobGroupModel:
       description: |

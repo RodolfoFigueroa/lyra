@@ -8,13 +8,13 @@ Interactive documentation is available when the server is running:
 - **ReDoc** (clean HTML): http://localhost:5219/redoc
 
 These are automatically generated from the FastAPI application and include:
-- All REST endpoints (`/data_types`, `/metrics`, `/download_result/{download_id}`)
+- All REST endpoints (`/data_types`, `/metrics`, `/metrics/{metric_name}`, `/models`, `/models/{model_name}`, `/met_zone_code`, `/download_result/{download_id}`)
 - Request/response schemas
 - Parameter descriptions
 
 ## WebSocket API (AsyncAPI)
 
-The WebSocket endpoint for metric computation is documented in [`asyncapi.yaml`](../asyncapi.yaml) using the AsyncAPI 3.0.0 specification.
+The WebSocket endpoint for metric computation is documented in [`asyncapi.yaml`](../asyncapi.yaml) using the AsyncAPI 3.1.0 specification.
 
 ### Generating Interactive HTML Documentation
 
@@ -38,7 +38,7 @@ asyncapi generate fromTemplate asyncapi.yaml @asyncapi/html-template -o docs/
 
 This will create `docs/index.html` with interactive documentation of:
 - Channel: `/ws/{metric}`
-- Available metrics (accessibility_jobs, accessibility_services, tree_coverage, urbanized_area)
+- Available metrics (accessibility_jobs, accessibility_services, temperature, temperature_raster, tree_coverage, urbanized_area)
 - Message schemas (requests, responses, errors)
 - Example payloads
 
@@ -54,15 +54,18 @@ asyncapi validate asyncapi.yaml
 
 The `asyncapi.yaml` file documents:
 1. **Server info**: WebSocket connection details
-2. **Channel**: The `/ws/{metric}` endpoint with path parameters
+2. **Channels**: One per metric (`/ws/accessibility_jobs`, `/ws/accessibility_services`, `/ws/temperature`, `/ws/temperature_raster`, `/ws/tree_coverage`, `/ws/urbanized_area`)
 3. **Messages**:
-   - `MetricRequest`: Client request payload structure
+   - `AccessibilityJobsRequest`: Client request payload structure
+   - `AccessibilityServicesRequest`: Client request payload structure
+   - `TemperatureRequest`: Client request payload structure
+   - `TemperatureRasterRequest`: Client request payload (returns a GeoTIFF file)
+   - `TreeCoverageRequest`: Client request payload structure
+   - `UrbanizedAreaRequest`: Client request payload structure
    - `QueuedMessage`: Server confirmation (task queued)
    - `ResultMessage`: Server result (computation complete)
    - `ErrorMessage`: Server error response
    - `ValidationErrorMessage`: Server validation error response
-
-When adding a new metric or changing the request/response format, update the relevant message schema in `asyncapi.yaml` to keep documentation in sync.
 
 ### Continuous Integration
 

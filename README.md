@@ -63,6 +63,10 @@ This starts the API (`lyra`), Redis, and the Celery worker together.
 |--------|------|-------------|
 | `GET` | `/data_types` | List accepted input data types |
 | `GET` | `/metrics` | List available metrics and their parameters |
+| `GET` | `/metrics/{metric_name}` | Get parameters for a single metric |
+| `GET` | `/models` | List processor input model schemas |
+| `GET` | `/models/{model_name}` | Get schema for a single processor model |
+| `GET` | `/met_zone_code` | Look up a metropolitan zone code by name |
 | `GET` | `/download_result/{download_id}` | Fetch a completed metric result |
 
 ### WebSocket
@@ -71,7 +75,9 @@ This starts the API (`lyra`), Redis, and the Celery worker together.
 |------|-------------|
 | `WS /ws/{metric}` | Submit a metric computation request |
 
-Available metrics: `accessibility_jobs`, `accessibility_services`, `tree_coverage`, `urbanized_area`.
+Available metrics: `accessibility_jobs`, `accessibility_services`, `temperature`, `temperature_raster`, `tree_coverage`, `urbanized_area`.
+
+> **Note:** `temperature_raster` returns a GeoTIFF file instead of JSON. The result is downloaded via `GET /download_result/{download_id}` with `Content-Type: image/tiff`.
 
 ## WebSocket Usage
 
@@ -93,20 +99,8 @@ async def run():
     async with websockets.connect(uri) as ws:
         payload = {
             "data": {
-                "data_type": "geojson",
-                "value": {
-                    "type": "FeatureCollection",
-                    "features": [
-                        {
-                            "type": "Feature",
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
-                            },
-                            "properties": {"cvegeo": "110010001001"}
-                        }
-                    ]
-                }
+                "data_type": "met_zone_code",
+                "value": "19.1.01"
             }
         }
         await ws.send(json.dumps(payload))

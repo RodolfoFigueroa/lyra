@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 import os
@@ -42,12 +43,34 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
         channel_name = f"task_results_{task.id}"
         await pubsub.subscribe(channel_name)
 
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                notification = json.loads(message["data"])
+        async def _wait_for_result() -> dict:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    return json.loads(message["data"])
 
-                await websocket.send_json(notification)
-                break
+        async def _wait_for_disconnect() -> None:
+            try:
+                while True:
+                    await websocket.receive()
+            except WebSocketDisconnect:
+                return
+
+        result_task = asyncio.create_task(_wait_for_result())
+        disconnect_task = asyncio.create_task(_wait_for_disconnect())
+
+        done, pending = await asyncio.wait(
+            {result_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for t in pending:
+            t.cancel()
+            await asyncio.gather(t, return_exceptions=True)
+
+        if result_task in done:
+            await websocket.send_json(result_task.result())
+        else:
+            celery_app.control.revoke(task.id, terminate=True, signal="SIGTERM")
 
     except ValidationError as e:
         clean_errors = [

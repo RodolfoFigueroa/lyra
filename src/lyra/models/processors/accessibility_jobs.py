@@ -1,16 +1,17 @@
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator
+
 from lyra.models.base import StrictBaseModel
-from typing import Literal
 
 
 def _validate_regex(v: str) -> str:
     try:
         re.compile(v)
     except re.error as e:
-        raise ValueError(f"Invalid regex pattern: {e}") from e
+        err = f"Invalid regex pattern: {e}"
+        raise ValueError(err) from e
     return v
 
 

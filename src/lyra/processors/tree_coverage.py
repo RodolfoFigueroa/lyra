@@ -1,4 +1,5 @@
 import ee
+
 from lyra.functions.utils import reduce_ee_image_over_gdf_factory
 
 
@@ -19,5 +20,7 @@ METRIC_DESCRIPTION: str = (
 )
 
 calculate = reduce_ee_image_over_gdf_factory(
-    load_tree_coverage_img, reducer=ee.Reducer.sum(), scale=25
+    load_tree_coverage_img,
+    reducer=ee.Reducer.sum(),
+    scale=25,
 )

@@ -1,40 +1,36 @@
 from typing import Literal
-from lyra.models.base import GeoJSON
-from lyra.models.wrappers import ExplicitLocationAPI
-from lyra.functions.utils import convert_geojson_to_gdf
-from lyra.models.processors.accessibility_services import AmenityGroupModel
+
+import geopandas as gpd
+import numpy as np
+import pandana as pdna
+import pandas as pd
+
+from lyra.constants import AMENITIES_DICT, PER_OCU_TO_NUM_WORKERS_MAP
 from lyra.functions.load.db import (
+    load_census_from_bounds,
     load_denue_from_bounds,
     load_mesh_from_bounds,
-    load_census_from_bounds,
 )
-from lyra.functions.utils import get_geometries_osmid
 from lyra.functions.load.osm import (
-    load_osm_features_from_bounds,
     load_accessibility_net_from_bounds,
+    load_osm_features_from_bounds,
 )
-import numpy as np
-import pandas as pd
-from lyra.constants import AMENITIES_DICT, PER_OCU_TO_NUM_WORKERS_MAP
-import geopandas as gpd
-import pandana as pdna
-
-
-LENGTH_METERS_TO_TRAVEL_TIME_SECONDS_MULTIPLIER = (
-    1 / (50 * 1000 / 3600)
-)  # Assuming an average speed of 50 km/h, convert length in meters to travel time in seconds
+from lyra.functions.utils import convert_geojson_to_gdf, get_geometries_osmid
+from lyra.models.base import GeoJSON
+from lyra.models.processors.accessibility_services import AmenityGroupModel
+from lyra.models.wrappers import ExplicitLocationAPI
 
 
 def process_denue_amenities(df_denue: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     df_denue = df_denue.assign(
-        num_workers=lambda x: x["per_ocu"].map(PER_OCU_TO_NUM_WORKERS_MAP)
+        num_workers=lambda x: x["per_ocu"].map(PER_OCU_TO_NUM_WORKERS_MAP),
     ).drop(columns=["per_ocu"])
 
     for name, amenity_query in AMENITIES_DICT.items():
         query = amenity_query.denue_query
         if query is None:
             continue
-        df_denue.loc[lambda df: df["codigo_act"].str.match(query), "amenity"] = name
+        df_denue.loc[lambda df: df["codigo_act"].str.match(query), "amenity"] = name  # noqa: B023
 
     return df_denue.dropna(subset=["amenity"]).drop(
         columns=["codigo_act"],
@@ -42,7 +38,8 @@ def process_denue_amenities(df_denue: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def concat_amenities(
-    df_denue: gpd.GeoDataFrame, df_public_spaces: gpd.GeoDataFrame
+    df_denue: gpd.GeoDataFrame,
+    df_public_spaces: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
     df = (
         pd.concat(
@@ -124,7 +121,10 @@ def get_amenities_adjusted_attraction(
         )
 
         if aggregated["osmid"].duplicated().any():
-            err = f"Duplicated osmids found in aggregated accessibility network for column {c}. This should never happen."
+            err = (
+                "Duplicated osmids found in aggregated accessibility network "
+                f"for column {c}. This should never happen."
+            )
             raise ValueError(err)
 
         amenities = (
@@ -142,15 +142,16 @@ def get_amenities_adjusted_attraction(
     for amenity_type in amenities["amenity"].unique():
         query = AMENITIES_DICT[amenity_type].pob_query
         amenities.loc[
-            lambda df: df["amenity"] == amenity_type, "reached_population"
-        ] = amenities.loc[lambda df: df["amenity"] == amenity_type].eval(query)
+            lambda df: df["amenity"] == amenity_type,  # noqa: B023
+            "reached_population",
+        ] = amenities.loc[lambda df: df["amenity"] == amenity_type].eval(query)  # noqa: B023
 
     # Adjust attraction by discounting opportunities taken by reached population
     return amenities.assign(
         adj_attraction=lambda df: (
             df["attraction"]
             / df["reached_population"].where(df["reached_population"] > 1, 1)
-        )
+        ),
     )["adj_attraction"]
 
 
@@ -200,15 +201,18 @@ def compute_accessibility_services(
     ).rename(columns={"accessibility_score": "accessibility"})["accessibility"]
 
 
-METRIC_DESCRIPTION: str = "Computes service accessibility scores for each spatial unit using road network analysis and amenity data."
+METRIC_DESCRIPTION: str = (
+    "Computes service accessibility scores for each spatial unit using road "
+    "network analysis and amenity data."
+)
 ITEMS_DEFAULT = {
     "default": AmenityGroupModel(
         attraction_edge_weights="length",
         attraction_max_weight=1000,
         accessibility_edge_weights="length",
         accessibility_max_weight=1000,
-        network_type="drive"
-    )
+        network_type="drive",
+    ),
 }
 
 
@@ -227,7 +231,12 @@ def calculate_prepare(
 
     if data_public is None:
         df_public_spaces = load_osm_features_from_bounds(
-            xmin, ymin, xmax, ymax, bounds_crs=wanted_crs, tags={"leisure": ["park"]}
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            bounds_crs=wanted_crs,
+            tags={"leisure": ["park"]},
         )
     else:
         df_public_spaces = (
@@ -237,7 +246,7 @@ def calculate_prepare(
         )
 
     df_denue = process_denue_amenities(
-        load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year)
+        load_denue_from_bounds(xmin, ymin, xmax, ymax, year=year),
     )
 
     df_amenities = concat_amenities(df_denue, df_public_spaces)
@@ -260,17 +269,24 @@ def calculate_prepare(
         ],
     )
 
-    df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax, level=9).pipe(merge_mesh_and_census, agebs=df_agebs)
+    df_mesh = load_mesh_from_bounds(xmin, ymin, xmax, ymax, level=9).pipe(
+        merge_mesh_and_census,
+        agebs=df_agebs,
+    )
 
     out_map = {}
     for network_type in ("walk", "drive"):
         net_accessibility = load_accessibility_net_from_bounds(
-            xmin, ymin, xmax, ymax, bounds_crs=wanted_crs, network_type=network_type
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            bounds_crs=wanted_crs,
+            network_type=network_type,
         )
 
-        df_mesh_type = (
-            df_mesh
-            .assign(osmid=lambda df: get_geometries_osmid(df, net_accessibility))
+        df_mesh_type = df_mesh.assign(
+            osmid=lambda df: get_geometries_osmid(df, net_accessibility),  # noqa: B023
         )
 
         update_net_with_mesh(net_accessibility, df_mesh_type)

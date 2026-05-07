@@ -1,20 +1,18 @@
 import logging
 import os
+from pathlib import Path
 
-
-DEFAULT_LOG_LEVEL = "INFO"
-DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+from lyra.constants import DEFAULT_LOG_FORMAT, DEFAULT_LOG_LEVEL
 
 
 def _build_log_handler() -> logging.Handler:
-    log_file_path = os.environ.get("LYRA_LOG_FILE")
+    log_file_var = os.environ.get("LYRA_LOG_FILE")
 
-    if not log_file_path:
+    if log_file_var is None:
         return logging.StreamHandler()
 
-    log_dir = os.path.dirname(log_file_path)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
+    log_file_path = Path(log_file_var)
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     return logging.FileHandler(log_file_path, encoding="utf-8")
 

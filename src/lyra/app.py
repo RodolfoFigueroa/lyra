@@ -1,12 +1,12 @@
-from fastapi import FastAPI
 import logging
-import uvicorn
 import os
-
 from contextlib import asynccontextmanager
+
+import uvicorn
+from fastapi import FastAPI
+
 from lyra.auth import initialize_earth_engine
 from lyra.logging_config import configure_logging
-
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,14 @@ def main() -> None:
     initialize_earth_engine()
 
     # Defer imports until after authenticating with Earth Engine
-    from lyra.routes import data_types, geojson, download, metrics, met_zone
+    from lyra.routes import (  # noqa: PLC0415
+        data_types,
+        download,
+        geojson,
+        met_zone,
+        metrics,
+        models,
+    )
 
     app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
     app.include_router(geojson.router)
@@ -33,10 +40,12 @@ def main() -> None:
     app.include_router(data_types.router)
     app.include_router(metrics.router)
     app.include_router(met_zone.router)
+    app.include_router(models.router)
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("LYRA_PORT", 5219)),
+        port=int(os.environ.get("LYRA_PORT", "5219")),
         reload=False,
+        ws_max_size=5_000_000,
     )

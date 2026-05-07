@@ -5,7 +5,7 @@ services:
     ports:
       - 5219:5219
     volumes:
-      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json
+      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
     env_file:
       - ../.env
@@ -33,7 +33,7 @@ services:
     image: lyra:latest
     command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
     volumes:
-      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json
+      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
     depends_on:
       - redis

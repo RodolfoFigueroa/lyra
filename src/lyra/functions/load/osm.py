@@ -1,14 +1,20 @@
-import networkx as nx
 from typing import Literal
+
 import geopandas as gpd
+import networkx as nx
 import osmnx as ox
-from pyproj import CRS, Transformer
 import pandana as pdna
+from pyproj import CRS, Transformer
+
 from lyra.constants import WALK_SPEED_KPH
 
 
 def _project_bounds_to_latlon(
-    xmin: float, ymin: float, xmax: float, ymax: float, bounds_crs: str | CRS
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    bounds_crs: str | CRS,
 ) -> tuple[float, float, float, float]:
     crs = CRS.from_user_input(bounds_crs)
     latlon_crs = CRS.from_epsg(4326)
@@ -22,10 +28,20 @@ def _project_bounds_to_latlon(
 
 
 def load_roads_from_bounds(
-    xmin: float, ymin: float, xmax: float, ymax: float, *, bounds_crs: str | CRS, network_type: Literal["drive", "walk"],
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    *,
+    bounds_crs: str | CRS,
+    network_type: Literal["drive", "walk"],
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     xmin, ymin, xmax, ymax = _project_bounds_to_latlon(
-        xmin, ymin, xmax, ymax, bounds_crs
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        bounds_crs,
     )
 
     g = ox.graph_from_bbox(bbox=(xmin, ymin, xmax, ymax), network_type=network_type)
@@ -44,9 +60,22 @@ def load_roads_from_bounds(
 
 
 def load_accessibility_net_from_bounds(
-    xmin: float, ymin: float, xmax: float, ymax: float, *, bounds_crs: str | CRS, network_type: Literal["drive", "walk"]
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    *,
+    bounds_crs: str | CRS,
+    network_type: Literal["drive", "walk"],
 ) -> pdna.Network:
-    nodes, edges = load_roads_from_bounds(xmin, ymin, xmax, ymax, bounds_crs=bounds_crs, network_type=network_type)
+    nodes, edges = load_roads_from_bounds(
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        bounds_crs=bounds_crs,
+        network_type=network_type,
+    )
     return pdna.Network(
         nodes["geometry"].x.copy(),
         nodes["geometry"].y.copy(),
@@ -66,6 +95,10 @@ def load_osm_features_from_bounds(
     tags: dict[str, bool | str | list[str]],
 ) -> gpd.GeoDataFrame:
     xmin, ymin, xmax, ymax = _project_bounds_to_latlon(
-        xmin, ymin, xmax, ymax, bounds_crs
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        bounds_crs,
     )
     return ox.features_from_bbox((xmin, ymin, xmax, ymax), tags=tags).to_crs(bounds_crs)

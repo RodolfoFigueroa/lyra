@@ -1,14 +1,18 @@
-import ee
-from google.oauth2.service_account import Credentials
 import os
 from pathlib import Path
 
+import ee
+from google.oauth2.service_account import Credentials
 
-def initialize_earth_engine():
+
+def initialize_earth_engine() -> None:
     fpath = Path("/app/service-account.json")
 
     if not fpath.exists():
-        err = f"Service account file not found at: {fpath}. Please set the SERVICE_ACCOUNT_FILE_PATH environment variable to the correct path."
+        err = (
+            f"Service account file not found at: {fpath}. Please set the "
+            "SERVICE_ACCOUNT_FILE_PATH environment variable to the correct path."
+        )
         raise FileNotFoundError(err)
 
     credentials = Credentials.from_service_account_file(

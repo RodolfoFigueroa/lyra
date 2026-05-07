@@ -1,4 +1,5 @@
 import ee
+
 from lyra.functions.utils import reduce_ee_image_over_gdf_factory
 
 
@@ -16,5 +17,7 @@ METRIC_DESCRIPTION: str = (
 )
 
 calculate = reduce_ee_image_over_gdf_factory(
-    load_urbanized_area_img, reducer=ee.Reducer.sum(), scale=100
+    load_urbanized_area_img,
+    reducer=ee.Reducer.sum(),
+    scale=100,
 )

@@ -1,30 +1,33 @@
 from typing import Literal
+
 import geopandas as gpd
-import pandas as pd
 import pandana as pdna
-from lyra.functions.utils import convert_geojson_to_gdf
-from lyra.models.processors.accessibility_jobs import JobGroupModel
-from lyra.models.wrappers import ExplicitLocationAPI
+import pandas as pd
+
 from lyra.constants import PER_OCU_TO_NUM_WORKERS_MAP
-from lyra.functions.load.osm import (
-    load_accessibility_net_from_bounds,
-)
-from lyra.functions.utils import get_geometries_osmid
 from lyra.functions.load.db import (
     load_denue_from_bounds,
     load_mesh_from_bounds,
 )
+from lyra.functions.load.osm import (
+    load_accessibility_net_from_bounds,
+)
+from lyra.functions.utils import convert_geojson_to_gdf, get_geometries_osmid
+from lyra.models.processors.accessibility_jobs import JobGroupModel
+from lyra.models.wrappers import ExplicitLocationAPI
 
-
-METRIC_DESCRIPTION: str = "Computes job accessibility scores for each spatial unit using road network analysis and employment data."
+METRIC_DESCRIPTION: str = (
+    "Computes job accessibility scores for each spatial unit using road network "
+    "analysis and employment data."
+)
 ITEMS_DEFAULT = {
-    "default": 
-        JobGroupModel(
-            edge_weights="length",
-            max_weight=1000,
-            network_type="drive"
-        )
+    "default": JobGroupModel(
+        edge_weights="length",
+        max_weight=1000,
+        network_type="drive",
+    ),
 }
+
 
 def calculate_prepare(
     data: ExplicitLocationAPI,
@@ -40,10 +43,20 @@ def calculate_prepare(
     xmin, ymin, xmax, ymax = df["geometry"].buffer(10_000).total_bounds
 
     net_accessibility_drive = load_accessibility_net_from_bounds(
-        xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372", network_type="drive"
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        bounds_crs="EPSG:6372",
+        network_type="drive",
     )
     net_accessibility_walk = load_accessibility_net_from_bounds(
-        xmin, ymin, xmax, ymax, bounds_crs="EPSG:6372", network_type="walk"
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        bounds_crs="EPSG:6372",
+        network_type="walk",
     )
 
     df_denue = (
@@ -127,7 +140,7 @@ def calculate_for_items(
         .sjoin(mesh, how="left")
         .drop(columns=[osmid_col, "index_right", "geometry"])
         .groupby("orig_index")
-        .mean()[f"jobs_{item_key}"]
+        .mean()[f"jobs_{item_key}"],
     )
 
 

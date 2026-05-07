@@ -135,3 +135,6 @@ AMENITIES_DICT = {
 }
 
 WALK_SPEED_KPH = 5  # Average walking speed in kilometers per hour
+
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"

@@ -1,10 +1,11 @@
-from sqlalchemy import quoted_name, text
+from collections.abc import Sequence
+from typing import Literal
+
 import geopandas as gpd
+from sqlalchemy import quoted_name, text
+
 from lyra.constants import YEAR_TO_DENUE_TABLE_MAP
 from lyra.db import engine
-from typing import Sequence, Literal
-from lyra.models.base import GeoJSON
-import json
 
 
 def load_geometries_from_bounds(
@@ -18,15 +19,18 @@ def load_geometries_from_bounds(
 ) -> gpd.GeoDataFrame:
     with engine.connect() as conn:
         if "geometry" not in columns:
-            columns = list(columns) + ["geometry"]
+            columns = [*list(columns), "geometry"]
 
         table_name = quoted_name(table_name, quote=True)
 
         return gpd.read_postgis(
             f"""
             SELECT {", ".join(columns)} FROM {table_name}
-            WHERE ST_Intersects(geometry, ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372))
-            """,
+            WHERE ST_Intersects(
+                geometry,
+                ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372)
+            )
+            """,  # noqa: S608
             conn,
             params={
                 "xmin": xmin,
@@ -38,15 +42,23 @@ def load_geometries_from_bounds(
         )
 
 
-def load_geometries_from_cvegeos(
-    cvegeos: list[str],
-) -> gpd.GeoDataFrame:
-    cvegeo_lengths = set(len(cvegeo) for cvegeo in cvegeos)
+def get_table_name_for_cvegeos(cvegeos: list[str]) -> str:
+    cvegeo_lengths = {len(cvegeo) for cvegeo in cvegeos}
+
+    if len(cvegeo_lengths) != 1:
+        err = "All cvegeos must have the same length to determine the geographic level."
+        raise ValueError(err)
 
     length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
     level = length_to_level_map.get(cvegeo_lengths.pop())
 
-    table_name = quoted_name(f"census_2020_{level}", quote=True)
+    return quoted_name(f"census_2020_{level}", quote=True)
+
+
+def load_geometries_from_cvegeos(
+    cvegeos: list[str],
+) -> gpd.GeoDataFrame:
+    table_name = get_table_name_for_cvegeos(cvegeos)
 
     with engine.connect() as conn:
         return gpd.read_postgis(
@@ -54,16 +66,27 @@ def load_geometries_from_cvegeos(
             SELECT cvegeo, geometry AS geometry
             FROM {table_name}
             WHERE cvegeo IN %(cvegeos)s
-            """,
+            """,  # noqa: S608
+            conn,
+            params={"cvegeos": tuple(cvegeos)},
+            geom_col="geometry",
+        ).set_index("cvegeo")  # ty:ignore[no-matching-overload]
+
+
+def load_bounds_from_cvegeos(cvegeos: list[str]) -> gpd.GeoDataFrame:
+    table_name = get_table_name_for_cvegeos(cvegeos)
+
+    with engine.connect() as conn:
+        return gpd.read_postgis(
+            f"""
+            SELECT ST_Extent(geometry)::geometry AS geometry
+            FROM {table_name}
+            WHERE cvegeo IN %(cvegeos)s
+            """,  # noqa: S608
             conn,
             params={"cvegeos": tuple(cvegeos)},
             geom_col="geometry",
         )  # ty:ignore[no-matching-overload]
-
-
-def load_geojson_from_cvegeos(cvegeos: list[str]):
-    gdf = load_geometries_from_cvegeos(cvegeos)
-    return GeoJSON(**json.loads(gdf.to_json()))
 
 
 # TODO: Import levels other than AGEB
@@ -82,12 +105,25 @@ def load_geometries_from_met_zone_code(code: str) -> gpd.GeoDataFrame:
             conn,
             params={"code": code},
             geom_col="geometry",
-        )
+        ).set_index("cvegeo")
 
 
-def load_geojson_from_met_zone_code(code: str) -> GeoJSON:
-    gdf = load_geometries_from_met_zone_code(code)
-    return GeoJSON(**json.loads(gdf.to_json()))
+def load_bounds_from_met_zone_code(code: str) -> gpd.GeoDataFrame:
+    with engine.connect() as conn:
+        return gpd.read_postgis(
+            """
+            SELECT ST_Extent(census_2020_ageb.geometry)::geometry AS geometry
+                FROM census_2020_ageb
+            INNER JOIN census_2020_mun
+                ON census_2020_ageb.cve_mun = census_2020_mun.cvegeo
+            INNER JOIN metropoli_2020
+                ON census_2020_mun.cve_met = metropoli_2020.cve_met
+            WHERE metropoli_2020.cve_met = %(code)s
+            """,
+            conn,
+            params={"code": code},
+            geom_col="geometry",
+        ).set_index("cve_met")
 
 
 def get_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
@@ -102,7 +138,6 @@ def get_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
     Returns:
         A tuple of (cve_met, nom_met) for the best match, or None.
     """
-    # Requires: CREATE EXTENSION IF NOT EXISTS pg_trgm;
     with engine.connect() as conn:
         result = conn.execute(
             text(
@@ -111,7 +146,7 @@ def get_met_zone_code_from_name(name: str) -> tuple[str, str] | None:
                 WHERE similarity(nom_met, :name) > 0.3
                 ORDER BY similarity(nom_met, :name) DESC
                 LIMIT 1
-                """
+                """,
             ),
             {"name": name},
         )

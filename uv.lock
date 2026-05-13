@@ -1285,8 +1285,10 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "celery" },
+    { name = "earthengine-api" },
     { name = "fastapi" },
     { name = "lyra-sdk" },
+    { name = "lyra-utils" },
     { name = "redis" },
     { name = "uvicorn" },
 ]
@@ -1300,8 +1302,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "celery", specifier = ">=5.6.3" },
+    { name = "earthengine-api", specifier = ">=1.7.26" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "lyra-sdk", editable = "packages/lyra_sdk" },
+    { name = "lyra-utils", editable = "packages/lyra_utils" },
     { name = "redis", specifier = ">=7.4.0" },
     { name = "uvicorn", specifier = ">=0.46.0" },
 ]

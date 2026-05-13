@@ -4,9 +4,8 @@ import geopandas as gpd
 import networkx as nx
 import osmnx as ox
 import pandana as pdna
+from lyra.utils.constants import WALK_SPEED_KPH
 from pyproj import CRS, Transformer
-
-from lyra_app.constants import WALK_SPEED_KPH
 
 
 def _project_bounds_to_latlon(

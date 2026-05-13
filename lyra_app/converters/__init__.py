@@ -1,19 +1,19 @@
-from lyra.converters.bounds import (
+from lyra_app.converters.bounds import (
     load_from_cvegeos as load_bounds_from_cvegeos,
 )
-from lyra.converters.bounds import (
+from lyra_app.converters.bounds import (
     load_from_geojson as load_bounds_from_geojson,
 )
-from lyra.converters.bounds import (
+from lyra_app.converters.bounds import (
     load_from_met_zone_code as load_bounds_from_met_zone_code,
 )
-from lyra.converters.location import (
+from lyra_app.converters.location import (
     load_from_cvegeos as load_location_from_cvegeos,
 )
-from lyra.converters.location import (
+from lyra_app.converters.location import (
     load_from_geojson as load_location_from_geojson,
 )
-from lyra.converters.location import (
+from lyra_app.converters.location import (
     load_from_met_zone_code as load_location_from_met_zone_code,
 )
 

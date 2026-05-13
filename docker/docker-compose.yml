@@ -21,6 +21,8 @@ services:
   celery_worker:
     image: rodolfofigueroa/lyra:latest
     command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
+    environment:
+      LYRA_PLUGIN_MODE: worker
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
@@ -29,6 +31,7 @@ services:
       - lyra_net
     depends_on:
       - redis
+      - lyra
     env_file: ".env"
 
 

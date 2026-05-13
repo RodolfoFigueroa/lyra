@@ -1,89 +1,9 @@
 import calendar
-import re
-from collections.abc import Callable, Iterator
 from typing import Literal
 
-import ee
-import geemap
 import geopandas as gpd
 import pandana as pdna
 import pandas as pd
-import shapely
-from lyra.sdk.models import GeoJSON
-from lyra.sdk.types import ExplicitLocationAPI
-
-
-def convert_geojson_to_gdf(geojson: GeoJSON) -> gpd.GeoDataFrame:
-    out = gpd.GeoDataFrame.from_features(
-        [feature.model_dump(mode="json") for feature in geojson.features],
-        crs=geojson.crs.properties.name,
-    )
-    out.index = [feature.id for feature in geojson.features]
-
-    return out
-
-
-def get_reducer_name(reducer: ee.Reducer) -> str:
-    # ee.Reducer objects don't have a public method to get their name, but the
-    # name is included in the string representation.
-    match = re.search(r"Reducer\.(\w+)", str(reducer))
-    if match:
-        return match.group(1)
-
-    err = f"Could not extract reducer name from: {reducer}"
-    raise ValueError(err)
-
-
-def chunk_gdf(
-    gdf: gpd.GeoDataFrame,
-    chunk_size: int = 1000,
-) -> Iterator[gpd.GeoDataFrame]:
-    for i in range(0, len(gdf), chunk_size):
-        yield gdf.iloc[i : i + chunk_size]
-
-
-def compute_gdf(
-    img: ee.Image,
-    gdf: gpd.GeoDataFrame,
-    *,
-    reducer: ee.Reducer,
-    scale: float,
-) -> pd.Series:
-    features = geemap.geopandas_to_ee(gdf[["geometry"]].reset_index(names="orig_index"))
-    computed = ee.data.computeFeatures(
-        {
-            "expression": (img.reduceRegions(features, reducer=reducer, scale=scale)),
-            "fileFormat": "PANDAS_DATAFRAME",
-        },
-    )
-    col_name = get_reducer_name(reducer)
-    return computed.set_index("orig_index")[col_name]
-
-
-def reduce_ee_image_over_gdf_factory(
-    load_img_func: Callable[[ee.Geometry], ee.Image],
-    *,
-    reducer: ee.Reducer,
-    scale: int,
-) -> Callable[[ExplicitLocationAPI], dict[str, float]]:
-    def _f(data: ExplicitLocationAPI) -> dict:
-        df = convert_geojson_to_gdf(data)[["geometry"]].to_crs("EPSG:4326")
-
-        bbox = ee.Geometry.BBox(*df.total_bounds)
-        img = load_img_func(bbox)
-
-        try:
-            return compute_gdf(img, df, reducer=reducer, scale=scale).to_dict()
-        except ee.EEException as e:
-            if re.match(r"Request payload size exceeds the limit", str(e)):
-                processed_chunks = [
-                    compute_gdf(img, chunk, reducer=reducer, scale=scale)
-                    for chunk in chunk_gdf(df)
-                ]
-                return pd.concat(processed_chunks).to_dict()
-            raise
-
-    return _f
 
 
 def get_geometries_osmid(
@@ -138,7 +58,3 @@ def get_season_date_range(
         raise ValueError(err)
 
     return start, end
-
-
-def convert_polygon_to_ee(polygon: shapely.Polygon) -> ee.Geometry:
-    return ee.Geometry.Polygon(list(polygon.exterior.coords))

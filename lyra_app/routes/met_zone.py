@@ -2,8 +2,9 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException
 from lyra.sdk.models import StrictBaseModel
+from lyra.utils.load.db import get_met_zone_code_from_name
 
-from lyra_app.functions.load.db import get_met_zone_code_from_name
+from lyra_app.db import engine
 
 router = APIRouter()
 
@@ -15,7 +16,8 @@ class MetZoneCodeResponse(StrictBaseModel):
 
 @router.get("/met_zone_code")
 async def get_met_zone_code(name: str) -> MetZoneCodeResponse:
-    result = await asyncio.to_thread(get_met_zone_code_from_name, name)
+    with engine.connect() as conn:
+        result = await asyncio.to_thread(get_met_zone_code_from_name, name, conn=conn)
 
     if result is None:
         raise HTTPException(

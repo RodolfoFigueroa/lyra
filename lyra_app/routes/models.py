@@ -1,14 +1,10 @@
-import importlib
-import inspect
-import pkgutil
 from typing import Any
 
-import app.models.processors as _processors_pkg
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from lyra_app.registry import _get_annotation_display_name
+from lyra_app.registry import TASK_REGISTRY, _get_annotation_display_name
 
 router = APIRouter()
 
@@ -23,29 +19,6 @@ class ModelFieldInfo(TypedDict):
 class ModelInfo(TypedDict):
     name: str
     fields: list[ModelFieldInfo]
-
-
-def is_processor_model(obj: Any, module_name: str) -> bool:
-    return (
-        inspect.isclass(obj)
-        and issubclass(obj, BaseModel)
-        and obj is not BaseModel
-        and obj.__module__ == module_name
-    )
-
-
-def discover_processor_models() -> dict[str, type[BaseModel]]:
-    result: dict[str, type[BaseModel]] = {}
-    for module_info in pkgutil.iter_modules(_processors_pkg.__path__):
-        module = importlib.import_module(f"lyra.models.processors.{module_info.name}")
-        result.update(
-            {
-                name: obj
-                for name, obj in inspect.getmembers(module)
-                if is_processor_model(obj, module.__name__)
-            },
-        )
-    return result
 
 
 def type_display_name(annotation: Any) -> str:
@@ -82,17 +55,16 @@ def _build_model_info(name: str, model_class: type[BaseModel]) -> ModelInfo:
 @router.get("/models")
 async def list_models() -> list[ModelInfo]:
     return [
-        _build_model_info(name, cls)
-        for name, cls in discover_processor_models().items()
+        _build_model_info(name, entry["model"]) for name, entry in TASK_REGISTRY.items()
     ]
 
 
 @router.get("/models/{model_name}")
 async def get_model(model_name: str) -> ModelInfo:
-    models = discover_processor_models()
-    if model_name not in models:
+    entry = TASK_REGISTRY.get(model_name)
+    if entry is None:
         raise HTTPException(
             status_code=404,
             detail=f"Model '{model_name}' not found.",
         )
-    return _build_model_info(model_name, models[model_name])
+    return _build_model_info(model_name, entry["model"])

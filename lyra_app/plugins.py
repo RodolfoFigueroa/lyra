@@ -103,6 +103,13 @@ def load_plugins() -> None:
 
     This function is idempotent: it exits immediately on subsequent calls
     within the same process.
+
+    When the environment variable ``LYRA_PLUGIN_MODE=worker`` is set, git
+    operations and the dry-run compatibility check are skipped.  Only
+    ``uv pip install -e`` is executed, which is required because each
+    container has its own ephemeral Python environment.  If a plugin
+    directory does not yet exist on the shared volume the plugin is skipped
+    with a warning.
     """
     global _PLUGINS_LOADED  # noqa: PLW0603
     if _PLUGINS_LOADED:
@@ -112,6 +119,8 @@ def load_plugins() -> None:
     raw = os.environ.get("LYRA_PLUGIN_REPOS", "").strip()
     if not raw:
         return
+
+    worker_mode = os.environ.get("LYRA_PLUGIN_MODE", "").strip().lower() == "worker"
 
     PLUGINS_TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -125,19 +134,29 @@ def load_plugins() -> None:
 
         target = PLUGINS_TARGET_DIR / repo_name
 
-        try:
-            _clone_or_update(clone_url, target, ref)
-        except subprocess.CalledProcessError as exc:
-            logger.warning(
-                "Failed to clone/update plugin %r: %s\n%s",
-                entry,
-                exc,
-                exc.stderr,
-            )
-            continue
+        if worker_mode:
+            if not target.exists():
+                logger.warning(
+                    "Plugin %r: directory %s does not exist. Skipping — ensure the "
+                    "API server has started and populated the plugin volume first.",
+                    repo_name,
+                    target,
+                )
+                continue
+        else:
+            try:
+                _clone_or_update(clone_url, target, ref)
+            except subprocess.CalledProcessError as exc:
+                logger.warning(
+                    "Failed to clone/update plugin %r: %s\n%s",
+                    entry,
+                    exc,
+                    exc.stderr,
+                )
+                continue
 
-        if not _check_compatible(target):
-            continue
+            if not _check_compatible(target):
+                continue
 
         try:
             _install(target)

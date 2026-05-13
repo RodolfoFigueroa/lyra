@@ -1,19 +1,23 @@
 import json
 
-from lyra.functions.load.db import (
+from lyra.sdk.models import GeoJSON
+from lyra.utils.load.db import (
     load_bounds_from_cvegeos,
     load_bounds_from_met_zone_code,
 )
-from lyra.models.base import GeoJSON
+
+from lyra_app.db import engine
 
 
 def load_from_cvegeos(cvegeos: list[str]) -> GeoJSON:
-    gdf = load_bounds_from_cvegeos(cvegeos)
+    with engine.connect() as conn:
+        gdf = load_bounds_from_cvegeos(cvegeos, conn=conn)
     return GeoJSON(**json.loads(gdf.to_json()))
 
 
 def load_from_met_zone_code(code: str) -> GeoJSON:
-    gdf = load_bounds_from_met_zone_code(code)
+    with engine.connect() as conn:
+        gdf = load_bounds_from_met_zone_code(code, conn=conn)
     return GeoJSON(**json.loads(gdf.to_json()))
 
 

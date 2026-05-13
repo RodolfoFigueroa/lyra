@@ -8,6 +8,8 @@ dependencies = [
     "redis>=7.4.0",
     "uvicorn>=0.46.0",
     "lyra-sdk",
+    "earthengine-api>=1.7.26",
+    "lyra-utils",
 ]
 
 [tool.uv.workspace]
@@ -15,10 +17,11 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 lyra-sdk = { workspace = true }
+lyra-utils = { workspace = true }
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D", "S104", "PLR0913"]
+ignore = ["D", "S104", "PLR0913", "PLR2004", "C901", "ANN401"]
 
 [dependency-groups]
 dev = [

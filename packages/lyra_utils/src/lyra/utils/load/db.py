@@ -71,7 +71,9 @@ def load_geometries_from_cvegeos(
 
 
 def load_bounds_from_cvegeos(
-    cvegeos: list[str], *, conn: Connection
+    cvegeos: list[str],
+    *,
+    conn: Connection,
 ) -> gpd.GeoDataFrame:
     table_name = get_table_name_for_cvegeos(cvegeos)
 
@@ -89,7 +91,9 @@ def load_bounds_from_cvegeos(
 
 # TODO: Import levels other than AGEB
 def load_geometries_from_met_zone_code(
-    code: str, *, conn: Connection
+    code: str,
+    *,
+    conn: Connection,
 ) -> gpd.GeoDataFrame:
     return gpd.read_postgis(
         """
@@ -125,7 +129,9 @@ def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDat
 
 
 def get_met_zone_code_from_name(
-    name: str, *, conn: Connection
+    name: str,
+    *,
+    conn: Connection,
 ) -> tuple[str, str] | None:
     """Return (cve_met, nom_met) for the closest matching metropolitan zone name.
 

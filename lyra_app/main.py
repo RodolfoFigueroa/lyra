@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from types import AsyncGeneratorType
 
 import uvicorn
 from fastapi import FastAPI
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGeneratorType:  # noqa: ARG001
     configure_logging()
     initialize_earth_engine()
     yield

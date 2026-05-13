@@ -7,6 +7,7 @@ services:
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
+      - lyra_plugins:/lyra_plugins
     networks:
       - lyra_net
     env_file: ".env"    
@@ -23,6 +24,7 @@ services:
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
+      - lyra_plugins:/lyra_plugins
     networks:
       - lyra_net
     depends_on:
@@ -34,3 +36,7 @@ networks:
   lyra_net:
     name: lyra_net
     driver: bridge
+
+volumes:
+  lyra_plugins:
+    name: lyra_plugins

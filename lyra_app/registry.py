@@ -153,10 +153,11 @@ def discover_tasks() -> None:
             raise RuntimeError(err)
 
         if not has_single and not has_batched:
-            print(
-                f"Skipping `{module_name}` as it does not have a callable 'calculate' "
+            logger.warning(
+                "Skipping `%s` as it does not have a callable 'calculate' "
                 "function or the batched pattern (calculate_prepare/"
                 "calculate_for_items/calculate_aggregate).",
+                module_name,
             )
             continue
 

@@ -1,8 +1,11 @@
+import logging
 import os
 from pathlib import Path
 
 import ee
 from google.oauth2.service_account import Credentials
+
+logger = logging.getLogger(__name__)
 
 
 def initialize_earth_engine() -> None:
@@ -20,4 +23,4 @@ def initialize_earth_engine() -> None:
         scopes=["https://www.googleapis.com/auth/earthengine"],
     )
     ee.Initialize(credentials, project=os.environ["EARTHENGINE_PROJECT"])
-    print("Earth Engine initialized successfully!")
+    logger.info("Earth Engine initialized successfully!")

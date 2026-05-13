@@ -1,7 +1,10 @@
+import importlib
 import logging
 import os
 import re
+import site
 import subprocess
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -24,7 +27,7 @@ _REPO_RE = re.compile(
 
 def _parse_repo_entry(entry: str) -> tuple[str, str, str | None]:
     """Parse a repo entry into (clone_url, repo_name, ref | None)."""
-    entry = entry.strip()
+    entry = entry.strip().rstrip("/")
     m = _REPO_RE.match(entry)
     if not m:
         err = f"Cannot parse plugin repo entry: {entry!r}"
@@ -62,7 +65,7 @@ def _clone_or_update(clone_url: str, target: Path, ref: str | None) -> None:
             )
         else:
             subprocess.run(  # noqa: S603
-                ["git", "-C", str(target), "pull", "--ff-only"],  # noqa: S607
+                ["git", "-C", str(target), "reset", "--hard", "FETCH_HEAD"],  # noqa: S607
                 check=True,
                 capture_output=True,
                 text=True,
@@ -71,12 +74,12 @@ def _clone_or_update(clone_url: str, target: Path, ref: str | None) -> None:
 
 def _check_compatible(plugin_dir: Path) -> bool:
     """Return True iff installing plugin_dir would not break the environment."""
-    result = subprocess.run(  # noqa: S603
-        ["uv", "pip", "install", "--dry-run", str(plugin_dir)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    cmd = [
+        "uv", "pip", "install",
+        "--python", sys.executable,
+        "--dry-run", str(plugin_dir),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
     if result.returncode != 0:
         logger.warning(
             "Plugin %s is incompatible with the current environment and will be "
@@ -91,11 +94,17 @@ def _check_compatible(plugin_dir: Path) -> bool:
 def _install(plugin_dir: Path) -> None:
     logger.info("Installing plugin %s (editable).", plugin_dir.name)
     subprocess.run(  # noqa: S603
-        ["uv", "pip", "install", "-e", str(plugin_dir)],  # noqa: S607
+        ["uv", "pip", "install", "--python", sys.executable, "-e", str(plugin_dir)],  # noqa: S607
         check=True,
         capture_output=True,
         text=True,
     )
+    # uv writes a .pth file into site-packages so the editable source root is on
+    # sys.path. Python only processes .pth files at startup, so we must do it
+    # manually here for the install to be importable within the running process.
+    for site_dir in site.getsitepackages():
+        site.addsitedir(site_dir)
+    importlib.invalidate_caches()
 
 
 def load_plugins() -> None:

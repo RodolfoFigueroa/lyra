@@ -7,8 +7,22 @@ import ee
 import geemap
 import geopandas as gpd
 import pandas as pd
+import shapely
 from lyra.sdk.types import ExplicitLocationAPI
 from lyra.utils.geometry import convert_geojson_to_gdf
+
+
+def convert_polygon_to_ee(polygon: shapely.Polygon) -> ee.Geometry:
+    """Convert a Shapely polygon to an Earth Engine Geometry.
+
+    Args:
+        polygon: A ``shapely.Polygon`` to convert.
+
+    Returns:
+        An ``ee.Geometry.Polygon`` built from the exterior coordinates of the
+        input polygon.
+    """
+    return ee.Geometry.Polygon(list(polygon.exterior.coords))
 
 
 def get_reducer_name(reducer: ee.Reducer) -> str:

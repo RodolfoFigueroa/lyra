@@ -18,4 +18,10 @@ lyra-sdk = { workspace = true }
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D", "S104"]
+ignore = ["D", "S104", "PLR0913"]
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=3.0.0.260204",
+    "types-geopandas>=1.1.3.20260508",
+]

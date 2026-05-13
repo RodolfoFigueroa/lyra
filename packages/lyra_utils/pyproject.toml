@@ -7,9 +7,12 @@ dependencies = [
     "geemap>=0.37.2",
     "geopandas>=1.1.3",
     "lyra-sdk",
+    "networkx>=3.6.1",
+    "osmnx>=2.1.0",
     "pandana>=0.7",
     "pandas>=3.0.3",
     "shapely>=2.1.2",
+    "sqlalchemy>=2.0.49",
 ]
 
 [build-system]

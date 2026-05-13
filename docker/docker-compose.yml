@@ -20,7 +20,7 @@ services:
 
   celery_worker:
     image: rodolfofigueroa/lyra:latest
-    command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
+    command: uv run --no-dev --frozen celery -A lyra_app.worker.celery_app worker --loglevel=info
     environment:
       LYRA_PLUGIN_MODE: worker
     volumes:

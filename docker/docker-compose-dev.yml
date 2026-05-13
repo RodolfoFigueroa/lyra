@@ -8,6 +8,8 @@ services:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
       - lyra_plugins:/lyra_plugins
+    networks:
+      - lyra_net
     env_file:
       - ../.env
     build: ..
@@ -23,22 +25,24 @@ services:
             - venv/
             - "*.env"
             - "*.ipynb"
-        
 
   redis:
     image: redis:alpine
     restart: unless-stopped
-
+    networks:
+      - lyra_net
 
   celery_worker:
     image: lyra:latest
-    command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
+    command: uv run --no-dev --frozen celery -A lyra_app.worker.celery_app worker --loglevel=info
     environment:
       LYRA_PLUGIN_MODE: worker
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
       - lyra_plugins:/lyra_plugins
+    networks:
+      - lyra_net
     depends_on:
       - redis
       - lyra

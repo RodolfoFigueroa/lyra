@@ -10,7 +10,6 @@ from lyra.sdk.types import ExplicitLocationAPI
 from pydantic import BaseModel, ConfigDict, create_model
 from typing_extensions import TypedDict
 
-from lyra_app.derivations import DERIVATION_TAGS
 from lyra_app.models import ExplicitBoundsUnion, ExplicitLocationUnion
 
 TASK_REGISTRY = {}
@@ -37,11 +36,13 @@ def generate_model_from_func(
     func: FunctionType,
     extra_fields: dict[str, tuple] | None = None,
     model_name: str | None = None,
-) -> tuple[type[BaseModel], dict[str, list[str]], dict[str, tuple[str, BaseModel]]]:
+) -> tuple[type[BaseModel], dict[str, list[str]], str | None]:
+    from lyra.sdk.db import LyraDB  # noqa: PLC0415
+
     sig = inspect.signature(func)
     fields = {}
     conversion_map = {}
-    derivation_map = {}
+    db_param_name = None
 
     for name, param in sig.parameters.items():
         annotation = param.annotation
@@ -54,26 +55,14 @@ def generate_model_from_func(
             )
             raise TypeError(err)
 
+        # LyraDB params are injected by the worker — exclude from client model
+        if inspect.isclass(annotation) and issubclass(annotation, LyraDB):
+            db_param_name = name
+            continue
+
         tags_found = []
         if origin is Annotated:
             metadata = get_args(annotation)[1:]
-
-            # Check for derivation tags first — these params are server-side only
-            derivation_tag = next((m for m in metadata if m in DERIVATION_TAGS), None)
-            if derivation_tag is not None:
-                params_instance = next(
-                    (m for m in metadata if isinstance(m, BaseModel)),
-                    None,
-                )
-                if params_instance is None:
-                    err = (
-                        f"Derived parameter '{name}' in '{func.__name__}' is missing "
-                        "a derivation params instance in its Annotated metadata."
-                    )
-                    raise TypeError(err)
-                derivation_map[name] = (derivation_tag, params_instance)
-                # Do not add to model fields — client never sends this
-                continue
 
             if "REQUIRE_EXPLICIT_TYPE" in metadata:
                 tags_found.append("REQUIRE_EXPLICIT_TYPE")
@@ -102,7 +91,7 @@ def generate_model_from_func(
         __config__=ConfigDict(extra="forbid"),
         **fields,
     )
-    return model, conversion_map, derivation_map
+    return model, conversion_map, db_param_name
 
 
 def _get_items_type_from_for_items_func(for_items_func: FunctionType) -> Any:
@@ -197,14 +186,14 @@ def discover_tasks() -> None:
                 )
                 raise RuntimeError(err)
 
-            RequestModel, params_to_convert, derivation_map = generate_model_from_func(  # noqa: N806
+            RequestModel, params_to_convert, db_param_name = generate_model_from_func(  # noqa: N806
                 calc_func,
             )
             TASK_REGISTRY[module_name] = {
                 "calculate": calc_func,
                 "model": RequestModel,
                 "params_to_convert": params_to_convert,
-                "derivation_map": derivation_map,
+                "db_param_name": db_param_name,
                 "description": description.strip(),
                 "is_batched": False,
                 "returns_file": returns_file,
@@ -224,7 +213,7 @@ def discover_tasks() -> None:
 
             item_type = _get_items_type_from_for_items_func(for_items_func)
             items_annotation = dict[str, item_type] | None
-            RequestModel, params_to_convert, derivation_map = generate_model_from_func(  # noqa: N806
+            RequestModel, params_to_convert, db_param_name = generate_model_from_func(  # noqa: N806
                 prepare_func,
                 extra_fields={"items": (items_annotation, None)},
                 model_name=f"{module_name.capitalize()}RequestModel",
@@ -237,7 +226,7 @@ def discover_tasks() -> None:
                 "items_annotation": items_annotation,
                 "model": RequestModel,
                 "params_to_convert": params_to_convert,
-                "derivation_map": derivation_map,
+                "db_param_name": db_param_name,
                 "description": description.strip(),
                 "is_batched": True,
                 "returns_file": False,

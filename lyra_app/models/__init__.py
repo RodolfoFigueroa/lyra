@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from lyra.sdk.models import GeoJSON
 from pydantic import Field
 
 from lyra_app.models.cvegeo_list import CVEGEOListWrapper
@@ -18,13 +17,7 @@ ExplicitBoundsUnion = Annotated[
     Field(discriminator="data_type"),
 ]
 
-ExplicitLocationAPI = Annotated[GeoJSON, "REQUIRE_EXPLICIT_TYPE"]
-ExplicitBoundsAPI = Annotated[GeoJSON, "REQUIRE_EXPLICIT_BOUNDS_TYPE"]
-
 __all__ = [
-    "ExplicitBoundsAPI",
-    "ExplicitLocationAPI",
+    "ExplicitBoundsUnion",
     "ExplicitLocationUnion",
-    "WrapperDataTypeInfo",
-    "get_wrapper_data_type_info",
 ]

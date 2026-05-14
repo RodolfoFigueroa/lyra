@@ -8,7 +8,7 @@ def get_date_range(month: int, year: int) -> tuple[str, str]:
     """Return the start and end date strings for a given month and year.
 
     Args:
-        month: Month number (1–12).
+        month: Month number (1-12).
         year: Four-digit year.
 
     Returns:

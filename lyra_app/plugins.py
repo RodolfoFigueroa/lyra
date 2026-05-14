@@ -75,9 +75,13 @@ def _clone_or_update(clone_url: str, target: Path, ref: str | None) -> None:
 def _check_compatible(plugin_dir: Path) -> bool:
     """Return True iff installing plugin_dir would not break the environment."""
     cmd = [
-        "uv", "pip", "install",
-        "--python", sys.executable,
-        "--dry-run", str(plugin_dir),
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        sys.executable,
+        "--dry-run",
+        str(plugin_dir),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
     if result.returncode != 0:

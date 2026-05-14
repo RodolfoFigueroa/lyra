@@ -11,6 +11,7 @@ from celery import Celery, Task
 from pydantic import BaseModel
 
 from lyra_app.converters import converter_map
+from lyra_app.derivations import DERIVATION_MAP
 from lyra_app.registry import TASK_REGISTRY
 
 REDIS_URL = os.environ["CELERY_BROKER_URL"]
@@ -51,6 +52,36 @@ def convert_explicit_type(
         "data_type": "geojson",
         "value": raw_geojson,
     }
+
+
+def resolve_derived_params(
+    func_kwargs: dict,
+    derivation_map: dict,
+) -> None:
+    """Compute server-side derived parameters and inject them into func_kwargs.
+
+    For each derived parameter, the first GeoJSON value already present in
+    func_kwargs is used as the spatial input to the derivation function.
+    """
+    if not derivation_map:
+        return
+
+    from lyra.sdk.models import GeoJSON  # noqa: PLC0415
+
+    source_geojson = next(
+        (v for v in func_kwargs.values() if isinstance(v, GeoJSON)),
+        None,
+    )
+    if source_geojson is None:
+        err = "No converted GeoJSON parameter found to use as derivation input."
+        raise ValueError(err)
+
+    for param_name, (tag, params_instance) in derivation_map.items():
+        derive_func = DERIVATION_MAP[tag]
+        func_kwargs[param_name] = derive_func(
+            source_geojson,
+            **params_instance.model_dump(),
+        )
 
 
 def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
@@ -139,6 +170,7 @@ def make_celery_wrapper(
     original_calculate_func: FunctionType,
     ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
+    derivation_map: dict,
 ) -> Callable:
     def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
         task_id = self.request.id
@@ -152,6 +184,7 @@ def make_celery_wrapper(
             update_validated_dict_with_converted_types(validated_dict, conversion_map)
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
+            resolve_derived_params(func_kwargs, derivation_map)
             result = original_calculate_func(**func_kwargs)
             notification = _store_result(task_id, result, det_key)
         except Exception as e:
@@ -171,6 +204,7 @@ def make_celery_wrapper_file(
     original_calculate_func: FunctionType,
     ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
+    derivation_map: dict,
 ) -> Callable:
     def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
         task_id = self.request.id
@@ -179,6 +213,7 @@ def make_celery_wrapper_file(
             update_validated_dict_with_converted_types(validated_dict, conversion_map)
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
+            resolve_derived_params(func_kwargs, derivation_map)
             file_path = original_calculate_func(**func_kwargs)
             full_payload = {
                 "status": "success",
@@ -207,6 +242,7 @@ def make_celery_wrapper_batched(
     ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
     items_default: dict,
+    derivation_map: dict,
 ) -> Callable:
     def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
         task_id = self.request.id
@@ -220,6 +256,7 @@ def make_celery_wrapper_batched(
             update_validated_dict_with_converted_types(validated_dict, conversion_map)
             reconstructed_model = ModelClass(**validated_dict)
             func_kwargs = rebuild_function_kwargs(reconstructed_model)
+            resolve_derived_params(func_kwargs, derivation_map)
 
             items_dict = func_kwargs.pop("items", None) or items_default
             if items_dict is None:
@@ -250,6 +287,7 @@ def make_celery_wrapper_batched(
 
 def register_tasks() -> None:
     for metric_name, info in TASK_REGISTRY.items():
+        derivation_map = info.get("derivation_map", {})
         if info["is_batched"]:
             wrapped_function = make_celery_wrapper_batched(
                 info["calculate_prepare"],
@@ -258,18 +296,21 @@ def register_tasks() -> None:
                 info["model"],
                 info["params_to_convert"],
                 info["items_default"],
+                derivation_map,
             )
         elif info["returns_file"]:
             wrapped_function = make_celery_wrapper_file(
                 info["calculate"],
                 info["model"],
                 info["params_to_convert"],
+                derivation_map,
             )
         else:
             wrapped_function = make_celery_wrapper(
                 info["calculate"],
                 info["model"],
                 info["params_to_convert"],
+                derivation_map,
             )
         celery_app.task(name=metric_name, bind=True)(wrapped_function)
 

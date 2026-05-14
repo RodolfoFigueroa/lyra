@@ -312,7 +312,7 @@ def load_mesh_from_bounds(
         xmax: Maximum x coordinate of the bounding box.
         ymax: Maximum y coordinate of the bounding box.
         conn: Active SQLAlchemy database connection.
-        level: Mesh resolution level (4–9). Higher values are finer.
+        level: Mesh resolution level (4-9). Higher values are finer.
             Defaults to ``9``.
 
     Returns:

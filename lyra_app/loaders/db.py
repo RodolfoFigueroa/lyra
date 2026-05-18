@@ -280,16 +280,6 @@ def load_denue_from_bounds(
     Returns:
         A GeoDataFrame with columns ``["per_ocu", "codigo_act", "geometry"]``.
     """
-    table_name = quoted_name(f"denue_{year}_{month:02d}", quote=True)
-    return load_geometries_from_bounds(
-        xmin,
-        ymin,
-        xmax,
-        ymax,
-        conn=conn,
-        columns=["per_ocu", "codigo_act", "geometry"],
-        table_name=table_name,
-    )
 
 
 def load_mesh_from_bounds(

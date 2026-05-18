@@ -6,13 +6,15 @@ from lyra.sdk.models import GeoJSON
 
 class LyraDB(ABC):
     @abstractmethod
-    def load_denue(
+    def load_denue_from_bounds(
         self,
-        data: GeoJSON,
+        xmin: float,
+        ymin: float,
+        xmax: float,
+        ymax: float,
         *,
         year: Literal[2020, 2021, 2022, 2023, 2024, 2025],
         month: Literal[5, 11],
-        buffer_size: float = 10_000,
     ) -> GeoJSON:
         """Load DENUE (business directory) points within the extent of *data*.
 
@@ -30,7 +32,11 @@ class LyraDB(ABC):
 
     @abstractmethod
     def load_mesh(
-        self, data: GeoJSON, *, buffer_size: float = 10_000, level: Literal[9] = 9,
+        self,
+        data: GeoJSON,
+        *,
+        buffer_size: float = 10_000,
+        level: Literal[9] = 9,
     ) -> GeoJSON:
         """Load statistical mesh polygons within the extent of *data*.
 

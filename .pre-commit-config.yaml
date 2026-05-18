@@ -8,3 +8,12 @@ repos:
       args: [ --fix-only ]
     # Run the formatter.
     - id: ruff-format
+
+- repo: local
+  hooks:
+    - id: generate-sdk-interface
+      name: Generate SDK Interface
+      entry: python build_sdk.py
+      language: system
+      files: ^my_api/execution_logic\.py$
+      pass_filenames: false

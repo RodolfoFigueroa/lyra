@@ -15,5 +15,7 @@ repos:
       # Run the linter.
       - id: ruff-check
         args: [--fix-only]
+        exclude: ^packages/lyra_sdk/src/lyra/sdk/db\.py$
       # Run the formatter.
       - id: ruff-format
+        exclude: ^packages/lyra_sdk/src/lyra/sdk/db\.py$

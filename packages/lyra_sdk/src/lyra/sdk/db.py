@@ -1,15 +1,20 @@
-from lyra.sdk.db import LyraDB
+from abc import ABC, abstractmethod
+
 from lyra.sdk.models import GeoJSON
 
+class LyraDB(ABC):
 
-class LyraDBImpl(LyraDB):
+    @abstractmethod
     def load_denue(self, data: GeoJSON, *, year: int) -> GeoJSON:
-        raise NotImplementedError
+        """
+        Test
+        """
+        ...
 
-    def load_mesh(self, data: GeoJSON, *, buffer_size: float = 10000) -> GeoJSON:
-        raise NotImplementedError
+    @abstractmethod
+    def load_mesh(self, data: GeoJSON, *, buffer_size: float=10000) -> GeoJSON:
+        ...
 
-    def load_census(
-        self, data: GeoJSON, *, columns: list[str], buffer_size: float = 10000
-    ) -> GeoJSON:
-        raise NotImplementedError
+    @abstractmethod
+    def load_census(self, data: GeoJSON, *, columns: list[str], buffer_size: float=10000) -> GeoJSON:
+        ...

@@ -10,7 +10,7 @@ on:
     types:
       - published
 
-# Explicitly grant access to write to GHCR
+# Explicitly grant access to write to GHCR, read repo contents
 permissions:
   contents: read
   packages: write
@@ -22,6 +22,18 @@ jobs:
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # Validates SDK generation, linting, and formatting all at once.
+      # Fails immediately if any file is modified or out of sync.
+      - name: Enforce SDK Sync & Formatting
+        run: |
+          pip install pre-commit
+          pre-commit run --all-files
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

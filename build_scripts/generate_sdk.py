@@ -19,9 +19,9 @@ def generate_sdk_interface(source: str, dest: str) -> None:
     # 3. Modify the tree
     for node in tree.body:
         # Find our concrete class
-        if isinstance(node, ast.ClassDef) and node.name == "MyDBClientImplicit":
+        if isinstance(node, ast.ClassDef) and node.name == "LyraDBImplicit":
             # Rename it for the SDK
-            node.name = "MyDBClient"
+            node.name = "LyraDB"
 
             # Make it inherit from ABC
             node.bases = [ast.Name(id="ABC", ctx=ast.Load())]

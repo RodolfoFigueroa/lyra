@@ -1,12 +1,12 @@
 import json
 
 from lyra.sdk.models import GeoJSON
-from lyra.utils.load.db import (
+
+from lyra_app.db.connection import engine
+from lyra_app.loaders.db import (
     load_geometries_from_cvegeos,
     load_geometries_from_met_zone_code,
 )
-
-from lyra_app.db import engine
 
 
 def load_from_cvegeos(cvegeos: list[str]) -> GeoJSON:

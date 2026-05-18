@@ -56,9 +56,9 @@ def convert_explicit_type(
 def inject_db(func_kwargs: dict, db_param_name: str | None) -> None:
     if db_param_name is None:
         return
-    from lyra_app.db_client import LyraDBImpl  # noqa: PLC0415
+    from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
 
-    func_kwargs[db_param_name] = LyraDBImpl()
+    func_kwargs[db_param_name] = LyraDBImplicit()
 
 
 def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:

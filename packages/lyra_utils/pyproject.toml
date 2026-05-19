@@ -9,7 +9,6 @@ dependencies = [
     "lyra-sdk",
     "networkx>=3.6.1",
     "osmnx>=2.1.0",
-    "pandana>=0.7",
     "pandas>=2.3.3",
     "shapely>=2.1.2",
     "sqlalchemy>=2.0.49",

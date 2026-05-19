@@ -1,6 +1,7 @@
 services:
-  lyra:
+  lyra-dev:
     image: lyra:latest
+    container_name: lyra-dev
     restart: unless-stopped
     ports:
       - 5219:5219
@@ -10,6 +11,8 @@ services:
       - lyra_plugins:/lyra_plugins
     networks:
       - lyra_net
+    environment:
+      - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0
     env_file:
       - ../.env
     build: ..
@@ -26,17 +29,21 @@ services:
             - "*.env"
             - "*.ipynb"
 
-  redis:
+  lyra-redis-dev:
     image: redis:alpine
+    container_name: lyra-redis-dev
     restart: unless-stopped
     networks:
       - lyra_net
 
-  celery_worker:
+  lyra-celery-worker-dev:
     image: lyra:latest
+    container_name: lyra-celery-worker-dev
+    restart: unless-stopped
     command: uv run --no-dev --frozen celery -A lyra_app.worker.celery_app worker --loglevel=info
     environment:
-      LYRA_PLUGIN_MODE: worker
+      - LYRA_PLUGIN_MODE=worker
+      - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
@@ -44,8 +51,8 @@ services:
     networks:
       - lyra_net
     depends_on:
-      - redis
-      - lyra
+      - lyra-redis-dev
+      - lyra-dev
     env_file:
       - ../.env
     build: ..

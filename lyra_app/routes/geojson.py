@@ -24,7 +24,9 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
         await websocket.close(code=4404)
         return
 
-    redis_client = aioredis.from_url(os.environ["CELERY_BROKER_URL"])
+    redis_client = aioredis.from_url(
+        os.getenv("CELERY_BROKER_URL", "redis://lyra-redis:6379/0")
+    )
     pubsub = redis_client.pubsub()
 
     try:

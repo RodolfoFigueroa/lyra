@@ -15,7 +15,9 @@ async def download_result(
     download_id: str,
     background_tasks: BackgroundTasks,
 ) -> FileResponse | dict:
-    redis_client = aioredis.from_url(os.environ["CELERY_BROKER_URL"])
+    redis_client = aioredis.from_url(
+        os.getenv("CELERY_BROKER_URL", "redis://lyra-redis:6379/0")
+    )
     data_string = await redis_client.get(f"result_data_{download_id}")
 
     if not data_string:

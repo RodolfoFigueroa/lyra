@@ -3,6 +3,7 @@ import importlib.metadata
 import inspect
 import logging
 import re
+import sys
 from types import FunctionType
 from typing import Annotated, Any, get_args, get_origin
 
@@ -15,8 +16,6 @@ from lyra_app.models import ExplicitBoundsUnion, ExplicitLocationUnion
 TASK_REGISTRY = {}
 
 logger = logging.getLogger(__name__)
-
-PLUGINS_TARGET_DIR = "/lyra_plugins"
 
 
 class MetricParameterInfo(TypedDict):
@@ -37,6 +36,33 @@ def generate_model_from_func(
     extra_fields: dict[str, tuple] | None = None,
     model_name: str | None = None,
 ) -> tuple[type[BaseModel], dict[str, list[str]], str | None]:
+    """Build a Pydantic request model from a plugin function's signature.
+
+    Inspects each parameter of *func* and maps it to a Pydantic field.
+    Parameters annotated with `LyraDB` are excluded from the model and tracked
+    separately as the db injection point. Parameters annotated with
+    ``REQUIRE_EXPLICIT_TYPE`` or ``REQUIRE_EXPLICIT_BOUNDS_TYPE`` are remapped
+    to the corresponding strict discriminated-union type and recorded in the
+    conversion map.
+
+    Args:
+        func (FunctionType): The plugin function whose signature is inspected.
+        extra_fields (dict[str, tuple] | None): Additional
+            ``{name: (type, default)}`` pairs appended after the function's own
+            parameters. Defaults to ``None``.
+        model_name (str | None): Name to give the generated model class.
+            Defaults to ``{func.__name__.capitalize()}RequestModel``.
+
+    Returns:
+        tuple[type[BaseModel], dict[str, list[str]], str | None]: A
+        ``(model, conversion_map, db_param_name)`` tuple where *model* is the
+        generated Pydantic class, *conversion_map* maps parameter names to
+        their conversion tags, and *db_param_name* is the name of the
+        ``LyraDB`` parameter or ``None``.
+
+    Raises:
+        TypeError: If any parameter of *func* is missing a type annotation.
+    """
     from lyra.sdk.db import LyraDB  # noqa: PLC0415
 
     sig = inspect.signature(func)
@@ -95,7 +121,23 @@ def generate_model_from_func(
 
 
 def _get_items_type_from_for_items_func(for_items_func: FunctionType) -> Any:
-    """Extract the item type annotation from calculate_for_items' second parameter."""
+    """Extract the item type annotation from a ``calculate_for_items`` function.
+
+    The second parameter of the function represents a single item and must be
+    typed; this type is used to build the ``items`` field annotation for the
+    batched request model.
+
+    Args:
+        for_items_func (FunctionType): The ``calculate_for_items`` function
+            from a batched plugin module.
+
+    Returns:
+        Any: The type annotation of the second parameter.
+
+    Raises:
+        TypeError: If the function has fewer than two parameters or if the
+            second parameter lacks a type annotation.
+    """
     params = list(inspect.signature(for_items_func).parameters.values())
     if len(params) < 2:
         err = (
@@ -114,6 +156,21 @@ def _get_items_type_from_for_items_func(for_items_func: FunctionType) -> Any:
 
 
 def discover_tasks() -> None:
+    """Discover and register all installed Lyra plugin tasks.
+
+    Initialises Earth Engine authentication, loads plugins via `load_plugins`,
+    then iterates over all ``lyra`` entry points. For each entry point the
+    module is inspected for either a single-step ``calculate`` function or a
+    three-function batched pattern (``calculate_prepare`` /
+    ``calculate_for_items`` / ``calculate_aggregate``). A Pydantic request
+    model is generated and the task is stored in ``TASK_REGISTRY``. This
+    function is a no-op if the registry is already populated.
+
+    Raises:
+        RuntimeError: If a plugin name conflict is detected, if a module
+            defines both the single and batched patterns, or if
+            ``METRIC_DESCRIPTION`` is missing or empty.
+    """
     # Prevent running the discovery loop multiple times if imported in multiple places
     if TASK_REGISTRY:
         return
@@ -177,15 +234,7 @@ def discover_tasks() -> None:
         returns_file = getattr(mod, "RETURNS_FILE", False)
 
         if has_single:
-            # ty complains if we don't explicitly check for callable here, even
-            # though we do above
-            if not callable(calc_func):
-                err = (
-                    f"Processor '{module_name}' must define a callable 'calculate' "
-                    "function.",
-                )
-                raise RuntimeError(err)
-
+            assert callable(calc_func)
             RequestModel, params_to_convert, db_param_name = generate_model_from_func(  # noqa: N806
                 calc_func,
             )
@@ -199,17 +248,11 @@ def discover_tasks() -> None:
                 "returns_file": returns_file,
             }
         else:
-            if not (
-                callable(prepare_func)
-                and callable(for_items_func)
-                and callable(aggregate_func)
-            ):
-                err = (
-                    f"Processor '{module_name}' must define callable functions for the "
-                    "batched pattern: 'calculate_prepare', 'calculate_for_items', and "
-                    "'calculate_aggregate'."
-                )
-                raise RuntimeError(err)
+            # ruff: noqa: S101 on - required to narrow types for the type checker
+            assert callable(prepare_func)
+            assert callable(for_items_func)
+            assert callable(aggregate_func)
+            # ruff: noqa: S101 off
 
             item_type = _get_items_type_from_for_items_func(for_items_func)
             items_annotation = dict[str, item_type] | None
@@ -234,13 +277,20 @@ def discover_tasks() -> None:
 
 
 def _get_annotation_display_name(annotation: Any) -> str:
-    """Convert a parameter annotation to a human-readable type name.
+    """Convert a type annotation to a human-readable display name.
 
-    Strips module prefixes and returns just the class/type name.
-    Examples:
-      typing.Optional[...] -> Optional[...]
-      lyra.models.base.GeoJSON -> GeoJSON
-      ExplicitLocationAPI -> ExplicitLocationAPI (special case for known aliases)
+    Strips qualified module prefixes from the string representation so that
+    only the base type name is shown. `ExplicitLocationAPI` is handled as a
+    special case because it appears under several aliases.
+
+    For example, ``typing.Optional[int]`` becomes ``Optional[int]`` and
+    ``lyra.models.base.GeoJSON`` becomes ``GeoJSON``.
+
+    Args:
+        annotation (Any): A type annotation, e.g. from ``inspect.signature``.
+
+    Returns:
+        str: A simplified type name suitable for display in API responses.
     """
     if annotation is ExplicitLocationAPI or annotation == ExplicitLocationAPI:
         return "ExplicitLocationAPI"
@@ -252,11 +302,29 @@ def _get_annotation_display_name(annotation: Any) -> str:
 
 
 def get_metric_info(name: str) -> MetricInfo | None:
+    """Look up a single metric's info dict by name.
+
+    Args:
+        name (str): The registered task name to look up.
+
+    Returns:
+        MetricInfo | None: The info dict for the named metric, or ``None`` if
+        no task with that name is registered.
+    """
     all_metrics = get_metrics_info()
     return next((m for m in all_metrics if m["name"] == name), None)
 
 
 def get_metrics_info() -> list[MetricInfo]:
+    """Return info dicts for every task registered in ``TASK_REGISTRY``.
+
+    Each entry includes the task name, description, parameter list with types
+    and required flags, and whether the task returns a file.
+
+    Returns:
+        list[MetricInfo]: One `MetricInfo` dict per registered task, in
+        iteration order of ``TASK_REGISTRY``.
+    """
     result = []
     for name, entry in TASK_REGISTRY.items():
         if not entry["is_batched"]:
@@ -298,3 +366,38 @@ def get_metrics_info() -> list[MetricInfo]:
 
 # Run the discovery process when this file is imported
 discover_tasks()
+
+
+def reload_tasks() -> None:
+    """Clear and re-discover all plugin tasks.
+
+    Evicts previously loaded plugin modules from `sys.modules`, clears the
+    `importlib.metadata` distribution cache so newly installed packages are
+    visible, then re-runs full task discovery. Intended to be called after
+    `reload_plugins` has reinstalled changed repos.
+    """
+    # Collect entry-point module names before clearing the registry so we know
+    # which sys.modules entries belong to plugins.
+    plugin_module_names: set[str] = set()
+    for ep in importlib.metadata.entry_points(group="lyra"):
+        # ep.value is e.g. "my_plugin.module:attribute"
+        plugin_module_names.add(ep.value.split(":")[0].split(".")[0])
+
+    TASK_REGISTRY.clear()
+
+    # Evict old plugin modules so re-import loads fresh code.
+    for mod_name in list(sys.modules):
+        if any(
+            mod_name == name or mod_name.startswith(name + ".")
+            for name in plugin_module_names
+        ):
+            del sys.modules[mod_name]
+
+    # Clear importlib.metadata's distribution cache so newly installed packages
+    # (and their entry points) are picked up by entry_points().
+    importlib.metadata.MetadataPathFinder.invalidate_caches()
+    # Also invalidate the import system's path-based caches so freshly installed
+    # modules are importable without a process restart.
+    importlib.invalidate_caches()
+
+    discover_tasks()

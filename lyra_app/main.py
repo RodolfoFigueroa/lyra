@@ -27,6 +27,7 @@ if __name__ == "__main__":
 
     # Defer imports until after authenticating with Earth Engine
     from lyra_app.routes import (
+        admin,
         data_types,
         download,
         geojson,
@@ -36,6 +37,7 @@ if __name__ == "__main__":
     )
 
     app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
+    app.include_router(admin.router)
     app.include_router(geojson.router)
     app.include_router(download.router)
     app.include_router(data_types.router)

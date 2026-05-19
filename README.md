@@ -8,7 +8,6 @@ REST and WebSocket API for computing accessibility and land-use metrics for spat
 - A `.env` file in the project root with at least:
 
 ```env
-CELERY_BROKER_URL=redis://localhost:6379/0
 EARTHENGINE_PROJECT=your-gee-project-id
 ```
 

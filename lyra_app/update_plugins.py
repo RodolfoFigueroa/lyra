@@ -1,9 +1,10 @@
 import argparse
 import logging
 
+from lyra_app.logging_config import configure_logging
 from lyra_app.plugins import format_update_message, reload_plugins
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -27,6 +28,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    configure_logging()
+
     # reload_plugins() must run before importing lyra_app.registry or
     # lyra_app.worker. Those modules execute discover_tasks() / register_tasks()
     # at import time, which calls load_plugins() → _clone_or_update(), pulling
@@ -42,7 +45,7 @@ def main() -> None:
     register_tasks()
     graceful_worker_restart(timeout=args.timeout)
 
-    print(format_update_message(updated))  # noqa: T201
+    logger.info(format_update_message(updated))
 
 
 if __name__ == "__main__":

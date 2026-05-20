@@ -18,7 +18,7 @@ def _build_log_handler() -> logging.Handler:
 
 
 def configure_logging() -> logging.Logger:
-    logger = logging.getLogger("lyra")
+    logger = logging.getLogger("lyra_app")
     logger.setLevel(os.environ.get("LYRA_LOG_LEVEL", DEFAULT_LOG_LEVEL).upper())
 
     if logger.handlers:

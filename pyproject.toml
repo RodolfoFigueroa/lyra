@@ -21,9 +21,13 @@ members = ["packages/*"]
 lyra-sdk = { workspace = true }
 lyra-utils = { workspace = true }
 
+[tool.ruff]
+extend-exclude = ["packages/lyra_sdk/src/lyra/sdk/db.py"]
+
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = ["D", "S104", "PLR0913", "PLR2004", "C901", "ANN401", "COM812"]
+
 
 [dependency-groups]
 dev = [

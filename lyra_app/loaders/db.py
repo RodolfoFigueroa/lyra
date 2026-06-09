@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 
 import geopandas as gpd
+import sqlalchemy
 from sqlalchemy import Connection, quoted_name, text
 
 
@@ -200,6 +201,10 @@ def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDat
         A single-row GeoDataFrame indexed by ``cve_met`` containing the
         combined bounding-box geometry.
     """
+    crs = conn.execute(
+        sqlalchemy.text("SELECT ST_SRID(geometry) FROM census_2020_ageb LIMIT 1")
+    ).scalar()
+
     return gpd.read_postgis(
         """
         SELECT ST_Extent(census_2020_ageb.geometry)::geometry AS geometry
@@ -213,6 +218,7 @@ def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDat
         conn,
         params={"code": code},
         geom_col="geometry",
+        crs=crs,
     )
 
 

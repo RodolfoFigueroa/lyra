@@ -203,7 +203,6 @@ def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDat
     return gpd.read_postgis(
         """
         SELECT
-            census_2020_ageb.cvegeo,
             ST_Extent(census_2020_ageb.geometry)::geometry AS geometry
         FROM census_2020_ageb
         INNER JOIN census_2020_mun

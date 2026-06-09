@@ -224,3 +224,4 @@ docs/css/*
 docs/index.html
 .zed
 *.gpkg
+*.tif

@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any, overload
@@ -24,31 +23,6 @@ class LyraAPIClient(_BaseLyraAPIClient):
         secure: Whether to use secure protocols (https/wss) or insecure (http/ws).
         log_level: Logging level for status messages. Defaults to logging.INFO.
     """
-
-    def __init__(
-        self,
-        host: str,
-        timeout: float = 100.0,
-        headers: dict[str, str] | None = None,
-        *,
-        secure: bool = True,
-        log_level: int = logging.INFO,
-        connect_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """Initialize the Lyra API client.
-
-        Args:
-            host: The API server hostname.
-            timeout: Request timeout in seconds. Defaults to 100.0.
-            headers: Default HTTP headers to include in WebSocket and HTTP requests.
-                If None, defaults to an empty dict.
-            secure: Whether to use secure protocols (https/wss). Defaults to True.
-            log_level: Logging level for status messages. Defaults to logging.INFO.
-            connect_kwargs: Additional keyword arguments passed to the WebSocket
-                connect call.
-        """
-        super().__init__(host, timeout, headers, secure=secure, log_level=log_level)
-        self.connect_kwargs = connect_kwargs or {}
 
     def submit(self, metric: str, payload: dict) -> str:
         """Submit a processing request via WebSocket.

@@ -48,6 +48,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             async with async_connect(
                 ws_url,
                 additional_headers=self.headers,
+                **self.connect_kwargs,
             ) as websocket:
                 await websocket.send(json.dumps(payload))
 

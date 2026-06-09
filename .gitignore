@@ -223,3 +223,4 @@ docs/js/*
 docs/css/*
 docs/index.html
 .zed
+*.gpkg

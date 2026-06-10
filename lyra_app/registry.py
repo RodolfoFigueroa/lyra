@@ -232,6 +232,14 @@ def discover_tasks() -> None:
             raise RuntimeError(err)
 
         returns_file = getattr(mod, "RETURNS_FILE", False)
+        tavi_hint = getattr(mod, "TAVI_HINT", "")
+
+        if not isinstance(tavi_hint, str):
+            err = (
+                f"Processor '{module_name}' has a TAVI_HINT that is not a string. "
+                "TAVI_HINT must be a string if defined.",
+            )
+            raise TypeError(err)
 
         if has_single:
             assert callable(calc_func)
@@ -246,6 +254,7 @@ def discover_tasks() -> None:
                 "description": description.strip(),
                 "is_batched": False,
                 "returns_file": returns_file,
+                "tavi_hint": tavi_hint.strip(),
             }
         else:
             # ruff: noqa: S101 on - required to narrow types for the type checker
@@ -273,6 +282,7 @@ def discover_tasks() -> None:
                 "description": description.strip(),
                 "is_batched": True,
                 "returns_file": False,
+                "tavi_hint": tavi_hint.strip(),
             }
 
 
@@ -357,6 +367,7 @@ def get_metrics_info() -> list[MetricInfo]:
             {
                 "name": name,
                 "description": entry["description"],
+                "tavi_hint": entry.get("tavi_hint", ""),
                 "parameters": parameters,
                 "returns_file": entry.get("returns_file", False),
             },

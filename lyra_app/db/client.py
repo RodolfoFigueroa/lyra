@@ -17,7 +17,7 @@ class LyraDBImplicit:
         ymax: float,
         *,
         year: Literal[2020, 2021, 2022, 2023, 2024, 2025],
-        month: Literal[5, 11] = 11,
+        month: Literal[5, 11],
     ) -> gpd.GeoDataFrame:
         """Load DENUE economic-unit records that intersect a bounding box.
 

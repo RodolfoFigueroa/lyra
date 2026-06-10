@@ -1,23 +1,20 @@
 import hashlib
 import json
 import logging
-import os
 import time
 from collections.abc import Callable
 from types import FunctionType
 from typing import Literal, cast
 
-import redis
 from celery import Celery, Task
 from pydantic import BaseModel
 
 from lyra_app.converters import converter_map
+from lyra_app.db.redis import redis_client_sync, redis_url
 from lyra_app.registry import TASK_REGISTRY
 
-REDIS_URL = os.getenv("CELERY_BROKER_URL", "redis://lyra-redis:6379/0")
 logger = logging.getLogger(__name__)
-celery_app = Celery("ee_tasks", broker=REDIS_URL, backend=REDIS_URL)
-redis_client = redis.from_url(REDIS_URL)
+celery_app = Celery("ee_tasks", broker=redis_url, backend=redis_url)
 
 
 def _has_met_zone_code(validated_dict: dict) -> bool:
@@ -189,10 +186,10 @@ def _resolve_cache(
     if not _has_met_zone_code(validated_dict):
         return None, False
     det_key = _build_deterministic_cache_key(task_name, validated_dict)
-    cached = redis_client.get(det_key)
+    cached = redis_client_sync.get(det_key)
     if cached is not None:
         cached_bytes = cast("bytes", cached)
-        redis_client.setex(f"result_data_{task_id}", 600, cached_bytes)
+        redis_client_sync.setex(f"result_data_{task_id}", 600, cached_bytes)
         logger.info(
             "Celery task %s serving cached result for %s (key: %s)",
             task_id,
@@ -222,9 +219,9 @@ def _store_result(task_id: str, result: dict, det_key: str | None) -> dict:
     """
     full_payload = {"status": "success", "result": result}
     serialised_payload = json.dumps(full_payload)
-    redis_client.setex(f"result_data_{task_id}", 600, serialised_payload)
+    redis_client_sync.setex(f"result_data_{task_id}", 600, serialised_payload)
     if det_key is not None:
-        redis_client.setex(det_key, 86400, serialised_payload)
+        redis_client_sync.setex(det_key, 86400, serialised_payload)
     return {"status": "success", "download_id": task_id}
 
 
@@ -261,7 +258,7 @@ def _publish_notification(task_id: str, notification: dict) -> dict:
         dict: The same *notification* dict, passed through unchanged.
     """
     channel_name = f"task_results_{task_id}"
-    redis_client.publish(channel_name, json.dumps(notification))
+    redis_client_sync.publish(channel_name, json.dumps(notification))
     return notification
 
 
@@ -402,7 +399,9 @@ def make_celery_wrapper_file(
                 "result_type": "file",
                 "file_path": str(file_path),
             }
-            redis_client.setex(f"result_data_{task_id}", 600, json.dumps(full_payload))
+            redis_client_sync.setex(
+                f"result_data_{task_id}", 600, json.dumps(full_payload)
+            )
             notification = {"status": "success", "download_id": task_id}
         except Exception as e:
             notification = _handle_task_exception(
@@ -553,7 +552,7 @@ def notify_interrupted_tasks(task_ids: list[str]) -> None:
                 "message": _INTERRUPTED_TASK_MESSAGE,
             }
         )
-        redis_client.publish(f"task_results_{task_id}", payload)
+        redis_client_sync.publish(f"task_results_{task_id}", payload)
         logger.info("Notified task %s of interruption.", task_id)
 
 

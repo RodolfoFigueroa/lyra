@@ -40,7 +40,7 @@ services:
     image: lyra:latest
     container_name: lyra-celery-worker-dev
     restart: unless-stopped
-    command: uv run --no-dev --frozen celery -A lyra_app.worker.celery_app worker --loglevel=info
+    command: uv run --no-dev --frozen celery -A lyra_app.worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-32}
     environment:
       - LYRA_PLUGIN_MODE=worker
       - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0

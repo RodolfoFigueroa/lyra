@@ -1,11 +1,11 @@
 import contextlib
 import json
-import os
 
-import redis.asyncio as aioredis
 from anyio import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
+
+from lyra_app.db.redis import redis_client
 
 router = APIRouter()
 
@@ -15,9 +15,11 @@ async def download_result(
     download_id: str,
     background_tasks: BackgroundTasks,
 ) -> FileResponse | dict:
-    redis_client = aioredis.from_url(
-        os.getenv("CELERY_BROKER_URL", "redis://lyra-redis:6379/0")
-    )
+    pong = await redis_client.ping()
+    if not pong:
+        err = "Cannot connect to Redis. Please try again later."
+        raise HTTPException(status_code=503, detail=err)
+
     data_string = await redis_client.get(f"result_data_{download_id}")
 
     if not data_string:

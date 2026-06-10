@@ -1,12 +1,11 @@
 import asyncio
 import contextlib
 import json
-import os
 
-import redis.asyncio as aioredis
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from lyra_app.db.redis import redis_client
 from lyra_app.registry import TASK_REGISTRY
 from lyra_app.worker import celery_app
 
@@ -15,6 +14,11 @@ router = APIRouter()
 
 @router.websocket("/ws/{metric}")
 async def websocket_route(websocket: WebSocket, metric: str) -> None:
+    pong = await redis_client.ping()
+    if not pong:
+        err = "Cannot connect to Redis. Please try again later."
+        raise HTTPException(status_code=503, detail=err)
+
     await websocket.accept()
 
     if metric not in TASK_REGISTRY:
@@ -24,9 +28,6 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
         await websocket.close(code=4404)
         return
 
-    redis_client = aioredis.from_url(
-        os.getenv("CELERY_BROKER_URL", "redis://lyra-redis:6379/0")
-    )
     pubsub = redis_client.pubsub()
 
     try:

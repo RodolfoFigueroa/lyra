@@ -49,10 +49,10 @@ def load_geometries_from_bounds(
         """,  # noqa: S608
         conn,
         params={
-            "xmin": xmin,
-            "ymin": ymin,
-            "xmax": xmax,
-            "ymax": ymax,
+            "xmin": float(xmin),
+            "ymin": float(ymin),
+            "xmax": float(xmax),
+            "ymax": float(ymax),
         },
         geom_col="geometry",
     )

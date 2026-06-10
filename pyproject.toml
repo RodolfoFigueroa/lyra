@@ -32,6 +32,7 @@ ignore = ["D", "S104", "PLR0913", "PLR2004", "C901", "ANN401", "COM812"]
 
 [dependency-groups]
 dev = [
+    "ipykernel<7",
     "lyra-api",
     "pandas-stubs>=3.0.0.260204",
     "pre-commit>=4.6.0",

@@ -136,7 +136,6 @@ class LyraAPIClient(_BaseLyraAPIClient):
         """
         path = Path(path)
         download_url = self._http_url(f"download_result/{download_id}")
-        status_code: int = 0
 
         try:
             with requests.get(

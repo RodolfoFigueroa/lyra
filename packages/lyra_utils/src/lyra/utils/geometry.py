@@ -1,7 +1,7 @@
 """Utilities for converting GeoJSON objects to GeoDataFrames."""
 
 import geopandas as gpd
-from lyra.sdk.models import GeoJSON, SingleGeoJSON
+from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 
 
 def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame:

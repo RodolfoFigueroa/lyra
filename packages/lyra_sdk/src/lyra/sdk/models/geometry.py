@@ -1,10 +1,7 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class StrictBaseModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from lyra.sdk.models.strict import StrictBaseModel
+from pydantic import Field
 
 
 class CRSProperties(StrictBaseModel):

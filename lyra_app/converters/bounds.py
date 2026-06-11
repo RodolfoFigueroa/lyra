@@ -1,6 +1,6 @@
 import json
 
-from lyra.sdk.models import SingleGeoJSON
+from lyra.sdk.models.geometry import SingleGeoJSON
 
 from lyra_app.db.connection import engine
 from lyra_app.loaders.db import (

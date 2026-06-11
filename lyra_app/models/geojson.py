@@ -1,6 +1,7 @@
 from typing import ClassVar, Literal
 
-from lyra.sdk.models import GeoJSON, SingleGeoJSON, StrictBaseModel
+from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
+from lyra.sdk.models.strict import StrictBaseModel
 
 
 class GeoJSONWrapper(StrictBaseModel):

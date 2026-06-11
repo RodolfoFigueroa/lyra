@@ -1,6 +1,6 @@
 from typing import Annotated, ClassVar, Literal
 
-from lyra.sdk.models import StrictBaseModel
+from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import AfterValidator
 
 

@@ -1,7 +1,7 @@
 from typing import Literal, get_args, get_origin
 
 from fastapi import APIRouter
-from lyra.sdk.models import StrictBaseModel
+from lyra.sdk.models.strict import StrictBaseModel
 from typing_extensions import TypedDict
 
 from lyra_app.models.cvegeo_list import CVEGEOListWrapper

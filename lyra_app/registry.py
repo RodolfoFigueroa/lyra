@@ -7,30 +7,15 @@ import sys
 from types import FunctionType
 from typing import Annotated, Any, get_args, get_origin
 
+from lyra.sdk.models.metric import MetricInfo, MetricParameterInfo
 from lyra.sdk.types import ExplicitBoundsAPI, ExplicitLocationAPI
 from pydantic import BaseModel, ConfigDict, create_model
-from typing_extensions import TypedDict
 
 from lyra_app.models import ExplicitBoundsUnion, ExplicitLocationUnion
 
 TASK_REGISTRY = {}
 
 logger = logging.getLogger(__name__)
-
-
-class MetricParameterInfo(TypedDict):
-    name: str
-    type: str
-    required: bool
-    default: Any | None
-
-
-class MetricInfo(TypedDict):
-    name: str
-    description: str
-    parameters: list[MetricParameterInfo]
-    returns_file: bool
-    tavi_hint: str
 
 
 def generate_model_from_func(
@@ -333,7 +318,7 @@ def get_metric_info(name: str, *, prettify_types: bool) -> MetricInfo | None:
         no task with that name is registered.
     """
     all_metrics = get_metrics_info(prettify_types=prettify_types)
-    return next((m for m in all_metrics if m["name"] == name), None)
+    return next((m for m in all_metrics if m.name == name), None)
 
 
 def get_metrics_info(*, prettify_types: bool) -> list[MetricInfo]:

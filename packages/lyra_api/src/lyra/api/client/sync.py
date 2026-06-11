@@ -191,14 +191,20 @@ class LyraAPIClient(_BaseLyraAPIClient):
         return data_types
 
     @overload
-    def get_metrics(self, metric_name: None = None) -> list[dict[str, Any]]: ...
+    def get_metrics(
+        self, metric_name: None = None, *, prettify_types: bool = True
+    ) -> list[dict[str, Any]]: ...
 
     @overload
-    def get_metrics(self, metric_name: str) -> dict[str, Any]: ...
+    def get_metrics(
+        self, metric_name: str, *, prettify_types: bool = True
+    ) -> dict[str, Any]: ...
 
     def get_metrics(
         self,
         metric_name: str | None = None,
+        *,
+        prettify_types: bool = True,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Fetch available metrics from the API.
 
@@ -216,6 +222,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 metrics_url,
                 timeout=self.timeout,
                 headers=self.headers,
+                params={"prettify_types": prettify_types},
             )
         except Exception as e:
             err = f"Metrics request error: {e}"

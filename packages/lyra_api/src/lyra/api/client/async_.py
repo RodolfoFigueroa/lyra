@@ -211,16 +211,27 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         return data_types
 
     @overload
-    async def get_metrics(self, metric_name: None = None) -> list[dict[str, Any]]: ...
+    async def get_metrics(
+        self, metric_name: None = None, *, prettify_types: bool = True
+    ) -> list[dict[str, Any]]: ...
 
     @overload
-    async def get_metrics(self, metric_name: str) -> dict[str, Any]: ...
+    async def get_metrics(
+        self, metric_name: str, *, prettify_types: bool = True
+    ) -> dict[str, Any]: ...
 
     async def get_metrics(
-        self,
-        metric_name: str | None = None,
+        self, metric_name: str | None = None, *, prettify_types: bool = True
     ) -> list[dict[str, Any]] | dict:
         """Fetch available metrics from the API (async).
+
+        Args:
+            metric_name: Optional name of a specific metric to fetch. If None,
+                returns a list of all metrics. If provided, returns the metric
+                with the matching name.
+            prettify_types: Whether to simplify type annotations in the returned
+                metric objects for display purposes. If False, type annotations
+                are returned as-is.
 
         Returns:
             A list of metric objects.
@@ -230,7 +241,6 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         """
         metric_str = "" if metric_name is None else metric_name
         metrics_url = self._http_url(f"metrics/{metric_str}")
-        status: int = 0
         metrics: Any = None
 
         try:
@@ -240,6 +250,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 session.get(
                     metrics_url,
                     headers=self.headers,
+                    params={"prettify_types": prettify_types},
                 ) as response,
             ):
                 status = response.status

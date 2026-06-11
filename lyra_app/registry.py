@@ -232,7 +232,6 @@ def discover_tasks() -> None:
                 "METRIC_DESCRIPTION module-level string constant.",
             )
             raise RuntimeError(err)
-
         returns_file = getattr(mod, "RETURNS_FILE", False)
         tavi_hint = getattr(mod, "TAVI_HINT", "")
 
@@ -320,30 +319,40 @@ def _get_annotation_display_name(annotation: Any) -> str:
     return re.sub(r"<class '(\w+)'>", r"\1", type_str)
 
 
-def get_metric_info(name: str) -> MetricInfo | None:
+def get_metric_info(name: str, *, prettify_types: bool) -> MetricInfo | None:
     """Look up a single metric's info dict by name.
 
     Args:
         name (str): The registered task name to look up.
+        prettify_types (bool): Whether to simplify type annotations in the
+        returned info dict for display purposes. If ``False``, type annotations
+        are returned as-is.
 
     Returns:
         MetricInfo | None: The info dict for the named metric, or ``None`` if
         no task with that name is registered.
     """
-    all_metrics = get_metrics_info()
+    all_metrics = get_metrics_info(prettify_types=prettify_types)
     return next((m for m in all_metrics if m["name"] == name), None)
 
 
-def get_metrics_info() -> list[MetricInfo]:
+def get_metrics_info(*, prettify_types: bool) -> list[MetricInfo]:
     """Return info dicts for every task registered in ``TASK_REGISTRY``.
 
     Each entry includes the task name, description, parameter list with types
     and required flags, and whether the task returns a file.
 
+    Args:
+        prettify_types (bool): Whether to simplify type annotations in the
+        returned info dict for display purposes. If ``False``, type annotations
+        are returned as-is.
     Returns:
         list[MetricInfo]: One `MetricInfo` dict per registered task, in
         iteration order of ``TASK_REGISTRY``.
     """
+
+    type_f = _get_annotation_display_name if prettify_types else str
+
     result: list[MetricInfo] = []
     for name, entry in TASK_REGISTRY.items():
         if not entry["is_batched"]:
@@ -354,7 +363,7 @@ def get_metrics_info() -> list[MetricInfo]:
             parameters = [
                 MetricParameterInfo(
                     name="items",
-                    type=_get_annotation_display_name(entry["items_annotation"]),
+                    type=type_f(entry["items_annotation"]),
                     required=False,
                     default=entry["items_default"],
                 ),
@@ -364,7 +373,7 @@ def get_metrics_info() -> list[MetricInfo]:
             [
                 MetricParameterInfo(
                     name=param_name,
-                    type=_get_annotation_display_name(param.annotation),
+                    type=type_f(param.annotation),
                     required=param.default is inspect.Parameter.empty,
                     default=param.default
                     if param.default is not inspect.Parameter.empty

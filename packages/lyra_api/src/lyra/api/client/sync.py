@@ -6,6 +6,7 @@ from typing import Any, overload
 import requests
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError, WebSocketError
+from lyra.sdk.models.metric import MetricInfo
 from websockets.sync.client import connect
 
 
@@ -193,23 +194,24 @@ class LyraAPIClient(_BaseLyraAPIClient):
     @overload
     def get_metrics(
         self, metric_name: None = None, *, prettify_types: bool = True
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[MetricInfo]: ...
 
     @overload
     def get_metrics(
         self, metric_name: str, *, prettify_types: bool = True
-    ) -> dict[str, Any]: ...
+    ) -> MetricInfo: ...
 
     def get_metrics(
         self,
         metric_name: str | None = None,
         *,
         prettify_types: bool = True,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
+    ) -> list[MetricInfo] | MetricInfo:
         """Fetch available metrics from the API.
 
         Returns:
-            A list of metric objects.
+            A list of MetricInfo objects if no specific metric_name is provided,
+            otherwise a single MetricInfo object.
 
         Raises:
             DownloadError: If the HTTP request fails or returns an invalid payload.
@@ -233,8 +235,12 @@ class LyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err)
 
         metrics = response.json()
-        self._validate_metric_response(metrics, metric_name)
-        return metrics
+
+        return (
+            [MetricInfo.model_validate(item) for item in metrics]
+            if metric_name is None
+            else MetricInfo.model_validate(metrics)
+        )
 
     def process(self, metric: str, payload: dict) -> dict[str, Any]:
         """Submit a request and download the result in one call.

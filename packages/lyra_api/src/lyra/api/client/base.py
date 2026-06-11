@@ -1,8 +1,6 @@
 import logging
 from typing import Any
 
-from lyra.api.exceptions import DownloadError
-
 
 class _BaseLyraAPIClient:
     """Base class for Lyra API clients, containing shared logic and configuration."""
@@ -62,27 +60,3 @@ class _BaseLyraAPIClient:
         resolved_kwargs = dict(connect_kwargs or {})
         resolved_kwargs.setdefault("open_timeout", self.timeout)
         return resolved_kwargs
-
-    def _validate_metric_response(
-        self,
-        response: list | dict,
-        metric_name: str | None,
-    ) -> None:
-        """Validate the format of the metrics response.
-
-        Args:
-            response: The raw response data to validate.
-            metric_name: The metric name used in the request, or None for all metrics.
-
-        Raises:
-            DownloadError: If the response format is invalid.
-        """
-        if metric_name is None:
-            if not isinstance(response, list) or not all(
-                isinstance(item, dict) for item in response
-            ):
-                err = "Invalid metrics response format"
-                raise DownloadError(err)
-        elif not isinstance(response, dict):
-            err = "Invalid metric response format"
-            raise DownloadError(err)

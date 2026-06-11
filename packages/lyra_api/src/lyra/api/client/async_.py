@@ -7,6 +7,7 @@ import aiofiles
 import aiohttp
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError, WebSocketError
+from lyra.sdk.models.metric import MetricInfo
 from websockets.asyncio.client import connect as async_connect
 
 
@@ -213,16 +214,16 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
     @overload
     async def get_metrics(
         self, metric_name: None = None, *, prettify_types: bool = True
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[MetricInfo]: ...
 
     @overload
     async def get_metrics(
         self, metric_name: str, *, prettify_types: bool = True
-    ) -> dict[str, Any]: ...
+    ) -> MetricInfo: ...
 
     async def get_metrics(
         self, metric_name: str | None = None, *, prettify_types: bool = True
-    ) -> list[dict[str, Any]] | dict:
+    ) -> list[MetricInfo] | MetricInfo:
         """Fetch available metrics from the API (async).
 
         Args:
@@ -264,8 +265,11 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch metrics. HTTP {status}"
             raise DownloadError(err)
 
-        self._validate_metric_response(metrics, metric_name)
-        return metrics
+        return (
+            [MetricInfo.model_validate(item) for item in metrics]
+            if metric_name is None
+            else MetricInfo.model_validate(metrics)
+        )
 
     async def process(self, metric: str, payload: dict) -> dict[str, Any]:
         """Submit a request and download the result in one call (async).

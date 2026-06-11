@@ -29,6 +29,7 @@ class MetricInfo(TypedDict):
     description: str
     parameters: list[MetricParameterInfo]
     returns_file: bool
+    tavi_hint: str
 
 
 def generate_model_from_func(
@@ -116,7 +117,7 @@ def generate_model_from_func(
         effective_model_name,
         __config__=ConfigDict(extra="forbid"),
         **fields,
-    )
+    )  # ty:ignore[no-matching-overload]
     return model, conversion_map, db_param_name
 
 
@@ -335,7 +336,7 @@ def get_metrics_info() -> list[MetricInfo]:
         list[MetricInfo]: One `MetricInfo` dict per registered task, in
         iteration order of ``TASK_REGISTRY``.
     """
-    result = []
+    result: list[MetricInfo] = []
     for name, entry in TASK_REGISTRY.items():
         if not entry["is_batched"]:
             param_source = entry["calculate"]
@@ -343,20 +344,20 @@ def get_metrics_info() -> list[MetricInfo]:
         else:
             param_source = entry["calculate_prepare"]
             parameters = [
-                {
-                    "name": "items",
-                    "type": _get_annotation_display_name(entry["items_annotation"]),
-                    "required": False,
-                },
+                MetricParameterInfo(
+                    name="items",
+                    type=_get_annotation_display_name(entry["items_annotation"]),
+                    required=False,
+                ),
             ]
 
         parameters.extend(
             [
-                {
-                    "name": param_name,
-                    "type": _get_annotation_display_name(param.annotation),
-                    "required": param.default is inspect.Parameter.empty,
-                }
+                MetricParameterInfo(
+                    name=param_name,
+                    type=_get_annotation_display_name(param.annotation),
+                    required=param.default is inspect.Parameter.empty,
+                )
                 for param_name, param in inspect.signature(
                     param_source,
                 ).parameters.items()
@@ -364,13 +365,13 @@ def get_metrics_info() -> list[MetricInfo]:
         )
 
         result.append(
-            {
-                "name": name,
-                "description": entry["description"],
-                "tavi_hint": entry.get("tavi_hint", ""),
-                "parameters": parameters,
-                "returns_file": entry.get("returns_file", False),
-            },
+            MetricInfo(
+                name=name,
+                description=entry["description"],
+                tavi_hint=entry.get("tavi_hint", ""),
+                parameters=parameters,
+                returns_file=entry.get("returns_file", False),
+            ),
         )
     return result
 

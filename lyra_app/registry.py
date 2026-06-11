@@ -7,7 +7,7 @@ import sys
 from types import FunctionType
 from typing import Annotated, Any, get_args, get_origin
 
-from lyra.sdk.types import ExplicitLocationAPI
+from lyra.sdk.types import ExplicitBoundsAPI, ExplicitLocationAPI
 from pydantic import BaseModel, ConfigDict, create_model
 from typing_extensions import TypedDict
 
@@ -22,6 +22,7 @@ class MetricParameterInfo(TypedDict):
     name: str
     type: str
     required: bool
+    default: Any | None
 
 
 class MetricInfo(TypedDict):
@@ -306,10 +307,17 @@ def _get_annotation_display_name(annotation: Any) -> str:
     if annotation is ExplicitLocationAPI or annotation == ExplicitLocationAPI:
         return "ExplicitLocationAPI"
 
+    if annotation is ExplicitBoundsAPI or annotation == ExplicitBoundsAPI:
+        return "ExplicitBoundsAPI"
+
     # Convert to string and strip module prefixes (e.g., typing.Optional -> Optional)
     type_str = str(annotation)
+
     # Replace patterns like "word.word.word" with just "word" (the last component)
-    return re.sub(r"(\w+\.)+", "", type_str)
+    type_str = re.sub(r"(\w+\.)+", "", type_str)
+
+    # Remove <class '...'> wrappers from types
+    return re.sub(r"<class '(\w+)'>", r"\1", type_str)
 
 
 def get_metric_info(name: str) -> MetricInfo | None:
@@ -348,6 +356,7 @@ def get_metrics_info() -> list[MetricInfo]:
                     name="items",
                     type=_get_annotation_display_name(entry["items_annotation"]),
                     required=False,
+                    default=entry["items_default"],
                 ),
             ]
 
@@ -357,6 +366,9 @@ def get_metrics_info() -> list[MetricInfo]:
                     name=param_name,
                     type=_get_annotation_display_name(param.annotation),
                     required=param.default is inspect.Parameter.empty,
+                    default=param.default
+                    if param.default is not inspect.Parameter.empty
+                    else None,
                 )
                 for param_name, param in inspect.signature(
                     param_source,

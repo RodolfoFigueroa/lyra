@@ -21,7 +21,7 @@ services:
   celery_worker:
     image: rodolfofigueroa/lyra:latest
     restart: unless-stopped
-    command: uv run --no-dev --frozen celery -A lyra_app.worker.celery_app worker --loglevel=info
+    command: celery -A lyra_app.worker.celery_app worker --loglevel=info
     environment:
       LYRA_PLUGIN_MODE: worker
     volumes:

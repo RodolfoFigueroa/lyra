@@ -11,9 +11,9 @@ from pydantic import BaseModel
 
 from lyra_app.celery_app import celery_app
 from lyra_app.db.redis import redis_client_sync
+from lyra_app.legacy_manifest import load_legacy_plugin_manifest
 from lyra_app.plugin_runtime import RunnerMetricEntry, build_runner_metric_entry
 from lyra_app.plugins import install_runner_plugins, sync_runner_repos
-from lyra_app.registry import load_plugin_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -512,7 +512,7 @@ def load_runner_metric_entries() -> dict[str, RunnerMetricEntry]:
     entries: dict[str, RunnerMetricEntry] = {}
 
     for repo in repos:
-        manifest = load_plugin_manifest(repo.path)
+        manifest = load_legacy_plugin_manifest(repo.path)
         for metric in manifest.metrics:
             if queues and metric.execution.queue not in queues:
                 continue

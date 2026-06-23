@@ -8,8 +8,8 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-from lyra.sdk.models.metric import MetricInfo, MetricParameterInfo
-from lyra.sdk.models.plugin import MetricManifest, PluginManifest
+from lyra.sdk.models.metric import MetricInfoV2
+from lyra.sdk.models.plugin_v2 import MetricManifestV2, PluginManifestV2
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.plugins import MANIFEST_FILENAME, sync_catalog_repos
@@ -19,14 +19,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MetricRegistryEntry:
-    metric: MetricManifest
+    metric: MetricManifestV2
     plugin_name: str
     plugin_version: str
     request_validator: Any
-
-    @property
-    def queue(self) -> str:
-        return self.metric.execution.queue
+    queue: str
+    entrypoint: str
 
 
 @dataclass(frozen=True)
@@ -58,7 +56,7 @@ def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
 
 
 def _normalised_manifest_payload(
-    manifests: list[tuple[PluginManifest, Path]],
+    manifests: list[tuple[PluginManifestV2, Path]],
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     for manifest, _path in manifests:
@@ -71,7 +69,7 @@ def _normalised_manifest_payload(
     )
 
 
-def load_plugin_manifest(path: Path) -> PluginManifest:
+def load_plugin_manifest(path: Path) -> PluginManifestV2:
     manifest_path = path / MANIFEST_FILENAME
     if not manifest_path.exists():
         msg = f"Plugin repo {path} is missing required {MANIFEST_FILENAME}."
@@ -79,7 +77,7 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
 
     try:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return PluginManifest.model_validate(raw)
+        return PluginManifestV2.model_validate(raw)
     except json.JSONDecodeError as exc:
         msg = f"Plugin manifest {manifest_path} is not valid JSON."
         raise RuntimeError(msg) from exc
@@ -88,8 +86,8 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
         raise RuntimeError(msg) from exc
 
 
-def _build_request_validator(metric: MetricManifest) -> Any:
-    schema = metric.request_schema or {"type": "object"}
+def _build_request_validator(metric: MetricManifestV2) -> Any:
+    schema = metric.request_schema
     try:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
@@ -99,7 +97,7 @@ def _build_request_validator(metric: MetricManifest) -> Any:
 
 
 def _build_registry(
-    manifests: list[tuple[PluginManifest, Path]],
+    manifests: list[tuple[PluginManifestV2, Path]],
 ) -> dict[str, MetricRegistryEntry]:
     registry: dict[str, MetricRegistryEntry] = {}
     for manifest, _path in manifests:
@@ -112,6 +110,8 @@ def _build_registry(
                 plugin_name=manifest.plugin.name,
                 plugin_version=manifest.plugin.version,
                 request_validator=_build_request_validator(metric),
+                queue=metric.execution.queue,
+                entrypoint=metric.entrypoint,
             )
     return registry
 
@@ -161,25 +161,18 @@ def get_metric_entry(name: str) -> MetricRegistryEntry | None:
     return TASK_REGISTRY.get(name)
 
 
-def get_metric_info(name: str, *, prettify_types: bool) -> MetricInfo | None:  # noqa: ARG001
+def get_metric_info(name: str) -> MetricInfoV2 | None:
     entry = get_metric_entry(name)
     if entry is None:
         return None
     return _metric_info_from_manifest(entry.metric)
 
 
-def get_metrics_info(*, prettify_types: bool) -> list[MetricInfo]:  # noqa: ARG001
+def get_metrics_info() -> list[MetricInfoV2]:
     ensure_catalog_loaded()
     return [
         _metric_info_from_manifest(entry.metric) for entry in TASK_REGISTRY.values()
     ]
-
-
-def get_metric_parameters(name: str) -> list[MetricParameterInfo] | None:
-    entry = get_metric_entry(name)
-    if entry is None:
-        return None
-    return entry.metric.parameters
 
 
 def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
@@ -211,20 +204,13 @@ def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]
     }
 
 
-def _metric_info_from_manifest(metric: MetricManifest) -> MetricInfo:
-    return MetricInfo(
+def _metric_info_from_manifest(metric: MetricManifestV2) -> MetricInfoV2:
+    return MetricInfoV2(
         name=metric.name,
         description=metric.description.strip(),
-        tavi_hint=metric.tavi_hint.strip(),
-        parameters=metric.parameters,
-        returns_file=metric.returns_file,
+        request_schema=metric.request_schema,
+        result_schema=metric.result_schema,
     )
-
-
-def _get_annotation_display_name(annotation: Any) -> str:
-    if hasattr(annotation, "__name__"):
-        return str(annotation.__name__)
-    return str(annotation)
 
 
 def reload_tasks() -> None:

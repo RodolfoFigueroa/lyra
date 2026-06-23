@@ -7,7 +7,7 @@ import aiofiles
 import aiohttp
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError, WebSocketError
-from lyra.sdk.models.metric import MetricInfo
+from lyra.sdk.models.metric import MetricInfoV2
 from websockets.asyncio.client import connect as async_connect
 
 
@@ -212,27 +212,21 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         return data_types
 
     @overload
-    async def get_metrics(
-        self, metric_name: None = None, *, prettify_types: bool = True
-    ) -> list[MetricInfo]: ...
+    async def get_metrics(self, metric_name: None = None) -> list[MetricInfoV2]: ...
 
     @overload
-    async def get_metrics(
-        self, metric_name: str, *, prettify_types: bool = True
-    ) -> MetricInfo: ...
+    async def get_metrics(self, metric_name: str) -> MetricInfoV2: ...
 
     async def get_metrics(
-        self, metric_name: str | None = None, *, prettify_types: bool = True
-    ) -> list[MetricInfo] | MetricInfo:
+        self,
+        metric_name: str | None = None,
+    ) -> list[MetricInfoV2] | MetricInfoV2:
         """Fetch available metrics from the API (async).
 
         Args:
             metric_name: Optional name of a specific metric to fetch. If None,
                 returns a list of all metrics. If provided, returns the metric
                 with the matching name.
-            prettify_types: Whether to simplify type annotations in the returned
-                metric objects for display purposes. If False, type annotations
-                are returned as-is.
 
         Returns:
             A list of metric objects.
@@ -251,7 +245,6 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 session.get(
                     metrics_url,
                     headers=self.headers,
-                    params={"prettify_types": prettify_types},
                 ) as response,
             ):
                 status = response.status
@@ -266,9 +259,9 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err)
 
         return (
-            [MetricInfo.model_validate(item) for item in metrics]
+            [MetricInfoV2.model_validate(item) for item in metrics]
             if metric_name is None
-            else MetricInfo.model_validate(metrics)
+            else MetricInfoV2.model_validate(metrics)
         )
 
     async def process(self, metric: str, payload: dict) -> dict[str, Any]:

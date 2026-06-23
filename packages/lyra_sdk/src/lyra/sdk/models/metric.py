@@ -16,3 +16,10 @@ class MetricInfo(StrictBaseModel):
     parameters: list[MetricParameterInfo]
     returns_file: bool
     tavi_hint: str
+
+
+class MetricInfoV2(StrictBaseModel):
+    name: str
+    description: str
+    request_schema: dict[str, Any]
+    result_schema: dict[str, Any] | None = None

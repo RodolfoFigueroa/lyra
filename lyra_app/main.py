@@ -37,7 +37,6 @@ if __name__ == "__main__":
         geojson,
         met_zone,
         metrics,
-        models,
     )
 
     app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
@@ -47,7 +46,6 @@ if __name__ == "__main__":
     app.include_router(data_types.router)
     app.include_router(metrics.router)
     app.include_router(met_zone.router)
-    app.include_router(models.router)
 
     uvicorn.run(
         app,

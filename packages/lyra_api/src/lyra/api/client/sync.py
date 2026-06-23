@@ -6,7 +6,7 @@ from typing import Any, overload
 import requests
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError, WebSocketError
-from lyra.sdk.models.metric import MetricInfo
+from lyra.sdk.models.metric import MetricInfoV2
 from websockets.sync.client import connect
 
 
@@ -192,26 +192,20 @@ class LyraAPIClient(_BaseLyraAPIClient):
         return data_types
 
     @overload
-    def get_metrics(
-        self, metric_name: None = None, *, prettify_types: bool = True
-    ) -> list[MetricInfo]: ...
+    def get_metrics(self, metric_name: None = None) -> list[MetricInfoV2]: ...
 
     @overload
-    def get_metrics(
-        self, metric_name: str, *, prettify_types: bool = True
-    ) -> MetricInfo: ...
+    def get_metrics(self, metric_name: str) -> MetricInfoV2: ...
 
     def get_metrics(
         self,
         metric_name: str | None = None,
-        *,
-        prettify_types: bool = True,
-    ) -> list[MetricInfo] | MetricInfo:
+    ) -> list[MetricInfoV2] | MetricInfoV2:
         """Fetch available metrics from the API.
 
         Returns:
-            A list of MetricInfo objects if no specific metric_name is provided,
-            otherwise a single MetricInfo object.
+            A list of MetricInfoV2 objects if no specific metric_name is provided,
+            otherwise a single MetricInfoV2 object.
 
         Raises:
             DownloadError: If the HTTP request fails or returns an invalid payload.
@@ -224,7 +218,6 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 metrics_url,
                 timeout=self.timeout,
                 headers=self.headers,
-                params={"prettify_types": prettify_types},
             )
         except Exception as e:
             err = f"Metrics request error: {e}"
@@ -237,9 +230,9 @@ class LyraAPIClient(_BaseLyraAPIClient):
         metrics = response.json()
 
         return (
-            [MetricInfo.model_validate(item) for item in metrics]
+            [MetricInfoV2.model_validate(item) for item in metrics]
             if metric_name is None
-            else MetricInfo.model_validate(metrics)
+            else MetricInfoV2.model_validate(metrics)
         )
 
     def process(self, metric: str, payload: dict) -> dict[str, Any]:

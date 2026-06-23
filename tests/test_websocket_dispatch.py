@@ -13,33 +13,19 @@ from lyra_app.routes import geojson
 
 def _manifest() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
         "metrics": [
             {
                 "name": "heavy_metric",
                 "description": "A heavy metric.",
-                "parameters": [
-                    {
-                        "name": "value",
-                        "type": "int",
-                        "required": True,
-                        "default": None,
-                    }
-                ],
-                "returns_file": False,
-                "tavi_hint": "",
                 "request_schema": {
                     "type": "object",
                     "required": ["value"],
                     "properties": {"value": {"type": "integer"}},
                 },
-                "execution": {
-                    "profile": "heavy",
-                    "queue": "heavy",
-                    "timeout_seconds": 120,
-                },
-                "callable": {"mode": "single", "calculate": "fake_plugin:calculate"},
+                "execution": {"queue": "heavy"},
+                "entrypoint": "fake_plugin.runner:run",
             }
         ],
     }

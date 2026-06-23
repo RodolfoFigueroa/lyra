@@ -1,6 +1,6 @@
 services:
   lyra-dev:
-    image: lyra:latest
+    image: lyra-dev:latest
     container_name: lyra-dev
     restart: unless-stopped
     ports:

@@ -12,6 +12,7 @@ dependencies = [
     "lyra-utils",
     "psycopg2>=2.9.12",
     "asyncpg>=0.31.0",
+    "jsonschema>=4.26.0",
 ]
 
 [tool.uv.workspace]

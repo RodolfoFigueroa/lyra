@@ -47,11 +47,11 @@ COPY pyproject.toml uv.lock .python-version ./
 COPY packages ./packages
 COPY lyra_app ./lyra_app
 
-# Plugin repos are cloned here at runtime. Mount a persistent volume at this
-# path so plugins survive container restarts and are not re-cloned from scratch.
+# Plugin manifests are cloned into /lyra_plugin_catalog by the API. Plugin code
+# is cloned and installed into /lyra_plugins by runner workers.
 # Set LYRA_PLUGIN_REPOS to a comma-separated list of GitHub repos to load.
-# Example: docker run -v lyra_plugins:/lyra_plugins -e LYRA_PLUGIN_REPOS=...
-RUN mkdir -p /lyra_plugins
+RUN mkdir -p /lyra_plugin_catalog /lyra_plugins
+VOLUME /lyra_plugin_catalog
 VOLUME /lyra_plugins
 
 EXPOSE 5219

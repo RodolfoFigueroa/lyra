@@ -1,421 +1,239 @@
-import importlib
-import importlib.metadata
-import inspect
+import hashlib
+import json
 import logging
-import re
-import sys
-from types import FunctionType
-from typing import Annotated, Any, get_args, get_origin
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from lyra.sdk.models.metric import MetricInfo, MetricParameterInfo
-from lyra.sdk.types import ExplicitBoundsAPI, ExplicitLocationAPI
-from pydantic import BaseModel, ConfigDict, create_model
+from lyra.sdk.models.plugin import MetricManifest, PluginManifest
+from pydantic import ValidationError as PydanticValidationError
 
-from lyra_app.models import ExplicitBoundsUnion, ExplicitLocationUnion
-
-TASK_REGISTRY = {}
+from lyra_app.plugins import MANIFEST_FILENAME, sync_catalog_repos
 
 logger = logging.getLogger(__name__)
 
 
-def generate_model_from_func(
-    func: FunctionType,
-    extra_fields: dict[str, tuple] | None = None,
-    model_name: str | None = None,
-) -> tuple[type[BaseModel], dict[str, list[str]], str | None]:
-    """Build a Pydantic request model from a plugin function's signature.
+@dataclass(frozen=True)
+class MetricRegistryEntry:
+    metric: MetricManifest
+    plugin_name: str
+    plugin_version: str
+    request_validator: Any
 
-    Inspects each parameter of *func* and maps it to a Pydantic field.
-    Parameters annotated with `LyraDB` are excluded from the model and tracked
-    separately as the db injection point. Parameters annotated with
-    ``REQUIRE_EXPLICIT_TYPE`` or ``REQUIRE_EXPLICIT_BOUNDS_TYPE`` are remapped
-    to the corresponding strict discriminated-union type and recorded in the
-    conversion map.
+    @property
+    def queue(self) -> str:
+        return self.metric.execution.queue
 
-    Args:
-        func (FunctionType): The plugin function whose signature is inspected.
-        extra_fields (dict[str, tuple] | None): Additional
-            ``{name: (type, default)}`` pairs appended after the function's own
-            parameters. Defaults to ``None``.
-        model_name (str | None): Name to give the generated model class.
-            Defaults to ``{func.__name__.capitalize()}RequestModel``.
 
-    Returns:
-        tuple[type[BaseModel], dict[str, list[str]], str | None]: A
-        ``(model, conversion_map, db_param_name)`` tuple where *model* is the
-        generated Pydantic class, *conversion_map* maps parameter names to
-        their conversion tags, and *db_param_name* is the name of the
-        ``LyraDB`` parameter or ``None``.
+@dataclass(frozen=True)
+class CatalogRefreshResult:
+    updated_plugins: list[str]
+    previous_catalog_fingerprint: str | None
+    catalog_fingerprint: str
+    catalog_changed: bool
 
-    Raises:
-        TypeError: If any parameter of *func* is missing a type annotation.
-    """
-    from lyra.sdk.db import LyraDB  # noqa: PLC0415
 
-    sig = inspect.signature(func)
-    fields = {}
-    conversion_map = {}
-    db_param_name = None
+class MetricPayloadValidationError(Exception):
+    def __init__(self, errors: list[dict[str, Any]]) -> None:
+        self.errors = errors
+        super().__init__("metric payload validation failed")
 
-    for name, param in sig.parameters.items():
-        annotation = param.annotation
-        origin = get_origin(annotation)
 
-        if annotation == inspect.Parameter.empty:
-            err = (
-                f"Missing type hint for parameter '{name}' in function "
-                f"'{func.__name__}'."
+TASK_REGISTRY: dict[str, MetricRegistryEntry] = {}
+_CATALOG_LOADED = False
+_CATALOG_FINGERPRINT: str | None = None
+
+
+def _empty_catalog_fingerprint() -> str:
+    return _fingerprint_payload([])
+
+
+def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _normalised_manifest_payload(
+    manifests: list[tuple[PluginManifest, Path]],
+) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for manifest, _path in manifests:
+        data = manifest.model_dump(mode="json")
+        data["metrics"] = sorted(data["metrics"], key=lambda item: item["name"])
+        payload.append(data)
+    return sorted(
+        payload,
+        key=lambda item: (item["plugin"]["name"], item["plugin"]["version"]),
+    )
+
+
+def load_plugin_manifest(path: Path) -> PluginManifest:
+    manifest_path = path / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        msg = f"Plugin repo {path} is missing required {MANIFEST_FILENAME}."
+        raise RuntimeError(msg)
+
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return PluginManifest.model_validate(raw)
+    except json.JSONDecodeError as exc:
+        msg = f"Plugin manifest {manifest_path} is not valid JSON."
+        raise RuntimeError(msg) from exc
+    except PydanticValidationError as exc:
+        msg = f"Plugin manifest {manifest_path} is invalid: {exc}"
+        raise RuntimeError(msg) from exc
+
+
+def _build_request_validator(metric: MetricManifest) -> Any:
+    schema = metric.request_schema or {"type": "object"}
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        msg = f"Metric {metric.name!r} has an invalid request_schema: {exc}"
+        raise RuntimeError(msg) from exc
+    return Draft202012Validator(schema)
+
+
+def _build_registry(
+    manifests: list[tuple[PluginManifest, Path]],
+) -> dict[str, MetricRegistryEntry]:
+    registry: dict[str, MetricRegistryEntry] = {}
+    for manifest, _path in manifests:
+        for metric in manifest.metrics:
+            if metric.name in registry:
+                msg = f"Duplicate metric name in plugin manifests: {metric.name!r}"
+                raise RuntimeError(msg)
+            registry[metric.name] = MetricRegistryEntry(
+                metric=metric,
+                plugin_name=manifest.plugin.name,
+                plugin_version=manifest.plugin.version,
+                request_validator=_build_request_validator(metric),
             )
-            raise TypeError(err)
-
-        # LyraDB params are injected by the worker — exclude from client model
-        if inspect.isclass(annotation) and issubclass(annotation, LyraDB):
-            db_param_name = name
-            continue
-
-        tags_found = []
-        if origin is Annotated:
-            metadata = get_args(annotation)[1:]
-
-            if "REQUIRE_EXPLICIT_TYPE" in metadata:
-                tags_found.append("REQUIRE_EXPLICIT_TYPE")
-
-                # Replace GeoJSON with the strict Pydantic Discriminator
-                annotation = ExplicitLocationUnion
-            elif "REQUIRE_EXPLICIT_BOUNDS_TYPE" in metadata:
-                tags_found.append("REQUIRE_EXPLICIT_BOUNDS_TYPE")
-
-                # Replace GeoJSON with the strict Pydantic Discriminator
-                annotation = ExplicitBoundsUnion
-
-            if tags_found:
-                conversion_map[name] = tags_found
-
-        default_val = ... if param.default == inspect.Parameter.empty else param.default
-
-        fields[name] = (annotation, default_val)
-
-    if extra_fields:
-        fields.update(extra_fields)
-
-    effective_model_name = model_name or f"{func.__name__.capitalize()}RequestModel"
-    model = create_model(
-        effective_model_name,
-        __config__=ConfigDict(extra="forbid"),
-        **fields,
-    )  # ty:ignore[no-matching-overload]
-    return model, conversion_map, db_param_name
+    return registry
 
 
-def _get_items_type_from_for_items_func(for_items_func: FunctionType) -> Any:
-    """Extract the item type annotation from a ``calculate_for_items`` function.
+def refresh_catalog() -> CatalogRefreshResult:
+    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
 
-    The second parameter of the function represents a single item and must be
-    typed; this type is used to build the ``items`` field annotation for the
-    batched request model.
+    previous_fingerprint = _CATALOG_FINGERPRINT
+    synced = sync_catalog_repos()
+    manifests = [(load_plugin_manifest(repo.path), repo.path) for repo in synced]
+    registry = _build_registry(manifests)
 
-    Args:
-        for_items_func (FunctionType): The ``calculate_for_items`` function
-            from a batched plugin module.
+    fingerprint = _fingerprint_payload(_normalised_manifest_payload(manifests))
+    TASK_REGISTRY.clear()
+    TASK_REGISTRY.update(registry)
+    _CATALOG_FINGERPRINT = fingerprint
+    _CATALOG_LOADED = True
 
-    Returns:
-        Any: The type annotation of the second parameter.
+    updated = [repo.entry.display_name for repo in synced if repo.changed]
+    catalog_changed = previous_fingerprint != fingerprint
+    logger.info(
+        "Loaded %d metric manifest(s); catalog fingerprint=%s; changed=%s",
+        len(TASK_REGISTRY),
+        fingerprint,
+        catalog_changed,
+    )
+    return CatalogRefreshResult(
+        updated_plugins=updated,
+        previous_catalog_fingerprint=previous_fingerprint,
+        catalog_fingerprint=fingerprint,
+        catalog_changed=catalog_changed,
+    )
 
-    Raises:
-        TypeError: If the function has fewer than two parameters or if the
-            second parameter lacks a type annotation.
-    """
-    params = list(inspect.signature(for_items_func).parameters.values())
-    if len(params) < 2:
-        err = (
-            f"'{for_items_func.__name__}' must have at least 2 parameters: "
-            "item_key: str, item: <ItemType>",
+
+def ensure_catalog_loaded() -> None:
+    if not _CATALOG_LOADED:
+        refresh_catalog()
+
+
+def get_catalog_fingerprint() -> str:
+    ensure_catalog_loaded()
+    return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
+
+
+def get_metric_entry(name: str) -> MetricRegistryEntry | None:
+    ensure_catalog_loaded()
+    return TASK_REGISTRY.get(name)
+
+
+def get_metric_info(name: str, *, prettify_types: bool) -> MetricInfo | None:  # noqa: ARG001
+    entry = get_metric_entry(name)
+    if entry is None:
+        return None
+    return _metric_info_from_manifest(entry.metric)
+
+
+def get_metrics_info(*, prettify_types: bool) -> list[MetricInfo]:  # noqa: ARG001
+    ensure_catalog_loaded()
+    return [
+        _metric_info_from_manifest(entry.metric) for entry in TASK_REGISTRY.values()
+    ]
+
+
+def get_metric_parameters(name: str) -> list[MetricParameterInfo] | None:
+    entry = get_metric_entry(name)
+    if entry is None:
+        return None
+    return entry.metric.parameters
+
+
+def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
+    entry = get_metric_entry(metric_name)
+    if entry is None:
+        msg = f"Unknown metric: {metric_name!r}"
+        raise KeyError(msg)
+    if not isinstance(payload, dict):
+        raise MetricPayloadValidationError(
+            [{"loc": [], "msg": "Input must be a JSON object.", "type": "type"}],
         )
-        raise TypeError(err)
-    item_param = params[1]
-    if item_param.annotation == inspect.Parameter.empty:
-        err = (
-            f"Missing type hint for parameter '{item_param.name}' "
-            f"in function '{for_items_func.__name__}'.",
+
+    errors = sorted(
+        entry.request_validator.iter_errors(payload),
+        key=lambda error: list(error.path),
+    )
+    if errors:
+        raise MetricPayloadValidationError(
+            [_format_validation_error(error) for error in errors]
         )
-        raise TypeError(err)
-    return item_param.annotation
+    return payload
 
 
-def discover_tasks() -> None:
-    """Discover and register all installed Lyra plugin tasks.
+def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]:
+    return {
+        "loc": list(error.path),
+        "msg": error.message,
+        "type": str(error.validator),
+    }
 
-    Initialises Earth Engine authentication, loads plugins via `load_plugins`,
-    then iterates over all ``lyra`` entry points. For each entry point the
-    module is inspected for either a single-step ``calculate`` function or a
-    three-function batched pattern (``calculate_prepare`` /
-    ``calculate_for_items`` / ``calculate_aggregate``). A Pydantic request
-    model is generated and the task is stored in ``TASK_REGISTRY``. This
-    function is a no-op if the registry is already populated.
 
-    Raises:
-        RuntimeError: If a plugin name conflict is detected, if a module
-            defines both the single and batched patterns, or if
-            ``METRIC_DESCRIPTION`` is missing or empty.
-    """
-    # Prevent running the discovery loop multiple times if imported in multiple places
-    if TASK_REGISTRY:
-        return
-
-    # Defer auth only if necessary
-    from lyra_app.auth import initialize_earth_engine  # noqa: PLC0415
-    from lyra_app.plugins import load_plugins  # noqa: PLC0415
-
-    initialize_earth_engine()
-    load_plugins()
-
-    for ep in importlib.metadata.entry_points(group="lyra"):
-        module_name = ep.name
-
-        if module_name in TASK_REGISTRY:
-            err = (
-                f"Plugin name conflict: '{module_name}' is registered by more than "
-                "one package. Each plugin must have a unique entry point name."
-            )
-            raise RuntimeError(err)
-
-        mod = ep.load()
-
-        calc_func = getattr(mod, "calculate", None)
-        prepare_func = getattr(mod, "calculate_prepare", None)
-        for_items_func = getattr(mod, "calculate_for_items", None)
-        aggregate_func = getattr(mod, "calculate_aggregate", None)
-
-        has_single = callable(calc_func)
-        has_batched = (
-            callable(prepare_func)
-            and callable(for_items_func)
-            and callable(aggregate_func)
-        )
-
-        if has_single and has_batched:
-            err = (
-                f"Processor '{module_name}' defines both 'calculate' and the batched "
-                "pattern (calculate_prepare/calculate_for_items/calculate_aggregate). "
-                "A module must define only one.",
-            )
-            raise RuntimeError(err)
-
-        if not has_single and not has_batched:
-            logger.warning(
-                "Skipping `%s` as it does not have a callable 'calculate' "
-                "function or the batched pattern (calculate_prepare/"
-                "calculate_for_items/calculate_aggregate).",
-                module_name,
-            )
-            continue
-
-        description = getattr(mod, "METRIC_DESCRIPTION", None)
-        if not isinstance(description, str) or not description.strip():
-            err = (
-                f"Processor '{module_name}' must define a non-empty "
-                "METRIC_DESCRIPTION module-level string constant.",
-            )
-            raise RuntimeError(err)
-        returns_file = getattr(mod, "RETURNS_FILE", False)
-        tavi_hint = getattr(mod, "TAVI_HINT", "")
-
-        if not isinstance(tavi_hint, str):
-            err = (
-                f"Processor '{module_name}' has a TAVI_HINT that is not a string. "
-                "TAVI_HINT must be a string if defined.",
-            )
-            raise TypeError(err)
-
-        if has_single:
-            assert callable(calc_func)
-            RequestModel, params_to_convert, db_param_name = generate_model_from_func(  # noqa: N806
-                calc_func,
-            )
-            TASK_REGISTRY[module_name] = {
-                "calculate": calc_func,
-                "model": RequestModel,
-                "params_to_convert": params_to_convert,
-                "db_param_name": db_param_name,
-                "description": description.strip(),
-                "is_batched": False,
-                "returns_file": returns_file,
-                "tavi_hint": tavi_hint.strip(),
-            }
-        else:
-            # ruff: noqa: S101 on - required to narrow types for the type checker
-            assert callable(prepare_func)
-            assert callable(for_items_func)
-            assert callable(aggregate_func)
-            # ruff: noqa: S101 off
-
-            item_type = _get_items_type_from_for_items_func(for_items_func)
-            items_annotation = dict[str, item_type] | None
-            RequestModel, params_to_convert, db_param_name = generate_model_from_func(  # noqa: N806
-                prepare_func,
-                extra_fields={"items": (items_annotation, None)},
-                model_name=f"{module_name.capitalize()}RequestModel",
-            )
-            TASK_REGISTRY[module_name] = {
-                "calculate_prepare": prepare_func,
-                "calculate_for_items": for_items_func,
-                "calculate_aggregate": aggregate_func,
-                "items_default": getattr(mod, "ITEMS_DEFAULT", None),
-                "items_annotation": items_annotation,
-                "model": RequestModel,
-                "params_to_convert": params_to_convert,
-                "db_param_name": db_param_name,
-                "description": description.strip(),
-                "is_batched": True,
-                "returns_file": False,
-                "tavi_hint": tavi_hint.strip(),
-            }
+def _metric_info_from_manifest(metric: MetricManifest) -> MetricInfo:
+    return MetricInfo(
+        name=metric.name,
+        description=metric.description.strip(),
+        tavi_hint=metric.tavi_hint.strip(),
+        parameters=metric.parameters,
+        returns_file=metric.returns_file,
+    )
 
 
 def _get_annotation_display_name(annotation: Any) -> str:
-    """Convert a type annotation to a human-readable display name.
-
-    Strips qualified module prefixes from the string representation so that
-    only the base type name is shown. `ExplicitLocationAPI` is handled as a
-    special case because it appears under several aliases.
-
-    For example, ``typing.Optional[int]`` becomes ``Optional[int]`` and
-    ``lyra.models.base.GeoJSON`` becomes ``GeoJSON``.
-
-    Args:
-        annotation (Any): A type annotation, e.g. from ``inspect.signature``.
-
-    Returns:
-        str: A simplified type name suitable for display in API responses.
-    """
-    if annotation is ExplicitLocationAPI or annotation == ExplicitLocationAPI:
-        return "ExplicitLocationAPI"
-
-    if annotation is ExplicitBoundsAPI or annotation == ExplicitBoundsAPI:
-        return "ExplicitBoundsAPI"
-
-    # Convert to string and strip module prefixes (e.g., typing.Optional -> Optional)
-    type_str = str(annotation)
-
-    # Replace patterns like "word.word.word" with just "word" (the last component)
-    type_str = re.sub(r"(\w+\.)+", "", type_str)
-
-    # Remove <class '...'> wrappers from types
-    return re.sub(r"<class '(\w+)'>", r"\1", type_str)
-
-
-def get_metric_info(name: str, *, prettify_types: bool) -> MetricInfo | None:
-    """Look up a single metric's info dict by name.
-
-    Args:
-        name (str): The registered task name to look up.
-        prettify_types (bool): Whether to simplify type annotations in the
-        returned info dict for display purposes. If ``False``, type annotations
-        are returned as-is.
-
-    Returns:
-        MetricInfo | None: The info dict for the named metric, or ``None`` if
-        no task with that name is registered.
-    """
-    all_metrics = get_metrics_info(prettify_types=prettify_types)
-    return next((m for m in all_metrics if m.name == name), None)
-
-
-def get_metrics_info(*, prettify_types: bool) -> list[MetricInfo]:
-    """Return info dicts for every task registered in ``TASK_REGISTRY``.
-
-    Each entry includes the task name, description, parameter list with types
-    and required flags, and whether the task returns a file.
-
-    Args:
-        prettify_types (bool): Whether to simplify type annotations in the
-        returned info dict for display purposes. If ``False``, type annotations
-        are returned as-is.
-    Returns:
-        list[MetricInfo]: One `MetricInfo` dict per registered task, in
-        iteration order of ``TASK_REGISTRY``.
-    """
-
-    type_f = _get_annotation_display_name if prettify_types else str
-
-    result: list[MetricInfo] = []
-    for name, entry in TASK_REGISTRY.items():
-        if not entry["is_batched"]:
-            param_source = entry["calculate"]
-            parameters = []
-        else:
-            param_source = entry["calculate_prepare"]
-            parameters = [
-                MetricParameterInfo(
-                    name="items",
-                    type=type_f(entry["items_annotation"]),
-                    required=False,
-                    default=entry["items_default"],
-                ),
-            ]
-
-        parameters.extend(
-            [
-                MetricParameterInfo(
-                    name=param_name,
-                    type=type_f(param.annotation),
-                    required=param.default is inspect.Parameter.empty,
-                    default=param.default
-                    if param.default is not inspect.Parameter.empty
-                    else None,
-                )
-                for param_name, param in inspect.signature(
-                    param_source,
-                ).parameters.items()
-            ],
-        )
-
-        result.append(
-            MetricInfo(
-                name=name,
-                description=entry["description"],
-                tavi_hint=entry.get("tavi_hint", ""),
-                parameters=parameters,
-                returns_file=entry.get("returns_file", False),
-            ),
-        )
-    return result
-
-
-# Run the discovery process when this file is imported
-discover_tasks()
+    if hasattr(annotation, "__name__"):
+        return str(annotation.__name__)
+    return str(annotation)
 
 
 def reload_tasks() -> None:
-    """Clear and re-discover all plugin tasks.
+    refresh_catalog()
 
-    Evicts previously loaded plugin modules from `sys.modules`, clears the
-    `importlib.metadata` distribution cache so newly installed packages are
-    visible, then re-runs full task discovery. Intended to be called after
-    `reload_plugins` has reinstalled changed repos.
-    """
-    # Collect entry-point module names before clearing the registry so we know
-    # which sys.modules entries belong to plugins.
-    plugin_module_names: set[str] = set()
-    for ep in importlib.metadata.entry_points(group="lyra"):
-        # ep.value is e.g. "my_plugin.module:attribute"
-        plugin_module_names.add(ep.value.split(":")[0].split(".")[0])
+
+def reset_catalog() -> None:
+    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
 
     TASK_REGISTRY.clear()
-
-    # Evict old plugin modules so re-import loads fresh code.
-    for mod_name in list(sys.modules):
-        if any(
-            mod_name == name or mod_name.startswith(name + ".")
-            for name in plugin_module_names
-        ):
-            del sys.modules[mod_name]
-
-    # Clear importlib.metadata's distribution cache so newly installed packages
-    # (and their entry points) are picked up by entry_points().
-    importlib.metadata.MetadataPathFinder.invalidate_caches()
-    # Also invalidate the import system's path-based caches so freshly installed
-    # modules are importable without a process restart.
-    importlib.invalidate_caches()
-
-    discover_tasks()
+    _CATALOG_FINGERPRINT = None
+    _CATALOG_LOADED = False

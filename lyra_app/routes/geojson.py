@@ -3,11 +3,14 @@ import contextlib
 import json
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import ValidationError
 
+from lyra_app.celery_app import celery_app
 from lyra_app.db.redis import redis_client
-from lyra_app.registry import TASK_REGISTRY
-from lyra_app.worker import celery_app
+from lyra_app.registry import (
+    MetricPayloadValidationError,
+    get_metric_entry,
+    validate_metric_payload,
+)
 
 router = APIRouter()
 
@@ -21,7 +24,8 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
 
     await websocket.accept()
 
-    if metric not in TASK_REGISTRY:
+    entry = get_metric_entry(metric)
+    if entry is None:
         await websocket.send_json(
             {"status": "error", "message": f"Unknown metric: '{metric}'"},
         )
@@ -31,15 +35,13 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
     pubsub = redis_client.pubsub()
 
     try:
-        RequestModel = TASK_REGISTRY[metric]["model"]  # noqa: N806
-
         raw_json = await websocket.receive_json()
-
-        # Raises ValidationError if the input doesn't match the expected schema
-        # for this metric
-        validated_data = RequestModel(**raw_json)
-
-        task = celery_app.send_task(metric, args=[validated_data.model_dump()])
+        validated_data = validate_metric_payload(metric, raw_json)
+        task = celery_app.send_task(
+            metric,
+            args=[validated_data],
+            queue=entry.queue,
+        )
 
         await websocket.send_json({"status": "queued", "task_id": task.id})
 
@@ -76,12 +78,8 @@ async def websocket_route(websocket: WebSocket, metric: str) -> None:
         else:
             celery_app.control.revoke(task.id, terminate=True, signal="SIGTERM")
 
-    except ValidationError as e:
-        clean_errors = [
-            {"loc": err.get("loc"), "msg": err.get("msg"), "type": err.get("type")}
-            for err in e.errors()
-        ]
-
+    except MetricPayloadValidationError as e:
+        clean_errors = e.errors
         error_message = "Input validation error: "
         for i in range(min(len(clean_errors), 5)):
             error_message += f"\n - {clean_errors[i]}"

@@ -1,20 +1,21 @@
 import hashlib
 import json
 import logging
-import time
+import os
 from collections.abc import Callable
 from types import FunctionType
-from typing import Literal, cast
+from typing import Literal, NoReturn, cast
 
-from celery import Celery, Task
+from celery import Task
 from pydantic import BaseModel
 
-from lyra_app.converters import converter_map
-from lyra_app.db.redis import redis_client_sync, redis_url
-from lyra_app.registry import TASK_REGISTRY
+from lyra_app.celery_app import celery_app
+from lyra_app.db.redis import redis_client_sync
+from lyra_app.plugin_runtime import RunnerMetricEntry, build_runner_metric_entry
+from lyra_app.plugins import install_runner_plugins, sync_runner_repos
+from lyra_app.registry import load_plugin_manifest
 
 logger = logging.getLogger(__name__)
-celery_app = Celery("ee_tasks", broker=redis_url, backend=redis_url)
 
 
 def _has_met_zone_code(validated_dict: dict) -> bool:
@@ -72,6 +73,8 @@ def convert_explicit_type(
         dict: A new discriminator-wrapped dict with ``data_type="geojson"``
         and the converted ``value``.
     """
+    from lyra_app.converters import converter_map  # noqa: PLC0415
+
     data = payload["value"]
     data_type = payload["data_type"]
 
@@ -122,7 +125,7 @@ def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
         into the plugin's calculation function.
     """
     func_kwargs = {}
-    for k in reconstructed_model.model_fields:
+    for k in type(reconstructed_model).model_fields:
         attr = getattr(reconstructed_model, k)
 
         if hasattr(attr, "data_type") and hasattr(attr, "value"):
@@ -347,7 +350,7 @@ def make_celery_wrapper(
             )
             result = original_calculate_func(**func_kwargs)
             notification = _store_result(task_id, result, det_key)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             notification = _handle_task_exception(
                 task_id,
                 getattr(self, "name", original_calculate_func.__module__),
@@ -403,7 +406,7 @@ def make_celery_wrapper_file(
                 f"result_data_{task_id}", 600, json.dumps(full_payload)
             )
             notification = {"status": "success", "download_id": task_id}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             notification = _handle_task_exception(
                 task_id,
                 getattr(self, "name", original_calculate_func.__module__),
@@ -422,7 +425,7 @@ def make_celery_wrapper_batched(
     aggregate_func: FunctionType,
     ModelClass: type[BaseModel],  # noqa: N803
     conversion_map: dict[str, list[str]],
-    items_default: dict,
+    items_default: dict | None,
     db_param_name: str | None,
 ) -> Callable:
     """Create a Celery task wrapper for a three-function batched processor.
@@ -466,10 +469,7 @@ def make_celery_wrapper_batched(
 
             items_dict = func_kwargs.pop("items", None) or items_default
             if items_dict is None:
-                err = (
-                    "No items provided and no ITEMS_DEFAULT defined for this processor."
-                )
-                raise ValueError(err)
+                _raise_missing_items_error()
 
             prepared = prepare_func(**func_kwargs)
             results = [
@@ -478,7 +478,7 @@ def make_celery_wrapper_batched(
             ]
             result = aggregate_func(results)
             notification = _store_result(task_id, result, det_key)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             notification = _handle_task_exception(
                 task_id,
                 getattr(self, "name", prepare_func.__module__),
@@ -491,109 +491,87 @@ def make_celery_wrapper_batched(
     return wrapper
 
 
-def register_tasks() -> None:
-    """Register all tasks from ``TASK_REGISTRY`` with the Celery application.
+def _raise_missing_items_error() -> NoReturn:
+    msg = "No items provided and no ITEMS_DEFAULT defined for this processor."
+    raise ValueError(msg)
 
-    Iterates over every entry in ``TASK_REGISTRY`` and wraps each plugin
-    function with the appropriate Celery wrapper (standard, file-returning, or
-    batched), then registers it with `celery_app` under the metric's name.
-    """
-    for metric_name, info in TASK_REGISTRY.items():
-        db_param_name = info.get("db_param_name")
-        if info["is_batched"]:
+
+_REGISTERED_TASK_NAMES: set[str] = set()
+
+
+def _configured_runner_queues() -> set[str]:
+    raw = os.environ.get("LYRA_RUNNER_QUEUES", "").strip()
+    if not raw:
+        return set()
+    return {queue.strip() for queue in raw.split(",") if queue.strip()}
+
+
+def load_runner_metric_entries() -> dict[str, RunnerMetricEntry]:
+    queues = _configured_runner_queues()
+    repos = install_runner_plugins(sync_runner_repos())
+    entries: dict[str, RunnerMetricEntry] = {}
+
+    for repo in repos:
+        manifest = load_plugin_manifest(repo.path)
+        for metric in manifest.metrics:
+            if queues and metric.execution.queue not in queues:
+                continue
+            if metric.name in entries:
+                msg = f"Duplicate metric name in runner manifests: {metric.name!r}"
+                raise RuntimeError(msg)
+            entries[metric.name] = build_runner_metric_entry(metric)
+
+    return entries
+
+
+def register_tasks() -> None:
+    """Register plugin metrics for this runner's configured queues."""
+    for metric_name, entry in load_runner_metric_entries().items():
+        if metric_name in _REGISTERED_TASK_NAMES:
+            continue
+
+        db_param_name = entry.db_param_name
+        if entry.metric.callable.mode == "batched":
+            if (
+                entry.calculate_prepare is None
+                or entry.calculate_for_items is None
+                or entry.calculate_aggregate is None
+            ):
+                msg = f"Batched metric {metric_name!r} has incomplete callables."
+                raise RuntimeError(msg)
             wrapped_function = make_celery_wrapper_batched(
-                info["calculate_prepare"],
-                info["calculate_for_items"],
-                info["calculate_aggregate"],
-                info["model"],
-                info["params_to_convert"],
-                info["items_default"],
+                entry.calculate_prepare,
+                entry.calculate_for_items,
+                entry.calculate_aggregate,
+                entry.model,
+                entry.params_to_convert,
+                entry.metric.callable.items_default,
                 db_param_name,
             )
-        elif info["returns_file"]:
+        elif entry.metric.returns_file:
+            if entry.calculate is None:
+                msg = (
+                    f"File-returning metric {metric_name!r} has no calculate callable."
+                )
+                raise RuntimeError(msg)
             wrapped_function = make_celery_wrapper_file(
-                info["calculate"],
-                info["model"],
-                info["params_to_convert"],
+                entry.calculate,
+                entry.model,
+                entry.params_to_convert,
                 db_param_name,
             )
         else:
+            if entry.calculate is None:
+                msg = f"Metric {metric_name!r} has no calculate callable."
+                raise RuntimeError(msg)
             wrapped_function = make_celery_wrapper(
-                info["calculate"],
-                info["model"],
-                info["params_to_convert"],
+                entry.calculate,
+                entry.model,
+                entry.params_to_convert,
                 db_param_name,
             )
         celery_app.task(name=metric_name, bind=True)(wrapped_function)
+        _REGISTERED_TASK_NAMES.add(metric_name)
 
 
 register_tasks()
-
-
-_INTERRUPTED_TASK_MESSAGE = (
-    "This task was interrupted because plugins were updated. Please retry."
-)
-
-
-def notify_interrupted_tasks(task_ids: list[str]) -> None:
-    """Publish an error notification to each task's Redis pub/sub channel.
-
-    Called before forcibly terminating workers so that connected websocket
-    clients receive an error response instead of waiting indefinitely.
-
-    Args:
-        task_ids (list[str]): IDs of the Celery tasks to notify.
-    """
-    for task_id in task_ids:
-        payload = json.dumps(
-            {
-                "status": "error",
-                "error_type": "worker",
-                "message": _INTERRUPTED_TASK_MESSAGE,
-            }
-        )
-        redis_client_sync.publish(f"task_results_{task_id}", payload)
-        logger.info("Notified task %s of interruption.", task_id)
-
-
-def graceful_worker_restart(timeout: float = 30.0) -> None:
-    """Drain active Celery tasks then broadcast a shutdown to all workers.
-
-    Polls `inspect().active()` every second up to *timeout* seconds. If all
-    workers become idle within the window, a graceful shutdown is issued
-    immediately. If the timeout is exceeded, any remaining in-flight tasks are
-    notified via their Redis pub/sub channels and then revoked and terminated
-    before the shutdown is sent. Docker's `restart: unless-stopped` policy
-    brings the workers back up automatically.
-
-    Args:
-        timeout (float): Maximum seconds to wait for in-flight tasks to drain
-            before force-terminating them. Defaults to ``30.0``.
-    """
-    inspector = celery_app.control.inspect()
-    deadline = time.monotonic() + timeout
-
-    while time.monotonic() < deadline:
-        active = inspector.active()
-        if not active or all(len(tasks) == 0 for tasks in active.values()):
-            logger.info("All workers idle; issuing graceful shutdown.")
-            celery_app.control.broadcast("shutdown")
-            return
-        time.sleep(1)
-
-    # Timeout exceeded — collect and terminate remaining in-flight tasks.
-    active = inspector.active() or {}
-    interrupted_ids: list[str] = [
-        task["id"] for tasks in active.values() for task in tasks
-    ]
-
-    if interrupted_ids:
-        logger.warning(
-            "Timeout exceeded with %d task(s) still running; terminating.",
-            len(interrupted_ids),
-        )
-        notify_interrupted_tasks(interrupted_ids)
-        for task_id in interrupted_ids:
-            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
-
-    celery_app.control.broadcast("shutdown")

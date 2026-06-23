@@ -25,6 +25,10 @@ if __name__ == "__main__":
     configure_logging()
     initialize_earth_engine()
 
+    from lyra_app.registry import ensure_catalog_loaded
+
+    ensure_catalog_loaded()
+
     # Defer imports until after authenticating with Earth Engine
     from lyra_app.routes import (
         admin,

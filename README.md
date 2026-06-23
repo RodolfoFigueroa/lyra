@@ -61,10 +61,8 @@ This starts the API (`lyra`), Redis, and the Celery worker together.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/data_types` | List accepted input data types |
-| `GET` | `/metrics` | List available metrics and their parameters |
-| `GET` | `/metrics/{metric_name}` | Get parameters for a single metric |
-| `GET` | `/models` | List processor input model schemas |
-| `GET` | `/models/{model_name}` | Get schema for a single processor model |
+| `GET` | `/metrics` | List available metrics and request/result schemas |
+| `GET` | `/metrics/{metric_name}` | Get request/result schemas for a single metric |
 | `GET` | `/met_zone_code` | Look up a metropolitan zone code by name |
 | `GET` | `/download_result/{download_id}` | Fetch a completed metric result |
 

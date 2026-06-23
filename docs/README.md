@@ -8,7 +8,7 @@ Interactive documentation is available when the server is running:
 - **ReDoc** (clean HTML): http://localhost:5219/redoc
 
 These are automatically generated from the FastAPI application and include:
-- All REST endpoints (`/data_types`, `/metrics`, `/metrics/{metric_name}`, `/models`, `/models/{model_name}`, `/met_zone_code`, `/download_result/{download_id}`)
+- All REST endpoints (`/data_types`, `/metrics`, `/metrics/{metric_name}`, `/met_zone_code`, `/download_result/{download_id}`)
 - Request/response schemas
 - Parameter descriptions
 

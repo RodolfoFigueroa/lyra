@@ -1360,11 +1360,15 @@ name = "lyra-sdk"
 version = "0.1.0"
 source = { editable = "packages/lyra_sdk" }
 dependencies = [
+    { name = "jsonschema" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.13.4" }]
+requires-dist = [
+    { name = "jsonschema", specifier = ">=4.26.0" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+]
 
 [[package]]
 name = "lyra-utils"

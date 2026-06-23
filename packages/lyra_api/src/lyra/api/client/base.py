@@ -8,7 +8,7 @@ class _BaseLyraAPIClient:
     def __init__(
         self,
         host: str,
-        timeout: float = 100.0,
+        timeout: float = 30.0,
         headers: dict[str, str] | None = None,
         *,
         secure: bool = True,

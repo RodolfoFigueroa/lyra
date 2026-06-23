@@ -1,10 +1,10 @@
 """Utilities for reducing Earth Engine images over GeoDataFrame geometries."""
 
+import json
 import re
 from collections.abc import Callable, Iterator
 
 import ee
-import geemap
 import geopandas as gpd
 import pandas as pd
 import shapely
@@ -23,6 +23,22 @@ def convert_polygon_to_ee(polygon: shapely.Polygon) -> ee.Geometry:
         input polygon.
     """
     return ee.Geometry.Polygon(list(polygon.exterior.coords))
+
+
+def convert_gdf_to_ee(gdf: gpd.GeoDataFrame) -> ee.FeatureCollection:
+    """Convert a GeoDataFrame to an Earth Engine FeatureCollection.
+
+    Args:
+        gdf: A ``geopandas.GeoDataFrame`` to convert.
+
+    Returns:
+        An ``ee.FeatureCollection`` built from the input GeoDataFrame.
+    """
+    if not gdf.crs or gdf.crs.to_epsg() != 4326:
+        err = "GeoDataFrame must be in EPSG:4326 (WGS84)"
+        raise ValueError(err)
+
+    return ee.FeatureCollection(json.loads(gdf.to_json()))
 
 
 def get_reducer_name(reducer: ee.Reducer) -> str:
@@ -74,7 +90,7 @@ def compute_gdf(
         A ``pd.Series`` indexed by the original GeoDataFrame index, containing
         the reducer value for each geometry.
     """
-    features = geemap.geopandas_to_ee(gdf[["geometry"]].reset_index(names="orig_index"))
+    features = convert_gdf_to_ee(gdf[["geometry"]].reset_index(names="orig_index"))
     computed = ee.data.computeFeatures(
         {
             "expression": (img.reduceRegions(features, reducer=reducer, scale=scale)),

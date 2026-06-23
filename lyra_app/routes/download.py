@@ -3,18 +3,22 @@ import json
 
 from anyio import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from lyra_app.db.redis import redis_client
 
 router = APIRouter()
 
 
+def _json_non_finite_constant(_: str) -> None:
+    return None
+
+
 @router.get("/download_result/{download_id}", response_model=None)
 async def download_result(
     download_id: str,
     background_tasks: BackgroundTasks,
-) -> FileResponse | dict:
+) -> FileResponse | JSONResponse:
     pong = await redis_client.ping()
     if not pong:
         err = "Cannot connect to Redis. Please try again later."
@@ -25,7 +29,7 @@ async def download_result(
     if not data_string:
         raise HTTPException(status_code=404, detail="Result expired or not found")
 
-    payload = json.loads(data_string)
+    payload = json.loads(data_string, parse_constant=_json_non_finite_constant)
 
     if payload.get("result_type") == "file":
         file_path = Path(payload["file_path"])
@@ -45,4 +49,4 @@ async def download_result(
             filename=file_path.name,
         )
 
-    return payload
+    return JSONResponse(content=payload)

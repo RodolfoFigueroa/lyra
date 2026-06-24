@@ -5,6 +5,8 @@ description: Read client-facing metric metadata and JSON Schemas from the API ca
 
 The API catalog is built from v2 plugin manifests. It exposes client-facing schema metadata only; it does not expose worker queue names or Python entrypoints.
 
+The catalog can be empty when `LYRA_PLUGIN_REPOS` is empty or configured repositories do not contain valid v2 manifests.
+
 ## List Metrics
 
 `GET /metrics` returns a list of `MetricInfoV2` objects:
@@ -12,8 +14,8 @@ The API catalog is built from v2 plugin manifests. It exposes client-facing sche
 ```json
 [
   {
-    "name": "tree_coverage",
-    "description": "Compute tree coverage for the input area.",
+    "name": "metric_name",
+    "description": "Compute a metric for the input area.",
     "request_schema": {
       "type": "object",
       "properties": {

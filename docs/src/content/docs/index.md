@@ -3,23 +3,26 @@ title: Lyra Docs
 description: Documentation for Lyra's v2 plugin runner, async job API, and warm-worker deployment model.
 ---
 
-Lyra is a REST API for computing accessibility and land-use metrics for spatial units in Mexico. It exposes metrics through JSON Schema metadata, submits work as Redis-backed Celery jobs, and executes metric code in warm queue-specific worker pools.
+Lyra is a REST API for computing accessibility and land-use metrics for spatial units in Mexico. It exposes metric schemas through a manifest catalog, submits work through the `/jobs` HTTP API, and executes metric code in warm queue-specific Celery workers.
 
-These docs describe the current v2 execution model:
+## Current Model
 
-- API containers read plugin manifests, validate requests, and dispatch jobs.
-- Worker containers install runner plugin code and execute the generic `lyra.run_metric` Celery task.
-- Public execution goes through the `/jobs` REST and SSE API.
+- API processes read v2 plugin manifests and validate job requests.
+- Worker processes install plugin code and run the generic `lyra.run_metric` task.
+- Redis stores queued, progress, terminal event, status, and result records.
+- Public execution uses `/jobs`, `/jobs/{job_id}`, `/jobs/{job_id}/events`, and `/jobs/{job_id}/result`.
 
-## First Steps
+## Choose A Path
 
-Start with [Getting Started](getting-started/) to run Lyra locally or with Docker Compose.
+If you want to run Lyra, start with [Getting Started](getting-started/) and [Local Development](local-development/).
 
-Use [Job API](job-api/) when building a client that submits work and follows progress.
+If you are changing Lyra itself, read [Contributor Guide](contributor-guide/), [Architecture](architecture/), and [Testing And Quality](testing-and-quality/).
 
-Use [Plugin Manifests](plugin-manifests/) and [Runner Plugins](runner-plugins/) when adding a metric.
+If you are building a plugin, start with [Plugin Quickstart](plugin-quickstart/), then read [Plugin Manifests](plugin-manifests/) and [Runner Plugins](runner-plugins/).
 
-Use [Deployment](deployment/) when wiring queues, workers, plugin catalogs, and plugin install volumes.
+If you are calling Lyra from another application, use [Job API](job-api/), [Metrics Catalog](metrics-catalog/), and [Python Client](python-client/).
+
+If you are an AI agent, use [AI Agent Guide](ai-agent-guide/) as the stable crawl entrypoint.
 
 ## Live OpenAPI Docs
 

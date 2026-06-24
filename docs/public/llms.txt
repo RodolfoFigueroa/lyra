@@ -1,0 +1,54 @@
+# Lyra Documentation
+
+Site: https://rodolfofigueroa.github.io/lyra/
+Repository: https://github.com/RodolfoFigueroa/lyra
+
+Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redis-backed jobs, and warm queue-specific Celery workers.
+
+## Primary Docs
+
+- Overview: https://rodolfofigueroa.github.io/lyra/
+- Getting Started: https://rodolfofigueroa.github.io/lyra/getting-started/
+- Architecture: https://rodolfofigueroa.github.io/lyra/architecture/
+- Contributor Guide: https://rodolfofigueroa.github.io/lyra/contributor-guide/
+- Local Development: https://rodolfofigueroa.github.io/lyra/local-development/
+- Testing And Quality: https://rodolfofigueroa.github.io/lyra/testing-and-quality/
+- Plugin Quickstart: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
+- Plugin Manifests: https://rodolfofigueroa.github.io/lyra/plugin-manifests/
+- Runner Plugins: https://rodolfofigueroa.github.io/lyra/runner-plugins/
+- Job API: https://rodolfofigueroa.github.io/lyra/job-api/
+- Metrics Catalog: https://rodolfofigueroa.github.io/lyra/metrics-catalog/
+- Python Client: https://rodolfofigueroa.github.io/lyra/python-client/
+- Deployment: https://rodolfofigueroa.github.io/lyra/deployment/
+- Operations: https://rodolfofigueroa.github.io/lyra/operations/
+- Reference: https://rodolfofigueroa.github.io/lyra/reference/
+- AI Agent Guide: https://rodolfofigueroa.github.io/lyra/ai-agent-guide/
+
+## Current Contracts
+
+- Plugin manifests: `PluginManifestV2` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v2.py`
+- Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `JobResult`, `JobStatusInfo` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
+- Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
+- Job routes: `lyra_app/routes/jobs.py`
+- Catalog: `lyra_app/registry.py`
+- Worker: `lyra_app/worker.py`
+- Job store: `lyra_app/job_store.py`
+
+## Public Routes
+
+- `GET /data_types`
+- `GET /metrics`
+- `GET /metrics/{metric_name}`
+- `POST /jobs`
+- `GET /jobs/{job_id}`
+- `GET /jobs/{job_id}/events`
+- `GET /jobs/{job_id}/result`
+- `GET /met_zone_code`
+- `POST /update-plugins`
+
+## Agent Notes
+
+- Metrics are not built into the app. They come from GitHub repositories listed in `LYRA_PLUGIN_REPOS`.
+- Use `/metrics` to discover metric names and JSON Schemas before submitting jobs.
+- Public metric execution uses the `lyra.run_metric` Celery task internally.
+- API containers read manifests. Worker containers install and import plugin code.

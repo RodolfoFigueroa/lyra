@@ -5,6 +5,8 @@ description: Understand Redis job storage, event streams, TTLs, cancellation, an
 
 Lyra uses Redis for Celery transport and for the v2 job store.
 
+The Redis URL comes from `CELERY_BROKER_URL`. The same URL is used by Celery and by the async/sync Redis clients.
+
 ## Job Store Keys
 
 Each job uses three Redis key families:

@@ -3,7 +3,7 @@ title: Runner Plugins
 description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and JobResult.
 ---
 
-Worker processes install runner plugin code at startup, read v2 manifests, import each matching entrypoint, and register the imported function under the generic `lyra.run_metric` task registry.
+Worker processes install runner plugin code at startup, read v2 manifests, import each matching entrypoint, and execute matching metrics through the generic `lyra.run_metric` Celery task.
 
 ## Entrypoint Contract
 
@@ -25,6 +25,8 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
 ```
 
 The worker calls `run(job, context)` and validates the returned `JobResult`. Unknown metrics, plugin exceptions, invalid return payloads, and mismatched result `job_id` values become failed `JobResult`s.
+
+The worker validates the returned object as `JobResult`; it does not validate `result` against the metric's `result_schema`.
 
 ## JobEnvelope
 
@@ -52,9 +54,15 @@ The `input` payload has already passed API-side JSON Schema validation before di
 
 `emit_event()` appends a durable `JobEvent` to the Redis Stream and marks the job status as `progress`.
 
+Use non-terminal event names for plugin progress, such as `progress`, `loaded_input`, or `export_started`.
+
 `check_cancelled()` raises an internal worker cancellation signal if the job status is already `cancelled`; the worker then persists a terminal cancelled result.
 
-Use `temp_dir` for intermediate files. For file results, return a `JobResult` with `result_type="file"` and `file_path` set to the produced file.
+Use `temp_dir` for intermediate files. The worker creates a per-job directory before calling the plugin.
+
+`db` is optional. Plugins must handle `context.db is None`.
+
+For file results, return a `JobResult` with `result_type="file"` and `file_path` set to the produced file.
 
 ## JobResult
 

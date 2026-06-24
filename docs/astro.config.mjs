@@ -24,21 +24,31 @@ export default defineConfig({
           items: [
             { label: 'Overview', link: '/' },
             { label: 'Getting Started', slug: 'getting-started' },
-            { label: 'Docs Versions', slug: 'docs-versions' },
+            { label: 'Architecture', slug: 'architecture' },
           ],
         },
         {
-          label: 'Using Lyra',
+          label: 'Develop Lyra',
+          items: [
+            { label: 'Contributor Guide', slug: 'contributor-guide' },
+            { label: 'Local Development', slug: 'local-development' },
+            { label: 'Testing And Quality', slug: 'testing-and-quality' },
+          ],
+        },
+        {
+          label: 'Build Plugins',
+          items: [
+            { label: 'Plugin Quickstart', slug: 'plugin-quickstart' },
+            { label: 'Plugin Manifests', slug: 'plugin-manifests' },
+            { label: 'Runner Plugins', slug: 'runner-plugins' },
+          ],
+        },
+        {
+          label: 'Use The API',
           items: [
             { label: 'Job API', slug: 'job-api' },
             { label: 'Metrics Catalog', slug: 'metrics-catalog' },
-          ],
-        },
-        {
-          label: 'Plugins',
-          items: [
-            { label: 'Plugin Manifests', slug: 'plugin-manifests' },
-            { label: 'Runner Plugins', slug: 'runner-plugins' },
+            { label: 'Python Client', slug: 'python-client' },
           ],
         },
         {
@@ -47,6 +57,13 @@ export default defineConfig({
             { label: 'Deployment', slug: 'deployment' },
             { label: 'Operations', slug: 'operations' },
             { label: 'Reference', slug: 'reference' },
+            { label: 'Docs Versions', slug: 'docs-versions' },
+          ],
+        },
+        {
+          label: 'Agent Guide',
+          items: [
+            { label: 'AI Agent Guide', slug: 'ai-agent-guide' },
           ],
         },
       ],

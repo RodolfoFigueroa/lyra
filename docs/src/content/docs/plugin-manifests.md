@@ -5,6 +5,8 @@ description: Define v2 plugin metadata, metric schemas, queues, and runner entry
 
 Lyra reads plugin catalog metadata from `lyra.plugin.json` files. The API loads v2 manifests only.
 
+The manifest is strict: extra fields are rejected. JSON Schemas are checked when the manifest is parsed.
+
 ## Manifest Shape
 
 ```json
@@ -16,8 +18,8 @@ Lyra reads plugin catalog metadata from `lyra.plugin.json` files. The API loads 
   },
   "metrics": [
     {
-      "name": "tree_coverage",
-      "description": "Compute tree coverage for the input area.",
+      "name": "example_metric",
+      "description": "Compute an example metric for the input area.",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -51,7 +53,7 @@ Metric fields:
 - `name`: unique metric name within the manifest and across the loaded catalog.
 - `description`: client-facing summary.
 - `request_schema`: JSON Schema used to validate `/jobs` input.
-- `result_schema`: optional JSON Schema describing successful result shape.
+- `result_schema`: optional JSON Schema describing successful result shape. Lyra checks that the schema itself is valid and exposes it through `/metrics`.
 - `execution.queue`: queue name used by the API to dispatch jobs and by workers to select metrics.
 - `entrypoint`: Python `module:function` reference imported by worker processes.
 
@@ -65,7 +67,7 @@ The module must be dot-separated Python identifiers, and the function must be on
 example_plugin.runner:run
 ```
 
-Legacy callable modes and v1-only fields are not accepted in v2 manifests.
+The referenced module must be importable after the plugin package is installed by the worker.
 
 ## Queue Ownership
 

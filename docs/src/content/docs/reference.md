@@ -12,9 +12,11 @@ Core application settings:
 | `EARTHENGINE_PROJECT` | Google Earth Engine project ID. |
 | `SERVICE_ACCOUNT_BIND_PATH` | Host path for the Earth Engine service account JSON in Compose. |
 | `CELERY_BROKER_URL` | Redis URL used by Celery and the Redis clients. |
+| `CELERY_WORKER_CONCURRENCY` | Worker concurrency used by the development Compose worker command. |
 | `LYRA_PLUGIN_REPOS` | Plugin repository list used by plugin sync/install paths. |
 | `LYRA_PLUGIN_CATALOG_DIR` | Directory containing API catalog manifests. |
 | `LYRA_PLUGIN_INSTALL_DIR` | Directory where workers install plugin code. |
+| `LYRA_PORT` | API server port for direct `python -m lyra_app.main` runs. Defaults to `5219`. |
 | `LYRA_RUNNER_QUEUES` | Comma-separated queue names a worker should import and execute. |
 | `LYRA_RUNNER_TEMP_DIR` | Optional base directory for runner temporary job files. |
 | `LYRA_CACHE_DIR` | Cache directory used as a fallback for runner temp files. |
@@ -68,7 +70,7 @@ npm run build --prefix docs
 Preview docs locally:
 
 ```bash
-npm run dev --prefix docs
+npm run preview --prefix docs
 ```
 
 ## Public API Paths
@@ -83,3 +85,4 @@ npm run dev --prefix docs
 | `GET` | `/jobs/{job_id}/events` | Stream typed SSE job events. |
 | `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file. |
 | `GET` | `/met_zone_code` | Look up a metropolitan zone code by name. |
+| `POST` | `/update-plugins` | Refresh plugin catalog repos and restart worker pools. |

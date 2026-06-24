@@ -44,6 +44,8 @@ Both use the same Lyra image and generic Celery task code. Each worker pool has 
 
 To add another queue, add another worker service using the same image, set `LYRA_RUNNER_QUEUES` to the new queue name, and set Celery `-Q` to the same queue.
 
+`CELERY_WORKER_CONCURRENCY` controls worker concurrency in the development Compose file. The production Compose file uses Celery defaults unless the command is changed.
+
 ## Plugin Updates
 
 Plugin updates are explicit:

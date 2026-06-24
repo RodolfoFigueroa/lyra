@@ -8,6 +8,9 @@ The written project docs are published with Astro Starlight:
 
 - Hosted docs: https://rodolfofigueroa.github.io/lyra/
 - Local docs: `npm run dev --prefix docs`
+- Develop Lyra: https://rodolfofigueroa.github.io/lyra/contributor-guide/
+- Build a plugin: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
+- Use the API: https://rodolfofigueroa.github.io/lyra/job-api/
 
 When the API server is running, FastAPI also exposes generated OpenAPI references:
 
@@ -54,10 +57,10 @@ Submit a metric job:
 ```bash
 curl -X POST http://localhost:5219/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"metric":"tree_coverage","input":{"data":{"data_type":"met_zone_code","value":"19.1.01"}}}'
+  -d '{"metric":"METRIC_NAME","input":{}}'
 ```
 
-Then use the returned `job_id` to stream events and fetch the terminal result:
+Choose `METRIC_NAME` from `GET /metrics`, and shape `input` according to that metric's `request_schema`. Then use the returned `job_id` to stream events and fetch the terminal result:
 
 ```bash
 curl -N http://localhost:5219/jobs/{job_id}/events

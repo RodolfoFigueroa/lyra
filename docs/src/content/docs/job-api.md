@@ -5,19 +5,16 @@ description: Submit metric jobs, stream events, and fetch JSON or file results.
 
 Lyra's public execution API is job-first. Clients submit a metric request, receive a `job_id`, stream typed server-sent events, and fetch the terminal result.
 
+Before creating a job, call `GET /metrics` and choose a metric from the current catalog. The job `input` must match that metric's `request_schema`.
+
 ## Submit A Job
 
 `POST /jobs` accepts:
 
 ```json
 {
-  "metric": "tree_coverage",
-  "input": {
-    "data": {
-      "data_type": "met_zone_code",
-      "value": "19.1.01"
-    }
-  },
+  "metric": "METRIC_NAME",
+  "input": {},
   "idempotency_key": "optional-client-key"
 }
 ```
@@ -29,7 +26,7 @@ Successful submissions return `202 Accepted`:
 ```json
 {
   "job_id": "job-id",
-  "metric": "tree_coverage",
+  "metric": "METRIC_NAME",
   "status": "queued",
   "links": {
     "self": "/jobs/job-id",
@@ -48,7 +45,7 @@ Successful submissions return `202 Accepted`:
 ```json
 {
   "job_id": "job-id",
-  "metric": "tree_coverage",
+  "metric": "METRIC_NAME",
   "status": "progress",
   "updated_at": "2026-06-23T18:30:00Z"
 }
@@ -102,6 +99,21 @@ Failed and cancelled jobs also return their terminal `JobResult` JSON with `200`
 
 File results return a file response when `result_type` is `file` and `file_path` points at the produced artifact. After the file response cleanup runs, only the stored result payload is deleted; status and events remain until the job-store TTL expires.
 
+The current server response for file results uses the produced filename and `image/tiff` media type.
+
+## Refresh Plugins
+
+`POST /update-plugins` reclones or updates configured plugin repositories, refreshes the API manifest catalog, and asks workers to restart.
+
+The route requires Bearer authentication:
+
+```bash
+curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+```
+
+`timeout` is the number of seconds to wait for in-flight tasks before forcing worker shutdown.
+
 ## Python Client
 
 The sync client wraps the same flow:
@@ -110,7 +122,9 @@ The sync client wraps the same flow:
 from lyra.api import LyraAPIClient
 
 client = LyraAPIClient("http://localhost:5219")
-job = client.create_job("tree_coverage", {"data": {"data_type": "met_zone_code", "value": "19.1.01"}})
+metrics = client.get_metrics()
+metric_name = metrics[0].name
+job = client.create_job(metric_name, {})
 
 for event in client.iter_job_events(job.job_id):
     if event.event in {"succeeded", "failed", "cancelled"}:

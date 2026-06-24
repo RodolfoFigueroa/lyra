@@ -8,13 +8,13 @@ Interactive documentation is available when the server is running:
 - **ReDoc** (clean HTML): http://localhost:5219/redoc
 
 These are automatically generated from the FastAPI application and include:
-- All REST endpoints (`/data_types`, `/metrics`, `/metrics/{metric_name}`, `/met_zone_code`, `/download_result/{download_id}`)
+- All REST endpoints (`/data_types`, `/metrics`, `/metrics/{metric_name}`, `/jobs`, `/jobs/{job_id}`, `/jobs/{job_id}/events`, `/jobs/{job_id}/result`, `/met_zone_code`, `/download_result/{download_id}`)
 - Request/response schemas
 - Parameter descriptions
 
-## WebSocket API (AsyncAPI)
+## Legacy WebSocket API (AsyncAPI)
 
-The WebSocket endpoint for metric computation is documented in [`asyncapi.yaml`](../asyncapi.yaml) using the AsyncAPI 3.1.0 specification.
+The legacy WebSocket endpoint for metric computation is documented in [`asyncapi.yaml`](../asyncapi.yaml) using the AsyncAPI 3.1.0 specification. New clients should use the REST job API and `GET /jobs/{job_id}/events` SSE stream instead.
 
 ### Generating Interactive HTML Documentation
 

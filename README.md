@@ -1,6 +1,6 @@
 # Lyra API
 
-REST and WebSocket API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery tasks backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
+REST API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery jobs backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
 
 ## Prerequisites
 
@@ -63,58 +63,52 @@ This starts the API (`lyra`), Redis, and the Celery worker together.
 | `GET` | `/data_types` | List accepted input data types |
 | `GET` | `/metrics` | List available metrics and request/result schemas |
 | `GET` | `/metrics/{metric_name}` | Get request/result schemas for a single metric |
+| `POST` | `/jobs` | Submit a metric job |
+| `GET` | `/jobs/{job_id}` | Fetch current job status |
+| `GET` | `/jobs/{job_id}/events` | Stream queued, progress, and terminal events with SSE |
+| `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file |
 | `GET` | `/met_zone_code` | Look up a metropolitan zone code by name |
-| `GET` | `/download_result/{download_id}` | Fetch a completed metric result |
+| `GET` | `/download_result/{download_id}` | Legacy result route kept until Step 6 |
 
-### WebSocket
+### Legacy WebSocket
 
 | Path | Description |
 |------|-------------|
-| `WS /ws/{metric}` | Submit a metric computation request |
+| `WS /ws/{metric}` | Legacy metric submission route kept until Step 6 |
 
 Available metrics: `accessibility_jobs`, `accessibility_services`, `temperature`, `temperature_raster`, `tree_coverage`, `urbanized_area`.
 
-> **Note:** `temperature_raster` returns a GeoTIFF file instead of JSON. The result is downloaded via `GET /download_result/{download_id}` with `Content-Type: image/tiff`.
+> **Note:** `temperature_raster` returns a GeoTIFF file instead of JSON. The result is downloaded via `GET /jobs/{job_id}/result` with `Content-Type: image/tiff`.
 
-## WebSocket Usage
+## Job API Usage
 
-The WebSocket endpoint follows a request/response flow:
+The job endpoint follows a submit/status/events/result flow:
 
-1. Connect to `ws://localhost:5219/ws/{metric}`.
-2. Send a JSON payload with a `data` field (GeoJSON or a supported wrapper type).
-3. Receive a `queued` message with a `task_id`.
-4. Receive a `success` message with a `download_id` when computation completes.
-5. Fetch the full result via `GET /download_result/{download_id}`.
+1. `POST /jobs` with `metric`, `input`, and optional `idempotency_key`.
+2. Receive `202 Accepted` with a `job_id` and links.
+3. Stream `GET /jobs/{job_id}/events` as `text/event-stream`.
+4. Fetch the terminal result via `GET /jobs/{job_id}/result`.
 
-Example using the `websockets` library:
-
-```python
-import asyncio, json, websockets
-
-async def run():
-    uri = "ws://localhost:5219/ws/tree_coverage"
-    async with websockets.connect(uri) as ws:
-        payload = {
-            "data": {
-                "data_type": "met_zone_code",
-                "value": "19.1.01"
-            }
-        }
-        await ws.send(json.dumps(payload))
-
-        queued = json.loads(await ws.recv())   # {"status": "queued", "task_id": "..."}
-        result = json.loads(await ws.recv())   # {"status": "success", "download_id": "..."}
-        print(queued, result)
-
-asyncio.run(run())
-```
-
-Fetch the result:
+Submit a job:
 
 ```bash
-curl http://localhost:5219/download_result/{download_id}
+curl -X POST http://localhost:5219/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"metric":"tree_coverage","input":{"data":{"data_type":"met_zone_code","value":"19.1.01"}}}'
 ```
-a
+
+Stream events:
+
+```bash
+curl -N http://localhost:5219/jobs/{job_id}/events
+```
+
+Fetch the terminal result:
+
+```bash
+curl http://localhost:5219/jobs/{job_id}/result
+```
+
 ## Documentation
 
 ### REST API
@@ -124,9 +118,9 @@ Interactive documentation is available while the server is running:
 - **Swagger UI**: http://localhost:5219/docs
 - **ReDoc**: http://localhost:5219/redoc
 
-### WebSocket API (AsyncAPI)
+### Legacy WebSocket API (AsyncAPI)
 
-The WebSocket endpoint is documented in [`docs/asyncapi.yaml`](docs/asyncapi.yaml).
+The legacy WebSocket endpoint is documented in [`docs/asyncapi.yaml`](docs/asyncapi.yaml).
 
 To generate a standalone interactive HTML document:
 

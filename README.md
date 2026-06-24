@@ -37,13 +37,14 @@ docker run -d -p 6379:6379 redis:alpine
 Start the Celery worker (in a separate terminal):
 
 ```bash
-uv run celery -A lyra.worker.celery_app worker --loglevel=info
+LYRA_RUNNER_QUEUES=interactive \
+uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
 ```
 
 Start the API server:
 
 ```bash
-uv run lyra
+uv run python -m lyra_app.main
 ```
 
 ### Docker (recommended)
@@ -52,7 +53,23 @@ uv run lyra
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-This starts the API (`lyra`), Redis, and the Celery worker together.
+This starts the API (`lyra-dev`), Redis, and two warm Celery worker pools:
+`interactive` and `batch`. The queue names are examples owned by the
+deployment; plugin manifests choose a queue with each metric's
+`execution.queue` value.
+
+The API container reads static plugin manifests from `/lyra_plugin_catalog`,
+validates job requests, and dispatches `lyra.run_metric`. It does not install or
+import plugin code. Worker containers clone and install plugin repos into their
+own `/lyra_plugins` volumes at startup, then consume only the Celery queues
+listed in `LYRA_RUNNER_QUEUES`.
+
+To add another queue, add another worker service that uses the same image,
+sets `LYRA_RUNNER_QUEUES` to the new queue name, and starts Celery with a
+matching `-Q` value. After plugin updates, refresh the API catalog with
+`POST /update-plugins` and restart warm worker pools; workers do not hot-reload
+plugin code in-process. Kubernetes manifests are intentionally out of scope for
+this Compose-only deployment shape.
 
 ## Endpoints
 
@@ -69,9 +86,9 @@ This starts the API (`lyra`), Redis, and the Celery worker together.
 | `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file |
 | `GET` | `/met_zone_code` | Look up a metropolitan zone code by name |
 
-Available metrics: `accessibility_jobs`, `accessibility_services`, `temperature`, `temperature_raster`, `tree_coverage`, `urbanized_area`.
+Available metrics come from v2 plugin manifests listed in `LYRA_PLUGIN_REPOS`.
 
-> **Note:** `temperature_raster` returns a GeoTIFF file instead of JSON. The result is downloaded via `GET /jobs/{job_id}/result` with `Content-Type: image/tiff`.
+> **Note:** File-producing metrics return the file from `GET /jobs/{job_id}/result`.
 
 ## Job API Usage
 

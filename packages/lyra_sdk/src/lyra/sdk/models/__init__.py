@@ -16,6 +16,7 @@ from lyra.sdk.models.plugin_v2 import (
     MetricManifestV2,
     PluginInfoV2,
     PluginManifestV2,
+    SpatialInputKind,
 )
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "MetricManifestV2",
     "PluginInfoV2",
     "PluginManifestV2",
+    "SpatialInputKind",
     "TerminalJobStatus",
 ]

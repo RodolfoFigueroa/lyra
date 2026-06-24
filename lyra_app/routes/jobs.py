@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator
@@ -24,6 +25,11 @@ from lyra_app.registry import (
     MetricPayloadValidationError,
     get_metric_entry,
     validate_metric_payload,
+)
+from lyra_app.spatial_inputs import (
+    SpatialInputResolutionUnavailableError,
+    SpatialInputValidationError,
+    resolve_spatial_inputs,
 )
 
 router = APIRouter()
@@ -118,12 +124,23 @@ async def create_job(request: JobCreateRequest) -> JobCreateResponse:
         validated_input = validate_metric_payload(request.metric, request.input)
     except MetricPayloadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
+    try:
+        resolved_input = await asyncio.to_thread(
+            resolve_spatial_inputs,
+            validated_input,
+            entry.metric.spatial_inputs,
+        )
+    except SpatialInputValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors) from exc
+    except SpatialInputResolutionUnavailableError as exc:
+        err = "Cannot resolve spatial input. Please try again later."
+        raise HTTPException(status_code=503, detail=err) from exc
 
     job_id = uuid4().hex
     envelope = JobEnvelope(
         job_id=job_id,
         metric=request.metric,
-        input=validated_input,
+        input=resolved_input,
         idempotency_key=request.idempotency_key,
     )
     await job_store.create_job_async(envelope)

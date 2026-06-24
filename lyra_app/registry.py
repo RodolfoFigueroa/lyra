@@ -13,6 +13,7 @@ from lyra.sdk.models.plugin_v2 import MetricManifestV2, PluginManifestV2
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.plugins import MANIFEST_FILENAME, sync_catalog_repos
+from lyra_app.spatial_inputs import build_effective_request_schema
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class MetricRegistryEntry:
     metric: MetricManifestV2
     plugin_name: str
     plugin_version: str
+    request_schema: dict[str, Any]
     request_validator: Any
     queue: str
     entrypoint: str
@@ -86,13 +88,12 @@ def load_plugin_manifest(path: Path) -> PluginManifestV2:
         raise RuntimeError(msg) from exc
 
 
-def _build_request_validator(metric: MetricManifestV2) -> Any:
-    schema = metric.request_schema
+def _build_request_validator(metric_name: str, schema: dict[str, Any]) -> Any:
     validator_class = validator_for(schema)
     try:
         validator_class.check_schema(schema)
     except SchemaError as exc:
-        msg = f"Metric {metric.name!r} has an invalid request_schema: {exc}"
+        msg = f"Metric {metric_name!r} has an invalid request_schema: {exc}"
         raise RuntimeError(msg) from exc
     return validator_class(schema)
 
@@ -106,11 +107,13 @@ def _build_registry(
             if metric.name in registry:
                 msg = f"Duplicate metric name in plugin manifests: {metric.name!r}"
                 raise RuntimeError(msg)
+            request_schema = build_effective_request_schema(metric)
             registry[metric.name] = MetricRegistryEntry(
                 metric=metric,
                 plugin_name=manifest.plugin.name,
                 plugin_version=manifest.plugin.version,
-                request_validator=_build_request_validator(metric),
+                request_schema=request_schema,
+                request_validator=_build_request_validator(metric.name, request_schema),
                 queue=metric.execution.queue,
                 entrypoint=metric.entrypoint,
             )
@@ -166,14 +169,12 @@ def get_metric_info(name: str) -> MetricInfoV2 | None:
     entry = get_metric_entry(name)
     if entry is None:
         return None
-    return _metric_info_from_manifest(entry.metric)
+    return _metric_info_from_entry(entry)
 
 
 def get_metrics_info() -> list[MetricInfoV2]:
     ensure_catalog_loaded()
-    return [
-        _metric_info_from_manifest(entry.metric) for entry in TASK_REGISTRY.values()
-    ]
+    return [_metric_info_from_entry(entry) for entry in TASK_REGISTRY.values()]
 
 
 def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
@@ -205,12 +206,12 @@ def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]
     }
 
 
-def _metric_info_from_manifest(metric: MetricManifestV2) -> MetricInfoV2:
+def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV2:
     return MetricInfoV2(
-        name=metric.name,
-        description=metric.description.strip(),
-        request_schema=metric.request_schema,
-        result_schema=metric.result_schema,
+        name=entry.metric.name,
+        description=entry.metric.description.strip(),
+        request_schema=entry.request_schema,
+        result_schema=entry.metric.result_schema,
     )
 
 

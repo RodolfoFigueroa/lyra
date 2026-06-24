@@ -152,7 +152,7 @@ def load_bounds_from_cvegeos(
     )  # ty: ignore[no-matching-overload]
 
 
-# TODO: Import levels other than AGEB
+# Metropolitan-zone imports currently use AGEB geometries only.
 def load_geometries_from_met_zone_code(
     code: str,
     *,

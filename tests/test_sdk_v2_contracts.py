@@ -3,7 +3,16 @@ from typing import Any
 
 import pytest
 from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, JobEvent, JobResult, PluginManifestV2
+from lyra.sdk.models import (
+    JobCreateRequest,
+    JobCreateResponse,
+    JobEnvelope,
+    JobEvent,
+    JobLinks,
+    JobResult,
+    JobStatusInfo,
+    PluginManifestV2,
+)
 from pydantic import ValidationError
 
 
@@ -103,6 +112,34 @@ def test_job_result_rejects_non_terminal_status() -> None:
         JobResult.model_validate(
             {"job_id": "job-1", "status": "progress", "result": {"value": 1}},
         )
+
+
+def test_job_api_models_accept_public_payloads() -> None:
+    request = JobCreateRequest.model_validate(
+        {"metric": "light_metric", "input": {"value": 1}, "idempotency_key": "idem"}
+    )
+    response = JobCreateResponse(
+        job_id="job-1",
+        metric="light_metric",
+        status="queued",
+        links=JobLinks(
+            self="/jobs/job-1",
+            events="/jobs/job-1/events",
+            result="/jobs/job-1/result",
+        ),
+    )
+    status = JobStatusInfo.model_validate(
+        {
+            "job_id": "job-1",
+            "metric": "light_metric",
+            "status": "started",
+            "updated_at": datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        }
+    )
+
+    assert request.metric == "light_metric"
+    assert response.links.events == "/jobs/job-1/events"
+    assert status.updated_at == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_manifest_v2_accepts_schema_backed_metric_contract() -> None:

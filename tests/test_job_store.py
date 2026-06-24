@@ -51,6 +51,7 @@ class FakeRedisAsync:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
         self.deleted: list[str] = []
+        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         if payload is not None:
             self.values[job_store.result_key("job-1")] = payload
 
@@ -68,14 +69,43 @@ class FakeRedisAsync:
         self.deleted.append(key)
         self.values.pop(key, None)
 
+    async def xadd(self, key: str, fields: dict[str, str]) -> str:
+        stream = self.streams.setdefault(key, [])
+        stream_id = f"{len(stream) + 1}-0"
+        stream.append((stream_id, fields))
+        return stream_id
+
     async def xrange(
         self,
-        key: str,  # noqa: ARG002
+        key: str,
         *,
-        min: str,  # noqa: A002, ARG002
-        count: int | None = None,  # noqa: ARG002
+        min: str,  # noqa: A002
+        count: int | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
-        return []
+        records = self.streams.get(key, [])
+        if min.startswith("("):
+            after_id = min[1:]
+            records = [record for record in records if record[0] > after_id]
+        elif min != job_store.STREAM_START:
+            records = [record for record in records if record[0] >= min]
+        return records if count is None else records[:count]
+
+    async def xread(
+        self,
+        streams: dict[str, str],
+        *,
+        block: int,  # noqa: ARG002
+        count: int | None = None,
+    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
+        key, after_id = next(iter(streams.items()))
+        records = self.streams.get(key, [])
+        if after_id != job_store.STREAM_LATEST:
+            records = [record for record in records if record[0] > after_id]
+        else:
+            records = []
+        if count is not None:
+            records = records[:count]
+        return [(key, records)] if records else []
 
 
 def _load_status(redis: FakeRedisSync, job_id: str) -> dict[str, Any]:
@@ -91,6 +121,8 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     assert snapshot.status == "queued"
     assert snapshot.metric == "heavy_metric"
     assert _load_status(redis, "job-1")["status"] == "queued"
+    events = job_store.read_job_events("job-1", client=redis)
+    assert [event.event.event for event in events] == ["queued"]
     assert (job_store.status_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
         redis.expirations
     )
@@ -130,6 +162,9 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
     assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
     assert _load_status(redis, "job-1")["status"] == "failed"
     assert _load_status(redis, "job-1")["error"] == payload["error"]
+    events = job_store.read_job_events("job-1", client=redis)
+    assert [event.event.event for event in events] == ["started", "failed"]
+    assert events[-1].event.data == payload
 
 
 def test_progress_events_append_in_order_and_resume_after_stream_id() -> None:
@@ -185,3 +220,21 @@ def test_async_result_read_sanitizes_non_finite_numbers_and_deletes_result() -> 
         "result": {"score": None},
     }
     assert redis.deleted == [job_store.result_key("job-1")]
+
+
+def test_async_blocking_event_read_returns_new_stream_entries() -> None:
+    redis = FakeRedisAsync()
+    asyncio.run(job_store.set_job_status_async("job-1", "queued", client=redis))
+    first_id = redis.streams[job_store.events_key("job-1")][0][0]
+    asyncio.run(job_store.set_job_status_async("job-1", "started", client=redis))
+
+    events = asyncio.run(
+        job_store.read_new_job_events_async(
+            "job-1",
+            after_id=first_id,
+            block_ms=1,
+            client=redis,
+        )
+    )
+
+    assert [event.event.event for event in events] == ["started"]

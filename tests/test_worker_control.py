@@ -9,6 +9,7 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
+        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
 
     def set(self, key: str, value: str, *, ex: int) -> None:
         self.values[key] = value
@@ -16,6 +17,12 @@ class FakeRedisSync:
 
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
+
+    def xadd(self, key: str, fields: dict[str, str]) -> str:
+        stream = self.streams.setdefault(key, [])
+        stream_id = f"{len(stream) + 1}-0"
+        stream.append((stream_id, fields))
+        return stream_id
 
 
 def test_notify_interrupted_tasks_persists_failed_job_results(
@@ -28,6 +35,7 @@ def test_notify_interrupted_tasks_persists_failed_job_results(
 
     result = json.loads(redis.values[job_store.result_key("job-1")])
     status = json.loads(redis.values[job_store.status_key("job-1")])
+    events = redis.streams[job_store.events_key("job-1")]
     assert result == {
         "job_id": "job-1",
         "status": "failed",
@@ -39,3 +47,4 @@ def test_notify_interrupted_tasks_persists_failed_job_results(
         },
     }
     assert status["status"] == "failed"
+    assert len(events) == 1

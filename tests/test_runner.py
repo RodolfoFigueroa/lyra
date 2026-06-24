@@ -225,7 +225,13 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
     assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "succeeded"
     events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
-    assert [event.event.data for event in events] == [{"percent": 50}]
+    assert [event.event.event for event in events] == [
+        "started",
+        "progress",
+        "succeeded",
+    ]
+    assert events[1].event.data == {"percent": 50}
+    assert events[-1].event.data == payload
 
 
 def test_unknown_metric_persists_failed_result(

@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+from jsonschema.validators import validator_for
 from lyra.sdk.models.metric import MetricInfoV2
 from lyra.sdk.models.plugin_v2 import MetricManifestV2, PluginManifestV2
 from pydantic import ValidationError as PydanticValidationError
@@ -88,12 +88,13 @@ def load_plugin_manifest(path: Path) -> PluginManifestV2:
 
 def _build_request_validator(metric: MetricManifestV2) -> Any:
     schema = metric.request_schema
+    validator_class = validator_for(schema)
     try:
-        Draft202012Validator.check_schema(schema)
+        validator_class.check_schema(schema)
     except SchemaError as exc:
         msg = f"Metric {metric.name!r} has an invalid request_schema: {exc}"
         raise RuntimeError(msg) from exc
-    return Draft202012Validator(schema)
+    return validator_class(schema)
 
 
 def _build_registry(

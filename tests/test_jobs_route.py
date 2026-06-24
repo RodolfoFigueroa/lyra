@@ -27,7 +27,7 @@ def _manifest() -> dict[str, Any]:
                     "required": ["value"],
                     "properties": {"value": {"type": "integer"}},
                 },
-                "execution": {"queue": "heavy"},
+                "execution": {"queue": "priority-lane"},
                 "entrypoint": "fake_plugin.runner:run",
             }
         ],
@@ -203,7 +203,7 @@ def test_create_job_dispatches_generic_task_to_manifest_queue(
                     "metadata": {},
                 }
             ],
-            "queue": "heavy",
+            "queue": "priority-lane",
             "task_id": "job-1",
         }
     ]

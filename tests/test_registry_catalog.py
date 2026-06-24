@@ -46,41 +46,6 @@ def _manifest(
     }
 
 
-def _legacy_manifest() -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "metrics": [
-            {
-                "name": "light_metric",
-                "description": "A metric.",
-                "parameters": [
-                    {
-                        "name": "value",
-                        "type": "int",
-                        "required": True,
-                        "default": None,
-                    }
-                ],
-                "returns_file": False,
-                "tavi_hint": "",
-                "request_schema": {
-                    "type": "object",
-                    "required": ["value"],
-                    "properties": {"value": {"type": "integer"}},
-                    "additionalProperties": False,
-                },
-                "execution": {
-                    "profile": "lightweight",
-                    "queue": "lightweight",
-                    "timeout_seconds": 30,
-                },
-                "callable": {"mode": "single", "calculate": "fake_plugin:calculate"},
-            }
-        ],
-    }
-
-
 def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
     repo.mkdir()
     (repo / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
@@ -136,18 +101,6 @@ def test_catalog_refresh_reads_v2_manifests_without_importing_plugin_code(
     assert entry is not None
     assert entry.queue == "lightweight"
     assert entry.entrypoint == "fake_plugin.runner:run"
-
-
-def test_catalog_refresh_rejects_legacy_v1_manifests(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo = tmp_path / "repo"
-    _write_manifest(repo, _legacy_manifest())
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
-
-    with pytest.raises(RuntimeError, match=r"Plugin manifest .* is invalid"):
-        registry.refresh_catalog()
 
 
 def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(

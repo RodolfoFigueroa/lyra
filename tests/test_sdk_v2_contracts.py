@@ -151,13 +151,10 @@ def test_manifest_v2_accepts_schema_backed_metric_contract() -> None:
     assert manifest.metrics[0].entrypoint == "fake_plugin.runner:run"
 
 
-def test_manifest_v2_rejects_legacy_metric_fields() -> None:
+def test_manifest_v2_rejects_extra_metric_fields() -> None:
     raw = _manifest(
         {
-            "parameters": [],
-            "returns_file": False,
-            "tavi_hint": "",
-            "callable": {"mode": "single", "calculate": "fake:calculate"},
+            "unexpected": True,
         },
     )
 

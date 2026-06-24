@@ -9,9 +9,8 @@ export default defineConfig({
       title: 'Lyra',
       expressiveCode: {
         styleOverrides: {
-          frames: {
-            frameType: 'none',
-          }
+          windowFrameBoxShadow: 'none',
+          windowTitleBarHeight: '0px',
         }
       },
       description: 'V2 plugin-runner and async job API documentation.',

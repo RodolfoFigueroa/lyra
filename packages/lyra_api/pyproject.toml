@@ -6,7 +6,6 @@ dependencies = [
     "aiofiles>=24.1.0",
     "aiohttp>=3.13.5",
     "pydantic>=2.13.4",
-    "websockets>=16.0",
 ]
 
 [build-system]

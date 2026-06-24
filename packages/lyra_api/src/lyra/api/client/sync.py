@@ -1,171 +1,175 @@
 import json
 import os
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any, overload
 
 import requests
 from lyra.api.client.base import _BaseLyraAPIClient
-from lyra.api.exceptions import DownloadError, WebSocketError
+from lyra.api.exceptions import DownloadError
+from lyra.sdk.models import JobCreateResponse, JobEvent, JobResult, JobStatusInfo
 from lyra.sdk.models.metric import MetricInfoV2
-from websockets.sync.client import connect
+
+TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
+
+
+def _iter_sse_job_events(lines: Iterable[str | bytes]) -> Iterator[JobEvent]:
+    data_lines: list[str] = []
+    for line in lines:
+        decoded_line = line.decode() if isinstance(line, bytes) else line
+        if decoded_line == "":
+            if data_lines:
+                yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
+                data_lines = []
+            continue
+        if decoded_line.startswith(":"):
+            continue
+
+        field, separator, value = decoded_line.partition(":")
+        if not separator:
+            continue
+        value = value.removeprefix(" ")
+        if field == "data":
+            data_lines.append(value)
+
+    if data_lines:
+        yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
 
 
 class LyraAPIClient(_BaseLyraAPIClient):
-    """Synchronous client for interacting with the Lyra API.
+    """Synchronous client for the Lyra HTTP job API."""
 
-    This client handles two-step data processing:
-    1. Submit a processing request via WebSocket and receive a download ID
-    2. Download the processed data via HTTP GET using the download ID
-
-    Attributes:
-        host: The API server hostname.
-        timeout: Request timeout in seconds.
-        headers: Default HTTP headers to include in all requests.
-        secure: Whether to use secure protocols (https/wss) or insecure (http/ws).
-        log_level: Logging level for status messages. Defaults to logging.INFO.
-    """
-
-    def submit(self, metric: str, payload: dict) -> str:
-        """Submit a processing request via WebSocket.
-
-        Args:
-            metric: The metric identifier for the processing task.
-            payload: The data payload to process.
-
-        Returns:
-            The download ID for retrieving the processed result.
-
-        Raises:
-            WebSocketError: If the WebSocket connection fails or the server
-                returns an error status.
-        """
-        ws_url = self._ws_url(f"ws/{metric}")
-
-        error: str | None = None
-        download_id: str | None = None
+    def create_job(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> JobCreateResponse:
+        body: dict[str, Any] = {"metric": metric, "input": payload}
+        if idempotency_key is not None:
+            body["idempotency_key"] = idempotency_key
 
         try:
-            with connect(
-                ws_url,
-                additional_headers=self.headers,
-                **self.connect_kwargs,
-            ) as websocket:
-                websocket.send(json.dumps(payload))
-
-                # Receive acknowledgment
-                ack_str = websocket.recv()
-                ack = json.loads(ack_str)
-
-                if ack["status"] == "error":
-                    message = ack.get("message", "Unknown error")
-                    error = f"Server error: {message}"
-                else:
-                    self._logger.info(
-                        "Server acknowledged. Task ID: %s",
-                        ack.get("task_id"),
-                    )
-
-                    # Receive processing result
-                    notification_str = websocket.recv()
-                    notification = json.loads(notification_str)
-                    status = notification["status"]
-
-                    if status == "error":
-                        message = notification.get("message", "Unknown error")
-                        error = f"Worker failed: {message}"
-                    elif status == "success":
-                        download_id = notification.get("download_id")
-                        self._logger.info(
-                            "Worker finished. Received download ticket: %s",
-                            download_id,
-                        )
-                    else:
-                        error = f"Unexpected status: {status}"
-
-        except Exception as e:
-            err = f"WebSocket error: {e}"
-            raise WebSocketError(err) from e
-
-        if error:
-            raise WebSocketError(error)
-
-        if download_id is None:
-            err = "Server did not return a download ID"
-            raise WebSocketError(err)
-
-        return download_id
-
-    def download(self, download_id: str) -> dict[str, Any]:
-        """Download processed data via HTTP GET.
-
-        Args:
-            download_id: The download ID received from submit().
-
-        Returns:
-            The downloaded data as a dictionary.
-
-        Raises:
-            DownloadError: If the HTTP request fails.
-        """
-        download_url = self._http_url(f"download_result/{download_id}")
-
-        try:
-            response = requests.get(
-                download_url,
+            response = requests.post(
+                self._http_url("jobs"),
+                json=body,
                 timeout=self.timeout,
                 headers=self.headers,
             )
-        except Exception as e:
-            err = f"Download error: {e}"
-            raise DownloadError(err) from e
+        except requests.RequestException as exc:
+            err = f"Job creation error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 202:
+            err = f"Failed to create job. HTTP {response.status_code}: {response.text}"
+            raise DownloadError(err)
+        return JobCreateResponse.model_validate(response.json())
+
+    def get_job(self, job_id: str) -> JobStatusInfo:
+        try:
+            response = requests.get(
+                self._http_url(f"jobs/{job_id}"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Job status error: {exc}"
+            raise DownloadError(err) from exc
 
         if response.status_code != 200:
-            err = f"Failed to download data. HTTP {response.status_code}"
+            err = f"Failed to fetch job. HTTP {response.status_code}: {response.text}"
             raise DownloadError(err)
+        return JobStatusInfo.model_validate(response.json())
 
-        return response.json()
-
-    def download_to_file(self, download_id: str, path: str | os.PathLike[str]) -> None:
-        """Download a result by ticket and write it to a file.
-
-        Args:
-            download_id: The download ID received from submit().
-            path: The file path to write the result to.
-
-        Raises:
-            DownloadError: If the HTTP request fails.
-        """
-        path = Path(path)
-        download_url = self._http_url(f"download_result/{download_id}")
+    def iter_job_events(
+        self,
+        job_id: str,
+        *,
+        last_event_id: str | None = None,
+    ) -> Iterator[JobEvent]:
+        headers = dict(self.headers)
+        if last_event_id is not None:
+            headers["Last-Event-ID"] = last_event_id
 
         try:
             with requests.get(
-                download_url,
+                self._http_url(f"jobs/{job_id}/events"),
+                timeout=self.timeout,
+                headers=headers,
+                stream=True,
+            ) as response:
+                if response.status_code != 200:
+                    err = (
+                        "Failed to stream job events. "
+                        f"HTTP {response.status_code}: {response.text}"
+                    )
+                    raise DownloadError(err)
+
+                yield from _iter_sse_job_events(
+                    response.iter_lines(decode_unicode=True)
+                )
+        except requests.RequestException as exc:
+            err = f"Job event stream error: {exc}"
+            raise DownloadError(err) from exc
+
+    def get_job_result(self, job_id: str) -> JobResult:
+        try:
+            response = requests.get(
+                self._http_url(f"jobs/{job_id}/result"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Job result error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch job result. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        if "application/json" not in response.headers.get("content-type", ""):
+            err = "Job result is a file; use download_job_result_to_file()."
+            raise DownloadError(err)
+        return JobResult.model_validate(response.json())
+
+    def download_job_result_to_file(
+        self,
+        job_id: str,
+        path: str | os.PathLike[str],
+    ) -> None:
+        output_path = Path(path)
+        try:
+            with requests.get(
+                self._http_url(f"jobs/{job_id}/result"),
                 timeout=self.timeout,
                 headers=self.headers,
                 stream=True,
             ) as response:
-                status_code = response.status_code
-                if status_code == 200:
-                    with path.open("wb") as f:
-                        f.writelines(response.iter_content(chunk_size=65536))
-                    return
-        except Exception as e:
-            err = f"Download error: {e}"
-            raise DownloadError(err) from e
+                if response.status_code != 200:
+                    err = (
+                        "Failed to download job result. "
+                        f"HTTP {response.status_code}: {response.text}"
+                    )
+                    raise DownloadError(err)
 
-        err = f"Failed to download data. HTTP {status_code}"
-        raise DownloadError(err)
+                if "application/json" in response.headers.get("content-type", ""):
+                    result = JobResult.model_validate(response.json())
+                    err = (
+                        f"Job {job_id} returned {result.status} JSON result, "
+                        "not a file."
+                    )
+                    raise DownloadError(err)
+
+                with output_path.open("wb") as file:
+                    file.writelines(response.iter_content(chunk_size=65536))
+        except requests.RequestException as exc:
+            err = f"Job result download error: {exc}"
+            raise DownloadError(err) from exc
 
     def get_data_types(self) -> list[dict[str, Any]]:
-        """Fetch available data types from the API.
-
-        Returns:
-            A list of data type objects.
-
-        Raises:
-            DownloadError: If the HTTP request fails or returns an invalid payload.
-        """
         data_types_url = self._http_url("data_types")
 
         try:
@@ -174,9 +178,9 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 timeout=self.timeout,
                 headers=self.headers,
             )
-        except Exception as e:
-            err = f"Data types request error: {e}"
-            raise DownloadError(err) from e
+        except requests.RequestException as exc:
+            err = f"Data types request error: {exc}"
+            raise DownloadError(err) from exc
 
         if response.status_code != 200:
             err = f"Failed to fetch data types. HTTP {response.status_code}"
@@ -201,15 +205,6 @@ class LyraAPIClient(_BaseLyraAPIClient):
         self,
         metric_name: str | None = None,
     ) -> list[MetricInfoV2] | MetricInfoV2:
-        """Fetch available metrics from the API.
-
-        Returns:
-            A list of MetricInfoV2 objects if no specific metric_name is provided,
-            otherwise a single MetricInfoV2 object.
-
-        Raises:
-            DownloadError: If the HTTP request fails or returns an invalid payload.
-        """
         metric_str = "" if metric_name is None else metric_name
         metrics_url = self._http_url(f"metrics/{metric_str}")
 
@@ -219,67 +214,54 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 timeout=self.timeout,
                 headers=self.headers,
             )
-        except Exception as e:
-            err = f"Metrics request error: {e}"
-            raise DownloadError(err) from e
+        except requests.RequestException as exc:
+            err = f"Metrics request error: {exc}"
+            raise DownloadError(err) from exc
 
         if response.status_code != 200:
             err = f"Failed to fetch metrics. HTTP {response.status_code}"
             raise DownloadError(err)
 
         metrics = response.json()
-
         return (
             [MetricInfoV2.model_validate(item) for item in metrics]
             if metric_name is None
             else MetricInfoV2.model_validate(metrics)
         )
 
-    def process(self, metric: str, payload: dict) -> dict[str, Any]:
-        """Submit a request and download the result in one call.
+    def _wait_for_terminal_event(self, job_id: str) -> JobEvent:
+        for event in self.iter_job_events(job_id):
+            if event.event in TERMINAL_EVENTS:
+                return event
+        err = f"Job {job_id} event stream ended before a terminal event."
+        raise DownloadError(err)
 
-        This is a convenience method combining submit() and download().
-
-        Args:
-            metric: The metric identifier for the processing task.
-            payload: The data payload to process.
-
-        Returns:
-            The processed data as a dictionary.
-
-        Raises:
-            WebSocketError: If the submission step fails.
-            DownloadError: If the download step fails.
-        """
-        self._logger.info("Submitting processing request...")
-        download_id = self.submit(metric, payload)
-
-        self._logger.info("Downloading data via HTTP...")
-        return self.download(download_id)
+    def process(self, metric: str, payload: dict[str, Any]) -> Any:
+        job = self.create_job(metric, payload)
+        self._wait_for_terminal_event(job.job_id)
+        result = self.get_job_result(job.job_id)
+        if result.status != "succeeded":
+            err = (
+                f"Job {job.job_id} finished with status {result.status}: {result.error}"
+            )
+            raise DownloadError(err)
+        return result.result
 
     def process_to_file(
         self,
         metric: str,
-        payload: dict,
+        payload: dict[str, Any],
         path: str | os.PathLike[str],
     ) -> None:
-        """Submit a request and write the result to a file.
-
-        This is a convenience method combining submit() and a file download.
-        Unlike process(), the result is written directly to disk rather than
-        loaded into memory.
-
-        Args:
-            metric: The metric identifier for the processing task.
-            payload: The data payload to process.
-            path: The file path to write the result to.
-
-        Raises:
-            WebSocketError: If the submission step fails.
-            DownloadError: If the download step fails.
-        """
-        self._logger.info("Submitting processing request...")
-        download_id = self.submit(metric, payload)
-
-        self._logger.info("Downloading data to file...")
-        self.download_to_file(download_id, path)
+        job = self.create_job(metric, payload)
+        event = self._wait_for_terminal_event(job.job_id)
+        result = JobResult.model_validate(event.data)
+        if result.status != "succeeded":
+            err = (
+                f"Job {job.job_id} finished with status {result.status}: {result.error}"
+            )
+            raise DownloadError(err)
+        if result.result_type != "file":
+            err = f"Job {job.job_id} did not produce a file result."
+            raise DownloadError(err)
+        self.download_job_result_to_file(job.job_id, path)

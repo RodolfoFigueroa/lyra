@@ -1,187 +1,191 @@
 import json
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, overload
 
 import aiofiles
 import aiohttp
 from lyra.api.client.base import _BaseLyraAPIClient
-from lyra.api.exceptions import DownloadError, WebSocketError
+from lyra.api.exceptions import DownloadError
+from lyra.sdk.models import JobCreateResponse, JobEvent, JobResult, JobStatusInfo
 from lyra.sdk.models.metric import MetricInfoV2
-from websockets.asyncio.client import connect as async_connect
+
+TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
+
+
+async def _aiter_sse_job_events(lines: AsyncIterator[str]) -> AsyncIterator[JobEvent]:
+    data_lines: list[str] = []
+    async for line in lines:
+        if line == "":
+            if data_lines:
+                yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+
+        field, separator, value = line.partition(":")
+        if not separator:
+            continue
+        value = value.removeprefix(" ")
+        if field == "data":
+            data_lines.append(value)
+
+    if data_lines:
+        yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
+
+
+async def _response_lines(response: aiohttp.ClientResponse) -> AsyncIterator[str]:
+    async for raw_line in response.content:
+        yield raw_line.decode().rstrip("\r\n")
 
 
 class AsyncLyraAPIClient(_BaseLyraAPIClient):
-    """Asynchronous client for interacting with the Lyra API.
+    """Asynchronous client for the Lyra HTTP job API."""
 
-    This client handles two-step data processing with async/await support:
-    1. Submit a processing request via WebSocket and receive a download ID
-    2. Download the processed data via HTTP GET using the download ID
-
-    Attributes:
-        host: The API server hostname.
-        timeout: Request timeout in seconds.
-        headers: Default HTTP headers to include in all requests.
-        secure: Whether to use secure protocols (https/wss) or insecure (http/ws).
-        log_level: Logging level for status messages. Defaults to logging.INFO.
-    """
-
-    async def submit(self, metric: str, payload: dict) -> str:
-        """Submit a processing request via WebSocket (async).
-
-        Args:
-            metric: The metric identifier for the processing task.
-            payload: The data payload to process.
-
-        Returns:
-            The download ID for retrieving the processed result.
-
-        Raises:
-            WebSocketError: If the WebSocket connection fails or the server
-                returns an error status.
-        """
-        ws_url = self._ws_url(f"ws/{metric}")
-
-        error: str | None = None
-        download_id: str | None = None
+    async def create_job(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> JobCreateResponse:
+        body: dict[str, Any] = {"metric": metric, "input": payload}
+        if idempotency_key is not None:
+            body["idempotency_key"] = idempotency_key
 
         try:
-            async with async_connect(
-                ws_url,
-                additional_headers=self.headers,
-                **self.connect_kwargs,
-            ) as websocket:
-                await websocket.send(json.dumps(payload))
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.post(
+                    self._http_url("jobs"),
+                    json=body,
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 202:
+                    text = await response.text()
+                    err = f"Failed to create job. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return JobCreateResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Job creation error: {exc}"
+            raise DownloadError(err) from exc
 
-                # Receive acknowledgment
-                ack_str = await websocket.recv()
-                ack = json.loads(ack_str)
+    async def get_job(self, job_id: str) -> JobStatusInfo:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url(f"jobs/{job_id}"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to fetch job. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return JobStatusInfo.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Job status error: {exc}"
+            raise DownloadError(err) from exc
 
-                if ack["status"] == "error":
-                    message = ack.get("message", "Unknown error")
-                    error = f"Server error: {message}"
-                else:
-                    self._logger.info(
-                        "Server acknowledged. Task ID: %s",
-                        ack.get("task_id"),
-                    )
-
-                    # Receive processing result
-                    notification_str = await websocket.recv()
-                    notification = json.loads(notification_str)
-                    status = notification["status"]
-
-                    if status == "error":
-                        message = notification.get("message", "Unknown error")
-                        error = f"Worker failed: {message}"
-                    elif status == "success":
-                        download_id = notification.get("download_id")
-                        self._logger.info(
-                            "Worker finished. Received download ticket: %s",
-                            download_id,
-                        )
-                    else:
-                        error = f"Unexpected status: {status}"
-
-        except Exception as e:
-            err = f"WebSocket error: {e}"
-            raise WebSocketError(err) from e
-
-        if error:
-            raise WebSocketError(error)
-
-        if download_id is None:
-            err = "Server did not return a download ID"
-            raise WebSocketError(err)
-
-        return download_id
-
-    async def download(self, download_id: str) -> dict[str, Any]:
-        """Download processed data via HTTP GET (async).
-
-        Args:
-            download_id: The download ID received from submit().
-
-        Returns:
-            The downloaded data as a dictionary.
-
-        Raises:
-            DownloadError: If the HTTP request fails.
-        """
-        download_url = self._http_url(f"download_result/{download_id}")
-        status: int = 0
+    async def iter_job_events(
+        self,
+        job_id: str,
+        *,
+        last_event_id: str | None = None,
+    ) -> AsyncIterator[JobEvent]:
+        headers = dict(self.headers)
+        if last_event_id is not None:
+            headers["Last-Event-ID"] = last_event_id
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
-                    download_url,
+                    self._http_url(f"jobs/{job_id}/events"),
+                    headers=headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to stream job events. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+
+                async for event in _aiter_sse_job_events(_response_lines(response)):
+                    yield event
+        except aiohttp.ClientError as exc:
+            err = f"Job event stream error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_job_result(self, job_id: str) -> JobResult:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url(f"jobs/{job_id}/result"),
                     headers=self.headers,
                 ) as response,
             ):
-                status = response.status
-                if status == 200:
-                    return await response.json()
-        except Exception as e:
-            err = f"Download error: {e}"
-            raise DownloadError(err) from e
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to fetch job result. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                if "application/json" not in response.headers.get("content-type", ""):
+                    err = "Job result is a file; use download_job_result_to_file()."
+                    raise DownloadError(err)
+                return JobResult.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Job result error: {exc}"
+            raise DownloadError(err) from exc
 
-        err = f"Failed to download data. HTTP {status}"
-        raise DownloadError(err)
-
-    async def download_to_file(
+    async def download_job_result_to_file(
         self,
-        download_id: str,
+        job_id: str,
         path: str | os.PathLike[str],
     ) -> None:
-        """Download a result by ticket and write it to a file (async).
-
-        Args:
-            download_id: The download ID received from submit().
-            path: The file path to write the result to.
-
-        Raises:
-            DownloadError: If the HTTP request fails.
-        """
-        path = Path(path)
-        download_url = self._http_url(f"download_result/{download_id}")
-        status: int = 0
-
+        output_path = Path(path)
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
-                    download_url,
+                    self._http_url(f"jobs/{job_id}/result"),
                     headers=self.headers,
                 ) as response,
             ):
-                status = response.status
-                if status == 200:
-                    async with aiofiles.open(path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(65536):
-                            await f.write(chunk)
-                    return
-        except Exception as e:
-            err = f"Download error: {e}"
-            raise DownloadError(err) from e
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        f"Failed to download job result. HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
 
-        err = f"Failed to download data. HTTP {status}"
-        raise DownloadError(err)
+                if "application/json" in response.headers.get("content-type", ""):
+                    result = JobResult.model_validate(await response.json())
+                    err = (
+                        f"Job {job_id} returned {result.status} JSON result, "
+                        "not a file."
+                    )
+                    raise DownloadError(err)
+
+                async with aiofiles.open(output_path, "wb") as file:
+                    async for chunk in response.content.iter_chunked(65536):
+                        await file.write(chunk)
+        except aiohttp.ClientError as exc:
+            err = f"Job result download error: {exc}"
+            raise DownloadError(err) from exc
 
     async def get_data_types(self) -> list[dict[str, Any]]:
-        """Fetch available data types from the API (async).
-
-        Returns:
-            A list of data type objects.
-
-        Raises:
-            DownloadError: If the HTTP request fails or returns an invalid payload.
-        """
         data_types_url = self._http_url("data_types")
+        data_types: Any = None
         status: int = 0
-        data_types: list | None = None
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -195,9 +199,9 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 status = response.status
                 if status == 200:
                     data_types = await response.json()
-        except Exception as e:
-            err = f"Data types request error: {e}"
-            raise DownloadError(err) from e
+        except aiohttp.ClientError as exc:
+            err = f"Data types request error: {exc}"
+            raise DownloadError(err) from exc
 
         if status != 200:
             err = f"Failed to fetch data types. HTTP {status}"
@@ -221,22 +225,10 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         self,
         metric_name: str | None = None,
     ) -> list[MetricInfoV2] | MetricInfoV2:
-        """Fetch available metrics from the API (async).
-
-        Args:
-            metric_name: Optional name of a specific metric to fetch. If None,
-                returns a list of all metrics. If provided, returns the metric
-                with the matching name.
-
-        Returns:
-            A list of metric objects.
-
-        Raises:
-            DownloadError: If the HTTP request fails or returns an invalid payload.
-        """
         metric_str = "" if metric_name is None else metric_name
         metrics_url = self._http_url(f"metrics/{metric_str}")
         metrics: Any = None
+        status: int = 0
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -250,9 +242,9 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 status = response.status
                 if status == 200:
                     metrics = await response.json()
-        except Exception as e:
-            err = f"Metrics request error: {e}"
-            raise DownloadError(err) from e
+        except aiohttp.ClientError as exc:
+            err = f"Metrics request error: {exc}"
+            raise DownloadError(err) from exc
 
         if status != 200:
             err = f"Failed to fetch metrics. HTTP {status}"
@@ -264,51 +256,39 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             else MetricInfoV2.model_validate(metrics)
         )
 
-    async def process(self, metric: str, payload: dict) -> dict[str, Any]:
-        """Submit a request and download the result in one call (async).
+    async def _wait_for_terminal_event(self, job_id: str) -> JobEvent:
+        async for event in self.iter_job_events(job_id):
+            if event.event in TERMINAL_EVENTS:
+                return event
+        err = f"Job {job_id} event stream ended before a terminal event."
+        raise DownloadError(err)
 
-        This is a convenience method combining submit() and download().
-
-        Args:
-            metric: The metric identifier for the processing task.
-            payload: The data payload to process.
-
-        Returns:
-            The processed data as a dictionary.
-
-        Raises:
-            WebSocketError: If the submission step fails.
-            DownloadError: If the download step fails.
-        """
-        self._logger.info("Submitting processing request...")
-        download_id = await self.submit(metric, payload)
-
-        self._logger.info("Downloading data via HTTP...")
-        return await self.download(download_id)
+    async def process(self, metric: str, payload: dict[str, Any]) -> Any:
+        job = await self.create_job(metric, payload)
+        await self._wait_for_terminal_event(job.job_id)
+        result = await self.get_job_result(job.job_id)
+        if result.status != "succeeded":
+            err = (
+                f"Job {job.job_id} finished with status {result.status}: {result.error}"
+            )
+            raise DownloadError(err)
+        return result.result
 
     async def process_to_file(
         self,
         metric: str,
-        payload: dict,
+        payload: dict[str, Any],
         path: str | os.PathLike[str],
     ) -> None:
-        """Submit a request and write the result to a file (async).
-
-        This is a convenience method combining submit() and a file download.
-        Unlike process(), the result is written directly to disk rather than
-        loaded into memory.
-
-        Args:
-            metric: The metric identifier for the processing task.
-            payload: The data payload to process.
-            path: The file path to write the result to.
-
-        Raises:
-            WebSocketError: If the submission step fails.
-            DownloadError: If the download step fails.
-        """
-        self._logger.info("Submitting processing request...")
-        download_id = await self.submit(metric, payload)
-
-        self._logger.info("Downloading data to file...")
-        await self.download_to_file(download_id, path)
+        job = await self.create_job(metric, payload)
+        event = await self._wait_for_terminal_event(job.job_id)
+        result = JobResult.model_validate(event.data)
+        if result.status != "succeeded":
+            err = (
+                f"Job {job.job_id} finished with status {result.status}: {result.error}"
+            )
+            raise DownloadError(err)
+        if result.result_type != "file":
+            err = f"Job {job.job_id} did not produce a file result."
+            raise DownloadError(err)
+        await self.download_job_result_to_file(job.job_id, path)

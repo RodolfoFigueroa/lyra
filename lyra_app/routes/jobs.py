@@ -15,6 +15,7 @@ from lyra.sdk.models import (
     JobResult,
     JobStatusInfo,
 )
+from redis.exceptions import RedisError
 
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
@@ -33,7 +34,11 @@ SSE_KEEPALIVE = ": keepalive\n\n"
 
 
 async def _ensure_redis_available() -> None:
-    pong = await redis_client.ping()
+    try:
+        pong = await redis_client.ping()
+    except RedisError as exc:
+        err = "Cannot connect to Redis. Please try again later."
+        raise HTTPException(status_code=503, detail=err) from exc
     if not pong:
         err = "Cannot connect to Redis. Please try again later."
         raise HTTPException(status_code=503, detail=err)

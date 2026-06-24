@@ -48,14 +48,38 @@ def _synced_repo(repo: Path) -> SyncedPluginRepo:
 
 class FakeRedisSync:
     def __init__(self) -> None:
-        self.setex_calls: list[tuple[str, int, str]] = []
-        self.published: list[tuple[str, str]] = []
+        self.values: dict[str, str] = {}
+        self.expirations: list[tuple[str, int]] = []
+        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
 
-    def setex(self, key: str, ttl: int, value: str) -> None:
-        self.setex_calls.append((key, ttl, value))
+    def set(self, key: str, value: str, *, ex: int) -> None:
+        self.values[key] = value
+        self.expirations.append((key, ex))
 
-    def publish(self, channel: str, payload: str) -> None:
-        self.published.append((channel, payload))
+    def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    def expire(self, key: str, ttl: int) -> None:
+        self.expirations.append((key, ttl))
+
+    def xadd(self, key: str, fields: dict[str, str]) -> str:
+        stream = self.streams.setdefault(key, [])
+        stream_id = f"{len(stream) + 1}-0"
+        stream.append((stream_id, fields))
+        return stream_id
+
+    def xrange(
+        self,
+        key: str,
+        *,
+        min: str,  # noqa: A002
+        count: int | None = None,
+    ) -> list[tuple[str, dict[str, str]]]:
+        records = self.streams.get(key, [])
+        if min.startswith("("):
+            after_id = min[1:]
+            records = [record for record in records if record[0] > after_id]
+        return records if count is None else records[:count]
 
 
 @pytest.fixture
@@ -85,8 +109,16 @@ def _configure_runner_repos(
     monkeypatch.setattr(worker, "install_runner_plugins", list)
 
 
-def _decode_stored_result(redis: FakeRedisSync) -> dict[str, Any]:
-    return json.loads(redis.setex_calls[-1][2])
+def _decode_stored_result(
+    worker: Any,
+    redis: FakeRedisSync,
+    job_id: str,
+) -> dict[str, Any]:
+    return json.loads(redis.values[worker.job_store.result_key(job_id)])
+
+
+def _decode_status(worker: Any, redis: FakeRedisSync, job_id: str) -> dict[str, Any]:
+    return json.loads(redis.values[worker.job_store.status_key(job_id)])
 
 
 def test_worker_registers_only_generic_task(worker_module: Any) -> None:
@@ -161,6 +193,7 @@ def test_generic_task_executes_entrypoint_and_persists_result(
         "    assert context.job_id == job.job_id\n"
         "    assert context.metric == job.metric\n"
         "    assert hasattr(context, 'db')\n"
+        "    context.emit_event('progress', {'percent': 50})\n"
         "    return JobResult(\n"
         "        job_id=job.job_id,\n"
         "        status='succeeded',\n"
@@ -177,7 +210,7 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     worker_module.refresh_runner_registry()
 
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     payload = worker_module.execute_job(
         {"job_id": "job-1", "metric": "heavy_metric", "input": {"value": 3}},
@@ -189,14 +222,10 @@ def test_generic_task_executes_entrypoint_and_persists_result(
         "status": "succeeded",
         "result": {"value": 6, "temp": "job-1"},
     }
-    assert fake_redis.setex_calls == [
-        (
-            "result_data_job-1",
-            worker_module.RESULT_TTL_SECONDS,
-            json.dumps(payload),
-        )
-    ]
-    assert fake_redis.published == [("task_results_job-1", json.dumps(payload))]
+    assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
+    assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "succeeded"
+    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
+    assert [event.event.data for event in events] == [{"percent": 50}]
 
 
 def test_unknown_metric_persists_failed_result(
@@ -204,7 +233,7 @@ def test_unknown_metric_persists_failed_result(
     worker_module: Any,
 ) -> None:
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     result = worker_module.execute_job(
         {"job_id": "job-unknown", "metric": "missing", "input": {}},
@@ -213,7 +242,10 @@ def test_unknown_metric_persists_failed_result(
 
     assert result["status"] == "failed"
     assert result["error"]["type"] == "unknown_metric"
-    assert _decode_stored_result(fake_redis) == result
+    assert _decode_stored_result(worker_module, fake_redis, "job-unknown") == result
+    assert _decode_status(worker_module, fake_redis, "job-unknown")["status"] == (
+        "failed"
+    )
 
 
 def test_invalid_job_envelope_persists_failed_result(
@@ -221,14 +253,15 @@ def test_invalid_job_envelope_persists_failed_result(
     worker_module: Any,
 ) -> None:
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     result = worker_module.execute_job({"metric": "missing"}, task_id="task-id")
 
     assert result["job_id"] == "task-id"
     assert result["status"] == "failed"
     assert result["error"]["type"] == "invalid_envelope"
-    assert _decode_stored_result(fake_redis) == result
+    assert _decode_stored_result(worker_module, fake_redis, "task-id") == result
+    assert _decode_status(worker_module, fake_redis, "task-id")["status"] == "failed"
 
 
 def test_plugin_exception_persists_failed_result(
@@ -246,7 +279,7 @@ def test_plugin_exception_persists_failed_result(
         run=fail,
     )
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     result = worker_module.execute_job(
         {"job_id": "job-bad", "metric": "bad_metric", "input": {}},
@@ -255,6 +288,7 @@ def test_plugin_exception_persists_failed_result(
 
     assert result["status"] == "failed"
     assert result["error"] == {"type": "worker", "message": "boom"}
+    assert _decode_stored_result(worker_module, fake_redis, "job-bad") == result
 
 
 @pytest.mark.parametrize(
@@ -279,7 +313,7 @@ def test_invalid_plugin_result_persists_failed_result(
         run=run,
     )
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     result = worker_module.execute_job(
         {"job_id": "job-invalid", "metric": "invalid_metric", "input": {}},
@@ -289,7 +323,7 @@ def test_invalid_plugin_result_persists_failed_result(
     assert result["job_id"] == "job-invalid"
     assert result["status"] == "failed"
     assert result["error"]["type"] == "invalid_result"
-    assert _decode_stored_result(fake_redis) == result
+    assert _decode_stored_result(worker_module, fake_redis, "job-invalid") == result
 
 
 def test_file_result_persists_through_generic_result_path(
@@ -311,7 +345,7 @@ def test_file_result_persists_through_generic_result_path(
         run=run,
     )
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     result = worker_module.execute_job(
         {"job_id": "job-file", "metric": "file_metric", "input": {}},
@@ -324,13 +358,46 @@ def test_file_result_persists_through_generic_result_path(
         "result_type": "file",
         "file_path": "result.tif",
     }
-    assert _decode_stored_result(fake_redis) == result
+    assert _decode_stored_result(worker_module, fake_redis, "job-file") == result
 
 
-def test_run_context_emit_event_is_unsupported(
+def test_check_cancelled_persists_cancelled_result(
+    monkeypatch: pytest.MonkeyPatch,
     worker_module: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> JobResult:
+        worker_module.job_store.set_job_status(job.job_id, "cancelled")
+        context.check_cancelled()
+        return JobResult(job_id=job.job_id, status="succeeded", result={"done": True})
+
+    worker_module.RUNNER_REGISTRY["cancel_metric"] = worker_module.RunnerMetricEntryV2(
+        metric_name="cancel_metric",
+        queue="heavy",
+        entrypoint="cancel_plugin:run",
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-cancel", "metric": "cancel_metric", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result == {"job_id": "job-cancel", "status": "cancelled"}
+    assert _decode_stored_result(worker_module, fake_redis, "job-cancel") == result
+    assert _decode_status(worker_module, fake_redis, "job-cancel")["status"] == (
+        "cancelled"
+    )
+
+
+def test_run_context_emit_event_writes_progress_event(
+    worker_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
     context = worker_module.WorkerRunContext(
         job_id="job-1",
         metric="metric",
@@ -339,5 +406,8 @@ def test_run_context_emit_event_is_unsupported(
         db=None,
     )
 
-    with pytest.raises(NotImplementedError):
-        context.emit_event("progress", {"percent": 50})
+    context.emit_event("progress", {"percent": 50})
+
+    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
+    assert [event.event.data for event in events] == [{"percent": 50}]
+    assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "progress"

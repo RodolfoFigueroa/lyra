@@ -107,6 +107,14 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Python Packages',
+          items: [
+            { label: 'lyra-sdk', slug: 'lyra-sdk' },
+            { label: 'lyra-api', slug: 'lyra-api' },
+            { label: 'lyra-utils', slug: 'lyra-utils' },
+          ],
+        },
+        {
           label: 'Use The API',
           items: [
             { label: 'Job API', slug: 'job-api' },

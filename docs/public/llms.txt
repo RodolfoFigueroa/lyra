@@ -16,6 +16,9 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Plugin Quickstart: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
 - Plugin Manifests: https://rodolfofigueroa.github.io/lyra/plugin-manifests/
 - Runner Plugins: https://rodolfofigueroa.github.io/lyra/runner-plugins/
+- lyra-sdk: https://rodolfofigueroa.github.io/lyra/lyra-sdk/
+- lyra-api: https://rodolfofigueroa.github.io/lyra/lyra-api/
+- lyra-utils: https://rodolfofigueroa.github.io/lyra/lyra-utils/
 - Job API: https://rodolfofigueroa.github.io/lyra/job-api/
 - Metrics Catalog: https://rodolfofigueroa.github.io/lyra/metrics-catalog/
 - Python Client: https://rodolfofigueroa.github.io/lyra/python-client/
@@ -29,6 +32,11 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Plugin manifests: `PluginManifestV2` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v2.py`
 - Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `JobResult`, `JobStatusInfo` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
 - Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
+- Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
+- Explicit spatial inputs: `ExplicitLocationAPI` and `ExplicitBoundsAPI` in `packages/lyra_sdk/src/lyra/sdk/types.py`
+- Geometry models: `GeoJSON` and `SingleGeoJSON` in `packages/lyra_sdk/src/lyra/sdk/models/geometry.py`
+- Python clients: `LyraAPIClient` and `AsyncLyraAPIClient` in `packages/lyra_api/src/lyra/api/`
+- Plugin helpers: GeoJSON conversion, date ranges, and Earth Engine utilities in `packages/lyra_utils/src/lyra/utils/`
 - Job routes: `lyra_app/routes/jobs.py`
 - Catalog: `lyra_app/registry.py`
 - Worker: `lyra_app/worker.py`

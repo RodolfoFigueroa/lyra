@@ -121,7 +121,7 @@ The sync client wraps the same flow:
 ```python
 from lyra.api import LyraAPIClient
 
-client = LyraAPIClient("http://localhost:5219")
+client = LyraAPIClient("localhost:5219", secure=False)
 metrics = client.get_metrics()
 metric_name = metrics[0].name
 job = client.create_job(metric_name, {})

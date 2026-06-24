@@ -37,6 +37,11 @@ packages = ["example_plugin"]
 
 Workers check plugin install compatibility with `uv pip install --dry-run` and then install compatible plugins editable into the worker environment.
 
+For spatial helpers, date helpers, or Earth Engine reduction utilities, add
+`lyra-utils` to the plugin dependencies and see the [lyra-utils package
+reference](../lyra-utils/). Plugins that only need runner contracts can depend
+on `lyra-sdk` alone.
+
 ## lyra.plugin.json
 
 ```json

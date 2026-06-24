@@ -5,6 +5,9 @@ description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and J
 
 Worker processes install runner plugin code at startup, read v2 manifests, import each matching entrypoint, and execute matching metrics through the generic `lyra.run_metric` Celery task.
 
+For the complete Python package surface available to plugin code, see the
+[lyra-sdk](../lyra-sdk/) and [lyra-utils](../lyra-utils/) references.
+
 ## Entrypoint Contract
 
 Each metric entrypoint must expose a sync function:
@@ -63,6 +66,10 @@ Use `temp_dir` for intermediate files. The worker creates a per-job directory be
 `db` is optional. Plugins must handle `context.db is None`.
 
 For file results, return a `JobResult` with `result_type="file"` and `file_path` set to the produced file.
+
+For `LyraDB` methods, explicit spatial input aliases such as
+`ExplicitLocationAPI` and `ExplicitBoundsAPI`, and SDK geometry models, see
+[lyra-sdk](../lyra-sdk/).
 
 ## JobResult
 

@@ -5,12 +5,15 @@ description: Use the sync and async lyra-api clients with metrics, jobs, events,
 
 The `lyra-api` package wraps Lyra's HTTP job API. The clients return SDK model objects from `lyra-sdk`.
 
+This page shows the common workflow. For the full method reference, constructor
+options, exceptions, and sync/async parity, see [lyra-api](../lyra-api/).
+
 ## Sync Client
 
 ```python
 from lyra.api import LyraAPIClient
 
-client = LyraAPIClient("http://localhost:5219")
+client = LyraAPIClient("localhost:5219", secure=False)
 metrics = client.get_metrics()
 metric_name = metrics[0].name
 
@@ -77,17 +80,17 @@ from lyra.api import AsyncLyraAPIClient
 
 
 async def main() -> None:
-    async with AsyncLyraAPIClient("http://localhost:5219") as client:
-        metrics = await client.get_metrics()
-        metric_name = metrics[0].name
-        job = await client.create_job(metric_name, {})
+    client = AsyncLyraAPIClient("localhost:5219", secure=False)
+    metrics = await client.get_metrics()
+    metric_name = metrics[0].name
+    job = await client.create_job(metric_name, {})
 
-        async for event in client.iter_job_events(job.job_id):
-            if event.event in {"succeeded", "failed", "cancelled"}:
-                break
+    async for event in client.iter_job_events(job.job_id):
+        if event.event in {"succeeded", "failed", "cancelled"}:
+            break
 
-        result = await client.get_job_result(job.job_id)
-        print(result.status, result.result)
+    result = await client.get_job_result(job.job_id)
+    print(result.status, result.result)
 
 
 asyncio.run(main())

@@ -7,6 +7,13 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Lyra',
+      expressiveCode: {
+        styleOverrides: {
+          frames: {
+            frameType: 'none',
+          }
+        }
+      },
       description: 'V2 plugin-runner and async job API documentation.',
       editLink: {
         baseUrl: 'https://github.com/RodolfoFigueroa/lyra/edit/dev/docs/',

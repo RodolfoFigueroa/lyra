@@ -1,502 +1,58 @@
-import hashlib
+import importlib
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Callable
-from types import FunctionType
-from typing import Literal, NoReturn, cast
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from celery import Task
-from pydantic import BaseModel
+from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models.plugin_v2 import MetricManifestV2
+from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.celery_app import celery_app
 from lyra_app.db.redis import redis_client_sync
-from lyra_app.legacy_manifest import load_legacy_plugin_manifest
-from lyra_app.plugin_runtime import RunnerMetricEntry, build_runner_metric_entry
 from lyra_app.plugins import install_runner_plugins, sync_runner_repos
+from lyra_app.registry import load_plugin_manifest
 
 logger = logging.getLogger(__name__)
 
+GENERIC_TASK_NAME = "lyra.run_metric"
+RESULT_TTL_SECONDS = 600
 
-def _has_met_zone_code(validated_dict: dict) -> bool:
-    """Return whether any parameter in the request payload is a met_zone_code.
+MetricRunCallable = Callable[
+    [JobEnvelope, "WorkerRunContext"], JobResult | dict[str, Any]
+]
 
-    Args:
-        validated_dict (dict): The deserialised task request payload.
 
-    Returns:
-        bool: ``True`` if at least one value is a dict with
-        ``data_type == "met_zone_code"``, ``False`` otherwise.
-    """
-    return any(
-        isinstance(v, dict) and v.get("data_type") == "met_zone_code"
-        for v in validated_dict.values()
-    )
+@dataclass(frozen=True)
+class RunnerMetricEntryV2:
+    metric_name: str
+    queue: str
+    entrypoint: str
+    run: MetricRunCallable
 
 
-def _build_deterministic_cache_key(task_name: str, validated_dict: dict) -> str:
-    """Build a stable Redis key for deterministic caching of a task request.
+@dataclass(frozen=True)
+class WorkerRunContext:
+    job_id: str
+    metric: str
+    logger: logging.Logger
+    temp_dir: Path
+    db: Any | None
 
-    The key is derived from a SHA-256 digest of the JSON-serialised (sorted)
-    request payload, ensuring identical inputs always map to the same key.
+    def emit_event(self, event: str, data: dict[str, Any] | None = None) -> None:
+        msg = "RunContext.emit_event requires the Redis job event store from Step 4."
+        raise NotImplementedError(msg)
 
-    Args:
-        task_name (str): The registered Celery task name.
-        validated_dict (dict): The deserialised task request payload.
+    def check_cancelled(self) -> None:
+        return None
 
-    Returns:
-        str: A Redis key of the form ``lyra_cache:{task_name}:{sha256hex}``.
-    """
-    serialised = json.dumps(validated_dict, sort_keys=True)
-    digest = hashlib.sha256(serialised.encode()).hexdigest()
-    return f"lyra_cache:{task_name}:{digest}"
 
-
-def convert_explicit_type(
-    payload: dict,
-    *,
-    request_type: Literal["location", "bounds"],
-) -> dict:
-    """Convert a discriminator-wrapped location or bounds value to plain GeoJSON.
-
-    Looks up the appropriate converter from ``converter_map`` using the
-    payload's ``data_type`` field, applies it, then re-wraps the result in the
-    discriminator format expected by the reconstructed Pydantic model.
-
-    Args:
-        payload (dict): Discriminator-wrapped value with ``data_type`` and
-            ``value`` keys.
-        request_type (Literal["location", "bounds"]): Whether to use the
-            location or bounds converter map.
-
-    Returns:
-        dict: A new discriminator-wrapped dict with ``data_type="geojson"``
-        and the converted ``value``.
-    """
-    from lyra_app.converters import converter_map  # noqa: PLC0415
-
-    data = payload["value"]
-    data_type = payload["data_type"]
-
-    converter = converter_map[request_type][data_type]
-
-    # Route to the correct conversion function based on data_type field
-    raw_geojson = converter(data)
-
-    # Repackage the processed GeoJSON into the wrapped format expected by the
-    # reconstructed Pydantic model
-    return {
-        "data_type": "geojson",
-        "value": raw_geojson,
-    }
-
-
-def inject_db(func_kwargs: dict, db_param_name: str | None) -> None:
-    """Inject a ``LyraDBImplicit`` instance into *func_kwargs* for the db parameter.
-
-    Does nothing if *db_param_name* is ``None``.
-
-    Args:
-        func_kwargs (dict): The kwargs dict passed to the task function.
-            Modified in-place.
-        db_param_name (str | None): Name of the parameter that expects a
-            ``LyraDB`` instance, or ``None`` if the function has no db
-            parameter.
-    """
-    if db_param_name is None:
-        return
-    from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
-
-    func_kwargs[db_param_name] = LyraDBImplicit()
-
-
-def rebuild_function_kwargs(reconstructed_model: BaseModel) -> dict:
-    """Extract a plain kwargs dict from a reconstructed Pydantic model.
-
-    For fields that are discriminator-union wrappers (i.e. have both
-    ``data_type`` and ``value`` attributes), only the inner ``value`` is kept;
-    all other fields are passed through as-is.
-
-    Args:
-        reconstructed_model (BaseModel): A validated Pydantic model instance.
-
-    Returns:
-        dict: A ``{field_name: value}`` dict suitable for ``**`` unpacking
-        into the plugin's calculation function.
-    """
-    func_kwargs = {}
-    for k in type(reconstructed_model).model_fields:
-        attr = getattr(reconstructed_model, k)
-
-        if hasattr(attr, "data_type") and hasattr(attr, "value"):
-            func_kwargs[k] = attr.value
-        else:
-            func_kwargs[k] = attr
-    return func_kwargs
-
-
-def update_validated_dict_with_converted_types(
-    validated_dict: dict,
-    conversion_map: dict[str, list[str]],
-) -> None:
-    """Apply explicit-type conversions to the matching parameters in *validated_dict*.
-
-    For each parameter listed in *conversion_map*, determines the request type
-    (``"location"`` or ``"bounds"``) from the associated tags and delegates to
-    `convert_explicit_type`. *validated_dict* is modified in-place.
-
-    Args:
-        validated_dict (dict): The deserialised task request payload. Modified
-            in-place.
-        conversion_map (dict[str, list[str]]): Maps parameter names to their
-            conversion tags (``REQUIRE_EXPLICIT_TYPE`` or
-            ``REQUIRE_EXPLICIT_BOUNDS_TYPE``).
-    """
-    for param_name, tags in conversion_map.items():
-        if "REQUIRE_EXPLICIT_TYPE" in tags:
-            request_type = "location"
-        elif "REQUIRE_EXPLICIT_BOUNDS_TYPE" in tags:
-            request_type = "bounds"
-
-        validated_dict[param_name] = convert_explicit_type(
-            validated_dict[param_name],
-            request_type=request_type,
-        )
-
-
-def _resolve_cache(
-    task_id: str,
-    task_name: str,
-    validated_dict: dict,
-) -> tuple[str | None, bool]:
-    """Check the deterministic cache for a met_zone_code task request.
-
-    Only requests containing a ``data_type="met_zone_code"`` parameter are
-    eligible for caching. On a cache hit the cached payload is written to
-    ``result_data_{task_id}`` in Redis.
-
-    Args:
-        task_id (str): The Celery task ID for this request.
-        task_name (str): The registered task name, used to build the cache key.
-        validated_dict (dict): The deserialised task request payload.
-
-    Returns:
-        tuple[str | None, bool]: A ``(det_key, cache_hit)`` pair where
-        *det_key* is the deterministic Redis cache key (or ``None`` if the
-        request is not cacheable) and *cache_hit* is ``True`` if a cached
-        result was found and stored.
-    """
-    if not _has_met_zone_code(validated_dict):
-        return None, False
-    det_key = _build_deterministic_cache_key(task_name, validated_dict)
-    cached = redis_client_sync.get(det_key)
-    if cached is not None:
-        cached_bytes = cast("bytes", cached)
-        redis_client_sync.setex(f"result_data_{task_id}", 600, cached_bytes)
-        logger.info(
-            "Celery task %s serving cached result for %s (key: %s)",
-            task_id,
-            task_name,
-            det_key,
-        )
-        return det_key, True
-    return det_key, False
-
-
-def _store_result(task_id: str, result: dict, det_key: str | None) -> dict:
-    """Serialise a task result and persist it to Redis.
-
-    Always writes to ``result_data_{task_id}`` with a 10-minute TTL. If
-    *det_key* is provided, the result is also cached under the deterministic
-    key with a 24-hour TTL.
-
-    Args:
-        task_id (str): The Celery task ID.
-        result (dict): The raw result returned by the calculation function.
-        det_key (str | None): Deterministic cache key to write, or ``None``
-            to skip deterministic caching.
-
-    Returns:
-        dict: A ``{"status": "success", "download_id": task_id}`` notification
-        dict ready to be published to the task's Redis pub/sub channel.
-    """
-    full_payload = {"status": "success", "result": result}
-    serialised_payload = json.dumps(full_payload)
-    redis_client_sync.setex(f"result_data_{task_id}", 600, serialised_payload)
-    if det_key is not None:
-        redis_client_sync.setex(det_key, 86400, serialised_payload)
-    return {"status": "success", "download_id": task_id}
-
-
-def _handle_task_exception(task_id: str, metric_name: str, exc: Exception) -> dict:
-    """Log a task failure and build an error notification dict.
-
-    Args:
-        task_id (str): The Celery task ID.
-        metric_name (str): The registered task name, used in the log message.
-        exc (Exception): The exception that caused the failure.
-
-    Returns:
-        dict: A ``{"status": "error", "error_type": "worker", "message": ...}``
-        notification dict ready to be published to the task's Redis pub/sub
-        channel.
-    """
-    logger.exception(
-        "Celery task %s failed while executing metric %s",
-        task_id,
-        metric_name,
-    )
-    return {"status": "error", "error_type": "worker", "message": str(exc)}
-
-
-def _publish_notification(task_id: str, notification: dict) -> dict:
-    """Publish a notification dict to the task's Redis pub/sub channel.
-
-    Args:
-        task_id (str): The Celery task ID. Used to derive the channel name
-            ``task_results_{task_id}``.
-        notification (dict): The notification payload to serialise and publish.
-
-    Returns:
-        dict: The same *notification* dict, passed through unchanged.
-    """
-    channel_name = f"task_results_{task_id}"
-    redis_client_sync.publish(channel_name, json.dumps(notification))
-    return notification
-
-
-def _build_func_kwargs(
-    validated_dict: dict,
-    conversion_map: dict[str, list[str]],
-    ModelClass: type[BaseModel],  # noqa: N803
-    db_param_name: str | None,
-) -> dict:
-    """Deserialise a task payload into a ready-to-call kwargs dict.
-
-    Applies explicit-type conversions, reconstructs the Pydantic model,
-    unwraps any discriminator-union wrappers, and injects the ``LyraDB``
-    instance if required.
-
-    Args:
-        validated_dict (dict): The deserialised task request payload.
-        conversion_map (dict[str, list[str]]): Maps parameter names to their
-            conversion tags.
-        ModelClass (type[BaseModel]): The Pydantic model class used to
-            validate and reconstruct the payload.
-        db_param_name (str | None): Name of the ``LyraDB`` parameter to
-            inject, or ``None`` if not required.
-
-    Returns:
-        dict: A ``{param_name: value}`` dict ready to be unpacked into the
-        plugin's calculation function.
-    """
-    update_validated_dict_with_converted_types(validated_dict, conversion_map)
-    reconstructed_model = ModelClass(**validated_dict)
-    func_kwargs = rebuild_function_kwargs(reconstructed_model)
-    inject_db(func_kwargs, db_param_name)
-    return func_kwargs
-
-
-def _publish_cache_hit(task_id: str) -> dict:
-    """Publish a cache-hit success notification and return it.
-
-    Args:
-        task_id (str): The Celery task ID.
-
-    Returns:
-        dict: The published ``{"status": "success", "download_id": task_id}``
-        notification dict.
-    """
-    notification = {"status": "success", "download_id": task_id}
-    return _publish_notification(task_id, notification)
-
-
-def make_celery_wrapper(
-    original_calculate_func: FunctionType,
-    ModelClass: type[BaseModel],  # noqa: N803
-    conversion_map: dict[str, list[str]],
-    db_param_name: str | None,
-) -> Callable:
-    """Create a Celery task wrapper for a single-step ``calculate`` function.
-
-    Checks the deterministic cache before running. On a miss, deserialises the
-    payload, calls *original_calculate_func*, stores the result in Redis, and
-    publishes a notification to the task's pub/sub channel.
-
-    Args:
-        original_calculate_func (FunctionType): The plugin's ``calculate``
-            function.
-        ModelClass (type[BaseModel]): The Pydantic model used to validate and
-            reconstruct the request payload.
-        conversion_map (dict[str, list[str]]): Maps parameter names to their
-            explicit-type conversion tags.
-        db_param_name (str | None): Name of the ``LyraDB`` parameter to
-            inject, or ``None``.
-
-    Returns:
-        Callable: A Celery-compatible bound-task wrapper function.
-    """
-
-    def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
-        task_id = self.request.id
-        task_name = str(self.name or original_calculate_func.__name__)
-        det_key, cache_hit = _resolve_cache(task_id, task_name, validated_dict)
-        if cache_hit:
-            return _publish_cache_hit(task_id)
-
-        try:
-            func_kwargs = _build_func_kwargs(
-                validated_dict, conversion_map, ModelClass, db_param_name
-            )
-            result = original_calculate_func(**func_kwargs)
-            notification = _store_result(task_id, result, det_key)
-        except Exception as e:  # noqa: BLE001
-            notification = _handle_task_exception(
-                task_id,
-                getattr(self, "name", original_calculate_func.__module__),
-                e,
-            )
-
-        return _publish_notification(task_id, notification)
-
-    wrapper.__name__ = original_calculate_func.__name__
-    return wrapper
-
-
-def make_celery_wrapper_file(
-    original_calculate_func: FunctionType,
-    ModelClass: type[BaseModel],  # noqa: N803
-    conversion_map: dict[str, list[str]],
-    db_param_name: str | None,
-) -> Callable:
-    """Create a Celery task wrapper for a file-returning ``calculate`` function.
-
-    Like `make_celery_wrapper` but expects the plugin function to return a
-    file path. The result is stored in Redis as a ``result_type="file"``
-    payload. Deterministic caching is not applied for file-returning tasks.
-
-    Args:
-        original_calculate_func (FunctionType): The plugin's file-returning
-            ``calculate`` function.
-        ModelClass (type[BaseModel]): The Pydantic model used to validate and
-            reconstruct the request payload.
-        conversion_map (dict[str, list[str]]): Maps parameter names to their
-            explicit-type conversion tags.
-        db_param_name (str | None): Name of the ``LyraDB`` parameter to
-            inject, or ``None``.
-
-    Returns:
-        Callable: A Celery-compatible bound-task wrapper function.
-    """
-
-    def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
-        task_id = self.request.id
-
-        try:
-            func_kwargs = _build_func_kwargs(
-                validated_dict, conversion_map, ModelClass, db_param_name
-            )
-            file_path = original_calculate_func(**func_kwargs)
-            full_payload = {
-                "status": "success",
-                "result_type": "file",
-                "file_path": str(file_path),
-            }
-            redis_client_sync.setex(
-                f"result_data_{task_id}", 600, json.dumps(full_payload)
-            )
-            notification = {"status": "success", "download_id": task_id}
-        except Exception as e:  # noqa: BLE001
-            notification = _handle_task_exception(
-                task_id,
-                getattr(self, "name", original_calculate_func.__module__),
-                e,
-            )
-
-        return _publish_notification(task_id, notification)
-
-    wrapper.__name__ = original_calculate_func.__name__
-    return wrapper
-
-
-def make_celery_wrapper_batched(
-    prepare_func: FunctionType,
-    for_items_func: FunctionType,
-    aggregate_func: FunctionType,
-    ModelClass: type[BaseModel],  # noqa: N803
-    conversion_map: dict[str, list[str]],
-    items_default: dict | None,
-    db_param_name: str | None,
-) -> Callable:
-    """Create a Celery task wrapper for a three-function batched processor.
-
-    Checks the deterministic cache before running. On a miss, calls
-    *prepare_func*, then *for_items_func* once per item in the items dict,
-    and finally *aggregate_func* to combine the results. The final result is
-    stored in Redis and a notification is published.
-
-    Args:
-        prepare_func (FunctionType): The plugin's ``calculate_prepare``
-            function.
-        for_items_func (FunctionType): The plugin's ``calculate_for_items``
-            function, called once per item.
-        aggregate_func (FunctionType): The plugin's ``calculate_aggregate``
-            function.
-        ModelClass (type[BaseModel]): The Pydantic model used to validate and
-            reconstruct the request payload.
-        conversion_map (dict[str, list[str]]): Maps parameter names to their
-            explicit-type conversion tags.
-        items_default (dict): Fallback items dict used when none is supplied
-            in the request.
-        db_param_name (str | None): Name of the ``LyraDB`` parameter to
-            inject, or ``None``.
-
-    Returns:
-        Callable: A Celery-compatible bound-task wrapper function.
-    """
-
-    def wrapper(self: Task, validated_dict: dict) -> dict[str, str]:
-        task_id = self.request.id
-        task_name = str(self.name or prepare_func.__name__)
-        det_key, cache_hit = _resolve_cache(task_id, task_name, validated_dict)
-        if cache_hit:
-            return _publish_cache_hit(task_id)
-
-        try:
-            func_kwargs = _build_func_kwargs(
-                validated_dict, conversion_map, ModelClass, db_param_name
-            )
-
-            items_dict = func_kwargs.pop("items", None) or items_default
-            if items_dict is None:
-                _raise_missing_items_error()
-
-            prepared = prepare_func(**func_kwargs)
-            results = [
-                (key, for_items_func(key, item, **prepared))
-                for key, item in items_dict.items()
-            ]
-            result = aggregate_func(results)
-            notification = _store_result(task_id, result, det_key)
-        except Exception as e:  # noqa: BLE001
-            notification = _handle_task_exception(
-                task_id,
-                getattr(self, "name", prepare_func.__module__),
-                e,
-            )
-
-        return _publish_notification(task_id, notification)
-
-    wrapper.__name__ = prepare_func.__name__
-    return wrapper
-
-
-def _raise_missing_items_error() -> NoReturn:
-    msg = "No items provided and no ITEMS_DEFAULT defined for this processor."
-    raise ValueError(msg)
-
-
-_REGISTERED_TASK_NAMES: set[str] = set()
+RUNNER_REGISTRY: dict[str, RunnerMetricEntryV2] = {}
 
 
 def _configured_runner_queues() -> set[str]:
@@ -506,72 +62,201 @@ def _configured_runner_queues() -> set[str]:
     return {queue.strip() for queue in raw.split(",") if queue.strip()}
 
 
-def load_runner_metric_entries() -> dict[str, RunnerMetricEntry]:
+def _load_entrypoint(spec: str) -> MetricRunCallable:
+    module_name, sep, function_name = spec.partition(":")
+    if not sep or not module_name or not function_name:
+        msg = f"Entrypoint must use 'module:function' format: {spec!r}"
+        raise ValueError(msg)
+
+    value = getattr(importlib.import_module(module_name), function_name)
+    if not callable(value):
+        msg = f"Entrypoint {spec!r} did not resolve to a callable."
+        raise TypeError(msg)
+    return value
+
+
+def _entry_from_metric(metric: MetricManifestV2) -> RunnerMetricEntryV2:
+    return RunnerMetricEntryV2(
+        metric_name=metric.name,
+        queue=metric.execution.queue,
+        entrypoint=metric.entrypoint,
+        run=_load_entrypoint(metric.entrypoint),
+    )
+
+
+def load_runner_metric_entries() -> dict[str, RunnerMetricEntryV2]:
     queues = _configured_runner_queues()
     repos = install_runner_plugins(sync_runner_repos())
-    entries: dict[str, RunnerMetricEntry] = {}
+    entries: dict[str, RunnerMetricEntryV2] = {}
 
     for repo in repos:
-        manifest = load_legacy_plugin_manifest(repo.path)
+        manifest = load_plugin_manifest(repo.path)
         for metric in manifest.metrics:
             if queues and metric.execution.queue not in queues:
                 continue
             if metric.name in entries:
                 msg = f"Duplicate metric name in runner manifests: {metric.name!r}"
                 raise RuntimeError(msg)
-            entries[metric.name] = build_runner_metric_entry(metric)
+            entries[metric.name] = _entry_from_metric(metric)
 
     return entries
 
 
-def register_tasks() -> None:
-    """Register plugin metrics for this runner's configured queues."""
-    for metric_name, entry in load_runner_metric_entries().items():
-        if metric_name in _REGISTERED_TASK_NAMES:
-            continue
-
-        db_param_name = entry.db_param_name
-        if entry.metric.callable.mode == "batched":
-            if (
-                entry.calculate_prepare is None
-                or entry.calculate_for_items is None
-                or entry.calculate_aggregate is None
-            ):
-                msg = f"Batched metric {metric_name!r} has incomplete callables."
-                raise RuntimeError(msg)
-            wrapped_function = make_celery_wrapper_batched(
-                entry.calculate_prepare,
-                entry.calculate_for_items,
-                entry.calculate_aggregate,
-                entry.model,
-                entry.params_to_convert,
-                entry.metric.callable.items_default,
-                db_param_name,
-            )
-        elif entry.metric.returns_file:
-            if entry.calculate is None:
-                msg = (
-                    f"File-returning metric {metric_name!r} has no calculate callable."
-                )
-                raise RuntimeError(msg)
-            wrapped_function = make_celery_wrapper_file(
-                entry.calculate,
-                entry.model,
-                entry.params_to_convert,
-                db_param_name,
-            )
-        else:
-            if entry.calculate is None:
-                msg = f"Metric {metric_name!r} has no calculate callable."
-                raise RuntimeError(msg)
-            wrapped_function = make_celery_wrapper(
-                entry.calculate,
-                entry.model,
-                entry.params_to_convert,
-                db_param_name,
-            )
-        celery_app.task(name=metric_name, bind=True)(wrapped_function)
-        _REGISTERED_TASK_NAMES.add(metric_name)
+def refresh_runner_registry() -> dict[str, RunnerMetricEntryV2]:
+    registry = load_runner_metric_entries()
+    RUNNER_REGISTRY.clear()
+    RUNNER_REGISTRY.update(registry)
+    logger.info(
+        "Loaded %d v2 runner metric(s) for generic task %s.",
+        len(RUNNER_REGISTRY),
+        GENERIC_TASK_NAME,
+    )
+    return dict(RUNNER_REGISTRY)
 
 
-register_tasks()
+def _runner_temp_base() -> Path:
+    configured = os.environ.get("LYRA_RUNNER_TEMP_DIR") or os.environ.get(
+        "LYRA_CACHE_DIR"
+    )
+    if configured:
+        return Path(configured)
+
+    cache_dir = Path("/lyra_cache")
+    if cache_dir.exists():
+        return cache_dir
+
+    return Path(tempfile.gettempdir()) / "lyra"
+
+
+def _safe_path_segment(value: str) -> str:
+    return "".join(
+        character if character.isalnum() or character in {"-", "_", "."} else "_"
+        for character in value
+    )
+
+
+def build_run_context(job: JobEnvelope) -> WorkerRunContext:
+    temp_dir = _runner_temp_base() / "jobs" / _safe_path_segment(job.job_id)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return WorkerRunContext(
+        job_id=job.job_id,
+        metric=job.metric,
+        logger=logging.getLogger(f"{__name__}.{job.metric}"),
+        temp_dir=temp_dir,
+        db=_build_db_context(),
+    )
+
+
+def _build_db_context() -> Any | None:
+    try:
+        from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
+    except KeyError as exc:
+        logger.info("DB context unavailable: missing environment variable %s.", exc)
+        return None
+    return LyraDBImplicit()
+
+
+def _job_id_from_payload(payload: Any, fallback: str) -> str:
+    if isinstance(payload, dict):
+        job_id = payload.get("job_id")
+        if isinstance(job_id, str) and job_id:
+            return job_id
+    return fallback
+
+
+def _failed_result(job_id: str, error_type: str, message: str) -> JobResult:
+    return JobResult(
+        job_id=job_id,
+        status="failed",
+        error={"type": error_type, "message": message},
+    )
+
+
+def _persist_and_publish_result(result: JobResult) -> dict[str, Any]:
+    payload = result.model_dump(mode="json", exclude_none=True)
+    serialised = json.dumps(payload)
+    redis_client_sync.setex(
+        f"result_data_{result.job_id}",
+        RESULT_TTL_SECONDS,
+        serialised,
+    )
+    redis_client_sync.publish(f"task_results_{result.job_id}", serialised)
+    return payload
+
+
+def _normalise_plugin_result(raw_result: Any, job: JobEnvelope) -> JobResult:
+    try:
+        result = (
+            raw_result
+            if isinstance(raw_result, JobResult)
+            else JobResult.model_validate(raw_result)
+        )
+    except PydanticValidationError as exc:
+        return _failed_result(job.job_id, "invalid_result", str(exc))
+
+    if result.job_id != job.job_id:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            f"Plugin returned job_id {result.job_id!r} for job {job.job_id!r}.",
+        )
+    return result
+
+
+def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
+    fallback_job_id = _job_id_from_payload(envelope_payload, task_id)
+    try:
+        job = JobEnvelope.model_validate(envelope_payload)
+    except PydanticValidationError as exc:
+        return _persist_and_publish_result(
+            _failed_result(fallback_job_id, "invalid_envelope", str(exc))
+        )
+
+    entry = RUNNER_REGISTRY.get(job.metric)
+    if entry is None:
+        return _persist_and_publish_result(
+            _failed_result(
+                job.job_id,
+                "unknown_metric",
+                f"Unknown metric: {job.metric}",
+            )
+        )
+
+    try:
+        context = build_run_context(job)
+        raw_result = entry.run(job, context)
+    except Exception as exc:
+        logger.exception(
+            "Generic task %s failed while executing metric %s for job %s.",
+            GENERIC_TASK_NAME,
+            job.metric,
+            job.job_id,
+        )
+        return _persist_and_publish_result(
+            _failed_result(job.job_id, "worker", str(exc))
+        )
+
+    result = _normalise_plugin_result(raw_result, job)
+    return _persist_and_publish_result(result)
+
+
+@celery_app.task(name=GENERIC_TASK_NAME, bind=True)
+def run_metric_task(self: Task, envelope_payload: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(getattr(self.request, "id", "") or "unknown-job")
+    return execute_job(envelope_payload, task_id=task_id)
+
+
+refresh_runner_registry()
+
+
+__all__ = [
+    "GENERIC_TASK_NAME",
+    "RUNNER_REGISTRY",
+    "RunnerMetricEntryV2",
+    "WorkerRunContext",
+    "build_run_context",
+    "execute_job",
+    "load_runner_metric_entries",
+    "refresh_runner_registry",
+    "run_metric_task",
+]

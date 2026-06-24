@@ -1,40 +1,34 @@
 # Lyra API
 
-REST API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery jobs backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
+Lyra is a REST API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery jobs backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
 
-## Prerequisites
+## Documentation
 
-- Google Earth Engine service account key saved as a JSON file.
-- A `.env` file in the project root with at least:
+The written project docs are published with Astro Starlight:
 
-```env
-EARTHENGINE_PROJECT=your-gee-project-id
-```
+- Hosted docs: https://rodolfofigueroa.github.io/lyra/
+- Local docs: `npm run dev --prefix docs`
 
-Optional logging settings:
+When the API server is running, FastAPI also exposes generated OpenAPI references:
 
-```env
-LYRA_LOG_LEVEL=INFO
-LYRA_LOG_FILE=logs/lyra.log
-```
+- Swagger UI: http://localhost:5219/docs
+- ReDoc: http://localhost:5219/redoc
 
-If `LYRA_LOG_FILE` is set, Lyra writes its internal logs to that file instead of standard output.
+## Quick Start
 
-## Install
+Install dependencies:
 
 ```bash
 uv sync
 ```
 
-## Run
-
-Start Redis (required for the task queue):
+Start Redis:
 
 ```bash
 docker run -d -p 6379:6379 redis:alpine
 ```
 
-Start the Celery worker (in a separate terminal):
+Start a worker for the `interactive` queue:
 
 ```bash
 LYRA_RUNNER_QUEUES=interactive \
@@ -47,59 +41,15 @@ Start the API server:
 uv run python -m lyra_app.main
 ```
 
-### Docker (recommended)
+Or run the development Compose stack:
 
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-This starts the API (`lyra-dev`), Redis, and two warm Celery worker pools:
-`interactive` and `batch`. The queue names are examples owned by the
-deployment; plugin manifests choose a queue with each metric's
-`execution.queue` value.
+## Job API
 
-The API container reads static plugin manifests from `/lyra_plugin_catalog`,
-validates job requests, and dispatches `lyra.run_metric`. It does not install or
-import plugin code. Worker containers clone and install plugin repos into their
-own `/lyra_plugins` volumes at startup, then consume only the Celery queues
-listed in `LYRA_RUNNER_QUEUES`.
-
-To add another queue, add another worker service that uses the same image,
-sets `LYRA_RUNNER_QUEUES` to the new queue name, and starts Celery with a
-matching `-Q` value. After plugin updates, refresh the API catalog with
-`POST /update-plugins` and restart warm worker pools; workers do not hot-reload
-plugin code in-process. Kubernetes manifests are intentionally out of scope for
-this Compose-only deployment shape.
-
-## Endpoints
-
-### REST
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/data_types` | List accepted input data types |
-| `GET` | `/metrics` | List available metrics and request/result schemas |
-| `GET` | `/metrics/{metric_name}` | Get request/result schemas for a single metric |
-| `POST` | `/jobs` | Submit a metric job |
-| `GET` | `/jobs/{job_id}` | Fetch current job status |
-| `GET` | `/jobs/{job_id}/events` | Stream queued, progress, and terminal events with SSE |
-| `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file |
-| `GET` | `/met_zone_code` | Look up a metropolitan zone code by name |
-
-Available metrics come from v2 plugin manifests listed in `LYRA_PLUGIN_REPOS`.
-
-> **Note:** File-producing metrics return the file from `GET /jobs/{job_id}/result`.
-
-## Job API Usage
-
-The job endpoint follows a submit/status/events/result flow:
-
-1. `POST /jobs` with `metric`, `input`, and optional `idempotency_key`.
-2. Receive `202 Accepted` with a `job_id` and links.
-3. Stream `GET /jobs/{job_id}/events` as `text/event-stream`.
-4. Fetch the terminal result via `GET /jobs/{job_id}/result`.
-
-Submit a job:
+Submit a metric job:
 
 ```bash
 curl -X POST http://localhost:5219/jobs \
@@ -107,23 +57,11 @@ curl -X POST http://localhost:5219/jobs \
   -d '{"metric":"tree_coverage","input":{"data":{"data_type":"met_zone_code","value":"19.1.01"}}}'
 ```
 
-Stream events:
+Then use the returned `job_id` to stream events and fetch the terminal result:
 
 ```bash
 curl -N http://localhost:5219/jobs/{job_id}/events
-```
-
-Fetch the terminal result:
-
-```bash
 curl http://localhost:5219/jobs/{job_id}/result
 ```
 
-## Documentation
-
-### REST API
-
-Interactive documentation is available while the server is running:
-
-- **Swagger UI**: http://localhost:5219/docs
-- **ReDoc**: http://localhost:5219/redoc
+See the Starlight docs for plugin manifests, runner entrypoints, deployment shape, and operations notes.

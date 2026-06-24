@@ -35,6 +35,7 @@ if __name__ == "__main__":
         data_types,
         download,
         geojson,
+        jobs,
         met_zone,
         metrics,
     )
@@ -42,6 +43,7 @@ if __name__ == "__main__":
     app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
     app.include_router(admin.router)
     app.include_router(geojson.router)
+    app.include_router(jobs.router)
     app.include_router(download.router)
     app.include_router(data_types.router)
     app.include_router(metrics.router)

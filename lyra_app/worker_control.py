@@ -1,9 +1,10 @@
-import json
 import logging
 import time
 
+from lyra.sdk.models import JobResult
+
+from lyra_app import job_store
 from lyra_app.celery_app import celery_app
-from lyra_app.db.redis import redis_client_sync
 
 logger = logging.getLogger(__name__)
 
@@ -14,14 +15,16 @@ _INTERRUPTED_TASK_MESSAGE = (
 
 def notify_interrupted_tasks(task_ids: list[str]) -> None:
     for task_id in task_ids:
-        payload = json.dumps(
-            {
-                "status": "error",
-                "error_type": "worker",
-                "message": _INTERRUPTED_TASK_MESSAGE,
-            }
+        job_store.save_job_result(
+            JobResult(
+                job_id=task_id,
+                status="failed",
+                error={
+                    "type": "worker",
+                    "message": _INTERRUPTED_TASK_MESSAGE,
+                },
+            )
         )
-        redis_client_sync.publish(f"task_results_{task_id}", payload)
         logger.info("Notified task %s of interruption.", task_id)
 
 

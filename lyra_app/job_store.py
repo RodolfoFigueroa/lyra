@@ -1,0 +1,310 @@
+import json
+import os
+from datetime import UTC, datetime
+from typing import Any, Literal, TypeAlias
+
+from lyra.sdk.models import JobEnvelope, JobEvent, JobResult
+from lyra.sdk.models.strict import StrictBaseModel
+from pydantic import Field
+
+from lyra_app.db.redis import redis_client, redis_client_sync
+
+JobStatus: TypeAlias = Literal[
+    "queued",
+    "started",
+    "progress",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
+
+TerminalJobStatus: TypeAlias = Literal["succeeded", "failed", "cancelled"]
+
+JOB_STORE_TTL_SECONDS = int(os.getenv("LYRA_JOB_STORE_TTL_SECONDS", "600"))
+STREAM_START = "0-0"
+
+
+class JobStatusSnapshot(StrictBaseModel):
+    job_id: str = Field(min_length=1)
+    status: JobStatus
+    updated_at: datetime
+    metric: str | None = Field(default=None, min_length=1)
+    error: dict[str, Any] | None = None
+
+
+class StoredJobEvent(StrictBaseModel):
+    stream_id: str
+    event: JobEvent
+
+
+class JobCancelledError(RuntimeError):
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"Job {job_id!r} was cancelled.")
+        self.job_id = job_id
+
+
+def status_key(job_id: str) -> str:
+    return f"job:{job_id}:status"
+
+
+def result_key(job_id: str) -> str:
+    return f"job:{job_id}:result"
+
+
+def events_key(job_id: str) -> str:
+    return f"job:{job_id}:events"
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _dump_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload)
+
+
+def _json_non_finite_constant(_: str) -> None:
+    return None
+
+
+def _loads_json(payload: Any) -> Any:
+    if isinstance(payload, bytes):
+        payload = payload.decode()
+    return json.loads(payload, parse_constant=_json_non_finite_constant)
+
+
+def _apply_ttl_sync(client: Any, job_id: str) -> None:
+    ttl = JOB_STORE_TTL_SECONDS
+    client.expire(status_key(job_id), ttl)
+    client.expire(result_key(job_id), ttl)
+    client.expire(events_key(job_id), ttl)
+
+
+async def _apply_ttl_async(client: Any, job_id: str) -> None:
+    ttl = JOB_STORE_TTL_SECONDS
+    await client.expire(status_key(job_id), ttl)
+    await client.expire(result_key(job_id), ttl)
+    await client.expire(events_key(job_id), ttl)
+
+
+def _status_payload(
+    job_id: str,
+    status: JobStatus,
+    *,
+    metric: str | None = None,
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return JobStatusSnapshot(
+        job_id=job_id,
+        metric=metric,
+        status=status,
+        updated_at=_now(),
+        error=error,
+    ).model_dump(mode="json", exclude_none=True)
+
+
+def create_job(job: JobEnvelope, client: Any | None = None) -> JobStatusSnapshot:
+    client = redis_client_sync if client is None else client
+    payload = _status_payload(job.job_id, "queued", metric=job.metric)
+    client.set(status_key(job.job_id), _dump_json(payload), ex=JOB_STORE_TTL_SECONDS)
+    _apply_ttl_sync(client, job.job_id)
+    return JobStatusSnapshot.model_validate(payload)
+
+
+def set_job_status(
+    job_id: str,
+    status: JobStatus,
+    *,
+    metric: str | None = None,
+    error: dict[str, Any] | None = None,
+    client: Any | None = None,
+) -> JobStatusSnapshot:
+    client = redis_client_sync if client is None else client
+    payload = _status_payload(job_id, status, metric=metric, error=error)
+    client.set(status_key(job_id), _dump_json(payload), ex=JOB_STORE_TTL_SECONDS)
+    _apply_ttl_sync(client, job_id)
+    return JobStatusSnapshot.model_validate(payload)
+
+
+def save_job_result(
+    result: JobResult,
+    *,
+    metric: str | None = None,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    client = redis_client_sync if client is None else client
+    payload = result.model_dump(mode="json", exclude_none=True)
+    client.set(result_key(result.job_id), _dump_json(payload), ex=JOB_STORE_TTL_SECONDS)
+    set_job_status(
+        result.job_id,
+        result.status,
+        metric=metric,
+        error=result.error,
+        client=client,
+    )
+    _apply_ttl_sync(client, result.job_id)
+    return payload
+
+
+def get_job_status(
+    job_id: str,
+    client: Any | None = None,
+) -> JobStatusSnapshot | None:
+    client = redis_client_sync if client is None else client
+    payload = client.get(status_key(job_id))
+    if payload is None:
+        return None
+    return JobStatusSnapshot.model_validate(_loads_json(payload))
+
+
+def is_job_cancelled(job_id: str, client: Any | None = None) -> bool:
+    snapshot = get_job_status(job_id, client)
+    return snapshot is not None and snapshot.status == "cancelled"
+
+
+def raise_if_cancelled(job_id: str, client: Any | None = None) -> None:
+    if is_job_cancelled(job_id, client):
+        raise JobCancelledError(job_id)
+
+
+def append_job_event(
+    job_id: str,
+    event: str,
+    data: dict[str, Any] | None = None,
+    *,
+    metric: str | None = None,
+    client: Any | None = None,
+) -> StoredJobEvent:
+    client = redis_client_sync if client is None else client
+    job_event = JobEvent(
+        job_id=job_id,
+        event=event,
+        timestamp=_now(),
+        data=data or {},
+    )
+    event_payload = job_event.model_dump(mode="json")
+    stream_id = client.xadd(
+        events_key(job_id),
+        {
+            "event": event,
+            "payload": _dump_json(event_payload),
+        },
+    )
+    if isinstance(stream_id, bytes):
+        stream_id = stream_id.decode()
+    set_job_status(job_id, "progress", metric=metric, client=client)
+    _apply_ttl_sync(client, job_id)
+    return StoredJobEvent(stream_id=str(stream_id), event=job_event)
+
+
+def read_job_events(
+    job_id: str,
+    *,
+    after_id: str | None = None,
+    count: int | None = None,
+    client: Any | None = None,
+) -> list[StoredJobEvent]:
+    client = redis_client_sync if client is None else client
+    start_id = STREAM_START if after_id is None else f"({after_id}"
+    records = client.xrange(events_key(job_id), min=start_id, count=count) or []
+    return [_stored_event_from_record(record) for record in records]
+
+
+async def create_job_async(
+    job: JobEnvelope,
+    client: Any | None = None,
+) -> JobStatusSnapshot:
+    client = redis_client if client is None else client
+    payload = _status_payload(job.job_id, "queued", metric=job.metric)
+    await client.set(
+        status_key(job.job_id),
+        _dump_json(payload),
+        ex=JOB_STORE_TTL_SECONDS,
+    )
+    await _apply_ttl_async(client, job.job_id)
+    return JobStatusSnapshot.model_validate(payload)
+
+
+async def get_job_status_async(
+    job_id: str,
+    client: Any | None = None,
+) -> JobStatusSnapshot | None:
+    client = redis_client if client is None else client
+    payload = await client.get(status_key(job_id))
+    if payload is None:
+        return None
+    return JobStatusSnapshot.model_validate(_loads_json(payload))
+
+
+async def get_job_result_async(
+    job_id: str,
+    client: Any | None = None,
+) -> dict[str, Any] | None:
+    client = redis_client if client is None else client
+    payload = await client.get(result_key(job_id))
+    if payload is None:
+        return None
+    return _loads_json(payload)
+
+
+async def delete_job_result_async(job_id: str, client: Any | None = None) -> None:
+    client = redis_client if client is None else client
+    await client.delete(result_key(job_id))
+
+
+async def read_job_events_async(
+    job_id: str,
+    *,
+    after_id: str | None = None,
+    count: int | None = None,
+    client: Any | None = None,
+) -> list[StoredJobEvent]:
+    client = redis_client if client is None else client
+    start_id = STREAM_START if after_id is None else f"({after_id}"
+    records = await client.xrange(events_key(job_id), min=start_id, count=count) or []
+    return [_stored_event_from_record(record) for record in records]
+
+
+def _stored_event_from_record(record: Any) -> StoredJobEvent:
+    stream_id, fields = record
+    if fields is None:
+        msg = f"Redis stream record {stream_id!r} did not include fields."
+        raise ValueError(msg)
+    if isinstance(stream_id, bytes):
+        stream_id = stream_id.decode()
+
+    payload = fields.get("payload")
+    if payload is None:
+        payload = fields.get(b"payload")
+
+    return StoredJobEvent(
+        stream_id=str(stream_id),
+        event=JobEvent.model_validate(_loads_json(payload)),
+    )
+
+
+__all__ = [
+    "JOB_STORE_TTL_SECONDS",
+    "STREAM_START",
+    "JobCancelledError",
+    "JobStatus",
+    "JobStatusSnapshot",
+    "StoredJobEvent",
+    "TerminalJobStatus",
+    "append_job_event",
+    "create_job",
+    "create_job_async",
+    "delete_job_result_async",
+    "events_key",
+    "get_job_result_async",
+    "get_job_status",
+    "get_job_status_async",
+    "is_job_cancelled",
+    "raise_if_cancelled",
+    "read_job_events",
+    "read_job_events_async",
+    "result_key",
+    "save_job_result",
+    "set_job_status",
+    "status_key",
+]

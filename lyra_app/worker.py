@@ -1,5 +1,4 @@
 import importlib
-import json
 import logging
 import os
 import tempfile
@@ -13,15 +12,14 @@ from lyra.sdk.models import JobEnvelope, JobResult
 from lyra.sdk.models.plugin_v2 import MetricManifestV2
 from pydantic import ValidationError as PydanticValidationError
 
+from lyra_app import job_store
 from lyra_app.celery_app import celery_app
-from lyra_app.db.redis import redis_client_sync
 from lyra_app.plugins import install_runner_plugins, sync_runner_repos
 from lyra_app.registry import load_plugin_manifest
 
 logger = logging.getLogger(__name__)
 
 GENERIC_TASK_NAME = "lyra.run_metric"
-RESULT_TTL_SECONDS = 600
 
 MetricRunCallable = Callable[
     [JobEnvelope, "WorkerRunContext"], JobResult | dict[str, Any]
@@ -45,11 +43,15 @@ class WorkerRunContext:
     db: Any | None
 
     def emit_event(self, event: str, data: dict[str, Any] | None = None) -> None:
-        msg = "RunContext.emit_event requires the Redis job event store from Step 4."
-        raise NotImplementedError(msg)
+        job_store.append_job_event(
+            self.job_id,
+            event,
+            data,
+            metric=self.metric,
+        )
 
     def check_cancelled(self) -> None:
-        return None
+        job_store.raise_if_cancelled(self.job_id)
 
 
 RUNNER_REGISTRY: dict[str, RunnerMetricEntryV2] = {}
@@ -172,16 +174,12 @@ def _failed_result(job_id: str, error_type: str, message: str) -> JobResult:
     )
 
 
-def _persist_and_publish_result(result: JobResult) -> dict[str, Any]:
-    payload = result.model_dump(mode="json", exclude_none=True)
-    serialised = json.dumps(payload)
-    redis_client_sync.setex(
-        f"result_data_{result.job_id}",
-        RESULT_TTL_SECONDS,
-        serialised,
-    )
-    redis_client_sync.publish(f"task_results_{result.job_id}", serialised)
-    return payload
+def _cancelled_result(job_id: str) -> JobResult:
+    return JobResult(job_id=job_id, status="cancelled")
+
+
+def _persist_result(result: JobResult, *, metric: str | None = None) -> dict[str, Any]:
+    return job_store.save_job_result(result, metric=metric)
 
 
 def _normalise_plugin_result(raw_result: Any, job: JobEnvelope) -> JobResult:
@@ -208,23 +206,31 @@ def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
     try:
         job = JobEnvelope.model_validate(envelope_payload)
     except PydanticValidationError as exc:
-        return _persist_and_publish_result(
+        return _persist_result(
             _failed_result(fallback_job_id, "invalid_envelope", str(exc))
         )
 
     entry = RUNNER_REGISTRY.get(job.metric)
     if entry is None:
-        return _persist_and_publish_result(
+        return _persist_result(
             _failed_result(
                 job.job_id,
                 "unknown_metric",
                 f"Unknown metric: {job.metric}",
-            )
+            ),
+            metric=job.metric,
         )
+
+    if job_store.is_job_cancelled(job.job_id):
+        return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
+
+    job_store.set_job_status(job.job_id, "started", metric=job.metric)
 
     try:
         context = build_run_context(job)
         raw_result = entry.run(job, context)
+    except job_store.JobCancelledError:
+        return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
     except Exception as exc:
         logger.exception(
             "Generic task %s failed while executing metric %s for job %s.",
@@ -232,12 +238,13 @@ def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
             job.metric,
             job.job_id,
         )
-        return _persist_and_publish_result(
-            _failed_result(job.job_id, "worker", str(exc))
+        return _persist_result(
+            _failed_result(job.job_id, "worker", str(exc)),
+            metric=job.metric,
         )
 
     result = _normalise_plugin_result(raw_result, job)
-    return _persist_and_publish_result(result)
+    return _persist_result(result, metric=job.metric)
 
 
 @celery_app.task(name=GENERIC_TASK_NAME, bind=True)

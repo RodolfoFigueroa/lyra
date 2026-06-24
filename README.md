@@ -68,13 +68,6 @@ This starts the API (`lyra`), Redis, and the Celery worker together.
 | `GET` | `/jobs/{job_id}/events` | Stream queued, progress, and terminal events with SSE |
 | `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file |
 | `GET` | `/met_zone_code` | Look up a metropolitan zone code by name |
-| `GET` | `/download_result/{download_id}` | Legacy result route kept until Step 6 |
-
-### Legacy WebSocket
-
-| Path | Description |
-|------|-------------|
-| `WS /ws/{metric}` | Legacy metric submission route kept until Step 6 |
 
 Available metrics: `accessibility_jobs`, `accessibility_services`, `temperature`, `temperature_raster`, `tree_coverage`, `urbanized_area`.
 
@@ -117,23 +110,3 @@ Interactive documentation is available while the server is running:
 
 - **Swagger UI**: http://localhost:5219/docs
 - **ReDoc**: http://localhost:5219/redoc
-
-### Legacy WebSocket API (AsyncAPI)
-
-The legacy WebSocket endpoint is documented in [`docs/asyncapi.yaml`](docs/asyncapi.yaml).
-
-To generate a standalone interactive HTML document:
-
-```bash
-# Install AsyncAPI CLI (requires Node.js)
-npm install -g @asyncapi/cli
-
-# Generate HTML documentation
-asyncapi generate fromTemplate docs/asyncapi.yaml @asyncapi/html-template -o docs/
-```
-
-To validate the spec:
-
-```bash
-asyncapi validate docs/asyncapi.yaml
-```

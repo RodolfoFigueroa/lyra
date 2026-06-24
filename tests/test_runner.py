@@ -4,48 +4,34 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lyra.sdk.models import JobEnvelope, JobResult
 
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 
 
-def _manifest() -> dict[str, Any]:
-    metric = {
-        "description": "A metric.",
-        "parameters": [
-            {"name": "value", "type": "int", "required": True, "default": None}
-        ],
-        "returns_file": False,
-        "tavi_hint": "",
+def _metric(
+    *,
+    name: str,
+    queue: str,
+    entrypoint: str,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": f"{name} metric.",
         "request_schema": {
             "type": "object",
-            "required": ["value"],
             "properties": {"value": {"type": "integer"}},
         },
-        "callable": {"mode": "single", "calculate": "fake_plugin:calculate"},
+        "execution": {"queue": queue},
+        "entrypoint": entrypoint,
     }
+
+
+def _manifest(metrics: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "metrics": [
-            {
-                **metric,
-                "name": "light_metric",
-                "execution": {
-                    "profile": "lightweight",
-                    "queue": "lightweight",
-                    "timeout_seconds": 30,
-                },
-            },
-            {
-                **metric,
-                "name": "heavy_metric",
-                "execution": {
-                    "profile": "heavy",
-                    "queue": "heavy",
-                    "timeout_seconds": 120,
-                },
-            },
-        ],
+        "metrics": metrics,
     }
 
 
@@ -65,9 +51,6 @@ class FakeRedisSync:
         self.setex_calls: list[tuple[str, int, str]] = []
         self.published: list[tuple[str, str]] = []
 
-    def get(self, key: str) -> None:  # noqa: ARG002
-        return None
-
     def setex(self, key: str, ttl: int, value: str) -> None:
         self.setex_calls.append((key, ttl, value))
 
@@ -75,51 +58,286 @@ class FakeRedisSync:
         self.published.append((channel, payload))
 
 
-class FakeRequest:
-    id = "task-id"
-
-
-class FakeTask:
-    request = FakeRequest()
-    name = "heavy_metric"
-
-
-def test_runner_loads_only_configured_queue_and_executes_metric(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.fixture
+def worker_module(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.delenv("LYRA_PLUGIN_REPOS", raising=False)
     worker = importlib.import_module("lyra_app.worker")
+    worker.RUNNER_REGISTRY.clear()
+    yield worker
+    worker.RUNNER_REGISTRY.clear()
 
-    repo = tmp_path / "repo"
+
+def _write_module(tmp_path: Path, module_name: str, source: str) -> None:
+    (tmp_path / f"{module_name}.py").write_text(source, encoding="utf-8")
+
+
+def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
     repo.mkdir()
-    (repo / MANIFEST_FILENAME).write_text(json.dumps(_manifest()), encoding="utf-8")
-    (tmp_path / "fake_plugin.py").write_text(
-        "def calculate(value: int) -> dict:\n    return {'value': value * 2}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setenv("LYRA_RUNNER_QUEUES", "heavy")
+    (repo / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _configure_runner_repos(
+    worker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    repo: Path,
+) -> None:
     monkeypatch.setattr(worker, "sync_runner_repos", lambda: [_synced_repo(repo)])
     monkeypatch.setattr(worker, "install_runner_plugins", list)
 
-    entries = worker.load_runner_metric_entries()
+
+def _decode_stored_result(redis: FakeRedisSync) -> dict[str, Any]:
+    return json.loads(redis.setex_calls[-1][2])
+
+
+def test_worker_registers_only_generic_task(worker_module: Any) -> None:
+    assert worker_module.GENERIC_TASK_NAME in worker_module.celery_app.tasks
+    assert "light_metric" not in worker_module.celery_app.tasks
+    assert "heavy_metric" not in worker_module.celery_app.tasks
+
+
+def test_runner_loads_only_configured_queue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(
+        repo,
+        _manifest(
+            [
+                _metric(
+                    name="light_metric",
+                    queue="lightweight",
+                    entrypoint="missing_light_plugin:run",
+                ),
+                _metric(
+                    name="heavy_metric",
+                    queue="heavy",
+                    entrypoint="heavy_plugin:run",
+                ),
+            ]
+        ),
+    )
+    _write_module(
+        tmp_path,
+        "heavy_plugin",
+        "def run(job, context):\n"
+        "    raise AssertionError('entrypoint should only be imported')\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("LYRA_RUNNER_QUEUES", "heavy")
+    _configure_runner_repos(worker_module, monkeypatch, repo)
+
+    entries = worker_module.refresh_runner_registry()
 
     assert list(entries) == ["heavy_metric"]
+    assert entries["heavy_metric"].queue == "heavy"
+    assert entries["heavy_metric"].entrypoint == "heavy_plugin:run"
 
-    entry = entries["heavy_metric"]
-    assert entry.calculate is not None
+
+def test_generic_task_executes_entrypoint_and_persists_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(
+        repo,
+        _manifest(
+            [
+                _metric(
+                    name="heavy_metric",
+                    queue="heavy",
+                    entrypoint="success_plugin:run",
+                )
+            ]
+        ),
+    )
+    _write_module(
+        tmp_path,
+        "success_plugin",
+        "from lyra.sdk.models import JobResult\n"
+        "def run(job, context):\n"
+        "    assert context.job_id == job.job_id\n"
+        "    assert context.metric == job.metric\n"
+        "    assert hasattr(context, 'db')\n"
+        "    return JobResult(\n"
+        "        job_id=job.job_id,\n"
+        "        status='succeeded',\n"
+        "        result={\n"
+        "            'value': job.input['value'] * 2,\n"
+        "            'temp': context.temp_dir.name,\n"
+        "        },\n"
+        "    )\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("LYRA_RUNNER_QUEUES", "heavy")
+    monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
+    _configure_runner_repos(worker_module, monkeypatch, repo)
+    worker_module.refresh_runner_registry()
+
     fake_redis = FakeRedisSync()
-    monkeypatch.setattr(worker, "redis_client_sync", fake_redis)
-    wrapper = worker.make_celery_wrapper(
-        entry.calculate,
-        entry.model,
-        entry.params_to_convert,
-        entry.db_param_name,
+    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+
+    payload = worker_module.execute_job(
+        {"job_id": "job-1", "metric": "heavy_metric", "input": {"value": 3}},
+        task_id="task-id",
     )
 
-    notification = wrapper(FakeTask(), {"value": 3})
+    assert payload == {
+        "job_id": "job-1",
+        "status": "succeeded",
+        "result": {"value": 6, "temp": "job-1"},
+    }
+    assert fake_redis.setex_calls == [
+        (
+            "result_data_job-1",
+            worker_module.RESULT_TTL_SECONDS,
+            json.dumps(payload),
+        )
+    ]
+    assert fake_redis.published == [("task_results_job-1", json.dumps(payload))]
 
-    assert notification == {"status": "success", "download_id": "task-id"}
-    stored_payload = json.loads(fake_redis.setex_calls[0][2])
-    assert stored_payload == {"status": "success", "result": {"value": 6}}
+
+def test_unknown_metric_persists_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-unknown", "metric": "missing", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "unknown_metric"
+    assert _decode_stored_result(fake_redis) == result
+
+
+def test_invalid_job_envelope_persists_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job({"metric": "missing"}, task_id="task-id")
+
+    assert result["job_id"] == "task-id"
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "invalid_envelope"
+    assert _decode_stored_result(fake_redis) == result
+
+
+def test_plugin_exception_persists_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    def fail(job: JobEnvelope, context: Any) -> JobResult:  # noqa: ARG001
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    worker_module.RUNNER_REGISTRY["bad_metric"] = worker_module.RunnerMetricEntryV2(
+        metric_name="bad_metric",
+        queue="heavy",
+        entrypoint="bad_plugin:run",
+        run=fail,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-bad", "metric": "bad_metric", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"] == {"type": "worker", "message": "boom"}
+
+
+@pytest.mark.parametrize(
+    "plugin_result",
+    [
+        {"job_id": "job-invalid", "status": "progress"},
+        JobResult(job_id="other-job", status="succeeded", result={"value": 1}),
+    ],
+)
+def test_invalid_plugin_result_persists_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+    plugin_result: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> Any:  # noqa: ARG001
+        return plugin_result
+
+    worker_module.RUNNER_REGISTRY["invalid_metric"] = worker_module.RunnerMetricEntryV2(
+        metric_name="invalid_metric",
+        queue="heavy",
+        entrypoint="invalid_plugin:run",
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-invalid", "metric": "invalid_metric", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result["job_id"] == "job-invalid"
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "invalid_result"
+    assert _decode_stored_result(fake_redis) == result
+
+
+def test_file_result_persists_through_generic_result_path(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> JobResult:  # noqa: ARG001
+        return JobResult(
+            job_id=job.job_id,
+            status="succeeded",
+            result_type="file",
+            file_path="result.tif",
+        )
+
+    worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntryV2(
+        metric_name="file_metric",
+        queue="heavy",
+        entrypoint="file_plugin:run",
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-file", "metric": "file_metric", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result == {
+        "job_id": "job-file",
+        "status": "succeeded",
+        "result_type": "file",
+        "file_path": "result.tif",
+    }
+    assert _decode_stored_result(fake_redis) == result
+
+
+def test_run_context_emit_event_is_unsupported(
+    worker_module: Any,
+    tmp_path: Path,
+) -> None:
+    context = worker_module.WorkerRunContext(
+        job_id="job-1",
+        metric="metric",
+        logger=worker_module.logger,
+        temp_dir=tmp_path,
+        db=None,
+    )
+
+    with pytest.raises(NotImplementedError):
+        context.emit_event("progress", {"percent": 50})

@@ -12,7 +12,7 @@ services:
     networks:
       - lyra_net
     environment:
-      - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0
+      CELERY_BROKER_URL: redis://lyra-redis-dev:6379/0
     env_file:
       - ../.env
     build: ..
@@ -36,18 +36,18 @@ services:
     networks:
       - lyra_net
 
-  lyra-celery-worker-lightweight-dev:
+  lyra-celery-worker-interactive-dev:
     image: lyra-dev:latest
-    container_name: lyra-celery-worker-lightweight-dev
+    container_name: lyra-celery-worker-interactive-dev
     restart: unless-stopped
-    command: celery -A lyra_app.worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-32} -Q lightweight
+    command: celery -A lyra_app.worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-32} -Q interactive
     environment:
-      - LYRA_RUNNER_QUEUES=lightweight
-      - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0
+      LYRA_RUNNER_QUEUES: interactive
+      CELERY_BROKER_URL: redis://lyra-redis-dev:6379/0
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
-      - lyra_plugins_lightweight:/lyra_plugins
+      - lyra_plugins_interactive:/lyra_plugins
     networks:
       - lyra_net
     depends_on:
@@ -69,18 +69,18 @@ services:
             - "*.env"
             - "*.ipynb"
 
-  lyra-celery-worker-earth-engine-dev:
+  lyra-celery-worker-batch-dev:
     image: lyra-dev:latest
-    container_name: lyra-celery-worker-earth-engine-dev
+    container_name: lyra-celery-worker-batch-dev
     restart: unless-stopped
-    command: celery -A lyra_app.worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-32} -Q earth_engine
+    command: celery -A lyra_app.worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-32} -Q batch
     environment:
-      - LYRA_RUNNER_QUEUES=earth_engine
-      - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0
+      LYRA_RUNNER_QUEUES: batch
+      CELERY_BROKER_URL: redis://lyra-redis-dev:6379/0
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
-      - lyra_plugins_earth_engine:/lyra_plugins
+      - lyra_plugins_batch:/lyra_plugins
     networks:
       - lyra_net
     depends_on:
@@ -102,38 +102,6 @@ services:
             - "*.env"
             - "*.ipynb"
 
-  lyra-celery-worker-heavy-dev:
-    image: lyra-dev:latest
-    container_name: lyra-celery-worker-heavy-dev
-    restart: unless-stopped
-    command: celery -A lyra_app.worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-32} -Q heavy
-    environment:
-      - LYRA_RUNNER_QUEUES=heavy
-      - CELERY_BROKER_URL=redis://lyra-redis-dev:6379/0
-    volumes:
-      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
-      - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
-      - lyra_plugins_heavy:/lyra_plugins
-    networks:
-      - lyra_net
-    depends_on:
-      - lyra-redis-dev
-      - lyra-dev
-    env_file:
-      - ../.env
-    build: ..
-    develop:
-      watch:
-        - action: sync+restart
-          path: ..
-          target: /app
-          ignore:
-            - .git/
-            - __pycache__/
-            - .venv/
-            - venv/
-            - "*.env"
-            - "*.ipynb"
 networks:
   lyra_net:
     name: lyra_net
@@ -142,9 +110,7 @@ networks:
 volumes:
   lyra_plugin_catalog:
     name: lyra_plugin_catalog
-  lyra_plugins_lightweight:
-    name: lyra_plugins_lightweight
-  lyra_plugins_earth_engine:
-    name: lyra_plugins_earth_engine
-  lyra_plugins_heavy:
-    name: lyra_plugins_heavy
+  lyra_plugins_interactive:
+    name: lyra_plugins_interactive
+  lyra_plugins_batch:
+    name: lyra_plugins_batch

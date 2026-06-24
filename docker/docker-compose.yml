@@ -10,7 +10,10 @@ services:
       - lyra_plugin_catalog:/lyra_plugin_catalog
     networks:
       - lyra_net
-    env_file: ".env"    
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+    env_file:
+      - ../.env
 
   redis:
     image: redis:alpine
@@ -18,56 +21,43 @@ services:
     networks:
       - lyra_net
 
-  celery_worker_lightweight:
+  celery_worker_interactive:
     image: rodolfofigueroa/lyra:latest
     restart: unless-stopped
-    command: celery -A lyra_app.worker.celery_app worker --loglevel=info -Q lightweight
+    command: celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
     environment:
-      LYRA_RUNNER_QUEUES: lightweight
+      LYRA_RUNNER_QUEUES: interactive
+      CELERY_BROKER_URL: redis://redis:6379/0
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
-      - lyra_plugins_lightweight:/lyra_plugins
+      - lyra_plugins_interactive:/lyra_plugins
     networks:
       - lyra_net
     depends_on:
       - redis
       - lyra
-    env_file: ".env"
+    env_file:
+      - ../.env
 
-  celery_worker_earth_engine:
+  celery_worker_batch:
     image: rodolfofigueroa/lyra:latest
     restart: unless-stopped
-    command: celery -A lyra_app.worker.celery_app worker --loglevel=info -Q earth_engine
+    command: celery -A lyra_app.worker.celery_app worker --loglevel=info -Q batch
     environment:
-      LYRA_RUNNER_QUEUES: earth_engine
+      LYRA_RUNNER_QUEUES: batch
+      CELERY_BROKER_URL: redis://redis:6379/0
     volumes:
       - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
       - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
-      - lyra_plugins_earth_engine:/lyra_plugins
+      - lyra_plugins_batch:/lyra_plugins
     networks:
       - lyra_net
     depends_on:
       - redis
       - lyra
-    env_file: ".env"
-
-  celery_worker_heavy:
-    image: rodolfofigueroa/lyra:latest
-    restart: unless-stopped
-    command: celery -A lyra_app.worker.celery_app worker --loglevel=info -Q heavy
-    environment:
-      LYRA_RUNNER_QUEUES: heavy
-    volumes:
-      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
-      - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
-      - lyra_plugins_heavy:/lyra_plugins
-    networks:
-      - lyra_net
-    depends_on:
-      - redis
-      - lyra
-    env_file: ".env"
+    env_file:
+      - ../.env
 
 
 networks:
@@ -78,9 +68,7 @@ networks:
 volumes:
   lyra_plugin_catalog:
     name: lyra_plugin_catalog
-  lyra_plugins_lightweight:
-    name: lyra_plugins_lightweight
-  lyra_plugins_earth_engine:
-    name: lyra_plugins_earth_engine
-  lyra_plugins_heavy:
-    name: lyra_plugins_heavy
+  lyra_plugins_interactive:
+    name: lyra_plugins_interactive
+  lyra_plugins_batch:
+    name: lyra_plugins_batch

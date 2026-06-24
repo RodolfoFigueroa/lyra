@@ -5,7 +5,9 @@ requires-python = ">=3.11"
 dependencies = [
     "aiofiles>=24.1.0",
     "aiohttp>=3.13.5",
+    "lyra-sdk",
     "pydantic>=2.13.4",
+    "requests>=2.34.2",
 ]
 
 [build-system]
@@ -14,3 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lyra"]
+
+[tool.uv.sources]
+lyra-sdk = { workspace = true }

@@ -176,3 +176,36 @@ def test_validate_metric_payload_uses_manifest_json_schema(
         registry.validate_metric_payload("light_metric", {"value": "wrong"})
 
     assert exc_info.value.errors[0]["type"] == "type"
+
+
+def test_validate_metric_payload_honors_declared_json_schema_draft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        request_schema={
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "type": "object",
+            "required": ["value"],
+            "properties": {
+                "value": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": True,
+                }
+            },
+        }
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    registry.refresh_catalog()
+
+    assert registry.validate_metric_payload("light_metric", {"value": 1}) == {
+        "value": 1
+    }
+
+    with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
+        registry.validate_metric_payload("light_metric", {"value": 0})
+
+    assert exc_info.value.errors[0]["type"] == "minimum"

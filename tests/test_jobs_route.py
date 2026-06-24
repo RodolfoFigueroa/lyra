@@ -8,6 +8,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models import JobCreateRequest, JobResult
+from redis.exceptions import RedisError
 
 from lyra_app import job_store, registry
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
@@ -107,6 +108,11 @@ class FakeRedisAsync:
         if count is not None:
             records = records[:count]
         return [(key, records)] if records else []
+
+
+class FailingPingRedisAsync(FakeRedisAsync):
+    async def ping(self) -> bool:
+        raise RedisError
 
 
 class FakeCelery:
@@ -245,6 +251,21 @@ def test_create_job_returns_503_when_redis_unavailable(
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync(available=False))
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(JobCreateRequest(metric="heavy_metric", input={"value": 3}))
+        )
+
+    assert exc_info.value.status_code == 503
+
+
+def test_create_job_returns_503_when_redis_ping_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    _patch_redis(monkeypatch, FailingPingRedisAsync())
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(

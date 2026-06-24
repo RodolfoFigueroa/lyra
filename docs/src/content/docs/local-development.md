@@ -73,6 +73,10 @@ The development stack starts the API, Redis, and two worker pools for `interacti
 owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
 ```
 
+Local filesystem plugin paths are not supported by `LYRA_PLUGIN_REPOS`. For
+local plugin iteration, push a branch to GitHub, point `LYRA_PLUGIN_REPOS` at
+that branch, and refresh the catalog.
+
 The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.
 
 Refresh the catalog and restart worker pools:

@@ -18,7 +18,7 @@ If you want to run Lyra, start with [Getting Started](getting-started/) and [Loc
 
 If you are changing Lyra itself, read [Contributor Guide](contributor-guide/), [Architecture](architecture/), and [Testing And Quality](testing-and-quality/).
 
-If you are building a plugin, start with [Plugin Quickstart](plugin-quickstart/), then read [Plugin Manifests](plugin-manifests/), [Runner Plugins](runner-plugins/), and the [lyra-sdk](lyra-sdk/) and [lyra-utils](lyra-utils/) package references.
+If you are building a plugin, start with [Plugin Quickstart](plugin-quickstart/), then read [Plugin Manifests](plugin-manifests/), [Spatial Plugin Inputs](spatial-plugin-inputs/), [Runner Plugins](runner-plugins/), and the [lyra-sdk](lyra-sdk/) and [lyra-utils](lyra-utils/) package references.
 
 If you are calling Lyra from another application, use [Job API](job-api/), [Metrics Catalog](metrics-catalog/), [Python Client](python-client/), and the [lyra-api](lyra-api/) package reference.
 

@@ -29,13 +29,19 @@ from lyra.sdk.models.geometry import GeoJSON
 from lyra.utils.geometry import convert_geojson_to_gdf
 
 
-def feature_count(data: GeoJSON) -> int:
-    gdf = convert_geojson_to_gdf(data)
+def feature_count(input_payload: dict) -> int:
+    geojson = GeoJSON.model_validate(input_payload["geometries"])
+    gdf = convert_geojson_to_gdf(geojson)
     return len(gdf)
 ```
 
 `convert_geojson_to_gdf(geojson)` accepts SDK `GeoJSON` or `SingleGeoJSON` and
 returns a `geopandas.GeoDataFrame`.
+
+Runner plugins receive `job.input` as a plain dictionary. Parse spatial fields
+with `GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before
+calling this helper. See [Spatial Plugin Inputs](../spatial-plugin-inputs/) for
+complete manifest schemas and runner examples.
 
 The returned GeoDataFrame:
 
@@ -130,4 +136,3 @@ The factory:
 | Image loading | Calls `load_img_func` with an `ee.Geometry.BBox` around all input features. |
 | Reduction | Runs the requested reducer at the provided scale for each geometry. |
 | Large payloads | Splits oversized Earth Engine requests into chunks and concatenates results. |
-

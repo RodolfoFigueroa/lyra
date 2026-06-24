@@ -42,6 +42,11 @@ For spatial helpers, date helpers, or Earth Engine reduction utilities, add
 reference](../lyra-utils/). Plugins that only need runner contracts can depend
 on `lyra-sdk` alone.
 
+For metrics that accept client-supplied geometries, read
+[Spatial Plugin Inputs](../spatial-plugin-inputs/) after this quickstart. It
+shows the request-schema shape, runner-side parsing, and a complete spatial
+plugin example.
+
 ## lyra.plugin.json
 
 ```json

@@ -18,7 +18,7 @@ Supporting routes:
 
 - `GET /metrics`
 - `GET /metrics/{metric_name}`
-- `GET /data_types`
+- `GET /data_types` for grouped `location` and `bounds` wrapper schemas
 - `GET /met_zone_code`
 - `POST /update-plugins`
 
@@ -56,6 +56,10 @@ The only Celery task name for metric execution is `lyra.run_metric`.
 `JobResult.status` is terminal: `succeeded`, `failed`, or `cancelled`.
 
 Job lifecycle status can be `queued`, `started`, `progress`, `succeeded`, `failed`, or `cancelled`.
+
+For spatial plugins, read [Spatial Plugin Inputs](../spatial-plugin-inputs/).
+Manifest JSON Schema validates `input`, but runner code receives
+`JobEnvelope.input` as a plain dict and must parse SDK geometry models itself.
 
 ## Commands
 

@@ -153,14 +153,19 @@ The bounding box arguments are `xmin`, `ymin`, `xmax`, and `ymax`.
 
 ## Explicit Spatial Inputs
 
-`ExplicitLocationAPI` and `ExplicitBoundsAPI` are marker aliases for Lyra
-spatial inputs that clients may provide in several wrapper formats. They are
-useful in reusable metric functions and helper factories where the plugin
-author wants Lyra tooling to distinguish explicit client-provided geometry
-from ordinary internal GeoJSON values.
+`ExplicitLocationAPI` and `ExplicitBoundsAPI` are marker aliases for helper
+function signatures. They document whether a helper expects one or more
+client-selected features (`GeoJSON`) or one enclosing geometry
+(`SingleGeoJSON`).
+
+The v2 job runner does not inspect those type aliases and does not convert
+`job.input` automatically. If a metric accepts spatial input, the manifest
+`request_schema` validates the JSON object and runner code parses the relevant
+field into `GeoJSON` or `SingleGeoJSON`.
 
 ```python
-from lyra.sdk.types import ExplicitBoundsAPI, ExplicitLocationAPI
+from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
+from lyra.sdk.types import ExplicitLocationAPI
 from lyra.utils.geometry import convert_geojson_to_gdf
 
 
@@ -169,21 +174,22 @@ def summarize_locations(locations: ExplicitLocationAPI) -> dict[str, int]:
     return {"feature_count": len(gdf)}
 
 
-def summarize_bounds(bounds: ExplicitBoundsAPI) -> dict[str, float]:
-    gdf = convert_geojson_to_gdf(bounds)
-    xmin, ymin, xmax, ymax = gdf.total_bounds
-    return {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax}
+def parse_locations(input_payload: dict) -> GeoJSON:
+    return GeoJSON.model_validate(input_payload["locations"])
+
+
+def parse_bounds(input_payload: dict) -> SingleGeoJSON:
+    return SingleGeoJSON.model_validate(input_payload["bounds"])
 ```
 
-Plugin-side resolved types:
+Underlying models:
 
-| Alias | Resolved SDK model | Use when |
+| Alias | Underlying SDK model | Use when |
 | --- | --- | --- |
 | `ExplicitLocationAPI` | `GeoJSON` | The metric should run over one or more client-selected features. |
 | `ExplicitBoundsAPI` | `SingleGeoJSON` | The metric needs one enclosing area or bounding geometry. |
 
-Accepted client wrapper payloads use a discriminator named `data_type` and a
-`value`:
+Accepted wrapper payloads use a discriminator named `data_type` and a `value`:
 
 ```json
 { "data_type": "cvegeo_list", "value": ["090020001", "090020002"] }
@@ -222,8 +228,26 @@ Accepted client wrapper payloads use a discriminator named `data_type` and a
 }
 ```
 
-Call `GET /data_types` or `client.get_data_types()` to discover the supported
-wrapper data types in a running deployment.
+`GET /data_types` or `client.get_data_types()` returns grouped wrapper schemas:
+
+| Group | Use when |
+| --- | --- |
+| `location` | The metric accepts one or more client-selected features. |
+| `bounds` | The metric accepts one enclosing area or bounding geometry. |
+
+Each item contains `data_type`, `description`, and `wrapper_schema`. For a full
+plugin example, see [Spatial Plugin Inputs](../spatial-plugin-inputs/).
+
+```python
+from lyra.sdk.types import ExplicitBoundsAPI
+from lyra.utils.geometry import convert_geojson_to_gdf
+
+
+def summarize_bounds(bounds: ExplicitBoundsAPI) -> dict[str, float]:
+    gdf = convert_geojson_to_gdf(bounds)
+    xmin, ymin, xmax, ymax = gdf.total_bounds
+    return {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax}
+```
 
 ## Geometry Models
 

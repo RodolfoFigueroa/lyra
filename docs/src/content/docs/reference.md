@@ -77,7 +77,7 @@ npm run preview --prefix docs
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/data_types` | List accepted input data types. |
+| `GET` | `/data_types` | Return grouped `location` and `bounds` wrapper schemas for explicit spatial inputs. |
 | `GET` | `/metrics` | List metric schema metadata. |
 | `GET` | `/metrics/{metric_name}` | Fetch one metric schema metadata record. |
 | `POST` | `/jobs` | Submit a metric job. |

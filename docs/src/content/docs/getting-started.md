@@ -63,6 +63,7 @@ LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/pl
 ```
 
 Each plugin repository must contain `lyra.plugin.json` at its root. If `GET /metrics` returns an empty list, configure at least one plugin repo and refresh the catalog.
+`LYRA_PLUGIN_REPOS` accepts GitHub-style repository entries, not local filesystem paths.
 
 ## Start A Worker
 

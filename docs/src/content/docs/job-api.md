@@ -21,6 +21,10 @@ Before creating a job, call `GET /metrics` and choose a metric from the current 
 
 The `input` object is validated against the metric's v2 `request_schema`. Unknown metrics return `404`. Invalid input returns `422`. Redis availability errors return `503`.
 
+For spatial metrics, `GET /data_types` exposes grouped wrapper schemas for
+`location` and `bounds` inputs. Metric-specific payloads still come from the
+selected metric's `request_schema`.
+
 Successful submissions return `202 Accepted`:
 
 ```json

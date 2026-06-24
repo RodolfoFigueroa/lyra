@@ -15,6 +15,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Testing And Quality: https://rodolfofigueroa.github.io/lyra/testing-and-quality/
 - Plugin Quickstart: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
 - Plugin Manifests: https://rodolfofigueroa.github.io/lyra/plugin-manifests/
+- Spatial Plugin Inputs: https://rodolfofigueroa.github.io/lyra/spatial-plugin-inputs/
 - Runner Plugins: https://rodolfofigueroa.github.io/lyra/runner-plugins/
 - lyra-sdk: https://rodolfofigueroa.github.io/lyra/lyra-sdk/
 - lyra-api: https://rodolfofigueroa.github.io/lyra/lyra-api/
@@ -35,6 +36,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
 - Explicit spatial inputs: `ExplicitLocationAPI` and `ExplicitBoundsAPI` in `packages/lyra_sdk/src/lyra/sdk/types.py`
 - Geometry models: `GeoJSON` and `SingleGeoJSON` in `packages/lyra_sdk/src/lyra/sdk/models/geometry.py`
+- Data type schema models: `DataTypeSchemaInfo` and `DataTypesResponse` in `packages/lyra_sdk/src/lyra/sdk/models/data_types.py`
 - Python clients: `LyraAPIClient` and `AsyncLyraAPIClient` in `packages/lyra_api/src/lyra/api/`
 - Plugin helpers: GeoJSON conversion, date ranges, and Earth Engine utilities in `packages/lyra_utils/src/lyra/utils/`
 - Job routes: `lyra_app/routes/jobs.py`
@@ -44,7 +46,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 
 ## Public Routes
 
-- `GET /data_types`
+- `GET /data_types` returns grouped `location` and `bounds` wrapper schemas
 - `GET /metrics`
 - `GET /metrics/{metric_name}`
 - `POST /jobs`
@@ -58,5 +60,6 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 
 - Metrics are not built into the app. They come from GitHub repositories listed in `LYRA_PLUGIN_REPOS`.
 - Use `/metrics` to discover metric names and JSON Schemas before submitting jobs.
+- For spatial plugins, use the Spatial Plugin Inputs page. Runner code receives `JobEnvelope.input` as a plain dict and must parse SDK geometry models itself.
 - Public metric execution uses the `lyra.run_metric` Celery task internally.
 - API containers read manifests. Worker containers install and import plugin code.

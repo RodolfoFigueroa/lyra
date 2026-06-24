@@ -57,6 +57,15 @@ Metric fields:
 - `execution.queue`: queue name used by the API to dispatch jobs and by workers to select metrics.
 - `entrypoint`: Python `module:function` reference imported by worker processes.
 
+`request_schema` is the only API-side input validation for a job. After that
+validation, the worker passes the same JSON object to the runner as
+`job.input`. If the metric accepts spatial payloads, use the schemas and
+runner parsing examples in [Spatial Plugin Inputs](../spatial-plugin-inputs/).
+
+`result_schema` is client-facing metadata. Lyra validates that the schema is
+well formed, but the worker does not validate successful plugin output against
+it at runtime.
+
 ## Entrypoints
 
 Entrypoints must be exactly `module:function`.

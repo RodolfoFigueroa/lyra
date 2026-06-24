@@ -29,7 +29,9 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
 
 The worker calls `run(job, context)` and validates the returned `JobResult`. Unknown metrics, plugin exceptions, invalid return payloads, and mismatched result `job_id` values become failed `JobResult`s.
 
-The worker validates the returned object as `JobResult`; it does not validate `result` against the metric's `result_schema`.
+The worker validates the returned object as `JobResult`; it does not validate
+`result` against the metric's `result_schema`. Treat `result_schema` as
+client-facing metadata and cover important output-shape checks in plugin tests.
 
 ## JobEnvelope
 
@@ -41,7 +43,11 @@ The worker validates the returned object as `JobResult`; it does not validate `r
 - optional `idempotency_key`
 - `metadata`
 
-The `input` payload has already passed API-side JSON Schema validation before dispatch.
+The `input` payload has already passed API-side JSON Schema validation before
+dispatch. It remains a plain `dict`; Lyra does not automatically convert it
+into SDK models. For spatial inputs, parse `job.input` with
+`GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before using
+`lyra-utils`.
 
 ## RunContext
 

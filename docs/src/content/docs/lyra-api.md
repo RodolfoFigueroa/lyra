@@ -13,8 +13,9 @@ development scripts that submit jobs against a running API server.
 from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient
 ```
 
-Both clients return models from `lyra-sdk`, such as `MetricInfoV2`,
-`JobCreateResponse`, `JobEvent`, `JobStatusInfo`, and `JobResult`.
+Both clients return models from `lyra-sdk`, such as `DataTypesResponse`,
+`MetricInfoV2`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`, and
+`JobResult`.
 
 ## Client Configuration
 
@@ -90,12 +91,15 @@ asyncio.run(main())
 
 | Method | Returns | Use when |
 | --- | --- | --- |
-| `get_data_types()` | `list[dict[str, Any]]` | You need the supported explicit input wrapper types from `/data_types`. |
+| `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data_types`. |
 | `get_metrics()` | `list[MetricInfoV2]` | You need all metric names, descriptions, request schemas, and result schemas. |
 | `get_metrics(metric_name)` | `MetricInfoV2` | You need one metric's schema metadata. |
 
 Fetch metric schemas before submitting jobs. The `input` object passed to
 `create_job()` must match the chosen metric's `request_schema`.
+
+`get_data_types()` returns a grouped response with `location` and `bounds`
+lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 
 ## Job Methods
 
@@ -148,4 +152,3 @@ try:
 except DownloadError as exc:
     print(f"Lyra request failed: {exc}")
 ```
-

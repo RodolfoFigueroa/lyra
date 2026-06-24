@@ -1,19 +1,14 @@
 from typing import Literal, get_args, get_origin
 
 from fastapi import APIRouter
+from lyra.sdk.models import DataTypeSchemaInfo, DataTypesResponse
 from lyra.sdk.models.strict import StrictBaseModel
-from typing_extensions import TypedDict
 
 from lyra_app.models.cvegeo_list import CVEGEOListWrapper
 from lyra_app.models.geojson import GeoJSONWrapper, SingleGeoJSONWrapper
 from lyra_app.models.met_zone_code import MetZoneCodeWrapper
 
 router = APIRouter()
-
-
-class WrapperDataTypeInfo(TypedDict):
-    data_type: str
-    description: str
 
 
 def extract_data_type(model_class: type[StrictBaseModel]) -> str:
@@ -47,17 +42,27 @@ def extract_data_type_description(model_class: type[StrictBaseModel]) -> str:
     raise RuntimeError(err)
 
 
+def build_data_type_info(
+    model_class: type[StrictBaseModel],
+) -> DataTypeSchemaInfo:
+    return DataTypeSchemaInfo(
+        data_type=extract_data_type(model_class),
+        description=extract_data_type_description(model_class),
+        wrapper_schema=model_class.model_json_schema(),
+    )
+
+
 @router.get("/data_types")
-async def list_data_types() -> list[WrapperDataTypeInfo]:
-    return [
-        {
-            "data_type": extract_data_type(wrapper_class),
-            "description": extract_data_type_description(wrapper_class),
-        }
-        for wrapper_class in [
-            CVEGEOListWrapper,
-            GeoJSONWrapper,
-            SingleGeoJSONWrapper,
-            MetZoneCodeWrapper,
-        ]
-    ]
+async def list_data_types() -> DataTypesResponse:
+    return DataTypesResponse(
+        location=[
+            build_data_type_info(CVEGEOListWrapper),
+            build_data_type_info(GeoJSONWrapper),
+            build_data_type_info(MetZoneCodeWrapper),
+        ],
+        bounds=[
+            build_data_type_info(CVEGEOListWrapper),
+            build_data_type_info(SingleGeoJSONWrapper),
+            build_data_type_info(MetZoneCodeWrapper),
+        ],
+    )

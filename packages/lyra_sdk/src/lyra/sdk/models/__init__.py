@@ -1,3 +1,4 @@
+from lyra.sdk.models.data_types import DataTypeSchemaInfo, DataTypesResponse
 from lyra.sdk.models.job import (
     JobCreateRequest,
     JobCreateResponse,
@@ -18,6 +19,8 @@ from lyra.sdk.models.plugin_v2 import (
 )
 
 __all__ = [
+    "DataTypeSchemaInfo",
+    "DataTypesResponse",
     "JobCreateRequest",
     "JobCreateResponse",
     "JobEnvelope",

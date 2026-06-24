@@ -7,7 +7,13 @@ from typing import Any, overload
 import requests
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError
-from lyra.sdk.models import JobCreateResponse, JobEvent, JobResult, JobStatusInfo
+from lyra.sdk.models import (
+    DataTypesResponse,
+    JobCreateResponse,
+    JobEvent,
+    JobResult,
+    JobStatusInfo,
+)
 from lyra.sdk.models.metric import MetricInfoV2
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
@@ -169,7 +175,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             err = f"Job result download error: {exc}"
             raise DownloadError(err) from exc
 
-    def get_data_types(self) -> list[dict[str, Any]]:
+    def get_data_types(self) -> DataTypesResponse:
         data_types_url = self._http_url("data_types")
 
         try:
@@ -186,14 +192,11 @@ class LyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch data types. HTTP {response.status_code}"
             raise DownloadError(err)
 
-        data_types = response.json()
-        if not isinstance(data_types, list) or not all(
-            isinstance(item, dict) for item in data_types
-        ):
+        try:
+            return DataTypesResponse.model_validate(response.json())
+        except ValueError as exc:
             err = "Invalid data types response format"
-            raise DownloadError(err)
-
-        return data_types
+            raise DownloadError(err) from exc
 
     @overload
     def get_metrics(self, metric_name: None = None) -> list[MetricInfoV2]: ...

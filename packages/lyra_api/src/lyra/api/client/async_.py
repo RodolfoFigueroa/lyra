@@ -8,7 +8,13 @@ import aiofiles
 import aiohttp
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError
-from lyra.sdk.models import JobCreateResponse, JobEvent, JobResult, JobStatusInfo
+from lyra.sdk.models import (
+    DataTypesResponse,
+    JobCreateResponse,
+    JobEvent,
+    JobResult,
+    JobStatusInfo,
+)
 from lyra.sdk.models.metric import MetricInfoV2
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
@@ -182,7 +188,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Job result download error: {exc}"
             raise DownloadError(err) from exc
 
-    async def get_data_types(self) -> list[dict[str, Any]]:
+    async def get_data_types(self) -> DataTypesResponse:
         data_types_url = self._http_url("data_types")
         data_types: Any = None
         status: int = 0
@@ -207,13 +213,11 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch data types. HTTP {status}"
             raise DownloadError(err)
 
-        if not isinstance(data_types, list) or not all(
-            isinstance(item, dict) for item in data_types
-        ):
+        try:
+            return DataTypesResponse.model_validate(data_types)
+        except ValueError as exc:
             err = "Invalid data types response format"
-            raise DownloadError(err)
-
-        return data_types
+            raise DownloadError(err) from exc
 
     @overload
     async def get_metrics(self, metric_name: None = None) -> list[MetricInfoV2]: ...

@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Self
 import pytest
 from lyra.api.client.async_ import AsyncLyraAPIClient
 from lyra.api.client.sync import LyraAPIClient
+from lyra.api.exceptions import DownloadError
 
 
 class FakeSyncResponse:
@@ -93,6 +94,25 @@ def _result_response() -> dict[str, Any]:
     }
 
 
+def _data_types_response() -> dict[str, Any]:
+    return {
+        "location": [
+            {
+                "data_type": "geojson",
+                "description": "GeoJSON locations.",
+                "wrapper_schema": {"type": "object"},
+            }
+        ],
+        "bounds": [
+            {
+                "data_type": "geojson",
+                "description": "One GeoJSON bounds geometry.",
+                "wrapper_schema": {"type": "object"},
+            }
+        ],
+    }
+
+
 def test_sync_client_uses_job_api_for_job_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,6 +164,42 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert [event.event for event in events] == ["succeeded"]
     assert result.result == {"value": 6}
     assert processed == {"value": 6}
+
+
+def test_sync_client_returns_grouped_data_type_schemas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        assert url == "http://example.test/data_types"
+        return FakeSyncResponse(payload=_data_types_response())
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    response = LyraAPIClient("example.test", secure=False).get_data_types()
+
+    assert response.location[0].data_type == "geojson"
+    assert response.bounds[0].wrapper_schema == {"type": "object"}
+
+
+def test_sync_client_rejects_invalid_data_type_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,  # noqa: ARG001
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        return FakeSyncResponse(payload={"location": []})
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+
+    with pytest.raises(DownloadError, match="Invalid data types response format"):
+        LyraAPIClient("example.test", secure=False).get_data_types()
 
 
 def test_sync_client_downloads_file_result(
@@ -265,6 +321,34 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
     )
 
     assert result == {"value": 6}
+
+
+def test_async_client_returns_grouped_data_type_schemas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSession.responses = [
+        FakeAsyncResponse(payload=_data_types_response()),
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+
+    response = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).get_data_types()
+    )
+
+    assert response.location[0].data_type == "geojson"
+    assert response.bounds[0].wrapper_schema == {"type": "object"}
+
+
+def test_async_client_rejects_invalid_data_type_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSession.responses = [
+        FakeAsyncResponse(payload={"location": []}),
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+
+    with pytest.raises(DownloadError, match="Invalid data types response format"):
+        asyncio.run(AsyncLyraAPIClient("example.test", secure=False).get_data_types())
 
 
 def test_async_client_downloads_file_job_result(

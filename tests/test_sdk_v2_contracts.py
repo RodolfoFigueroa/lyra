@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 from lyra.sdk.context import RunContext
 from lyra.sdk.models import (
+    DataTypesResponse,
     JobCreateRequest,
     JobCreateResponse,
     JobEnvelope,
@@ -140,6 +141,36 @@ def test_job_api_models_accept_public_payloads() -> None:
     assert request.metric == "light_metric"
     assert response.links.events == "/jobs/job-1/events"
     assert status.updated_at == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_data_types_response_accepts_grouped_schema_payload() -> None:
+    response = DataTypesResponse.model_validate(
+        {
+            "location": [
+                {
+                    "data_type": "geojson",
+                    "description": "GeoJSON locations.",
+                    "wrapper_schema": {
+                        "type": "object",
+                        "required": ["data_type", "value"],
+                    },
+                }
+            ],
+            "bounds": [
+                {
+                    "data_type": "geojson",
+                    "description": "One GeoJSON bounds geometry.",
+                    "wrapper_schema": {
+                        "type": "object",
+                        "required": ["data_type", "value"],
+                    },
+                }
+            ],
+        }
+    )
+
+    assert response.location[0].data_type == "geojson"
+    assert response.bounds[0].wrapper_schema["type"] == "object"
 
 
 def test_manifest_v2_accepts_schema_backed_metric_contract() -> None:

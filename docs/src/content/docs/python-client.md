@@ -16,8 +16,14 @@ from lyra.api import LyraAPIClient
 client = LyraAPIClient("localhost:5219", secure=False)
 metrics = client.get_metrics()
 metric_name = metrics[0].name
+payload = {
+    "SPATIAL_FIELD": {
+        "data_type": "cvegeo_list",
+        "value": ["090020001"],
+    }
+}
 
-job = client.create_job(metric_name, {})
+job = client.create_job(metric_name, payload)
 status = client.get_job(job.job_id)
 ```
 
@@ -60,13 +66,13 @@ If a job returns JSON instead of a file, the client raises a client error for fi
 For JSON-producing metrics:
 
 ```python
-value = client.process(metric_name, {})
+value = client.process(metric_name, payload)
 ```
 
 For file-producing metrics:
 
 ```python
-client.process_to_file(metric_name, {}, "result.tif")
+client.process_to_file(metric_name, payload, "result.tif")
 ```
 
 Both methods create a job, consume events until a terminal event, then fetch the terminal result.
@@ -83,7 +89,13 @@ async def main() -> None:
     client = AsyncLyraAPIClient("localhost:5219", secure=False)
     metrics = await client.get_metrics()
     metric_name = metrics[0].name
-    job = await client.create_job(metric_name, {})
+    payload = {
+        "SPATIAL_FIELD": {
+            "data_type": "cvegeo_list",
+            "value": ["090020001"],
+        }
+    }
+    job = await client.create_job(metric_name, payload)
 
     async for event in client.iter_job_events(job.job_id):
         if event.event in {"succeeded", "failed", "cancelled"}:
@@ -98,4 +110,6 @@ asyncio.run(main())
 
 ## Metric Payloads
 
-Do not hard-code example payloads from these docs. Fetch the metric's `request_schema` and submit an `input` object that matches it.
+Do not hard-code example payloads from these docs. Fetch the metric's
+`request_schema` and submit an `input` object that matches it. Every metric has
+at least one required spatial wrapper field.

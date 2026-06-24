@@ -5,7 +5,9 @@ description: Submit metric jobs, stream events, and fetch JSON or file results.
 
 Lyra's public execution API is job-first. Clients submit a metric request, receive a `job_id`, stream typed server-sent events, and fetch the terminal result.
 
-Before creating a job, call `GET /metrics` and choose a metric from the current catalog. The job `input` must match that metric's `request_schema`.
+Before creating a job, call `GET /metrics` and choose a metric from the current
+catalog. The job `input` must match that metric's effective `request_schema`.
+Every metric has at least one required spatial wrapper field.
 
 ## Submit A Job
 
@@ -19,11 +21,18 @@ Before creating a job, call `GET /metrics` and choose a metric from the current 
 }
 ```
 
-The `input` object is validated against the metric's v2 `request_schema`. Unknown metrics return `404`. Invalid input returns `422`. Redis availability errors return `503`.
+The `input` object is validated against the metric's v2 `request_schema`.
+Unknown metrics return `404`. Invalid input returns `422`. Redis availability
+errors return `503`.
 
-For spatial metrics, `GET /data_types` exposes grouped wrapper schemas for
-`location` and `bounds` inputs. Metric-specific payloads still come from the
-selected metric's `request_schema`.
+`GET /data_types` exposes grouped wrapper schemas for `location` and `bounds`
+inputs. Metric-specific payloads come from the selected metric's `/metrics`
+entry, where Lyra has injected those wrapper schemas into the manifest's
+declared spatial fields. Raw GeoJSON is accepted only inside a `geojson`
+wrapper's `value`.
+
+Before dispatching to workers, Lyra resolves spatial wrappers into canonical
+GeoJSON dictionaries in `JobEnvelope.input`.
 
 Successful submissions return `202 Accepted`:
 
@@ -128,7 +137,13 @@ from lyra.api import LyraAPIClient
 client = LyraAPIClient("localhost:5219", secure=False)
 metrics = client.get_metrics()
 metric_name = metrics[0].name
-job = client.create_job(metric_name, {})
+payload = {
+    "SPATIAL_FIELD": {
+        "data_type": "cvegeo_list",
+        "value": ["090020001"],
+    }
+}
+job = client.create_job(metric_name, payload)
 
 for event in client.iter_job_events(job.job_id):
     if event.event in {"succeeded", "failed", "cancelled"}:

@@ -44,10 +44,10 @@ client-facing metadata and cover important output-shape checks in plugin tests.
 - `metadata`
 
 The `input` payload has already passed API-side JSON Schema validation before
-dispatch. It remains a plain `dict`; Lyra does not automatically convert it
-into SDK models. For spatial inputs, parse `job.input` with
-`GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before using
-`lyra-utils`.
+dispatch. Spatial wrapper fields have also been resolved by the API, so
+`job.input` contains canonical GeoJSON dictionaries under the manifest's
+declared spatial field names. Parse those fields with `GeoJSON.model_validate()`
+or `SingleGeoJSON.model_validate()` before using `lyra-utils`.
 
 ## RunContext
 

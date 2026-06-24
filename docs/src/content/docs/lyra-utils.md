@@ -30,7 +30,7 @@ from lyra.utils.geometry import convert_geojson_to_gdf
 
 
 def feature_count(input_payload: dict) -> int:
-    geojson = GeoJSON.model_validate(input_payload["geometries"])
+    geojson = GeoJSON.model_validate(input_payload["location"])
     gdf = convert_geojson_to_gdf(geojson)
     return len(gdf)
 ```
@@ -38,10 +38,11 @@ def feature_count(input_payload: dict) -> int:
 `convert_geojson_to_gdf(geojson)` accepts SDK `GeoJSON` or `SingleGeoJSON` and
 returns a `geopandas.GeoDataFrame`.
 
-Runner plugins receive `job.input` as a plain dictionary. Parse spatial fields
-with `GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before
-calling this helper. See [Spatial Plugin Inputs](../spatial-plugin-inputs/) for
-complete manifest schemas and runner examples.
+Runner plugins receive spatial fields after the API resolves client wrappers
+into GeoJSON dictionaries. Parse those fields with `GeoJSON.model_validate()`
+or `SingleGeoJSON.model_validate()` before calling this helper. See
+[Spatial Plugin Inputs](../spatial-plugin-inputs/) for complete manifest
+schemas and runner examples.
 
 The returned GeoDataFrame:
 

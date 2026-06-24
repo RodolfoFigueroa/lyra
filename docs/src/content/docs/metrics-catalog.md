@@ -19,9 +19,16 @@ The catalog can be empty when `LYRA_PLUGIN_REPOS` is empty or configured reposit
     "request_schema": {
       "type": "object",
       "properties": {
+        "location": {
+          "oneOf": [
+            { "$ref": "#/$defs/CVEGEOListWrapper" },
+            { "$ref": "#/$defs/GeoJSONWrapper" },
+            { "$ref": "#/$defs/MetZoneCodeWrapper" }
+          ]
+        },
         "data": { "type": "object" }
       },
-      "required": ["data"]
+      "required": ["location", "data"]
     },
     "result_schema": {
       "type": "object"
@@ -43,6 +50,13 @@ Each item includes:
 
 ## Payload Validation
 
-`POST /jobs` validates `input` against the selected metric's `request_schema` before dispatching work. The API uses the schema draft declared in the JSON Schema, when present.
+`POST /jobs` validates `input` against the selected metric's effective
+`request_schema` before dispatching work. Every metric includes at least one
+required spatial wrapper field injected from its manifest `spatial_inputs`
+declaration.
+
+After validation, the API resolves spatial wrappers into canonical GeoJSON for
+the worker. Clients should treat the `/metrics` schema as the source of truth
+for request payloads.
 
 Keep request schemas focused on the public client payload. Worker-only details belong in the plugin manifest's internal `execution` and `entrypoint` fields, not in `/metrics`.

@@ -58,8 +58,9 @@ The only Celery task name for metric execution is `lyra.run_metric`.
 Job lifecycle status can be `queued`, `started`, `progress`, `succeeded`, `failed`, or `cancelled`.
 
 For spatial plugins, read [Spatial Plugin Inputs](../spatial-plugin-inputs/).
-Manifest JSON Schema validates `input`, but runner code receives
-`JobEnvelope.input` as a plain dict and must parse SDK geometry models itself.
+Every metric manifest declares required `spatial_inputs`. The API injects
+wrapper schemas into `/metrics`, validates client wrappers, and resolves them
+to GeoJSON dictionaries before workers receive `JobEnvelope.input`.
 
 ## Commands
 

@@ -111,7 +111,8 @@ Choose one metric name from that response. Submit a job using an input payload t
 ```bash
 curl -X POST http://localhost:5219/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"metric":"METRIC_NAME","input":{}}'
+  -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"cvegeo_list","value":["090020001"]}}}'
 ```
 
-Then stream events and fetch the terminal result using the returned `job_id`.
+Every metric includes at least one required spatial wrapper field. Then stream
+events and fetch the terminal result using the returned `job_id`.

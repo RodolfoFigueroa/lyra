@@ -57,10 +57,13 @@ Submit a metric job:
 ```bash
 curl -X POST http://localhost:5219/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"metric":"METRIC_NAME","input":{}}'
+  -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"cvegeo_list","value":["090020001"]}}}'
 ```
 
-Choose `METRIC_NAME` from `GET /metrics`, and shape `input` according to that metric's `request_schema`. Then use the returned `job_id` to stream events and fetch the terminal result:
+Choose `METRIC_NAME` from `GET /metrics`, and shape `input` according to that
+metric's `request_schema`. Every metric includes at least one required spatial
+wrapper field. Then use the returned `job_id` to stream events and fetch the
+terminal result:
 
 ```bash
 curl -N http://localhost:5219/jobs/{job_id}/events

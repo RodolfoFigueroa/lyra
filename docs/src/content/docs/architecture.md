@@ -23,18 +23,22 @@ Redis is used for Celery transport and for job status, result, and event storage
 2. The API syncs those repositories into `LYRA_PLUGIN_CATALOG_DIR`, defaulting to `/lyra_plugin_catalog`.
 3. Each repository must contain `lyra.plugin.json`.
 4. `lyra_app.registry` parses each manifest as `PluginManifestV2`.
-5. `/metrics` exposes only `name`, `description`, `request_schema`, and optional `result_schema`.
+5. The registry builds an effective `request_schema` by injecting canonical
+   spatial wrapper schemas for each metric's required `spatial_inputs`.
+6. `/metrics` exposes only `name`, `description`, the effective
+   `request_schema`, and optional `result_schema`.
 
 The API catalog does not import plugin Python code.
 
 ## Job Flow
 
 1. A client submits `POST /jobs` with `metric`, `input`, and optional `idempotency_key`.
-2. The API validates `input` against the selected metric's `request_schema`.
-3. The API creates a `JobEnvelope`, stores a queued job snapshot, and dispatches `lyra.run_metric` to the metric's manifest queue.
-4. A worker consuming that queue validates the envelope, builds a `RunContext`, and calls the metric entrypoint.
-5. The worker stores progress events, terminal status, and a normalized `JobResult`.
-6. Clients read status, stream events, and fetch results through the `/jobs/{job_id}` routes.
+2. The API validates `input` against the selected metric's effective `request_schema`.
+3. The API resolves each declared spatial wrapper into canonical GeoJSON.
+4. The API creates a `JobEnvelope`, stores a queued job snapshot, and dispatches `lyra.run_metric` to the metric's manifest queue.
+5. A worker consuming that queue validates the envelope, builds a `RunContext`, and calls the metric entrypoint.
+6. The worker stores progress events, terminal status, and a normalized `JobResult`.
+7. Clients read status, stream events, and fetch results through the `/jobs/{job_id}` routes.
 
 ## Worker Flow
 

@@ -47,8 +47,14 @@ client = LyraAPIClient("localhost:5219", secure=False)
 
 metrics = client.get_metrics()
 metric_name = metrics[0].name
+payload = {
+    "SPATIAL_FIELD": {
+        "data_type": "cvegeo_list",
+        "value": ["090020001"],
+    }
+}
 
-job = client.create_job(metric_name, {})
+job = client.create_job(metric_name, payload)
 
 for event in client.iter_job_events(job.job_id):
     if event.event in {"succeeded", "failed", "cancelled"}:
@@ -73,8 +79,14 @@ async def main() -> None:
 
     metrics = await client.get_metrics()
     metric_name = metrics[0].name
+    payload = {
+        "SPATIAL_FIELD": {
+            "data_type": "cvegeo_list",
+            "value": ["090020001"],
+        }
+    }
 
-    job = await client.create_job(metric_name, {})
+    job = await client.create_job(metric_name, payload)
 
     async for event in client.iter_job_events(job.job_id):
         if event.event in {"succeeded", "failed", "cancelled"}:
@@ -96,7 +108,8 @@ asyncio.run(main())
 | `get_metrics(metric_name)` | `MetricInfoV2` | You need one metric's schema metadata. |
 
 Fetch metric schemas before submitting jobs. The `input` object passed to
-`create_job()` must match the chosen metric's `request_schema`.
+`create_job()` must match the chosen metric's `request_schema`. Every metric
+has at least one required spatial wrapper field.
 
 `get_data_types()` returns a grouped response with `location` and `bounds`
 lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
@@ -146,9 +159,15 @@ download problems.
 from lyra.api import DownloadError, LyraAPIClient
 
 client = LyraAPIClient("localhost:5219", secure=False)
+payload = {
+    "SPATIAL_FIELD": {
+        "data_type": "cvegeo_list",
+        "value": ["090020001"],
+    }
+}
 
 try:
-    result = client.process("metric_name", {})
+    result = client.process("metric_name", payload)
 except DownloadError as exc:
     print(f"Lyra request failed: {exc}")
 ```

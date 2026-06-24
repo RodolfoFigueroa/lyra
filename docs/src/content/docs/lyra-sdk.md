@@ -154,14 +154,14 @@ The bounding box arguments are `xmin`, `ymin`, `xmax`, and `ymax`.
 ## Explicit Spatial Inputs
 
 `ExplicitLocationAPI` and `ExplicitBoundsAPI` are marker aliases for helper
-function signatures. They document whether a helper expects one or more
-client-selected features (`GeoJSON`) or one enclosing geometry
+function signatures. They document whether a helper expects resolved
+client-selected features (`GeoJSON`) or one resolved enclosing geometry
 (`SingleGeoJSON`).
 
-The v2 job runner does not inspect those type aliases and does not convert
-`job.input` automatically. If a metric accepts spatial input, the manifest
-`request_schema` validates the JSON object and runner code parses the relevant
-field into `GeoJSON` or `SingleGeoJSON`.
+All metrics declare spatial fields in `spatial_inputs`. Clients submit wrappers
+for those fields, and Lyra resolves them before the worker calls the runner.
+Runner code parses the resolved `job.input` field into `GeoJSON` or
+`SingleGeoJSON`.
 
 ```python
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
@@ -174,8 +174,8 @@ def summarize_locations(locations: ExplicitLocationAPI) -> dict[str, int]:
     return {"feature_count": len(gdf)}
 
 
-def parse_locations(input_payload: dict) -> GeoJSON:
-    return GeoJSON.model_validate(input_payload["locations"])
+def parse_location(input_payload: dict) -> GeoJSON:
+    return GeoJSON.model_validate(input_payload["location"])
 
 
 def parse_bounds(input_payload: dict) -> SingleGeoJSON:
@@ -236,7 +236,9 @@ Accepted wrapper payloads use a discriminator named `data_type` and a `value`:
 | `bounds` | The metric accepts one enclosing area or bounding geometry. |
 
 Each item contains `data_type`, `description`, and `wrapper_schema`. For a full
-plugin example, see [Spatial Plugin Inputs](../spatial-plugin-inputs/).
+plugin example, see [Spatial Plugin Inputs](../spatial-plugin-inputs/). Fetch
+`GET /metrics/{metric_name}` for the complete metric request schema with these
+wrappers injected into the declared spatial fields.
 
 ```python
 from lyra.sdk.types import ExplicitBoundsAPI

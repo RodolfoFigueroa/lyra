@@ -1,161 +1,10 @@
 ---
 title: Spatial Plugin Inputs
-description: Author spatial request schemas and parse GeoJSON payloads inside Lyra runner plugins.
+description: Author mandatory spatial wrapper inputs for Lyra runner plugins.
 ---
 
-Spatial plugins have two separate contracts:
-
-1. The API validates the job `input` object against the metric's manifest
-   `request_schema`.
-2. The worker passes that validated object to the runner as `job.input`, a plain
-   Python dictionary.
-
-Lyra does not automatically convert `job.input` into SDK geometry models. Parse
-spatial payloads in the runner before using `lyra-utils`.
-
-```python
-from lyra.sdk.models.geometry import GeoJSON
-from lyra.utils.geometry import convert_geojson_to_gdf
-
-geojson = GeoJSON.model_validate(job.input["geometries"])
-gdf = convert_geojson_to_gdf(geojson)
-```
-
-Plugin packages should import public runtime contracts from `lyra-sdk` and
-helpers from `lyra-utils`. Do not import from `lyra_app` inside plugin packages.
-
-## Raw GeoJSON Input
-
-Use raw GeoJSON when clients will submit the exact features the metric should
-process.
-
-```json
-{
-  "type": "object",
-  "required": ["geometries"],
-  "additionalProperties": false,
-  "properties": {
-    "geometries": { "$ref": "#/$defs/geoJSON" }
-  },
-  "$defs": {
-    "crs": {
-      "type": "object",
-      "required": ["type", "properties"],
-      "additionalProperties": false,
-      "properties": {
-        "type": { "const": "name" },
-        "properties": {
-          "type": "object",
-          "required": ["name"],
-          "additionalProperties": false,
-          "properties": {
-            "name": { "type": "string", "minLength": 1 }
-          }
-        }
-      }
-    },
-    "point": {
-      "type": "object",
-      "required": ["type", "coordinates"],
-      "additionalProperties": false,
-      "properties": {
-        "type": { "const": "Point" },
-        "coordinates": {
-          "type": "array",
-          "items": { "type": "number" }
-        }
-      }
-    },
-    "polygon": {
-      "type": "object",
-      "required": ["type", "coordinates"],
-      "additionalProperties": false,
-      "properties": {
-        "type": { "const": "Polygon" },
-        "coordinates": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "array",
-              "items": { "type": "number" }
-            }
-          }
-        }
-      }
-    },
-    "multiPolygon": {
-      "type": "object",
-      "required": ["type", "coordinates"],
-      "additionalProperties": false,
-      "properties": {
-        "type": { "const": "MultiPolygon" },
-        "coordinates": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "array",
-              "items": {
-                "type": "array",
-                "items": { "type": "number" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "feature": {
-      "type": "object",
-      "required": ["id", "type", "geometry", "properties"],
-      "additionalProperties": false,
-      "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "type": { "const": "Feature" },
-        "geometry": {
-          "oneOf": [
-            { "$ref": "#/$defs/point" },
-            { "$ref": "#/$defs/polygon" },
-            { "$ref": "#/$defs/multiPolygon" }
-          ]
-        },
-        "properties": { "type": "object" }
-      }
-    },
-    "geoJSON": {
-      "type": "object",
-      "required": ["type", "features", "crs"],
-      "additionalProperties": false,
-      "properties": {
-        "type": { "const": "FeatureCollection" },
-        "features": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "$ref": "#/$defs/feature" }
-        },
-        "crs": { "$ref": "#/$defs/crs" }
-      }
-    }
-  }
-}
-```
-
-The SDK `GeoJSON` model accepts FeatureCollections with one or more features.
-Feature geometries may be `Point`, `Polygon`, or `MultiPolygon`. Every feature
-must have a non-empty `id`, a `geometry`, and a `properties` object. The CRS
-object must be shaped as:
-
-```json
-{ "type": "name", "properties": { "name": "EPSG:4326" } }
-```
-
-For a single enclosing geometry, use `SingleGeoJSON` in runner code and set the
-schema's `features` array to `minItems: 1` and `maxItems: 1`. `SingleGeoJSON`
-allows `Point` and `Polygon`, but not `MultiPolygon`.
-
-## Wrapper-Style Input
-
-Wrapper payloads let clients describe spatial input by a discriminator:
+Every Lyra metric has at least one spatial input. Clients always submit spatial
+fields through a wrapper object:
 
 ```json
 { "data_type": "geojson", "value": { "...": "FeatureCollection" } }
@@ -169,189 +18,97 @@ Wrapper payloads let clients describe spatial input by a discriminator:
 { "data_type": "met_zone_code", "value": "MET_ZONE_CODE" }
 ```
 
-`GET /data_types` returns grouped wrapper schemas:
+Raw GeoJSON is valid only as the `value` of the `geojson` wrapper. Do not expose
+a top-level raw GeoJSON field in a metric manifest.
+
+## Manifest Contract
+
+Each metric declares its spatial fields with `spatial_inputs`. Keys are
+top-level request field names. Values are:
+
+| Value | Runner receives |
+| --- | --- |
+| `location` | `GeoJSON` with one or more features. |
+| `bounds` | `SingleGeoJSON` with one enclosing geometry. |
+
+The same fields must exist in `request_schema.properties` and
+`request_schema.required`. Lyra replaces those placeholder field schemas with
+canonical wrapper schemas when it builds the catalog exposed by `/metrics`.
 
 ```json
 {
-  "location": [
-    {
-      "data_type": "geojson",
-      "description": "A GeoDataFrame in GeoJSON format.",
-      "wrapper_schema": {}
-    }
-  ],
-  "bounds": [
-    {
-      "data_type": "geojson",
-      "description": "A GeoDataFrame in GeoJSON format containing a single geometry. Does not support MultiPolygon or GeometryCollection.",
-      "wrapper_schema": {}
-    }
-  ]
-}
-```
-
-Use `location` schemas when a metric should process one or more selected
-features. Use `bounds` schemas when a metric needs one enclosing area. The two
-groups both contain a `geojson` data type, but the location schema validates
-`GeoJSON` and the bounds schema validates `SingleGeoJSON`.
-
-A compact manifest schema for a wrapper-style location field looks like this:
-
-```json
-{
-  "type": "object",
-  "required": ["location"],
-  "additionalProperties": false,
-  "properties": {
-    "location": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": ["data_type", "value"],
-          "additionalProperties": false,
-          "properties": {
-            "data_type": { "const": "cvegeo_list" },
-            "value": {
-              "type": "array",
-              "minItems": 1,
-              "items": { "type": "string" }
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": ["data_type", "value"],
-          "additionalProperties": false,
-          "properties": {
-            "data_type": { "const": "geojson" },
-            "value": { "$ref": "#/$defs/geoJSON" }
-          }
-        },
-        {
-          "type": "object",
-          "required": ["data_type", "value"],
-          "additionalProperties": false,
-          "properties": {
-            "data_type": { "const": "met_zone_code" },
-            "value": { "type": "string", "minLength": 1 }
-          }
-        }
-      ]
-    }
-  }
-}
-```
-
-Add the raw GeoJSON `$defs` from the previous section when using the `geojson`
-branch. For an exact current schema, fetch `/data_types` from the running
-deployment and copy the appropriate `wrapper_schema`.
-
-## Temperature Plugin Example
-
-This example assumes you already have:
-
-```python
-def get_temperatures(geometries):
-    ...
-```
-
-where `geometries` is a list of geometry objects and the function returns one
-average temperature per input geometry.
-
-Repository layout:
-
-```text
-temperature-lyra-plugin/
-  pyproject.toml
-  lyra.plugin.json
-  temperature_plugin/
-    __init__.py
-    runner.py
-    temperature.py
-```
-
-`pyproject.toml`:
-
-```toml
-[project]
-name = "temperature-lyra-plugin"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-  "lyra-sdk",
-  "lyra-utils",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["temperature_plugin"]
-```
-
-`lyra.plugin.json`:
-
-```json
-{
-  "schema_version": 2,
-  "plugin": {
-    "name": "temperature-lyra-plugin",
-    "version": "0.1.0"
+  "name": "average_temperature_by_location",
+  "description": "Return average temperature for each submitted location.",
+  "spatial_inputs": {
+    "location": "location"
   },
-  "metrics": [
-    {
-      "name": "average_temperature_by_geometry",
-      "description": "Return average temperature for each submitted geometry.",
-      "request_schema": {
-        "type": "object",
-        "required": ["geometries"],
-        "additionalProperties": false,
-        "properties": {
-          "geometries": { "$ref": "#/$defs/geoJSON" }
-        },
-        "$defs": {
-          "geoJSON": {
-            "type": "object",
-            "required": ["type", "features", "crs"],
-            "additionalProperties": false,
-            "properties": {
-              "type": { "const": "FeatureCollection" },
-              "features": { "type": "array", "minItems": 1 },
-              "crs": { "type": "object" }
-            }
-          }
-        }
-      },
-      "result_schema": {
-        "type": "object",
-        "required": ["feature_ids", "temperatures"],
-        "additionalProperties": false,
-        "properties": {
-          "feature_ids": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "temperatures": {
-            "type": "array",
-            "items": { "type": "number" }
-          }
-        }
-      },
-      "execution": {
-        "queue": "interactive"
-      },
-      "entrypoint": "temperature_plugin.runner:run"
+  "request_schema": {
+    "type": "object",
+    "required": ["location", "year"],
+    "additionalProperties": false,
+    "properties": {
+      "location": {},
+      "year": { "type": "integer", "minimum": 2020 }
     }
-  ]
+  },
+  "execution": {
+    "queue": "interactive"
+  },
+  "entrypoint": "temperature_plugin.runner:run"
 }
 ```
 
-The manifest example keeps the embedded GeoJSON schema short. For production,
-use the fuller schema from this page or copy the exact `geojson` wrapper schema
-from `/data_types`.
+Fetch `GET /metrics/{metric_name}` to see the complete effective schema clients
+must submit. `GET /data_types` still exposes the individual wrapper schemas for
+UI builders and client tooling.
 
-`temperature_plugin/runner.py`:
+## API Resolution
+
+`POST /jobs` validates client input against the effective metric schema. Before
+dispatching the job, Lyra resolves every declared spatial wrapper:
+
+| Client wrapper | Resolution |
+| --- | --- |
+| `geojson` | Validates and forwards the supplied FeatureCollection. |
+| `cvegeo_list` | Loads matching census geometries or aggregate bounds. |
+| `met_zone_code` | Loads geometries or bounds for the metropolitan zone. |
+
+The worker receives the same top-level field names, but their values are
+canonical GeoJSON dictionaries:
+
+```json
+{
+  "location": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "id": "area-1",
+        "type": "Feature",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[
+            [-99.20, 19.30],
+            [-99.10, 19.30],
+            [-99.10, 19.40],
+            [-99.20, 19.40],
+            [-99.20, 19.30]
+          ]]
+        },
+        "properties": {}
+      }
+    ],
+    "crs": { "type": "name", "properties": { "name": "EPSG:4326" } }
+  },
+  "year": 2025
+}
+```
+
+Invalid wrappers return `422`. Database resolution failures return `503`.
+
+## Runner Code
+
+Runner plugins parse the resolved GeoJSON field with SDK models before using
+`lyra-utils`.
 
 ```python
 from lyra.sdk.context import RunContext
@@ -359,88 +116,71 @@ from lyra.sdk.models import JobEnvelope, JobResult
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.utils.geometry import convert_geojson_to_gdf
 
-from temperature_plugin.temperature import get_temperatures
-
 
 def run(job: JobEnvelope, context: RunContext) -> JobResult:
-    context.emit_event("progress", {"message": "Loading geometries"})
+    context.emit_event("progress", {"message": "Loading location"})
     context.check_cancelled()
 
-    geojson = GeoJSON.model_validate(job.input["geometries"])
+    geojson = GeoJSON.model_validate(job.input["location"])
     gdf = convert_geojson_to_gdf(geojson)
-    temperatures = get_temperatures(list(gdf.geometry))
-
-    if len(temperatures) != len(gdf):
-        return JobResult(
-            job_id=job.job_id,
-            status="failed",
-            error={
-                "type": "plugin_error",
-                "message": "Temperature result count did not match geometry count",
-            },
-        )
 
     return JobResult(
         job_id=job.job_id,
         status="succeeded",
-        result={
-            "feature_ids": [str(feature_id) for feature_id in gdf.index],
-            "temperatures": temperatures,
-        },
+        result={"feature_count": len(gdf)},
     )
 ```
 
-Sample job:
+Use `SingleGeoJSON` for fields declared as `"bounds"`.
+
+## Sample Job
 
 ```bash
 curl -X POST http://localhost:5219/jobs \
   -H 'Content-Type: application/json' \
   -d '{
-    "metric": "average_temperature_by_geometry",
+    "metric": "average_temperature_by_location",
     "input": {
-      "geometries": {
-        "type": "FeatureCollection",
-        "features": [
-          {
-            "id": "area-1",
-            "type": "Feature",
-            "geometry": {
-              "type": "Polygon",
-              "coordinates": [[
-                [-99.20, 19.30],
-                [-99.10, 19.30],
-                [-99.10, 19.40],
-                [-99.20, 19.40],
-                [-99.20, 19.30]
-              ]]
-            },
-            "properties": {}
+      "location": {
+        "data_type": "geojson",
+        "value": {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "id": "area-1",
+              "type": "Feature",
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                  [-99.20, 19.30],
+                  [-99.10, 19.30],
+                  [-99.10, 19.40],
+                  [-99.20, 19.40],
+                  [-99.20, 19.30]
+                ]]
+              },
+              "properties": {}
+            }
+          ],
+          "crs": {
+            "type": "name",
+            "properties": { "name": "EPSG:4326" }
           }
-        ],
-        "crs": {
-          "type": "name",
-          "properties": { "name": "EPSG:4326" }
         }
-      }
+      },
+      "year": 2025
     }
   }'
 ```
 
-Successful result:
+A client could submit the same metric with:
 
 ```json
 {
-  "job_id": "job-id",
-  "status": "succeeded",
-  "result": {
-    "feature_ids": ["area-1"],
-    "temperatures": [24.8]
+  "location": {
+    "data_type": "cvegeo_list",
+    "value": ["090020001", "090020002"]
   },
-  "result_type": null,
-  "file_path": null,
-  "error": null
+  "year": 2025
 }
 ```
-
-The API does not validate `result` against `result_schema`. Keep result checks
-inside plugin tests when output shape matters.

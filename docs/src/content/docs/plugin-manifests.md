@@ -20,12 +20,17 @@ The manifest is strict: extra fields are rejected. JSON Schemas are checked when
     {
       "name": "example_metric",
       "description": "Compute an example metric for the input area.",
+      "spatial_inputs": {
+        "location": "location"
+      },
       "request_schema": {
         "type": "object",
+        "required": ["location", "data"],
         "properties": {
+          "location": {},
           "data": { "type": "object" }
         },
-        "required": ["data"]
+        "additionalProperties": false
       },
       "result_schema": {
         "type": "object"
@@ -52,15 +57,22 @@ Metric fields:
 
 - `name`: unique metric name within the manifest and across the loaded catalog.
 - `description`: client-facing summary.
+- `spatial_inputs`: non-empty mapping of required top-level input fields to `location` or `bounds`.
 - `request_schema`: JSON Schema used to validate `/jobs` input.
 - `result_schema`: optional JSON Schema describing successful result shape. Lyra checks that the schema itself is valid and exposes it through `/metrics`.
 - `execution.queue`: queue name used by the API to dispatch jobs and by workers to select metrics.
 - `entrypoint`: Python `module:function` reference imported by worker processes.
 
-`request_schema` is the only API-side input validation for a job. After that
-validation, the worker passes the same JSON object to the runner as
-`job.input`. If the metric accepts spatial payloads, use the schemas and
-runner parsing examples in [Spatial Plugin Inputs](../spatial-plugin-inputs/).
+Every metric must declare at least one spatial input. Each `spatial_inputs` key
+must appear in `request_schema.properties` and `request_schema.required`. Lyra
+replaces those placeholder field schemas with canonical wrapper schemas in the
+catalog exposed by `/metrics`.
+
+`POST /jobs` validates input against that effective schema. Before dispatch,
+Lyra resolves spatial wrappers into canonical GeoJSON dictionaries in
+`job.input`. Use the examples in
+[Spatial Plugin Inputs](../spatial-plugin-inputs/) for complete request and
+runner shapes.
 
 `result_schema` is client-facing metadata. Lyra validates that the schema is
 well formed, but the worker does not validate successful plugin output against

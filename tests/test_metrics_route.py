@@ -21,9 +21,10 @@ def _manifest() -> dict[str, Any]:
                 "description": "A lightweight metric.",
                 "request_schema": {
                     "type": "object",
-                    "required": ["value"],
-                    "properties": {"value": {"type": "integer"}},
+                    "required": ["location", "value"],
+                    "properties": {"location": {}, "value": {"type": "integer"}},
                 },
+                "spatial_inputs": {"location": "location"},
                 "result_schema": {
                     "type": "object",
                     "properties": {"value": {"type": "integer"}},
@@ -67,21 +68,17 @@ def test_metrics_route_returns_schema_metadata_only(
     response = asyncio.run(metrics.list_metrics())
 
     assert isinstance(response, list)
-    assert [item.model_dump() for item in response] == [
-        {
-            "name": "light_metric",
-            "description": "A lightweight metric.",
-            "request_schema": {
-                "type": "object",
-                "required": ["value"],
-                "properties": {"value": {"type": "integer"}},
-            },
-            "result_schema": {
-                "type": "object",
-                "properties": {"value": {"type": "integer"}},
-            },
-        }
-    ]
+    assert len(response) == 1
+    payload = response[0].model_dump()
+    assert payload["name"] == "light_metric"
+    assert payload["description"] == "A lightweight metric."
+    assert payload["request_schema"]["required"] == ["location", "value"]
+    assert payload["request_schema"]["properties"]["value"] == {"type": "integer"}
+    assert "oneOf" in payload["request_schema"]["properties"]["location"]
+    assert payload["result_schema"] == {
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+    }
 
 
 def test_metric_route_returns_404_for_unknown_metric(

@@ -15,6 +15,7 @@ def _metric(
     description: str = "A metric.",
     request_schema: dict[str, Any] | None = None,
     result_schema: dict[str, Any] | None = None,
+    spatial_inputs: dict[str, str] | None = None,
     queue: str = "lightweight",
     entrypoint: str = "fake_plugin.runner:run",
 ) -> dict[str, Any]:
@@ -24,10 +25,11 @@ def _metric(
         "request_schema": request_schema
         or {
             "type": "object",
-            "required": ["value"],
-            "properties": {"value": {"type": "integer"}},
+            "required": ["location", "value"],
+            "properties": {"location": {}, "value": {"type": "integer"}},
             "additionalProperties": False,
         },
+        "spatial_inputs": spatial_inputs or {"location": "location"},
         "result_schema": result_schema,
         "execution": {"queue": queue},
         "entrypoint": entrypoint,
@@ -87,17 +89,14 @@ def test_catalog_refresh_reads_v2_manifests_without_importing_plugin_code(
 
     assert result.catalog_changed is True
     assert info is not None
-    assert info.model_dump() == {
-        "name": "light_metric",
-        "description": "A metric.",
-        "request_schema": {
-            "type": "object",
-            "required": ["value"],
-            "properties": {"value": {"type": "integer"}},
-            "additionalProperties": False,
-        },
-        "result_schema": None,
-    }
+    info_payload = info.model_dump()
+    assert info_payload["name"] == "light_metric"
+    assert info_payload["description"] == "A metric."
+    assert info_payload["result_schema"] is None
+    assert info_payload["request_schema"]["required"] == ["location", "value"]
+    assert info_payload["request_schema"]["properties"]["value"] == {"type": "integer"}
+    assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
+    assert "GeoJSONWrapper" in info_payload["request_schema"]["$defs"]
     assert entry is not None
     assert entry.queue == "lightweight"
     assert entry.entrypoint == "fake_plugin.runner:run"
@@ -168,12 +167,20 @@ def test_validate_metric_payload_uses_manifest_json_schema(
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
     registry.refresh_catalog()
 
-    assert registry.validate_metric_payload("light_metric", {"value": 1}) == {
-        "value": 1
+    payload = {
+        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+        "value": 1,
     }
+    assert registry.validate_metric_payload("light_metric", payload) == payload
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
-        registry.validate_metric_payload("light_metric", {"value": "wrong"})
+        registry.validate_metric_payload(
+            "light_metric",
+            {
+                "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+                "value": "wrong",
+            },
+        )
 
     assert exc_info.value.errors[0]["type"] == "type"
 
@@ -187,13 +194,14 @@ def test_validate_metric_payload_honors_declared_json_schema_draft(
         request_schema={
             "$schema": "http://json-schema.org/draft-04/schema#",
             "type": "object",
-            "required": ["value"],
+            "required": ["location", "value"],
             "properties": {
+                "location": {},
                 "value": {
                     "type": "number",
                     "minimum": 0,
                     "exclusiveMinimum": True,
-                }
+                },
             },
         }
     )
@@ -201,11 +209,88 @@ def test_validate_metric_payload_honors_declared_json_schema_draft(
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
     registry.refresh_catalog()
 
-    assert registry.validate_metric_payload("light_metric", {"value": 1}) == {
-        "value": 1
+    valid_payload = {
+        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+        "value": 1,
     }
+    assert (
+        registry.validate_metric_payload("light_metric", valid_payload) == valid_payload
+    )
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
-        registry.validate_metric_payload("light_metric", {"value": 0})
+        registry.validate_metric_payload(
+            "light_metric",
+            {
+                "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+                "value": 0,
+            },
+        )
 
     assert exc_info.value.errors[0]["type"] == "minimum"
+
+
+def test_catalog_refresh_rejects_raw_geojson_request_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        request_schema={
+            "type": "object",
+            "required": ["location"],
+            "properties": {"location": {"$ref": "#/$defs/geoJSON"}},
+            "$defs": {
+                "geoJSON": {
+                    "type": "object",
+                    "required": ["type", "features", "crs"],
+                    "properties": {
+                        "type": {"const": "FeatureCollection"},
+                        "features": {"type": "array"},
+                        "crs": {"type": "object"},
+                    },
+                },
+            },
+        },
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+
+    with pytest.raises(RuntimeError, match="raw GeoJSON"):
+        registry.refresh_catalog()
+
+
+def test_catalog_builds_spatial_schema_for_location_and_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        request_schema={
+            "type": "object",
+            "required": ["location", "bounds", "value"],
+            "properties": {
+                "location": {},
+                "bounds": {},
+                "value": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        spatial_inputs={"location": "location", "bounds": "bounds"},
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    registry.refresh_catalog()
+
+    payload = {
+        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+        "bounds": {"data_type": "cvegeo_list", "value": ["090020001"]},
+        "value": 1,
+    }
+
+    assert registry.validate_metric_payload("light_metric", payload) == payload
+
+    info = registry.get_metric_info("light_metric")
+    assert info is not None
+    schema_defs = info.request_schema["$defs"]
+    assert "GeoJSONWrapper" in schema_defs
+    assert "SingleGeoJSONWrapper" in schema_defs

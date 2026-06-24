@@ -23,7 +23,7 @@ def _metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         "description": "A lightweight metric.",
         "request_schema": {
             "type": "object",
-            "required": ["value"],
+            "required": ["location", "value"],
             "properties": {"value": {"type": "integer"}},
             "additionalProperties": False,
         },
@@ -32,9 +32,11 @@ def _metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
             "properties": {"value": {"type": "integer"}},
             "additionalProperties": False,
         },
+        "spatial_inputs": {"location": "location"},
         "execution": {"queue": "lightweight"},
         "entrypoint": "fake_plugin.runner:run",
     }
+    metric["request_schema"]["properties"]["location"] = {}
     if overrides:
         metric.update(overrides)
     return metric
@@ -178,8 +180,53 @@ def test_manifest_v2_accepts_schema_backed_metric_contract() -> None:
 
     assert manifest.schema_version == 2
     assert manifest.plugin.name == "fake-plugin"
+    assert manifest.metrics[0].spatial_inputs == {"location": "location"}
     assert manifest.metrics[0].execution.queue == "lightweight"
     assert manifest.metrics[0].entrypoint == "fake_plugin.runner:run"
+
+
+def test_manifest_v2_requires_spatial_inputs() -> None:
+    raw = _manifest()
+    raw["metrics"][0].pop("spatial_inputs")
+
+    with pytest.raises(ValidationError, match="spatial_inputs"):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_empty_spatial_inputs() -> None:
+    raw = _manifest({"spatial_inputs": {}})
+
+    with pytest.raises(ValidationError):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_invalid_spatial_input_kind() -> None:
+    raw = _manifest({"spatial_inputs": {"location": "area"}})
+
+    with pytest.raises(ValidationError):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_empty_spatial_input_field_name() -> None:
+    raw = _manifest({"spatial_inputs": {"": "location"}})
+
+    with pytest.raises(ValidationError, match="non-empty"):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_undeclared_spatial_input_field() -> None:
+    raw = _manifest({"spatial_inputs": {"missing": "location"}})
+
+    with pytest.raises(ValidationError, match="properties"):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_optional_spatial_input_field() -> None:
+    raw = _manifest()
+    raw["metrics"][0]["request_schema"]["required"] = ["value"]
+
+    with pytest.raises(ValidationError, match="required"):
+        PluginManifestV2.model_validate(raw)
 
 
 def test_manifest_v2_rejects_extra_metric_fields() -> None:

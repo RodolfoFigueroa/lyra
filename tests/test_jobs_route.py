@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -8,7 +9,9 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models import JobCreateRequest, JobResult
+from lyra.sdk.models.geometry import GeoJSON
 from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, registry
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
@@ -25,9 +28,10 @@ def _manifest() -> dict[str, Any]:
                 "description": "A heavy metric.",
                 "request_schema": {
                     "type": "object",
-                    "required": ["value"],
-                    "properties": {"value": {"type": "integer"}},
+                    "required": ["location", "value"],
+                    "properties": {"location": {}, "value": {"type": "integer"}},
                 },
+                "spatial_inputs": {"location": "location"},
                 "execution": {"queue": "priority-lane"},
                 "entrypoint": "fake_plugin.runner:run",
             }
@@ -44,6 +48,73 @@ def _synced_repo(repo: Path) -> SyncedPluginRepo:
         ref=None,
     )
     return SyncedPluginRepo(entry=entry, path=repo, changed=False)
+
+
+def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "id": feature_id,
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [-99.20, 19.30],
+                            [-99.10, 19.30],
+                            [-99.10, 19.40],
+                            [-99.20, 19.40],
+                            [-99.20, 19.30],
+                        ]
+                    ],
+                },
+                "properties": {},
+            }
+        ],
+        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+    }
+
+
+def _spatial_payload(
+    *,
+    data_type: str = "geojson",
+    value: Any | None = None,
+) -> dict[str, Any]:
+    return {
+        "location": {
+            "data_type": data_type,
+            "value": _feature_collection() if value is None else value,
+        },
+        "value": 3,
+    }
+
+
+def _patch_converter_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    def convert_cvegeos(cvegeos: list[str]) -> GeoJSON:
+        assert cvegeos == ["090020001"]
+        return GeoJSON.model_validate(_feature_collection("cvegeo-area"))
+
+    def convert_met_zone(code: str) -> GeoJSON:
+        return GeoJSON.model_validate(_feature_collection(f"met-{code}"))
+
+    converter_map = {
+        "location": {
+            "geojson": lambda geojson: geojson,
+            "cvegeo_list": convert_cvegeos,
+            "met_zone_code": convert_met_zone,
+        },
+        "bounds": {
+            "geojson": lambda geojson: geojson,
+            "cvegeo_list": convert_cvegeos,
+            "met_zone_code": convert_met_zone,
+        },
+    }
+    monkeypatch.setitem(
+        sys.modules,
+        "lyra_app.converters",
+        SimpleNamespace(converter_map=converter_map),
+    )
 
 
 class FakeRedisAsync:
@@ -174,6 +245,7 @@ def test_create_job_dispatches_generic_task_to_manifest_queue(
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
 
@@ -181,7 +253,7 @@ def test_create_job_dispatches_generic_task_to_manifest_queue(
         jobs.create_job(
             JobCreateRequest(
                 metric="heavy_metric",
-                input={"value": 3},
+                input=_spatial_payload(),
                 idempotency_key="key-1",
             )
         )
@@ -204,7 +276,7 @@ def test_create_job_dispatches_generic_task_to_manifest_queue(
                 {
                     "job_id": "job-1",
                     "metric": "heavy_metric",
-                    "input": {"value": 3},
+                    "input": {"location": _feature_collection(), "value": 3},
                     "idempotency_key": "key-1",
                     "metadata": {},
                 }
@@ -243,6 +315,141 @@ def test_create_job_rejects_invalid_input(
         asyncio.run(jobs.create_job(JobCreateRequest(metric="heavy_metric", input={})))
 
     assert exc_info.value.status_code == 422
+
+
+def test_create_job_rejects_raw_geojson_spatial_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    _patch_redis(monkeypatch, FakeRedisAsync())
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric="heavy_metric",
+                    input={"location": _feature_collection(), "value": 3},
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_create_job_resolves_cvegeo_list_spatial_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
+
+    asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(
+                metric="heavy_metric",
+                input=_spatial_payload(
+                    data_type="cvegeo_list",
+                    value=["090020001"],
+                ),
+            )
+        )
+    )
+
+    dispatched_input = celery.sent[0]["args"][0]["input"]
+    assert dispatched_input["location"] == _feature_collection("cvegeo-area")
+
+
+def test_create_job_resolves_met_zone_code_spatial_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
+
+    asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(
+                metric="heavy_metric",
+                input=_spatial_payload(
+                    data_type="met_zone_code",
+                    value="09.01",
+                ),
+            )
+        )
+    )
+
+    dispatched_input = celery.sent[0]["args"][0]["input"]
+    assert dispatched_input["location"] == _feature_collection("met-09.01")
+
+
+def test_create_job_rejects_invalid_cvegeo_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    _patch_redis(monkeypatch, FakeRedisAsync())
+    _patch_converter_map(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric="heavy_metric",
+                    input=_spatial_payload(data_type="cvegeo_list", value=["1"]),
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_create_job_returns_503_when_spatial_resolution_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    _patch_redis(monkeypatch, FakeRedisAsync())
+
+    def fail_resolution(geojson: GeoJSON) -> GeoJSON:  # noqa: ARG001
+        raise SQLAlchemyError
+
+    converter_map = {
+        "location": {
+            "geojson": fail_resolution,
+            "cvegeo_list": fail_resolution,
+            "met_zone_code": fail_resolution,
+        },
+        "bounds": {
+            "geojson": fail_resolution,
+            "cvegeo_list": fail_resolution,
+            "met_zone_code": fail_resolution,
+        },
+    }
+    monkeypatch.setitem(
+        sys.modules,
+        "lyra_app.converters",
+        SimpleNamespace(converter_map=converter_map),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+            )
+        )
+
+    assert exc_info.value.status_code == 503
 
 
 def test_create_job_returns_503_when_redis_unavailable(

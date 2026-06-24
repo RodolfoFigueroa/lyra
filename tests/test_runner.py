@@ -20,8 +20,10 @@ def _metric(
         "description": f"{name} metric.",
         "request_schema": {
             "type": "object",
-            "properties": {"value": {"type": "integer"}},
+            "required": ["location"],
+            "properties": {"location": {}, "value": {"type": "integer"}},
         },
+        "spatial_inputs": {"location": "location"},
         "execution": {"queue": queue},
         "entrypoint": entrypoint,
     }

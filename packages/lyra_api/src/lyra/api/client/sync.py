@@ -17,7 +17,7 @@ from lyra.sdk.models import (
     TerminalJobResult,
     parse_job_result,
 )
-from lyra.sdk.models.metric import MetricInfoV2
+from lyra.sdk.models.metric import MetricInfoV3
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 
@@ -202,15 +202,15 @@ class LyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err) from exc
 
     @overload
-    def get_metrics(self, metric_name: None = None) -> list[MetricInfoV2]: ...
+    def get_metrics(self, metric_name: None = None) -> list[MetricInfoV3]: ...
 
     @overload
-    def get_metrics(self, metric_name: str) -> MetricInfoV2: ...
+    def get_metrics(self, metric_name: str) -> MetricInfoV3: ...
 
     def get_metrics(
         self,
         metric_name: str | None = None,
-    ) -> list[MetricInfoV2] | MetricInfoV2:
+    ) -> list[MetricInfoV3] | MetricInfoV3:
         metric_str = "" if metric_name is None else metric_name
         metrics_url = self._http_url(f"metrics/{metric_str}")
 
@@ -230,9 +230,9 @@ class LyraAPIClient(_BaseLyraAPIClient):
 
         metrics = response.json()
         return (
-            [MetricInfoV2.model_validate(item) for item in metrics]
+            [MetricInfoV3.model_validate(item) for item in metrics]
             if metric_name is None
-            else MetricInfoV2.model_validate(metrics)
+            else MetricInfoV3.model_validate(metrics)
         )
 
     def _wait_for_terminal_event(self, job_id: str) -> JobEvent:

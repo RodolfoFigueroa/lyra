@@ -1,5 +1,6 @@
 import importlib
 import logging
+import math
 import os
 import tempfile
 from collections.abc import Callable
@@ -8,8 +9,23 @@ from pathlib import Path
 from typing import Any
 
 from celery import Task
-from lyra.sdk.models import JobEnvelope, JobResult
-from lyra.sdk.models.plugin_v2 import MetricManifestV2
+from lyra.sdk.models import (
+    CancelledJobResult,
+    FailedJobResult,
+    FileJobResult,
+    JobEnvelope,
+    TableJobResult,
+    TerminalJobResult,
+    parse_job_result,
+)
+from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk.models.plugin_v2 import (
+    FileMetricOutputV2,
+    MetricManifestV2,
+    MetricOutputV2,
+    OutputColumnType,
+    TableMetricOutputV2,
+)
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app import job_store
@@ -22,7 +38,7 @@ logger = logging.getLogger(__name__)
 GENERIC_TASK_NAME = "lyra.run_metric"
 
 MetricRunCallable = Callable[
-    [JobEnvelope, "WorkerRunContext"], JobResult | dict[str, Any]
+    [JobEnvelope, "WorkerRunContext"], TerminalJobResult | dict[str, Any]
 ]
 
 
@@ -31,6 +47,7 @@ class RunnerMetricEntryV2:
     metric_name: str
     queue: str
     entrypoint: str
+    output: MetricOutputV2
     run: MetricRunCallable
 
 
@@ -82,6 +99,7 @@ def _entry_from_metric(metric: MetricManifestV2) -> RunnerMetricEntryV2:
         metric_name=metric.name,
         queue=metric.execution.queue,
         entrypoint=metric.entrypoint,
+        output=metric.output,
         run=_load_entrypoint(metric.entrypoint),
     )
 
@@ -166,29 +184,176 @@ def _job_id_from_payload(payload: Any, fallback: str) -> str:
     return fallback
 
 
-def _failed_result(job_id: str, error_type: str, message: str) -> JobResult:
-    return JobResult(
+def _failed_result(job_id: str, error_type: str, message: str) -> FailedJobResult:
+    return FailedJobResult(
         job_id=job_id,
-        status="failed",
         error={"type": error_type, "message": message},
     )
 
 
-def _cancelled_result(job_id: str) -> JobResult:
-    return JobResult(job_id=job_id, status="cancelled")
+def _cancelled_result(job_id: str) -> CancelledJobResult:
+    return CancelledJobResult(job_id=job_id)
 
 
-def _persist_result(result: JobResult, *, metric: str | None = None) -> dict[str, Any]:
+def _persist_result(
+    result: TerminalJobResult,
+    *,
+    metric: str | None = None,
+) -> dict[str, Any]:
     return job_store.save_job_result(result, metric=metric)
 
 
-def _normalise_plugin_result(raw_result: Any, job: JobEnvelope) -> JobResult:
+def _cell_error(
+    value: Any,
+    column_type: OutputColumnType,
+    *,
+    nullable: bool,
+) -> str | None:
+    if value is None:
+        return None if nullable else "null is not allowed"
+
+    error: str | None
+    if column_type == "boolean":
+        error = None if type(value) is bool else "expected boolean"
+    elif column_type == "integer":
+        error = None if type(value) is int else "expected integer"
+    elif column_type == "number":
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            error = "expected number"
+        else:
+            error = None if math.isfinite(float(value)) else "number must be finite"
+    elif column_type == "string":
+        error = None if type(value) is str else "expected string"
+    else:
+        error = f"unsupported column type: {column_type}"
+    return error
+
+
+def _validate_table_result(
+    result: TableJobResult,
+    job: JobEnvelope,
+    output: TableMetricOutputV2,
+) -> TableJobResult | FailedJobResult:
     try:
-        result = (
-            raw_result
-            if isinstance(raw_result, JobResult)
-            else JobResult.model_validate(raw_result)
+        location = GeoJSON.model_validate(job.input["location"])
+    except PydanticValidationError as exc:
+        return _failed_result(job.job_id, "invalid_result", str(exc))
+
+    expected_index = [feature.id for feature in location.features]
+    if result.index != expected_index:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Table result index must match the resolved location feature IDs.",
         )
+
+    expected_columns = [column.name for column in output.columns]
+    if result.columns != expected_columns:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Table result columns must match the metric output declaration.",
+        )
+
+    for row_position, row in enumerate(result.data):
+        for column_position, column in enumerate(output.columns):
+            error = _cell_error(
+                row[column_position],
+                column.type,
+                nullable=column.nullable,
+            )
+            if error is not None:
+                return _failed_result(
+                    job.job_id,
+                    "invalid_result",
+                    (
+                        "Invalid table value at row "
+                        f"{row_position}, column {column.name!r}: {error}."
+                    ),
+                )
+
+    return result
+
+
+def _validate_file_result(
+    result: FileJobResult,
+    job: JobEnvelope,
+    output: FileMetricOutputV2,
+    context: WorkerRunContext,
+) -> FileJobResult | FailedJobResult:
+    if result.media_type != output.media_type:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "File result media_type must match the metric output declaration.",
+        )
+
+    file_path = Path(result.file_path)
+    if not file_path.is_absolute():
+        file_path = context.temp_dir / file_path
+
+    resolved_path = file_path.resolve()
+    temp_dir = context.temp_dir.resolve()
+    if not resolved_path.is_relative_to(temp_dir):
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "File result path must be inside the job temp directory.",
+        )
+
+    if not resolved_path.is_file():
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "File result path does not exist or is not a file.",
+        )
+
+    allowed_extensions = {extension.lower() for extension in output.extensions}
+    if resolved_path.suffix.lower() not in allowed_extensions:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "File result extension must match the metric output declaration.",
+        )
+
+    return result.model_copy(update={"file_path": str(resolved_path)})
+
+
+def _validate_success_result(
+    result: TerminalJobResult,
+    job: JobEnvelope,
+    output: MetricOutputV2,
+    context: WorkerRunContext,
+) -> TerminalJobResult:
+    if isinstance(result, FailedJobResult | CancelledJobResult):
+        return result
+
+    if isinstance(output, TableMetricOutputV2):
+        if not isinstance(result, TableJobResult):
+            return _failed_result(
+                job.job_id,
+                "invalid_result",
+                "Metric declared table output but returned a non-table result.",
+            )
+        return _validate_table_result(result, job, output)
+
+    if not isinstance(result, FileJobResult):
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Metric declared file output but returned a non-file result.",
+        )
+    return _validate_file_result(result, job, output, context)
+
+
+def _normalise_plugin_result(
+    raw_result: Any,
+    job: JobEnvelope,
+    entry: RunnerMetricEntryV2,
+    context: WorkerRunContext,
+) -> TerminalJobResult:
+    try:
+        result = parse_job_result(raw_result)
     except PydanticValidationError as exc:
         return _failed_result(job.job_id, "invalid_result", str(exc))
 
@@ -198,7 +363,7 @@ def _normalise_plugin_result(raw_result: Any, job: JobEnvelope) -> JobResult:
             "invalid_result",
             f"Plugin returned job_id {result.job_id!r} for job {job.job_id!r}.",
         )
-    return result
+    return _validate_success_result(result, job, entry.output, context)
 
 
 def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
@@ -243,7 +408,7 @@ def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
             metric=job.metric,
         )
 
-    result = _normalise_plugin_result(raw_result, job)
+    result = _normalise_plugin_result(raw_result, job, entry, context)
     return _persist_result(result, metric=job.metric)
 
 

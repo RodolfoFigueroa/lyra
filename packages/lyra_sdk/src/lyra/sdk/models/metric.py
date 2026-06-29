@@ -1,5 +1,6 @@
 from typing import Any
 
+from lyra.sdk.models.plugin_v2 import MetricOutputV2
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
 
@@ -12,9 +13,8 @@ class MetricInfoV2(StrictBaseModel):
     request_schema: dict[str, Any] = Field(
         description="JSON Schema for the client request payload.",
     )
-    result_schema: dict[str, Any] | None = Field(
-        default=None,
-        description="Optional JSON Schema for successful JSON results.",
+    output: MetricOutputV2 = Field(
+        description="Successful metric output declaration.",
     )
 
 

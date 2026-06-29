@@ -1,7 +1,7 @@
 import logging
 import time
 
-from lyra.sdk.models import JobResult
+from lyra.sdk.models import FailedJobResult
 
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
@@ -16,9 +16,8 @@ _INTERRUPTED_TASK_MESSAGE = (
 def notify_interrupted_tasks(task_ids: list[str]) -> None:
     for task_id in task_ids:
         job_store.save_job_result(
-            JobResult(
+            FailedJobResult(
                 job_id=task_id,
-                status="failed",
                 error={
                     "type": "worker",
                     "message": _INTERRUPTED_TASK_MESSAGE,

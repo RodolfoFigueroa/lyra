@@ -9,12 +9,13 @@ from anyio import Path
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models import (
+    FileJobResult,
     JobCreateRequest,
     JobCreateResponse,
     JobEnvelope,
     JobLinks,
-    JobResult,
     JobStatusInfo,
+    parse_job_result,
 )
 from redis.exceptions import RedisError
 
@@ -199,11 +200,8 @@ async def get_job_result(
     if payload is None:
         raise HTTPException(status_code=404, detail="Result expired or not found")
 
-    result = JobResult.model_validate(payload)
-    if result.result_type == "file":
-        if result.file_path is None:
-            raise HTTPException(status_code=404, detail="Result file not found")
-
+    result = parse_job_result(payload)
+    if isinstance(result, FileJobResult):
         file_path = Path(result.file_path)
         if not await file_path.exists():
             raise HTTPException(status_code=404, detail="Result file not found")
@@ -216,7 +214,7 @@ async def get_job_result(
         background_tasks.add_task(cleanup)
         return FileResponse(
             file_path,
-            media_type="image/tiff",
+            media_type=result.media_type,
             filename=file_path.name,
         )
 

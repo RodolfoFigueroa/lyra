@@ -3,7 +3,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any, Literal, TypeAlias
 
-from lyra.sdk.models import JobEnvelope, JobEvent, JobResult
+from lyra.sdk.models import JobEnvelope, JobEvent, TerminalJobResult
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
 
@@ -187,7 +187,7 @@ def set_job_status(
 
 
 def save_job_result(
-    result: JobResult,
+    result: TerminalJobResult,
     *,
     metric: str | None = None,
     client: Any | None = None,
@@ -199,7 +199,7 @@ def save_job_result(
         result.job_id,
         result.status,
         metric=metric,
-        error=result.error,
+        error=getattr(result, "error", None),
         emit_event=False,
         client=client,
     )

@@ -211,7 +211,7 @@ def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV2:
         name=entry.metric.name,
         description=entry.metric.description.strip(),
         request_schema=entry.request_schema,
-        result_schema=entry.metric.result_schema,
+        output=entry.metric.output,
     )
 
 

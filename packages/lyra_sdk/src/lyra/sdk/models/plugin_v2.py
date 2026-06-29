@@ -1,5 +1,5 @@
 import re
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
@@ -34,6 +34,86 @@ class MetricExecutionV2(StrictBaseModel):
 
 
 SpatialInputKind = Literal["location", "bounds"]
+OutputColumnType = Literal["number", "integer", "string", "boolean"]
+
+
+class TableOutputColumnV2(StrictBaseModel):
+    """One scalar column produced by a table metric."""
+
+    name: str = Field(min_length=1, description="Column name in the result table.")
+    type: OutputColumnType = Field(description="Scalar value type for this column.")
+    unit: str = Field(min_length=1, description="Measurement unit for this column.")
+    description: str = Field(
+        min_length=1,
+        description="Human-readable column description.",
+    )
+    nullable: bool = Field(
+        default=False,
+        description="Whether this column may contain null values.",
+    )
+
+
+class TableMetricOutputV2(StrictBaseModel):
+    """Output declaration for per-feature value metrics."""
+
+    kind: Literal["table"] = Field(description="Metric output kind.")
+    columns: list[TableOutputColumnV2] = Field(
+        min_length=1,
+        description="Ordered result columns.",
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_columns(self) -> Self:
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for column in self.columns:
+            if column.name in seen:
+                duplicates.add(column.name)
+            seen.add(column.name)
+        if duplicates:
+            names = ", ".join(sorted(duplicates))
+            msg = f"duplicate table output column name(s): {names}"
+            raise ValueError(msg)
+        return self
+
+
+class FileMetricOutputV2(StrictBaseModel):
+    """Output declaration for file-producing metrics."""
+
+    kind: Literal["file"] = Field(description="Metric output kind.")
+    media_type: str = Field(min_length=1, description="Produced file media type.")
+    extensions: list[str] = Field(
+        min_length=1,
+        description="Allowed file extensions, including the leading dot.",
+    )
+
+    @field_validator("extensions")
+    @classmethod
+    def validate_extensions(cls, extensions: list[str]) -> list[str]:
+        invalid = [
+            extension
+            for extension in extensions
+            if not extension.startswith(".") or len(extension) == 1
+        ]
+        if invalid:
+            names = ", ".join(sorted(invalid))
+            msg = (
+                "file output extension(s) must start with '.' and include a suffix: "
+                f"{names}"
+            )
+            raise ValueError(msg)
+
+        lowered = [extension.lower() for extension in extensions]
+        if len(set(lowered)) != len(lowered):
+            msg = "file output extensions must be unique"
+            raise ValueError(msg)
+        return extensions
+
+
+MetricOutputV2 = Annotated[
+    TableMetricOutputV2 | FileMetricOutputV2,
+    Field(discriminator="kind"),
+]
 
 
 class MetricManifestV2(StrictBaseModel):
@@ -47,9 +127,8 @@ class MetricManifestV2(StrictBaseModel):
     request_schema: dict[str, Any] = Field(
         description="JSON Schema for the unresolved client request payload.",
     )
-    result_schema: dict[str, Any] | None = Field(
-        default=None,
-        description="Optional JSON Schema for successful JSON results.",
+    output: MetricOutputV2 = Field(
+        description="Successful metric output declaration.",
     )
     spatial_inputs: dict[str, SpatialInputKind] = Field(
         min_length=1,
@@ -62,16 +141,6 @@ class MetricManifestV2(StrictBaseModel):
     @classmethod
     def validate_request_schema(cls, schema: dict[str, Any]) -> dict[str, Any]:
         _validate_json_schema(schema, "request_schema")
-        return schema
-
-    @field_validator("result_schema")
-    @classmethod
-    def validate_result_schema(
-        cls,
-        schema: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        if schema is not None:
-            _validate_json_schema(schema, "result_schema")
         return schema
 
     @field_validator("entrypoint")
@@ -137,6 +206,16 @@ class MetricManifestV2(StrictBaseModel):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_output_spatial_contract(self) -> Self:
+        if (
+            isinstance(self.output, TableMetricOutputV2)
+            and self.spatial_inputs.get("location") != "location"
+        ):
+            msg = "table metrics must declare a location spatial input named 'location'"
+            raise ValueError(msg)
+        return self
+
 
 class PluginManifestV2(StrictBaseModel):
     """Top-level v2 plugin manifest file."""
@@ -164,9 +243,14 @@ class PluginManifestV2(StrictBaseModel):
 
 
 __all__ = [
+    "FileMetricOutputV2",
     "MetricExecutionV2",
     "MetricManifestV2",
+    "MetricOutputV2",
+    "OutputColumnType",
     "PluginInfoV2",
     "PluginManifestV2",
     "SpatialInputKind",
+    "TableMetricOutputV2",
+    "TableOutputColumnV2",
 ]

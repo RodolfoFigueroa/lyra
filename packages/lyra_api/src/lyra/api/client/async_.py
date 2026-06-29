@@ -10,10 +10,13 @@ from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     DataTypesResponse,
+    FileJobResult,
     JobCreateResponse,
     JobEvent,
-    JobResult,
     JobStatusInfo,
+    TableJobResult,
+    TerminalJobResult,
+    parse_job_result,
 )
 from lyra.sdk.models.metric import MetricInfoV2
 
@@ -129,7 +132,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Job event stream error: {exc}"
             raise DownloadError(err) from exc
 
-    async def get_job_result(self, job_id: str) -> JobResult:
+    async def get_job_result(self, job_id: str) -> TerminalJobResult:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
@@ -146,7 +149,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 if "application/json" not in response.headers.get("content-type", ""):
                     err = "Job result is a file; use download_job_result_to_file()."
                     raise DownloadError(err)
-                return JobResult.model_validate(await response.json())
+                return parse_job_result(await response.json())
         except aiohttp.ClientError as exc:
             err = f"Job result error: {exc}"
             raise DownloadError(err) from exc
@@ -174,7 +177,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                     raise DownloadError(err)
 
                 if "application/json" in response.headers.get("content-type", ""):
-                    result = JobResult.model_validate(await response.json())
+                    result = parse_job_result(await response.json())
                     err = (
                         f"Job {job_id} returned {result.status} JSON result, "
                         "not a file."
@@ -267,7 +270,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         err = f"Job {job_id} event stream ended before a terminal event."
         raise DownloadError(err)
 
-    async def process(self, metric: str, payload: dict[str, Any]) -> Any:
+    async def process(self, metric: str, payload: dict[str, Any]) -> TableJobResult:
         job = await self.create_job(metric, payload)
         await self._wait_for_terminal_event(job.job_id)
         result = await self.get_job_result(job.job_id)
@@ -276,7 +279,10 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 f"Job {job.job_id} finished with status {result.status}: {result.error}"
             )
             raise DownloadError(err)
-        return result.result
+        if not isinstance(result, TableJobResult):
+            err = f"Job {job.job_id} produced a file result; use process_to_file()."
+            raise DownloadError(err)
+        return result
 
     async def process_to_file(
         self,
@@ -286,13 +292,13 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
     ) -> None:
         job = await self.create_job(metric, payload)
         event = await self._wait_for_terminal_event(job.job_id)
-        result = JobResult.model_validate(event.data)
+        result = parse_job_result(event.data)
         if result.status != "succeeded":
             err = (
                 f"Job {job.job_id} finished with status {result.status}: {result.error}"
             )
             raise DownloadError(err)
-        if result.result_type != "file":
+        if not isinstance(result, FileJobResult):
             err = f"Job {job.job_id} did not produce a file result."
             raise DownloadError(err)
         await self.download_job_result_to_file(job.job_id, path)

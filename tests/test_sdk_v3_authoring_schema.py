@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+import lyra.sdk.models as sdk_models
 import pytest
 from lyra.sdk.models import PluginManifestV3
 from lyra.sdk.models.plugin_v3 import BatchInputV3, FileOutputV3, TableOutputV3
@@ -92,6 +93,13 @@ def _dynamic_metric() -> dict[str, Any]:
 def _assert_invalid(raw: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         PluginManifestV3.model_validate(raw)
+
+
+def test_sdk_public_surface_exposes_v3_manifest_entrypoints() -> None:
+    assert sdk_models.PluginManifestV3 is PluginManifestV3
+    assert hasattr(sdk_models, "compile_plugin_manifest")
+    assert not hasattr(sdk_models, "PluginManifestV2")
+    assert not hasattr(sdk_models, "MetricInfoV2")
 
 
 def test_manifest_v3_accepts_minimal_static_table_metric() -> None:

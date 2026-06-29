@@ -12,10 +12,10 @@ from lyra.sdk.models import (
     JobEvent,
     JobLinks,
     JobStatusInfo,
-    PluginManifestV2,
     TableJobResult,
     parse_job_result,
 )
+from lyra.sdk.models.plugin_v2 import PluginManifestV2
 from pydantic import ValidationError
 
 

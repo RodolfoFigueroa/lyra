@@ -15,7 +15,7 @@ class FakeSyncResponse:
         self,
         *,
         status_code: int = 200,
-        payload: dict[str, Any] | None = None,
+        payload: Any | None = None,
         text: str = "",
         headers: dict[str, str] | None = None,
         lines: list[str] | None = None,
@@ -34,7 +34,7 @@ class FakeSyncResponse:
     def __exit__(self, *args: object) -> None:
         return None
 
-    def json(self) -> dict[str, Any]:
+    def json(self) -> Any:
         assert self._payload is not None
         return self._payload
 
@@ -119,6 +119,50 @@ def _data_types_response() -> dict[str, Any]:
     }
 
 
+def _metric_response() -> dict[str, Any]:
+    return {
+        "name": "accessibility_by_destination",
+        "description": "Compute accessibility by destination.",
+        "request_schema": {
+            "type": "object",
+            "required": ["location", "sector_filters"],
+            "properties": {
+                "location": {"type": "object"},
+                "sector_filters": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "object",
+                        "required": ["key", "value"],
+                        "properties": {
+                            "key": {"type": "string"},
+                            "value": {"type": "string"},
+                            "label": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "additionalProperties": False,
+        },
+        "output": {
+            "kind": "table",
+            "columns": [],
+            "batched_columns": [
+                {
+                    "source": "sector_filters",
+                    "name": "job_accessibility_{key}",
+                    "type": "number",
+                    "unit": "jobs",
+                    "description": "Job accessibility for {label}.",
+                    "nullable": False,
+                }
+            ],
+        },
+    }
+
+
 def test_sync_client_uses_job_api_for_job_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -190,6 +234,28 @@ def test_sync_client_returns_grouped_data_type_schemas(
 
     assert response.location[0].data_type == "geojson"
     assert response.bounds[0].wrapper_schema == {"type": "object"}
+
+
+def test_sync_client_returns_v3_metric_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        assert url == "http://example.test/metrics/"
+        return FakeSyncResponse(payload=[_metric_response()])
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    metrics = LyraAPIClient("example.test", secure=False).get_metrics()
+
+    assert len(metrics) == 1
+    assert metrics[0].name == "accessibility_by_destination"
+    output = metrics[0].output.model_dump(mode="json")
+    assert output["batched_columns"][0]["name"] == "job_accessibility_{key}"
+    assert "name_template" not in output["batched_columns"][0]
 
 
 def test_sync_client_rejects_invalid_data_type_response(
@@ -267,7 +333,7 @@ class FakeAsyncResponse:
         self,
         *,
         status: int = 200,
-        payload: dict[str, Any] | None = None,
+        payload: Any | None = None,
         text: str = "",
         headers: dict[str, str] | None = None,
         lines: list[str] | None = None,
@@ -285,7 +351,7 @@ class FakeAsyncResponse:
     async def __aexit__(self, *args: object) -> None:
         return None
 
-    async def json(self) -> dict[str, Any]:
+    async def json(self) -> Any:
         assert self._payload is not None
         return self._payload
 
@@ -363,6 +429,28 @@ def test_async_client_returns_grouped_data_type_schemas(
 
     assert response.location[0].data_type == "geojson"
     assert response.bounds[0].wrapper_schema == {"type": "object"}
+
+
+def test_async_client_returns_v3_metric_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSession.responses = [
+        FakeAsyncResponse(payload=_metric_response()),
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+
+    metric = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).get_metrics(
+            "accessibility_by_destination"
+        )
+    )
+
+    assert metric.name == "accessibility_by_destination"
+    output = metric.output.model_dump(mode="json")
+    assert output["batched_columns"][0]["description"] == (
+        "Job accessibility for {label}."
+    )
+    assert "description_template" not in output["batched_columns"][0]
 
 
 def test_async_client_rejects_invalid_data_type_response(

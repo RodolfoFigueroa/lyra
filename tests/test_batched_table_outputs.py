@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lyra.sdk.models import JobEnvelope, PluginManifestV2, TableJobResult
-from lyra.sdk.models.plugin_v2 import TableMetricOutputV2
+from lyra.sdk.models import JobEnvelope, TableJobResult
+from lyra.sdk.models.plugin_v2 import PluginManifestV2, TableMetricOutputV2
 from lyra.sdk.models.plugin_v3 import TableOutputV3
 from pydantic import ValidationError
 

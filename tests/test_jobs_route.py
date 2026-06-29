@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 from fastapi import BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from lyra.sdk.models import JobCreateRequest, JobResult
+from lyra.sdk.models import FailedJobResult, FileJobResult, JobCreateRequest
 from lyra.sdk.models.geometry import GeoJSON
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
@@ -32,6 +32,17 @@ def _manifest() -> dict[str, Any]:
                     "properties": {"location": {}, "value": {"type": "integer"}},
                 },
                 "spatial_inputs": {"location": "location"},
+                "output": {
+                    "kind": "table",
+                    "columns": [
+                        {
+                            "name": "value",
+                            "type": "integer",
+                            "unit": "count",
+                            "description": "Example output value.",
+                        }
+                    ],
+                },
                 "execution": {"queue": "priority-lane"},
                 "entrypoint": "fake_plugin.runner:run",
             }
@@ -577,9 +588,11 @@ def test_job_result_returns_json_terminal_result(
     redis = FakeRedisAsync()
     _patch_redis(monkeypatch, redis)
     redis.values[job_store.result_key("job-1")] = json.dumps(
-        JobResult(job_id="job-1", status="failed", error={"type": "worker"}).model_dump(
+        FailedJobResult(
+            job_id="job-1",
+            error={"type": "worker"},
+        ).model_dump(
             mode="json",
-            exclude_none=True,
         )
     )
 
@@ -587,6 +600,7 @@ def test_job_result_returns_json_terminal_result(
 
     assert isinstance(response, JSONResponse)
     assert json.loads(bytes(response.body)) == {
+        "kind": "failed",
         "job_id": "job-1",
         "status": "failed",
         "error": {"type": "worker"},
@@ -602,11 +616,10 @@ def test_job_result_returns_file_and_cleans_result(
     output = tmp_path / "result.tif"
     output.write_bytes(b"data")
     redis.values[job_store.result_key("job-1")] = json.dumps(
-        JobResult(
+        FileJobResult(
             job_id="job-1",
-            status="succeeded",
-            result_type="file",
             file_path=str(output),
+            media_type="image/tiff",
         ).model_dump(mode="json", exclude_none=True)
     )
     background_tasks = BackgroundTasks()

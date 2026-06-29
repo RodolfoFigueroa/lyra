@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 import pytest
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import FailedJobResult, JobEnvelope
 
 from lyra_app import job_store
 
@@ -143,9 +143,8 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
         metric="heavy_metric",
         client=redis,
     )
-    result = JobResult(
+    result = FailedJobResult(
         job_id="job-1",
-        status="failed",
         error={"type": "worker", "message": "boom"},
     )
     payload = job_store.save_job_result(
@@ -155,6 +154,7 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
     )
 
     assert payload == {
+        "kind": "failed",
         "job_id": "job-1",
         "status": "failed",
         "error": {"type": "worker", "message": "boom"},
@@ -208,16 +208,20 @@ def test_cancelled_status_is_detected_and_raised() -> None:
 
 def test_async_result_read_sanitizes_non_finite_numbers_and_deletes_result() -> None:
     redis = FakeRedisAsync(
-        '{"job_id":"job-1","status":"succeeded","result":{"score":NaN}}'
+        '{"kind":"table","job_id":"job-1","status":"succeeded",'
+        '"index":["area-1"],"columns":["score"],"data":[[NaN]]}'
     )
 
     payload = asyncio.run(job_store.get_job_result_async("job-1", client=redis))
     asyncio.run(job_store.delete_job_result_async("job-1", client=redis))
 
     assert payload == {
+        "kind": "table",
         "job_id": "job-1",
         "status": "succeeded",
-        "result": {"score": None},
+        "index": ["area-1"],
+        "columns": ["score"],
+        "data": [[None]],
     }
     assert redis.deleted == [job_store.result_key("job-1")]
 

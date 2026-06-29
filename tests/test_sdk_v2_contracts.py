@@ -5,14 +5,16 @@ import pytest
 from lyra.sdk.context import RunContext
 from lyra.sdk.models import (
     DataTypesResponse,
+    FailedJobResult,
     JobCreateRequest,
     JobCreateResponse,
     JobEnvelope,
     JobEvent,
     JobLinks,
-    JobResult,
     JobStatusInfo,
     PluginManifestV2,
+    TableJobResult,
+    parse_job_result,
 )
 from pydantic import ValidationError
 
@@ -27,10 +29,16 @@ def _metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
             "properties": {"value": {"type": "integer"}},
             "additionalProperties": False,
         },
-        "result_schema": {
-            "type": "object",
-            "properties": {"value": {"type": "integer"}},
-            "additionalProperties": False,
+        "output": {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                }
+            ],
         },
         "spatial_inputs": {"location": "location"},
         "execution": {"queue": "lightweight"},
@@ -70,17 +78,20 @@ def test_job_models_accept_v2_contract_payloads() -> None:
             "data": {"percent": 50},
         },
     )
-    result = JobResult.model_validate(
+    result = parse_job_result(
         {
+            "kind": "table",
             "job_id": "job-1",
             "status": "succeeded",
-            "result": {"value": 2},
-            "result_type": "json",
+            "index": ["area-1"],
+            "columns": ["value"],
+            "data": [[2]],
         },
     )
 
     assert envelope.input == {"value": 1}
     assert event.timestamp == datetime(2026, 1, 1, tzinfo=UTC)
+    assert isinstance(result, TableJobResult)
     assert result.status == "succeeded"
 
 
@@ -110,11 +121,28 @@ def test_job_event_rejects_empty_event_name() -> None:
         )
 
 
-def test_job_result_rejects_non_terminal_status() -> None:
+def test_terminal_result_rejects_non_terminal_status() -> None:
     with pytest.raises(ValidationError):
-        JobResult.model_validate(
-            {"job_id": "job-1", "status": "progress", "result": {"value": 1}},
+        TableJobResult.model_validate(
+            {
+                "kind": "table",
+                "job_id": "job-1",
+                "status": "progress",
+                "index": ["area-1"],
+                "columns": ["value"],
+                "data": [[1]],
+            },
         )
+
+
+def test_failed_terminal_result_accepts_error_payload() -> None:
+    result = FailedJobResult(
+        job_id="job-1",
+        error={"type": "worker", "message": "boom"},
+    )
+
+    assert result.kind == "failed"
+    assert result.status == "failed"
 
 
 def test_job_api_models_accept_public_payloads() -> None:
@@ -280,10 +308,78 @@ def test_manifest_v2_rejects_invalid_request_schema() -> None:
         PluginManifestV2.model_validate(raw)
 
 
-def test_manifest_v2_rejects_invalid_result_schema() -> None:
-    raw = _manifest({"result_schema": {"type": "not-a-json-schema-type"}})
+def test_manifest_v2_rejects_missing_output() -> None:
+    raw = _manifest()
+    raw["metrics"][0].pop("output")
 
-    with pytest.raises(ValidationError, match="invalid result_schema"):
+    with pytest.raises(ValidationError, match="output"):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_duplicate_table_output_columns() -> None:
+    raw = _manifest(
+        {
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "value",
+                        "type": "integer",
+                        "unit": "count",
+                        "description": "One.",
+                    },
+                    {
+                        "name": "value",
+                        "type": "integer",
+                        "unit": "count",
+                        "description": "Two.",
+                    },
+                ],
+            }
+        }
+    )
+
+    with pytest.raises(ValidationError, match="duplicate"):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_rejects_table_output_without_location_field() -> None:
+    raw = _manifest({"spatial_inputs": {"bounds": "bounds"}})
+    raw["metrics"][0]["request_schema"]["properties"] = {"bounds": {}, "value": {}}
+    raw["metrics"][0]["request_schema"]["required"] = ["bounds", "value"]
+
+    with pytest.raises(ValidationError, match="location"):
+        PluginManifestV2.model_validate(raw)
+
+
+def test_manifest_v2_accepts_file_output() -> None:
+    raw = _manifest(
+        {
+            "output": {
+                "kind": "file",
+                "media_type": "image/tiff",
+                "extensions": [".tif", ".tiff"],
+            }
+        }
+    )
+
+    manifest = PluginManifestV2.model_validate(raw)
+
+    assert manifest.metrics[0].output.kind == "file"
+
+
+def test_manifest_v2_rejects_invalid_file_output_extension() -> None:
+    raw = _manifest(
+        {
+            "output": {
+                "kind": "file",
+                "media_type": "image/tiff",
+                "extensions": ["tif"],
+            }
+        }
+    )
+
+    with pytest.raises(ValidationError, match="extension"):
         PluginManifestV2.model_validate(raw)
 
 

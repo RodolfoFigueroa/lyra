@@ -73,9 +73,12 @@ def _terminal_event_lines() -> list[str]:
         "event": "succeeded",
         "timestamp": "2026-01-01T00:00:00Z",
         "data": {
+            "kind": "table",
             "job_id": "job-1",
             "status": "succeeded",
-            "result": {"value": 6},
+            "index": ["area-1"],
+            "columns": ["value"],
+            "data": [[6]],
         },
     }
     return [
@@ -88,9 +91,12 @@ def _terminal_event_lines() -> list[str]:
 
 def _result_response() -> dict[str, Any]:
     return {
+        "kind": "table",
         "job_id": "job-1",
         "status": "succeeded",
-        "result": {"value": 6},
+        "index": ["area-1"],
+        "columns": ["value"],
+        "data": [[6]],
     }
 
 
@@ -162,8 +168,9 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert job.job_id == "job-1"
     assert status.status == "started"
     assert [event.event for event in events] == ["succeeded"]
-    assert result.result == {"value": 6}
-    assert processed == {"value": 6}
+    assert result.kind == "table"
+    assert result.data == [[6]]
+    assert processed.data == [[6]]
 
 
 def test_sync_client_returns_grouped_data_type_schemas(
@@ -320,7 +327,8 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
         )
     )
 
-    assert result == {"value": 6}
+    assert result.kind == "table"
+    assert result.data == [[6]]
 
 
 def test_async_client_returns_grouped_data_type_schemas(

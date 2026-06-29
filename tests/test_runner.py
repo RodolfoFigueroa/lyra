@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
+from lyra.sdk.models.plugin_v2 import FileMetricOutputV2, TableMetricOutputV2
 
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 
@@ -14,6 +15,7 @@ def _metric(
     name: str,
     queue: str,
     entrypoint: str,
+    output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -24,6 +26,18 @@ def _metric(
             "properties": {"location": {}, "value": {"type": "integer"}},
         },
         "spatial_inputs": {"location": "location"},
+        "output": output
+        or {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                }
+            ],
+        },
         "execution": {"queue": queue},
         "entrypoint": entrypoint,
     }
@@ -46,6 +60,56 @@ def _synced_repo(repo: Path) -> SyncedPluginRepo:
         ref=None,
     )
     return SyncedPluginRepo(entry=entry, path=repo, changed=False)
+
+
+def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "id": feature_id,
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [-99.20, 19.30],
+                            [-99.10, 19.30],
+                            [-99.10, 19.40],
+                            [-99.20, 19.40],
+                            [-99.20, 19.30],
+                        ]
+                    ],
+                },
+                "properties": {},
+            }
+        ],
+        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+    }
+
+
+def _table_output() -> TableMetricOutputV2:
+    return TableMetricOutputV2.model_validate(
+        {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                }
+            ],
+        }
+    )
+
+
+def _file_output() -> FileMetricOutputV2:
+    return FileMetricOutputV2(
+        kind="file",
+        media_type="image/tiff",
+        extensions=[".tif", ".tiff"],
+    )
 
 
 class FakeRedisSync:
@@ -190,19 +254,17 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     _write_module(
         tmp_path,
         "success_plugin",
-        "from lyra.sdk.models import JobResult\n"
+        "from lyra.sdk.models import TableJobResult\n"
         "def run(job, context):\n"
         "    assert context.job_id == job.job_id\n"
         "    assert context.metric == job.metric\n"
         "    assert hasattr(context, 'db')\n"
         "    context.emit_event('progress', {'percent': 50})\n"
-        "    return JobResult(\n"
+        "    return TableJobResult(\n"
         "        job_id=job.job_id,\n"
-        "        status='succeeded',\n"
-        "        result={\n"
-        "            'value': job.input['value'] * 2,\n"
-        "            'temp': context.temp_dir.name,\n"
-        "        },\n"
+        "        index=['area-1'],\n"
+        "        columns=['value'],\n"
+        "        data=[[job.input['value'] * 2]],\n"
         "    )\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -215,14 +277,21 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
     payload = worker_module.execute_job(
-        {"job_id": "job-1", "metric": "heavy_metric", "input": {"value": 3}},
+        {
+            "job_id": "job-1",
+            "metric": "heavy_metric",
+            "input": {"location": _feature_collection(), "value": 3},
+        },
         task_id="task-id",
     )
 
     assert payload == {
+        "kind": "table",
         "job_id": "job-1",
         "status": "succeeded",
-        "result": {"value": 6, "temp": "job-1"},
+        "index": ["area-1"],
+        "columns": ["value"],
+        "data": [[6]],
     }
     assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
     assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "succeeded"
@@ -276,7 +345,7 @@ def test_plugin_exception_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: Any,
 ) -> None:
-    def fail(job: JobEnvelope, context: Any) -> JobResult:  # noqa: ARG001
+    def fail(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
         msg = "boom"
         raise RuntimeError(msg)
 
@@ -284,6 +353,7 @@ def test_plugin_exception_persists_failed_result(
         metric_name="bad_metric",
         queue="heavy",
         entrypoint="bad_plugin:run",
+        output=_table_output(),
         run=fail,
     )
     fake_redis = FakeRedisSync()
@@ -303,7 +373,12 @@ def test_plugin_exception_persists_failed_result(
     "plugin_result",
     [
         {"job_id": "job-invalid", "status": "progress"},
-        JobResult(job_id="other-job", status="succeeded", result={"value": 1}),
+        TableJobResult(
+            job_id="other-job",
+            index=["area-1"],
+            columns=["value"],
+            data=[[1]],
+        ),
     ],
 )
 def test_invalid_plugin_result_persists_failed_result(
@@ -318,6 +393,7 @@ def test_invalid_plugin_result_persists_failed_result(
         metric_name="invalid_metric",
         queue="heavy",
         entrypoint="invalid_plugin:run",
+        output=_table_output(),
         run=run,
     )
     fake_redis = FakeRedisSync()
@@ -334,22 +410,91 @@ def test_invalid_plugin_result_persists_failed_result(
     assert _decode_stored_result(worker_module, fake_redis, "job-invalid") == result
 
 
+@pytest.mark.parametrize(
+    "plugin_result",
+    [
+        TableJobResult(
+            job_id="job-invalid-table",
+            index=["other-area"],
+            columns=["value"],
+            data=[[1]],
+        ),
+        TableJobResult(
+            job_id="job-invalid-table",
+            index=["area-1"],
+            columns=["other_value"],
+            data=[[1]],
+        ),
+        TableJobResult(
+            job_id="job-invalid-table",
+            index=["area-1"],
+            columns=["value"],
+            data=[["wrong"]],
+        ),
+        TableJobResult(
+            job_id="job-invalid-table",
+            index=["area-1"],
+            columns=["value"],
+            data=[[None]],
+        ),
+    ],
+)
+def test_invalid_table_result_persists_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+    plugin_result: TableJobResult,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+        return plugin_result
+
+    worker_module.RUNNER_REGISTRY["invalid_table_metric"] = (
+        worker_module.RunnerMetricEntryV2(
+            metric_name="invalid_table_metric",
+            queue="heavy",
+            entrypoint="invalid_table_plugin:run",
+            output=_table_output(),
+            run=run,
+        )
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-invalid-table",
+            "metric": "invalid_table_metric",
+            "input": {"location": _feature_collection(), "value": 1},
+        },
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "invalid_result"
+    assert _decode_stored_result(worker_module, fake_redis, "job-invalid-table") == (
+        result
+    )
+
+
 def test_file_result_persists_through_generic_result_path(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     worker_module: Any,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> JobResult:  # noqa: ARG001
-        return JobResult(
+    def run(job: JobEnvelope, context: Any) -> FileJobResult:
+        output_path = context.temp_dir / "result.tif"
+        output_path.write_bytes(b"data")
+        return FileJobResult(
             job_id=job.job_id,
-            status="succeeded",
-            result_type="file",
-            file_path="result.tif",
+            file_path=str(output_path),
+            media_type="image/tiff",
         )
 
+    monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
     worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntryV2(
         metric_name="file_metric",
         queue="heavy",
         entrypoint="file_plugin:run",
+        output=_file_output(),
         run=run,
     )
     fake_redis = FakeRedisSync()
@@ -361,27 +506,82 @@ def test_file_result_persists_through_generic_result_path(
     )
 
     assert result == {
+        "kind": "file",
         "job_id": "job-file",
         "status": "succeeded",
-        "result_type": "file",
-        "file_path": "result.tif",
+        "file_path": str(tmp_path / "tmp" / "jobs" / "job-file" / "result.tif"),
+        "media_type": "image/tiff",
     }
     assert _decode_stored_result(worker_module, fake_redis, "job-file") == result
+
+
+@pytest.mark.parametrize(
+    ("filename", "media_type"),
+    [
+        ("result.txt", "image/tiff"),
+        ("result.tif", "text/plain"),
+    ],
+)
+def test_invalid_file_result_persists_failed_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+    filename: str,
+    media_type: str,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> FileJobResult:
+        output_path = context.temp_dir / filename
+        output_path.write_bytes(b"data")
+        return FileJobResult(
+            job_id=job.job_id,
+            file_path=str(output_path),
+            media_type=media_type,
+        )
+
+    monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
+    worker_module.RUNNER_REGISTRY["invalid_file_metric"] = (
+        worker_module.RunnerMetricEntryV2(
+            metric_name="invalid_file_metric",
+            queue="heavy",
+            entrypoint="invalid_file_plugin:run",
+            output=_file_output(),
+            run=run,
+        )
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-invalid-file", "metric": "invalid_file_metric", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "invalid_result"
+    assert _decode_stored_result(worker_module, fake_redis, "job-invalid-file") == (
+        result
+    )
 
 
 def test_check_cancelled_persists_cancelled_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: Any,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> JobResult:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:
         worker_module.job_store.set_job_status(job.job_id, "cancelled")
         context.check_cancelled()
-        return JobResult(job_id=job.job_id, status="succeeded", result={"done": True})
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["value"],
+            data=[[1]],
+        )
 
     worker_module.RUNNER_REGISTRY["cancel_metric"] = worker_module.RunnerMetricEntryV2(
         metric_name="cancel_metric",
         queue="heavy",
         entrypoint="cancel_plugin:run",
+        output=_table_output(),
         run=run,
     )
     fake_redis = FakeRedisSync()
@@ -392,7 +592,11 @@ def test_check_cancelled_persists_cancelled_result(
         task_id="task-id",
     )
 
-    assert result == {"job_id": "job-cancel", "status": "cancelled"}
+    assert result == {
+        "kind": "cancelled",
+        "job_id": "job-cancel",
+        "status": "cancelled",
+    }
     assert _decode_stored_result(worker_module, fake_redis, "job-cancel") == result
     assert _decode_status(worker_module, fake_redis, "job-cancel")["status"] == (
         "cancelled"

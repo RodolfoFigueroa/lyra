@@ -14,7 +14,7 @@ def _metric(
     name: str = "light_metric",
     description: str = "A metric.",
     request_schema: dict[str, Any] | None = None,
-    result_schema: dict[str, Any] | None = None,
+    output: dict[str, Any] | None = None,
     spatial_inputs: dict[str, str] | None = None,
     queue: str = "lightweight",
     entrypoint: str = "fake_plugin.runner:run",
@@ -30,7 +30,18 @@ def _metric(
             "additionalProperties": False,
         },
         "spatial_inputs": spatial_inputs or {"location": "location"},
-        "result_schema": result_schema,
+        "output": output
+        or {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                }
+            ],
+        },
         "execution": {"queue": queue},
         "entrypoint": entrypoint,
     }
@@ -92,7 +103,8 @@ def test_catalog_refresh_reads_v2_manifests_without_importing_plugin_code(
     info_payload = info.model_dump()
     assert info_payload["name"] == "light_metric"
     assert info_payload["description"] == "A metric."
-    assert info_payload["result_schema"] is None
+    assert info_payload["output"]["kind"] == "table"
+    assert info_payload["output"]["columns"][0]["name"] == "value"
     assert info_payload["request_schema"]["required"] == ["location", "value"]
     assert info_payload["request_schema"]["properties"]["value"] == {"type": "integer"}
     assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
@@ -120,15 +132,12 @@ def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
         registry.refresh_catalog()
 
 
-@pytest.mark.parametrize("schema_field", ["request_schema", "result_schema"])
-def test_catalog_refresh_rejects_invalid_json_schemas(
+def test_catalog_refresh_rejects_invalid_request_json_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    schema_field: str,
 ) -> None:
     repo = tmp_path / "repo"
-    metric = _metric()
-    metric[schema_field] = {"type": "not-a-json-schema-type"}
+    metric = _metric(request_schema={"type": "not-a-json-schema-type"})
     _write_manifest(repo, _manifest(metric=metric))
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
 

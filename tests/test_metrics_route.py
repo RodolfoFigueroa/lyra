@@ -25,9 +25,16 @@ def _manifest() -> dict[str, Any]:
                     "properties": {"location": {}, "value": {"type": "integer"}},
                 },
                 "spatial_inputs": {"location": "location"},
-                "result_schema": {
-                    "type": "object",
-                    "properties": {"value": {"type": "integer"}},
+                "output": {
+                    "kind": "table",
+                    "columns": [
+                        {
+                            "name": "value",
+                            "type": "integer",
+                            "unit": "count",
+                            "description": "Example output value.",
+                        }
+                    ],
                 },
                 "execution": {"queue": "lightweight"},
                 "entrypoint": "fake_plugin.runner:run",
@@ -75,10 +82,8 @@ def test_metrics_route_returns_schema_metadata_only(
     assert payload["request_schema"]["required"] == ["location", "value"]
     assert payload["request_schema"]["properties"]["value"] == {"type": "integer"}
     assert "oneOf" in payload["request_schema"]["properties"]["location"]
-    assert payload["result_schema"] == {
-        "type": "object",
-        "properties": {"value": {"type": "integer"}},
-    }
+    assert payload["output"]["kind"] == "table"
+    assert payload["output"]["columns"][0]["name"] == "value"
 
 
 def test_metric_route_returns_404_for_unknown_metric(

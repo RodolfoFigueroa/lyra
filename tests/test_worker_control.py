@@ -37,6 +37,7 @@ def test_notify_interrupted_tasks_persists_failed_job_results(
     status = json.loads(redis.values[job_store.status_key("job-1")])
     events = redis.streams[job_store.events_key("job-1")]
     assert result == {
+        "kind": "failed",
         "job_id": "job-1",
         "status": "failed",
         "error": {

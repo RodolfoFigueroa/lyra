@@ -58,5 +58,5 @@ rg "class Job|class Plugin|class Metric" packages/lyra_sdk/src/lyra/sdk
 Find job store behavior:
 
 ```bash
-rg "job:\\{job_id\\}|JobEvent|JobResult" lyra_app tests
+rg "job:\\{job_id\\}|JobEvent|TerminalJobResult|TableJobResult|FileJobResult" lyra_app tests
 ```

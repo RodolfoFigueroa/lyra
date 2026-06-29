@@ -122,22 +122,23 @@ Runner plugins parse the resolved GeoJSON field with SDK models before using
 
 ```python
 from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import JobEnvelope, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.utils.geometry import convert_geojson_to_gdf
 
 
-def run(job: JobEnvelope, context: RunContext) -> JobResult:
+def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     context.emit_event("progress", {"message": "Loading location"})
     context.check_cancelled()
 
     geojson = GeoJSON.model_validate(job.input["location"])
     gdf = convert_geojson_to_gdf(geojson)
 
-    return JobResult(
+    return TableJobResult(
         job_id=job.job_id,
-        status="succeeded",
-        result={"feature_count": len(gdf)},
+        index=[str(feature_id) for feature_id in gdf.index],
+        columns=["feature_value"],
+        data=[[1] for _feature_id in gdf.index],
     )
 ```
 

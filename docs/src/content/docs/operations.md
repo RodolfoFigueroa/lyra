@@ -13,7 +13,7 @@ by the async/sync Redis clients.
 Each job uses three Redis key families:
 
 - `job:{job_id}:status`: JSON status snapshot.
-- `job:{job_id}:result`: normalized terminal `JobResult` JSON.
+- `job:{job_id}:result`: normalized terminal result JSON.
 - `job:{job_id}:events`: Redis Stream of `JobEvent` payloads.
 
 Status snapshots include:
@@ -47,13 +47,13 @@ The `/jobs/{job_id}/events` route replays stored events, supports
 
 Cancellation storage is represented by the job status. A runner that calls
 `context.check_cancelled()` will stop if the status is `cancelled`; the worker
-persists a terminal cancelled `JobResult`.
+persists a terminal cancelled result.
 
 There is no public cancellation endpoint in the current API.
 
 ## Interrupted Workers
 
-Worker interruption handling writes failed `JobResult` records through the same
+Worker interruption handling writes failed terminal result records through the same
 job store. This keeps result consumers on the `/jobs/{job_id}/result` path
 regardless of whether failure came from plugin code, validation, or worker
 shutdown handling.

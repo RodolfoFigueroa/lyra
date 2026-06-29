@@ -15,7 +15,7 @@ from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient
 
 Both clients return models from `lyra-sdk`, such as `DataTypesResponse`,
 `MetricInfoV2`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`, and
-`JobResult`.
+terminal result models.
 
 ## Client Configuration
 
@@ -66,7 +66,7 @@ submit, wait, and result workflow, see [Python Client](../python-client/).
 | Method | Returns | Use when |
 | --- | --- | --- |
 | `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data_types`. |
-| `get_metrics()` | `list[MetricInfoV2]` | You need all metric names, descriptions, request schemas, and result schemas. |
+| `get_metrics()` | `list[MetricInfoV2]` | You need all metric names, descriptions, request schemas, and output declarations. |
 | `get_metrics(metric_name)` | `MetricInfoV2` | You need one metric's schema metadata. |
 
 Fetch metric schemas before submitting jobs. The `input` object passed to
@@ -83,7 +83,7 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 | `create_job(metric, payload, idempotency_key=None)` | `JobCreateResponse` | Submit a job and receive a `job_id`. |
 | `get_job(job_id)` | `JobStatusInfo` | Poll the latest status snapshot. |
 | `iter_job_events(job_id, last_event_id=None)` | Iterator or async iterator of `JobEvent` | Stream progress and terminal events. |
-| `get_job_result(job_id)` | `JobResult` | Fetch a terminal JSON result. |
+| `get_job_result(job_id)` | `TerminalJobResult` | Fetch a terminal table, failed, or cancelled JSON result. |
 | `download_job_result_to_file(job_id, path)` | `None` | Download a terminal file result. |
 
 `iter_job_events()` accepts `last_event_id` and sends it as the
@@ -94,11 +94,12 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 
 ## Convenience Methods
 
-For JSON-producing metrics, `process()` submits a job, waits for a terminal
-event, fetches the result, and returns `JobResult.result`.
+For table-producing metrics, `process()` submits a job, waits for a terminal
+event, fetches the result, and returns a `TableJobResult`.
 
 ```python
-value = client.process(metric_name, payload)
+table = client.process(metric_name, payload)
+rows = table.data
 ```
 
 For file-producing metrics, `process_to_file()` submits a job, waits for a

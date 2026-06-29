@@ -129,7 +129,7 @@ example payload without checking it.
 | Job remains `queued` | No worker is consuming the manifest queue with matching Celery `-Q` settings. |
 | `POST /jobs` returns `422` | Fetch `/metrics/{metric_name}` and match the effective schema. Spatial fields must use wrapper objects, not top-level raw GeoJSON. |
 | Spatial resolution returns `503` | Database-backed wrappers such as `cvegeo_list` or `met_zone_code` could not be resolved. Check database settings and availability. |
-| Worker returns `invalid_result` | Return a `JobResult` with the same `job_id` as the envelope and a terminal status. |
+| Worker returns `invalid_result` | Return `TableJobResult` or `FileJobResult` with the same `job_id` as the envelope and a payload matching the manifest `output`. |
 
 For manifest details, see [Plugin Manifests](../plugin-manifests/). For runner
 behavior, see [Runner Plugins](../runner-plugins/).

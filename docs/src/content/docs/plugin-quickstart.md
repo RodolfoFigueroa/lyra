@@ -63,7 +63,7 @@ full wrapper contract and conversion flow.
   "metrics": [
     {
       "name": "example_metric",
-      "description": "Return the submitted value and feature count.",
+      "description": "Return the submitted value for each input feature.",
       "spatial_inputs": {
         "location": "location"
       },
@@ -76,14 +76,16 @@ full wrapper contract and conversion flow.
         "required": ["location", "value"],
         "additionalProperties": false
       },
-      "result_schema": {
-        "type": "object",
-        "properties": {
-          "value": { "type": "number" },
-          "feature_count": { "type": "integer" }
-        },
-        "required": ["value", "feature_count"],
-        "additionalProperties": false
+      "output": {
+        "kind": "table",
+        "columns": [
+          {
+            "name": "value",
+            "type": "number",
+            "unit": "dimensionless",
+            "description": "Submitted numeric value."
+          }
+        ]
       },
       "execution": {
         "queue": "interactive"
@@ -98,21 +100,19 @@ full wrapper contract and conversion flow.
 
 ```python
 from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import JobEnvelope, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON
 
 
-def run(job: JobEnvelope, context: RunContext) -> JobResult:
+def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     context.emit_event("progress", {"message": "Preparing result"})
     context.check_cancelled()
     location = GeoJSON.model_validate(job.input["location"])
-    return JobResult(
+    return TableJobResult(
         job_id=job.job_id,
-        status="succeeded",
-        result={
-            "value": job.input["value"],
-            "feature_count": len(location.features),
-        },
+        index=[feature.id for feature in location.features],
+        columns=["value"],
+        data=[[job.input["value"]] for _feature in location.features],
     )
 ```
 

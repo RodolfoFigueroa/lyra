@@ -27,7 +27,7 @@ Redis is used for Celery transport and for job status, result, and event storage
 5. The registry builds an effective `request_schema` by injecting canonical
    spatial wrapper schemas for each metric's required `spatial_inputs`.
 6. `/metrics` exposes only `name`, `description`, the effective
-   `request_schema`, and optional `result_schema`.
+   `request_schema`, and the `output` declaration.
 
 The API catalog does not import plugin Python code.
 
@@ -38,7 +38,7 @@ The API catalog does not import plugin Python code.
 3. The API resolves each declared spatial wrapper into canonical GeoJSON.
 4. The API creates a `JobEnvelope`, stores a queued job snapshot, and dispatches `lyra.run_metric` to the metric's manifest queue.
 5. A worker consuming that queue validates the envelope, builds a `RunContext`, and calls the metric entrypoint.
-6. The worker stores progress events, terminal status, and a normalized `JobResult`.
+6. The worker stores progress events, terminal status, and a normalized terminal result.
 7. Clients read status, stream events, and fetch results through the `/jobs/{job_id}` routes.
 
 ## Worker Flow
@@ -60,7 +60,7 @@ For each job, Lyra writes:
 - `job:{job_id}:result`
 - `job:{job_id}:events`
 
-The status key stores lifecycle state. The result key stores the terminal `JobResult`. The events key is a Redis Stream consumed by the SSE route.
+The status key stores lifecycle state. The result key stores the terminal result. The events key is a Redis Stream consumed by the SSE route.
 
 ## Public Contracts
 
@@ -68,5 +68,5 @@ The stable contracts to read first are:
 
 - `PluginManifestV2` for plugin metadata.
 - `MetricInfoV2` for `/metrics` responses.
-- `JobCreateRequest`, `JobCreateResponse`, `JobStatusInfo`, `JobEvent`, and `JobResult` for public job APIs.
+- `JobCreateRequest`, `JobCreateResponse`, `JobStatusInfo`, `JobEvent`, and terminal result models for public job APIs.
 - `JobEnvelope` and `RunContext` for runner plugins.

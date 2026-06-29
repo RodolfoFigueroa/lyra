@@ -93,26 +93,39 @@ Clients can reconnect with `Last-Event-ID` to resume after a known stream ID. Th
 
 `GET /jobs/{job_id}/result` returns `404` until a terminal result exists.
 
-JSON results return the full `JobResult` payload:
+Table results return the full terminal table payload:
 
 ```json
 {
+  "kind": "table",
   "job_id": "job-id",
   "status": "succeeded",
-  "result": {
-    "value": 42
-  },
-  "result_type": null,
-  "file_path": null,
-  "error": null
+  "index": ["area-1", "area-2"],
+  "columns": ["value"],
+  "data": [[42], [37]]
 }
 ```
 
-Failed and cancelled jobs also return their terminal `JobResult` JSON with `200`.
+Failed and cancelled jobs also return terminal JSON with `200`:
 
-File results return a file response when `result_type` is `file` and `file_path` points at the produced artifact. After the file response cleanup runs, only the stored result payload is deleted; status and events remain until the job-store TTL expires.
+```json
+{
+  "kind": "failed",
+  "job_id": "job-id",
+  "status": "failed",
+  "error": {
+    "type": "worker",
+    "message": "Unexpected error"
+  }
+}
+```
 
-The current server response for file results uses the produced filename and `image/tiff` media type.
+File results return a file response for terminal payloads with `kind: "file"`.
+After the file response cleanup runs, only the stored result payload is deleted;
+status and events remain until the job-store TTL expires.
+
+The server response uses the produced filename and the `media_type` declared by
+the plugin's file result.
 
 ## Refresh Plugins
 

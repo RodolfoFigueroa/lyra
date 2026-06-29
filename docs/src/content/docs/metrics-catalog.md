@@ -33,8 +33,17 @@ repositories do not contain valid v2 manifests.
       },
       "required": ["location", "data"]
     },
-    "result_schema": {
-      "type": "object"
+    "output": {
+      "kind": "table",
+      "columns": [
+        {
+          "name": "value",
+          "type": "number",
+          "unit": "dimensionless",
+          "description": "Computed value for each input feature.",
+          "nullable": false
+        }
+      ]
     }
   }
 ]
@@ -45,7 +54,10 @@ Each item includes:
 - `name`
 - `description`
 - `request_schema`
-- optional `result_schema`
+- `output`
+
+`output.kind` is either `table` or `file`. Table outputs include ordered column
+metadata; file outputs include a `media_type` and allowed `extensions`.
 
 ## Fetch One Metric
 

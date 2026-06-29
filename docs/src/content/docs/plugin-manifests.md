@@ -37,8 +37,16 @@ For end-to-end publishing checks, see
         },
         "additionalProperties": false
       },
-      "result_schema": {
-        "type": "object"
+      "output": {
+        "kind": "table",
+        "columns": [
+          {
+            "name": "value",
+            "type": "number",
+            "unit": "dimensionless",
+            "description": "Example value for each input feature."
+          }
+        ]
       },
       "execution": {
         "queue": "interactive"
@@ -64,7 +72,7 @@ Metric fields:
 - `description`: client-facing summary.
 - `spatial_inputs`: non-empty mapping of required top-level input fields to `location` or `bounds`.
 - `request_schema`: JSON Schema used to validate `/jobs` input.
-- `result_schema`: optional JSON Schema describing successful result shape. Lyra checks that the schema itself is valid and exposes it through `/metrics`.
+- `output`: successful output declaration. Use `kind: "table"` for value metrics and `kind: "file"` for file-producing metrics.
 - `execution.queue`: queue name used by the API to dispatch jobs and by workers to select metrics.
 - `entrypoint`: Python `module:function` reference imported by worker processes.
 
@@ -79,9 +87,54 @@ Lyra resolves spatial wrappers into canonical GeoJSON dictionaries in
 [Spatial Plugin Inputs](../spatial-plugin-inputs/) for complete request and
 runner shapes.
 
-`result_schema` is client-facing metadata. Lyra validates that the schema is
-well formed, but the worker does not validate successful plugin output against
-it at runtime.
+For table outputs, workers validate that the returned table index exactly
+matches the resolved `location` feature IDs and that columns match the manifest
+declaration. For file outputs, workers validate the file media type, extension,
+existence, and that the artifact is inside `context.temp_dir`.
+
+## Output Declarations
+
+Table metrics return one row per geometry in the resolved `location` input:
+
+```json
+{
+  "output": {
+    "kind": "table",
+    "columns": [
+      {
+        "name": "area_m2",
+        "type": "number",
+        "unit": "m2",
+        "description": "Urbanized area in square meters.",
+        "nullable": false
+      },
+      {
+        "name": "area_frac",
+        "type": "number",
+        "unit": "ratio",
+        "description": "Urbanized area fraction.",
+        "nullable": false
+      }
+    ]
+  }
+}
+```
+
+Table column types are `number`, `integer`, `string`, and `boolean`. Column
+names must be unique. `unit` and `description` are required; `nullable`
+defaults to `false`.
+
+File metrics produce one job-level artifact:
+
+```json
+{
+  "output": {
+    "kind": "file",
+    "media_type": "image/tiff",
+    "extensions": [".tif", ".tiff"]
+  }
+}
+```
 
 ## Validation Rules
 
@@ -99,6 +152,10 @@ wrapper schemas in `/metrics`.
 Metric names must be unique inside a manifest and across all configured plugin
 repositories. Use plugin-specific prefixes if separate repositories might expose
 similar metric names.
+
+Table metrics must declare a spatial input named `location` with value
+`"location"`. File metrics still declare the spatial inputs they need, but
+their successful result is served as a file artifact rather than table JSON.
 
 ## Entrypoints
 

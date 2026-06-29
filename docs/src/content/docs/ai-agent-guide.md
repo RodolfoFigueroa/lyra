@@ -47,13 +47,14 @@ Plugin manifests are `PluginManifestV2` with integer `schema_version: 2`.
 Metric entrypoints are sync functions shaped as:
 
 ```python
-def run(job: JobEnvelope, context: RunContext) -> JobResult:
+def run(job: JobEnvelope, context: RunContext) -> TableJobResult | FileJobResult:
     ...
 ```
 
 The only Celery task name for metric execution is `lyra.run_metric`.
 
-`JobResult.status` is terminal: `succeeded`, `failed`, or `cancelled`.
+Terminal result models include `TableJobResult`, `FileJobResult`,
+`FailedJobResult`, and `CancelledJobResult`.
 
 Job lifecycle status can be `queued`, `started`, `progress`, `succeeded`, `failed`, or `cancelled`.
 

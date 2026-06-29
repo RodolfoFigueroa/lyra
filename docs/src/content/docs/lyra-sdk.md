@@ -11,7 +11,7 @@ this package instead of importing from `lyra_app`.
 
 ```python
 from lyra.sdk import LyraDB, RunContext
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 from lyra.sdk.types import ExplicitBoundsAPI, ExplicitLocationAPI
 ```
@@ -23,21 +23,24 @@ Pydantic models, `lyra.sdk.models.geometry` for GeoJSON models, and
 ## Runner Entry Points
 
 Every runner plugin metric is a synchronous function that accepts a
-`JobEnvelope` and a `RunContext`, then returns a `JobResult`.
+`JobEnvelope` and a `RunContext`, then returns a terminal result model.
 
 ```python
 from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import JobEnvelope, TableJobResult
+from lyra.sdk.models.geometry import GeoJSON
 
 
-def run(job: JobEnvelope, context: RunContext) -> JobResult:
+def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     context.emit_event("progress", {"message": "Starting"})
     context.check_cancelled()
 
-    return JobResult(
+    location = GeoJSON.model_validate(job.input["location"])
+    return TableJobResult(
         job_id=job.job_id,
-        status="succeeded",
-        result={"value": 42},
+        index=[feature.id for feature in location.features],
+        columns=["value"],
+        data=[[42] for _feature in location.features],
     )
 ```
 
@@ -65,40 +68,41 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
 
 ## Returning Results
 
-`JobResult.status` is terminal and must be one of `succeeded`, `failed`, or
-`cancelled`.
+Successful value metrics return `TableJobResult`. The table must match the
+metric manifest's `output.columns` and must be indexed by the resolved
+`location` feature IDs.
 
-Return JSON results in `result`:
+Return table results with split-table fields:
 
 ```python
-return JobResult(
+return TableJobResult(
     job_id=job.job_id,
-    status="succeeded",
-    result={"mean_temperature": 24.8},
+    index=["area-1", "area-2"],
+    columns=["mean_temperature"],
+    data=[[24.8], [23.1]],
 )
 ```
 
-Return files by writing under `context.temp_dir` and setting `result_type` and
-`file_path`:
+Return files by writing under `context.temp_dir` and returning `FileJobResult`:
 
 ```python
 output_path = context.temp_dir / "result.tif"
 # write output_path here
 
-return JobResult(
+return FileJobResult(
     job_id=job.job_id,
-    status="succeeded",
-    result_type="file",
     file_path=str(output_path),
+    media_type="image/tiff",
 )
 ```
 
-Return expected plugin failures as failed `JobResult`s:
+Return expected plugin failures as `FailedJobResult`s:
 
 ```python
-return JobResult(
+from lyra.sdk.models import FailedJobResult
+
+return FailedJobResult(
     job_id=job.job_id,
-    status="failed",
     error={"type": "validation", "message": "Input geometry is empty"},
 )
 ```
@@ -114,22 +118,21 @@ Always handle the optional case:
 
 ```python
 from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, JobResult
-from lyra.sdk.models.geometry import SingleGeoJSON
+from lyra.sdk.models import FailedJobResult, JobEnvelope, TableJobResult
+from lyra.sdk.models.geometry import GeoJSON
 from lyra.utils.geometry import convert_geojson_to_gdf
 
 
-def run(job: JobEnvelope, context: RunContext) -> JobResult:
+def run(job: JobEnvelope, context: RunContext) -> TableJobResult | FailedJobResult:
     if context.db is None:
-        return JobResult(
+        return FailedJobResult(
             job_id=job.job_id,
-            status="failed",
             error={"type": "configuration", "message": "Database is unavailable"},
         )
 
-    bounds = SingleGeoJSON.model_validate(job.input["bounds"])
-    bounds_gdf = convert_geojson_to_gdf(bounds)
-    xmin, ymin, xmax, ymax = bounds_gdf.total_bounds
+    location = GeoJSON.model_validate(job.input["location"])
+    gdf = convert_geojson_to_gdf(location)
+    xmin, ymin, xmax, ymax = gdf.total_bounds
     census = context.db.load_census_from_bounds(
         xmin,
         ymin,
@@ -139,10 +142,11 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
         columns=["pobtot", "geometry"],
     )
 
-    return JobResult(
+    return TableJobResult(
         job_id=job.job_id,
-        status="succeeded",
-        result={"rows": len(census)},
+        index=[str(feature_id) for feature_id in gdf.index],
+        columns=["census_rows"],
+        data=[[len(census)] for _feature_id in gdf.index],
     )
 ```
 
@@ -226,7 +230,8 @@ Use `lyra-utils` when you need to convert these models to GeoDataFrames.
 
 ## SDK Models
 
-Most plugin code only needs `JobEnvelope`, `RunContext`, and `JobResult`, but
+Most plugin code only needs `JobEnvelope`, `RunContext`, `TableJobResult`, and
+`FileJobResult`, but
 these models are also available for tests, clients, and manifest tooling:
 
 | Model | Where it is used |
@@ -235,6 +240,10 @@ these models are also available for tests, clients, and manifest tooling:
 | `JobCreateResponse` | Public `/jobs` submission response. |
 | `JobStatusInfo` | Public `/jobs/{job_id}` status response. |
 | `JobEvent` | Durable event payload streamed from `/jobs/{job_id}/events`. |
+| `TableJobResult` | Successful terminal result for value metrics. |
+| `FileJobResult` | Successful terminal result for file metrics. |
+| `FailedJobResult` | Terminal result for expected or runtime failures. |
+| `CancelledJobResult` | Terminal result persisted by the worker for cancelled jobs. |
 | `MetricInfoV2` | Public metric catalog item exposed by `/metrics`. |
 | `PluginManifestV2` | Strict v2 `lyra.plugin.json` manifest model. |
 | `MetricManifestV2` | One metric entry inside a plugin manifest. |

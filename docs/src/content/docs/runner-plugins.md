@@ -1,6 +1,6 @@
 ---
 title: Runner Plugins
-description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and JobResult.
+description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and terminal result models.
 ---
 
 Runner plugins are the code that workers actually execute. At startup, each
@@ -35,35 +35,38 @@ before publishing the branch or tag that Lyra will run.
 
 ## Entrypoint Contract
 
-Each metric entrypoint must expose a sync function. The documented return value
-is `JobResult`:
+Each metric entrypoint must expose a sync function. Return `TableJobResult` for
+value metrics and `FileJobResult` for file-producing metrics:
 
 ```python
 from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models import JobEnvelope, TableJobResult
+from lyra.sdk.models.geometry import GeoJSON
 
 
-def run(job: JobEnvelope, context: RunContext) -> JobResult:
+def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     context.emit_event("progress", {"message": "Starting"})
     context.check_cancelled()
-    return JobResult(
+
+    location = GeoJSON.model_validate(job.input["location"])
+    return TableJobResult(
         job_id=job.job_id,
-        status="succeeded",
-        result={"value": 42},
+        index=[feature.id for feature in location.features],
+        columns=["value"],
+        data=[[42] for _feature in location.features],
     )
 ```
 
-The worker calls `run(job, context)` and validates the returned `JobResult`.
-Internally it can normalize compatible dictionaries as `JobResult`, but plugin
-authors should return `JobResult` directly so type checks and tests catch shape
-errors early.
+The worker calls `run(job, context)` and validates the returned terminal result
+against the metric's manifest `output` declaration.
 
 Unknown metrics, plugin exceptions, invalid return payloads, and mismatched
-result `job_id` values become failed `JobResult`s.
+result `job_id` values become `FailedJobResult` payloads.
 
-The worker validates the returned object as `JobResult`; it does not validate
-`result` against the metric's `result_schema`. Treat `result_schema` as
-client-facing metadata and cover important output-shape checks in plugin tests.
+For expected domain failures, such as an empty input geometry, plugins may
+return `FailedJobResult`. Plugins should usually not return
+`CancelledJobResult`; call `context.check_cancelled()` and let the worker persist
+the cancelled result.
 
 ## JobEnvelope
 
@@ -106,44 +109,50 @@ Use `temp_dir` for intermediate files. The worker creates a per-job directory be
 
 `db` is optional. Plugins should handle `context.db is None` gracefully.
 
-For file results, return a `JobResult` with `result_type="file"` and
-`file_path` set to the produced file.
+For file results, write the artifact under `context.temp_dir` and return
+`FileJobResult`.
 
 For `LyraDB` methods, explicit spatial input aliases such as
 `ExplicitLocationAPI` and `ExplicitBoundsAPI`, and SDK geometry models, see
 [lyra-sdk](../lyra-sdk/).
 
-## JobResult
+## Terminal Results
 
-Terminal statuses are:
-
-- `succeeded`
-- `failed`
-- `cancelled`
-
-JSON result example:
+Table result example:
 
 ```python
-JobResult(job_id=job.job_id, status="succeeded", result={"value": 42})
+TableJobResult(
+    job_id=job.job_id,
+    index=["area-1", "area-2"],
+    columns=["area_m2", "area_frac"],
+    data=[[12345.6, 0.42], [9876.5, 0.31]],
+)
 ```
 
 File result example:
 
 ```python
-JobResult(
+from lyra.sdk.models import FileJobResult
+
+FileJobResult(
     job_id=job.job_id,
-    status="succeeded",
-    result_type="file",
     file_path=str(output_path),
+    media_type="image/tiff",
 )
 ```
 
 Failed result example:
 
 ```python
-JobResult(
+from lyra.sdk.models import FailedJobResult
+
+FailedJobResult(
     job_id=job.job_id,
-    status="failed",
     error={"type": "validation", "message": "Input geometry is empty"},
 )
 ```
+
+Successful table results use a split-table wire shape with `index`, `columns`,
+and row-major `data`. The worker requires `index` to match the resolved
+`location` feature IDs exactly and `columns` to match the manifest output
+declaration exactly.

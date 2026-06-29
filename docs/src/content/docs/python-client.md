@@ -1,6 +1,6 @@
 ---
 title: Python Client
-description: Use the sync and async lyra-api clients with metrics, jobs, events, JSON results, and file results.
+description: Use the sync and async lyra-api clients with metrics, jobs, events, table results, and file results.
 ---
 
 The `lyra-api` package wraps Lyra's HTTP job API. The clients return SDK model objects from `lyra-sdk`.
@@ -40,18 +40,19 @@ for event in client.iter_job_events(job.job_id):
 
 `iter_job_events()` accepts `last_event_id` to resume from a known SSE stream ID.
 
-## Fetch JSON Results
+## Fetch Table Results
 
 ```python
 result = client.get_job_result(job.job_id)
 
 if result.status == "succeeded":
-    print(result.result)
+    print(result.index, result.columns, result.data)
 else:
     print(result.error)
 ```
 
-Failed and cancelled jobs return terminal `JobResult` JSON.
+Failed and cancelled jobs return terminal JSON with `kind: "failed"` or
+`kind: "cancelled"`.
 
 ## Download File Results
 
@@ -59,14 +60,14 @@ Failed and cancelled jobs return terminal `JobResult` JSON.
 client.download_job_result_to_file(job.job_id, "result.tif")
 ```
 
-If a job returns JSON instead of a file, the client raises a client error for file download calls.
+If a job returns table JSON instead of a file, the client raises a client error for file download calls.
 
 ## Convenience Methods
 
-For JSON-producing metrics:
+For table-producing metrics:
 
 ```python
-value = client.process(metric_name, payload)
+table = client.process(metric_name, payload)
 ```
 
 For file-producing metrics:
@@ -102,7 +103,7 @@ async def main() -> None:
             break
 
     result = await client.get_job_result(job.job_id)
-    print(result.status, result.result)
+    print(result.status, result.data)
 
 
 asyncio.run(main())

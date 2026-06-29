@@ -200,7 +200,37 @@ def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
         raise MetricPayloadValidationError(
             [_format_validation_error(error) for error in errors]
         )
+    batch_errors = _validate_unique_batch_keys(entry.metric, payload)
+    if batch_errors:
+        raise MetricPayloadValidationError(batch_errors)
     return payload
+
+
+def _validate_unique_batch_keys(
+    metric: CompiledMetricManifestV3,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    for field_name in metric.batch_inputs:
+        source_values = payload[field_name]
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for source_value in source_values:
+            key = source_value["key"]
+            if key in seen:
+                duplicates.add(key)
+            seen.add(key)
+
+        if duplicates:
+            duplicate_names = ", ".join(sorted(duplicates))
+            errors.append(
+                {
+                    "loc": [field_name],
+                    "msg": f"Batch input keys must be unique: {duplicate_names}.",
+                    "type": "unique_batch_keys",
+                }
+            )
+    return errors
 
 
 def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]:

@@ -583,6 +583,9 @@ class CompiledMetricManifestV3(StrictBaseModel):
         min_length=1,
         description="Request fields Lyra resolves into spatial GeoJSON inputs.",
     )
+    batch_inputs: list[str] = Field(
+        description="Request fields Lyra validates as batch inputs.",
+    )
     request_schema: dict[str, Any] = Field(
         description="Effective JSON Schema for unresolved client requests.",
     )
@@ -814,10 +817,11 @@ def _merge_defs(
 def _compile_metric_request_schema(
     metric: MetricManifestV3,
     metric_index: int,
-) -> tuple[dict[str, Any], dict[str, SpatialInputKindV3]]:
+) -> tuple[dict[str, Any], dict[str, SpatialInputKindV3], list[str]]:
     required: list[str] = []
     properties: dict[str, Any] = {}
     spatial_inputs: dict[str, SpatialInputKindV3] = {}
+    batch_inputs: list[str] = []
     root_defs: dict[str, Any] = {}
 
     for field_name, input_spec in metric.inputs.items():
@@ -828,6 +832,8 @@ def _compile_metric_request_schema(
             required.append(field_name)
         if spatial_kind is not None:
             spatial_inputs[field_name] = spatial_kind
+        if isinstance(input_spec, BatchInputV3):
+            batch_inputs.append(field_name)
         _merge_defs(root_defs, defs, path)
 
     request_schema: dict[str, Any] = {
@@ -840,7 +846,7 @@ def _compile_metric_request_schema(
         request_schema["$defs"] = root_defs
 
     _validate_json_schema(request_schema, f"metrics[{metric_index}].request_schema")
-    return request_schema, spatial_inputs
+    return request_schema, spatial_inputs, batch_inputs
 
 
 def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifestV3:
@@ -848,7 +854,10 @@ def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifes
 
     compiled_metrics: list[CompiledMetricManifestV3] = []
     for index, metric in enumerate(manifest.metrics):
-        request_schema, spatial_inputs = _compile_metric_request_schema(metric, index)
+        request_schema, spatial_inputs, batch_inputs = _compile_metric_request_schema(
+            metric,
+            index,
+        )
         compiled_metrics.append(
             CompiledMetricManifestV3(
                 name=metric.name,
@@ -856,6 +865,7 @@ def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifes
                 queue=metric.queue,
                 entrypoint=metric.entrypoint,
                 spatial_inputs=spatial_inputs,
+                batch_inputs=batch_inputs,
                 request_schema=request_schema,
                 output=metric.output.model_copy(deep=True),
             )

@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "generate:api": "uv run --frozen --group dev python scripts/generate_api_docs.py",
+    "predev": "npm run generate:api",
     "dev": "astro dev",
+    "prebuild": "npm run generate:api",
     "build": "astro build",
+    "precheck": "npm run generate:api",
     "preview": "astro preview",
     "check": "astro check"
   },

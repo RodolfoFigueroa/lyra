@@ -21,6 +21,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - lyra-sdk: https://rodolfofigueroa.github.io/lyra/lyra-sdk/
 - lyra-api: https://rodolfofigueroa.github.io/lyra/lyra-api/
 - lyra-utils: https://rodolfofigueroa.github.io/lyra/lyra-utils/
+- API Reference: https://rodolfofigueroa.github.io/lyra/api-reference/
 - Job API: https://rodolfofigueroa.github.io/lyra/job-api/
 - Metrics Catalog: https://rodolfofigueroa.github.io/lyra/metrics-catalog/
 - Python Client: https://rodolfofigueroa.github.io/lyra/python-client/
@@ -40,6 +41,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Data type schema models: `DataTypeSchemaInfo` and `DataTypesResponse` in `packages/lyra_sdk/src/lyra/sdk/models/data_types.py`
 - Python clients: `LyraAPIClient` and `AsyncLyraAPIClient` in `packages/lyra_api/src/lyra/api/`
 - Plugin helpers: GeoJSON conversion, date ranges, and Earth Engine utilities in `packages/lyra_utils/src/lyra/utils/`
+- Generated Python API reference: `docs/src/content/docs/api-reference/`, created by `npm run generate:api --prefix docs`
 - Job routes: `lyra_app/routes/jobs.py`
 - Catalog: `lyra_app/registry.py`
 - Worker: `lyra_app/worker.py`

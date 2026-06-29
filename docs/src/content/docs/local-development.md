@@ -90,6 +90,13 @@ Install docs dependencies from the lockfile:
 npm ci --prefix docs
 ```
 
+The docs build generates the Python API reference from package source using
+Griffe. Regenerate it directly when you want to inspect the generated Markdown:
+
+```bash
+npm run generate:api --prefix docs
+```
+
 Preview the built site:
 
 ```bash

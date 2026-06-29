@@ -21,25 +21,42 @@ def _validate_json_schema(schema: dict[str, Any], field_name: str) -> None:
 
 
 class PluginInfoV2(StrictBaseModel):
-    name: str = Field(min_length=1)
-    version: str = Field(min_length=1)
+    """Package-level metadata declared by a Lyra runner plugin."""
+
+    name: str = Field(min_length=1, description="Human-readable plugin name.")
+    version: str = Field(min_length=1, description="Plugin package version.")
 
 
 class MetricExecutionV2(StrictBaseModel):
-    queue: str = Field(min_length=1)
+    """Execution routing metadata for a plugin metric."""
+
+    queue: str = Field(min_length=1, description="Celery queue used by this metric.")
 
 
 SpatialInputKind = Literal["location", "bounds"]
 
 
 class MetricManifestV2(StrictBaseModel):
-    name: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    request_schema: dict[str, Any]
-    result_schema: dict[str, Any] | None = None
-    spatial_inputs: dict[str, SpatialInputKind] = Field(min_length=1)
-    execution: MetricExecutionV2
-    entrypoint: str
+    """Manifest entry that describes one executable metric."""
+
+    name: str = Field(min_length=1, description="Public metric name.")
+    description: str = Field(
+        min_length=1,
+        description="Short description shown to API clients.",
+    )
+    request_schema: dict[str, Any] = Field(
+        description="JSON Schema for the unresolved client request payload.",
+    )
+    result_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional JSON Schema for successful JSON results.",
+    )
+    spatial_inputs: dict[str, SpatialInputKind] = Field(
+        min_length=1,
+        description="Request fields that Lyra resolves into spatial GeoJSON inputs.",
+    )
+    execution: MetricExecutionV2 = Field(description="Queue routing metadata.")
+    entrypoint: str = Field(description="Python module:function runner reference.")
 
     @field_validator("request_schema")
     @classmethod
@@ -122,9 +139,14 @@ class MetricManifestV2(StrictBaseModel):
 
 
 class PluginManifestV2(StrictBaseModel):
-    schema_version: Literal[2]
-    plugin: PluginInfoV2
-    metrics: list[MetricManifestV2] = Field(min_length=1)
+    """Top-level v2 plugin manifest file."""
+
+    schema_version: Literal[2] = Field(description="Manifest schema version.")
+    plugin: PluginInfoV2 = Field(description="Plugin metadata.")
+    metrics: list[MetricManifestV2] = Field(
+        min_length=1,
+        description="Executable metrics exposed by the plugin.",
+    )
 
     @model_validator(mode="after")
     def validate_unique_metric_names(self) -> Self:

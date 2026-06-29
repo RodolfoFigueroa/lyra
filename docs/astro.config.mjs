@@ -117,6 +117,12 @@ export default defineConfig({
           ],
         },
         {
+          label: 'API Reference',
+          items: [
+            { autogenerate: { directory: 'api-reference' } },
+          ],
+        },
+        {
           label: 'Use The API',
           items: [
             { label: 'Job API', slug: 'job-api' },

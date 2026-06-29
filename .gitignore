@@ -218,6 +218,7 @@ __marimo__/
 # Extra
 *.ipynb
 .DS_Store
+docs/src/content/docs/api-reference/
 cache/
 node_modules/
 docs/.astro/

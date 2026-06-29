@@ -55,6 +55,12 @@ Run Starlight and TypeScript checks:
 npm run check --prefix docs
 ```
 
+Generate the Python API reference without running a full docs build:
+
+```bash
+npm run generate:api --prefix docs
+```
+
 Build the static site:
 
 ```bash

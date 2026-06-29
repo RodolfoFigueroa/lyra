@@ -36,7 +36,7 @@ Constructor options:
 | `secure` | `True` uses HTTPS; `False` uses HTTP. |
 | `log_level` | Python logging level for client loggers. |
 
-## Synchronous Client
+## Client Classes
 
 Use `LyraAPIClient` when your caller is synchronous.
 
@@ -44,60 +44,22 @@ Use `LyraAPIClient` when your caller is synchronous.
 from lyra.api import LyraAPIClient
 
 client = LyraAPIClient("localhost:5219", secure=False)
-
 metrics = client.get_metrics()
-metric_name = metrics[0].name
-payload = {
-    "SPATIAL_FIELD": {
-        "data_type": "cvegeo_list",
-        "value": ["090020001"],
-    }
-}
-
-job = client.create_job(metric_name, payload)
-
-for event in client.iter_job_events(job.job_id):
-    if event.event in {"succeeded", "failed", "cancelled"}:
-        break
-
-result = client.get_job_result(job.job_id)
-print(result.status, result.result)
 ```
-
-## Asynchronous Client
 
 Use `AsyncLyraAPIClient` when your caller is already async.
 
 ```python
-import asyncio
-
 from lyra.api import AsyncLyraAPIClient
 
-
-async def main() -> None:
+async def get_metrics() -> None:
     client = AsyncLyraAPIClient("localhost:5219", secure=False)
-
     metrics = await client.get_metrics()
-    metric_name = metrics[0].name
-    payload = {
-        "SPATIAL_FIELD": {
-            "data_type": "cvegeo_list",
-            "value": ["090020001"],
-        }
-    }
-
-    job = await client.create_job(metric_name, payload)
-
-    async for event in client.iter_job_events(job.job_id):
-        if event.event in {"succeeded", "failed", "cancelled"}:
-            break
-
-    result = await client.get_job_result(job.job_id)
-    print(result.status, result.result)
-
-
-asyncio.run(main())
 ```
+
+Both clients expose the same method names. Async client methods are awaited,
+and `iter_job_events()` is consumed as an async iterator. For a complete
+submit, wait, and result workflow, see [Python Client](../python-client/).
 
 ## Discovery Methods
 
@@ -159,15 +121,9 @@ download problems.
 from lyra.api import DownloadError, LyraAPIClient
 
 client = LyraAPIClient("localhost:5219", secure=False)
-payload = {
-    "SPATIAL_FIELD": {
-        "data_type": "cvegeo_list",
-        "value": ["090020001"],
-    }
-}
 
 try:
-    result = client.process("metric_name", payload)
+    result = client.process(metric_name, payload)
 except DownloadError as exc:
     print(f"Lyra request failed: {exc}")
 ```

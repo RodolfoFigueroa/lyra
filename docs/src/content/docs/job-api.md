@@ -127,29 +127,8 @@ curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
 
 `timeout` is the number of seconds to wait for in-flight tasks before forcing worker shutdown.
 
-## Python Client
+## Python Clients
 
-The sync client wraps the same flow:
-
-```python
-from lyra.api import LyraAPIClient
-
-client = LyraAPIClient("localhost:5219", secure=False)
-metrics = client.get_metrics()
-metric_name = metrics[0].name
-payload = {
-    "SPATIAL_FIELD": {
-        "data_type": "cvegeo_list",
-        "value": ["090020001"],
-    }
-}
-job = client.create_job(metric_name, payload)
-
-for event in client.iter_job_events(job.job_id):
-    if event.event in {"succeeded", "failed", "cancelled"}:
-        break
-
-result = client.get_job_result(job.job_id)
-```
-
-For simple JSON-producing metrics, `client.process(metric, payload)` submits, waits for a terminal event, and returns the result value.
+The `lyra-api` package wraps this HTTP flow. For end-to-end client workflows,
+see [Python Client](../python-client/). For constructor options, method tables,
+and exceptions, see [lyra-api](../lyra-api/).

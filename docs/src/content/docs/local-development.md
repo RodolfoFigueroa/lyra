@@ -3,47 +3,26 @@ title: Local Development
 description: Run Lyra locally, configure plugins, and work with the docs site.
 ---
 
-## Python Environment
+This page is for contributors working in the Lyra repository. For first-run
+environment setup, `.env` values, Redis, and the basic API/worker startup flow,
+start with [Getting Started](../getting-started/).
 
-Install the workspace:
+## Workspace
+
+Install the Python workspace before running tests, the API, or workers:
 
 ```bash
 uv sync
 ```
 
-The root project requires Python `>=3.11` and includes the workspace packages under `packages/*`.
-
-## Environment File
-
-Create `.env` in the repository root. Start from `.env.example` and fill in the
-values needed for your run mode.
-
-Minimum values for most local work:
-
-```text
-EARTHENGINE_PROJECT=your-gee-project-id
-SERVICE_ACCOUNT_BIND_PATH=C:\path\to\service-account.json
-LYRA_CACHE_BIND_PATH=C:\path\to\lyra-cache
-CELERY_BROKER_URL=redis://localhost:6379/0
-LYRA_PLUGIN_REPOS=owner/plugin-repo@branch
-LYRA_ADMIN_API_KEY=local-admin-secret
-```
-
-The app reads the Earth Engine key from `/app/service-account.json`. Compose
-mounts `SERVICE_ACCOUNT_BIND_PATH` to that path. Direct local runs need that
-path to exist.
-
-## Redis
-
-Run Redis locally:
-
-```bash
-docker run -d -p 6379:6379 redis:alpine
-```
+The root project requires Python `>=3.11` and includes workspace packages under
+`packages/*`.
 
 ## Direct API And Worker
 
-Start one worker queue:
+Use direct processes when you are iterating on application or worker code and
+want fast restarts. Run Redis and configure `.env` as described in
+[Getting Started](../getting-started/), then start one worker queue:
 
 ```bash
 LYRA_RUNNER_QUEUES=interactive \
@@ -60,7 +39,8 @@ The API defaults to port `5219`. Set `LYRA_PORT` to change it.
 
 ## Docker Compose
 
-Run the development stack:
+Use Compose when you want the same mounted service-account path, plugin catalog
+volume, and worker plugin volumes used by the deployment examples:
 
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
@@ -72,7 +52,8 @@ pool mounts its own `/lyra_plugins` volume.
 
 ## Plugin Catalog During Development
 
-`LYRA_PLUGIN_REPOS` accepts comma-separated GitHub entries:
+Plugin repositories must be reachable through GitHub-style
+`LYRA_PLUGIN_REPOS` entries:
 
 ```text
 owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
@@ -80,7 +61,8 @@ owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
 
 `LYRA_PLUGIN_REPOS` does not support local filesystem paths. For local plugin
 iteration, push a branch to GitHub, point `LYRA_PLUGIN_REPOS` at that branch,
-and refresh the catalog.
+and refresh the catalog. For repository entry formats and preflight checks, see
+[Plugin Author Checklist](../plugin-author-checklist/).
 
 The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync
 and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.
@@ -96,6 +78,9 @@ Refresh the catalog and restart worker pools:
 curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
+
+Workers do not hot-reload plugin code in process. The refresh route reloads the
+API catalog and asks worker pools to restart so they reinstall plugin code.
 
 ## Docs Site
 

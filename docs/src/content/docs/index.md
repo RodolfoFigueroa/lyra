@@ -17,8 +17,8 @@ queue-specific Celery workers.
 
 ## Choose A Path
 
-- Run Lyra locally: start with [Getting Started](getting-started/) and
-  [Local Development](local-development/).
+- Run Lyra locally: start with [Getting Started](getting-started/), then use
+  [Local Development](local-development/) for repository workflows.
 - Change Lyra itself: read [Contributor Guide](contributor-guide/),
   [Architecture](architecture/), and
   [Testing And Quality](testing-and-quality/).
@@ -27,9 +27,9 @@ queue-specific Celery workers.
   [Plugin Manifests](plugin-manifests/),
   [Spatial Plugin Inputs](spatial-plugin-inputs/), [Runner Plugins](runner-plugins/),
   [lyra-sdk](lyra-sdk/), and [lyra-utils](lyra-utils/).
-- Call Lyra from another application: use [Job API](job-api/),
-  [Metrics Catalog](metrics-catalog/), [Python Client](python-client/), and
-  [lyra-api](lyra-api/).
+- Call Lyra from another application: use [Job API](job-api/) and
+  [Metrics Catalog](metrics-catalog/) for HTTP behavior, [Python Client](python-client/)
+  for client workflows, and [lyra-api](lyra-api/) for package reference.
 - Work as an AI agent: use [AI Agent Guide](ai-agent-guide/) as the stable crawl
   entrypoint.
 

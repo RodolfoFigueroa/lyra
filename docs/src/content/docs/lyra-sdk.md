@@ -194,67 +194,21 @@ Underlying models:
 | `ExplicitLocationAPI` | `GeoJSON` | The metric should run over one or more client-selected features. |
 | `ExplicitBoundsAPI` | `SingleGeoJSON` | The metric needs one enclosing area or bounding geometry. |
 
-Accepted wrapper payloads use a discriminator named `data_type` and a `value`:
+Client spatial payloads use wrapper objects with a `data_type` discriminator and
+a `value`. Lyra validates and resolves those wrappers before constructing the
+`JobEnvelope`. For the full wrapper lifecycle, request shapes, and sample jobs,
+see [Spatial Plugin Inputs](../spatial-plugin-inputs/).
 
-```json
-{ "data_type": "cvegeo_list", "value": ["090020001", "090020002"] }
-```
-
-```json
-{ "data_type": "met_zone_code", "value": "MET_ZONE_CODE" }
-```
-
-```json
-{
-  "data_type": "geojson",
-  "value": {
-    "type": "FeatureCollection",
-    "features": [
-      {
-        "id": "area-1",
-        "type": "Feature",
-        "geometry": {
-          "type": "Polygon",
-          "coordinates": [
-            [
-              [-99.20, 19.30],
-              [-99.10, 19.30],
-              [-99.10, 19.40],
-              [-99.20, 19.40],
-              [-99.20, 19.30]
-            ]
-          ]
-        },
-        "properties": {}
-      }
-    ],
-    "crs": { "type": "name", "properties": { "name": "EPSG:4326" } }
-  }
-}
-```
-
-`GET /data_types` or `client.get_data_types()` returns grouped wrapper schemas:
+`GET /data_types` and `client.get_data_types()` expose grouped wrapper schemas:
 
 | Group | Use when |
 | --- | --- |
 | `location` | The metric accepts one or more client-selected features. |
 | `bounds` | The metric accepts one enclosing area or bounding geometry. |
 
-Each item contains `data_type`, `description`, and `wrapper_schema`. For a full
-plugin example, see [Spatial Plugin Inputs](../spatial-plugin-inputs/). Fetch
-`GET /metrics/{metric_name}` for the complete metric request schema with these
+Each item contains `data_type`, `description`, and `wrapper_schema`. Fetch
+`GET /metrics/{metric_name}` for the complete metric request schema with
 wrappers injected into the declared spatial fields.
-
-```python
-from lyra.sdk.types import ExplicitBoundsAPI
-from lyra.utils.geometry import convert_geojson_to_gdf
-
-
-def summarize_bounds(bounds: ExplicitBoundsAPI) -> dict[str, float]:
-    gdf = convert_geojson_to_gdf(bounds)
-    xmin, ymin, xmax, ymax = gdf.total_bounds
-    return {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax}
-```
 
 ## Geometry Models
 

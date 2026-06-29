@@ -15,7 +15,7 @@ from lyra.sdk.models.job import (
     TerminalJobStatus,
     parse_job_result,
 )
-from lyra.sdk.models.metric import MetricInfoV2
+from lyra.sdk.models.metric import MetricInfoV2, MetricInfoV3
 from lyra.sdk.models.plugin_v2 import (
     BatchedTableOutputColumnV2,
     FileMetricOutputV2,
@@ -84,6 +84,7 @@ __all__ = [
     "LocationInputV3",
     "MetricExecutionV2",
     "MetricInfoV2",
+    "MetricInfoV3",
     "MetricManifestV2",
     "MetricManifestV3",
     "MetricOutputV2",

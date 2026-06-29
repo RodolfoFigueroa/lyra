@@ -8,19 +8,23 @@ from typing import Any
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
-from lyra.sdk.models.metric import MetricInfoV2
-from lyra.sdk.models.plugin_v2 import MetricManifestV2, PluginManifestV2
+from lyra.sdk.models.metric import MetricInfoV3
+from lyra.sdk.models.plugin_v3 import (
+    CompiledMetricManifestV3,
+    CompiledPluginManifestV3,
+    PluginManifestV3,
+    compile_plugin_manifest,
+)
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.plugins import MANIFEST_FILENAME, sync_catalog_repos
-from lyra_app.spatial_inputs import build_effective_request_schema
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class MetricRegistryEntry:
-    metric: MetricManifestV2
+    metric: CompiledMetricManifestV3
     plugin_name: str
     plugin_version: str
     request_schema: dict[str, Any]
@@ -58,7 +62,7 @@ def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
 
 
 def _normalised_manifest_payload(
-    manifests: list[tuple[PluginManifestV2, Path]],
+    manifests: list[tuple[CompiledPluginManifestV3, Path]],
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     for manifest, _path in manifests:
@@ -71,7 +75,7 @@ def _normalised_manifest_payload(
     )
 
 
-def load_plugin_manifest(path: Path) -> PluginManifestV2:
+def load_plugin_manifest(path: Path) -> CompiledPluginManifestV3:
     manifest_path = path / MANIFEST_FILENAME
     if not manifest_path.exists():
         msg = f"Plugin repo {path} is missing required {MANIFEST_FILENAME}."
@@ -79,11 +83,12 @@ def load_plugin_manifest(path: Path) -> PluginManifestV2:
 
     try:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return PluginManifestV2.model_validate(raw)
+        manifest = PluginManifestV3.model_validate(raw)
+        return compile_plugin_manifest(manifest)
     except json.JSONDecodeError as exc:
         msg = f"Plugin manifest {manifest_path} is not valid JSON."
         raise RuntimeError(msg) from exc
-    except PydanticValidationError as exc:
+    except (PydanticValidationError, ValueError) as exc:
         msg = f"Plugin manifest {manifest_path} is invalid: {exc}"
         raise RuntimeError(msg) from exc
 
@@ -99,7 +104,7 @@ def _build_request_validator(metric_name: str, schema: dict[str, Any]) -> Any:
 
 
 def _build_registry(
-    manifests: list[tuple[PluginManifestV2, Path]],
+    manifests: list[tuple[CompiledPluginManifestV3, Path]],
 ) -> dict[str, MetricRegistryEntry]:
     registry: dict[str, MetricRegistryEntry] = {}
     for manifest, _path in manifests:
@@ -107,14 +112,14 @@ def _build_registry(
             if metric.name in registry:
                 msg = f"Duplicate metric name in plugin manifests: {metric.name!r}"
                 raise RuntimeError(msg)
-            request_schema = build_effective_request_schema(metric)
+            request_schema = metric.request_schema
             registry[metric.name] = MetricRegistryEntry(
                 metric=metric,
                 plugin_name=manifest.plugin.name,
                 plugin_version=manifest.plugin.version,
                 request_schema=request_schema,
                 request_validator=_build_request_validator(metric.name, request_schema),
-                queue=metric.execution.queue,
+                queue=metric.queue,
                 entrypoint=metric.entrypoint,
             )
     return registry
@@ -165,14 +170,14 @@ def get_metric_entry(name: str) -> MetricRegistryEntry | None:
     return TASK_REGISTRY.get(name)
 
 
-def get_metric_info(name: str) -> MetricInfoV2 | None:
+def get_metric_info(name: str) -> MetricInfoV3 | None:
     entry = get_metric_entry(name)
     if entry is None:
         return None
     return _metric_info_from_entry(entry)
 
 
-def get_metrics_info() -> list[MetricInfoV2]:
+def get_metrics_info() -> list[MetricInfoV3]:
     ensure_catalog_loaded()
     return [_metric_info_from_entry(entry) for entry in TASK_REGISTRY.values()]
 
@@ -206,8 +211,8 @@ def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]
     }
 
 
-def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV2:
-    return MetricInfoV2(
+def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV3:
+    return MetricInfoV3(
         name=entry.metric.name,
         description=entry.metric.description.strip(),
         request_schema=entry.request_schema,

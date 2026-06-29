@@ -20,13 +20,13 @@ from lyra.sdk.models import (
     parse_job_result,
 )
 from lyra.sdk.models.geometry import GeoJSON
-from lyra.sdk.models.plugin_v2 import (
-    FileMetricOutputV2,
-    MetricManifestV2,
-    MetricOutputV2,
-    OutputColumnType,
-    TableMetricOutputV2,
-    TableOutputColumnV2,
+from lyra.sdk.models.plugin_v3 import (
+    CompiledMetricManifestV3,
+    FileOutputV3,
+    OutputColumnTypeV3,
+    OutputSpecV3,
+    TableOutputColumnV3,
+    TableOutputV3,
 )
 from pydantic import ValidationError as PydanticValidationError
 
@@ -47,11 +47,11 @@ MetricRunCallable = Callable[
 
 
 @dataclass(frozen=True)
-class RunnerMetricEntryV2:
+class RunnerMetricEntry:
     metric_name: str
     queue: str
     entrypoint: str
-    output: MetricOutputV2
+    output: OutputSpecV3
     run: MetricRunCallable
 
 
@@ -75,7 +75,7 @@ class WorkerRunContext:
         job_store.raise_if_cancelled(self.job_id)
 
 
-RUNNER_REGISTRY: dict[str, RunnerMetricEntryV2] = {}
+RUNNER_REGISTRY: dict[str, RunnerMetricEntry] = {}
 
 
 def _configured_runner_queues() -> set[str]:
@@ -98,25 +98,25 @@ def _load_entrypoint(spec: str) -> MetricRunCallable:
     return value
 
 
-def _entry_from_metric(metric: MetricManifestV2) -> RunnerMetricEntryV2:
-    return RunnerMetricEntryV2(
+def _entry_from_metric(metric: CompiledMetricManifestV3) -> RunnerMetricEntry:
+    return RunnerMetricEntry(
         metric_name=metric.name,
-        queue=metric.execution.queue,
+        queue=metric.queue,
         entrypoint=metric.entrypoint,
         output=metric.output,
         run=_load_entrypoint(metric.entrypoint),
     )
 
 
-def load_runner_metric_entries() -> dict[str, RunnerMetricEntryV2]:
+def load_runner_metric_entries() -> dict[str, RunnerMetricEntry]:
     queues = _configured_runner_queues()
     repos = install_runner_plugins(sync_runner_repos())
-    entries: dict[str, RunnerMetricEntryV2] = {}
+    entries: dict[str, RunnerMetricEntry] = {}
 
     for repo in repos:
         manifest = load_plugin_manifest(repo.path)
         for metric in manifest.metrics:
-            if queues and metric.execution.queue not in queues:
+            if queues and metric.queue not in queues:
                 continue
             if metric.name in entries:
                 msg = f"Duplicate metric name in runner manifests: {metric.name!r}"
@@ -126,12 +126,12 @@ def load_runner_metric_entries() -> dict[str, RunnerMetricEntryV2]:
     return entries
 
 
-def refresh_runner_registry() -> dict[str, RunnerMetricEntryV2]:
+def refresh_runner_registry() -> dict[str, RunnerMetricEntry]:
     registry = load_runner_metric_entries()
     RUNNER_REGISTRY.clear()
     RUNNER_REGISTRY.update(registry)
     logger.info(
-        "Loaded %d v2 runner metric(s) for generic task %s.",
+        "Loaded %d v3 runner metric(s) for generic task %s.",
         len(RUNNER_REGISTRY),
         GENERIC_TASK_NAME,
     )
@@ -209,7 +209,7 @@ def _persist_result(
 
 def _cell_error(
     value: Any,
-    column_type: OutputColumnType,
+    column_type: OutputColumnTypeV3,
     *,
     nullable: bool,
 ) -> str | None:
@@ -272,9 +272,9 @@ def _expand_batched_template(template: str, context: dict[str, str]) -> str:
 
 
 def _expand_table_output_columns(
-    output: TableMetricOutputV2,
+    output: TableOutputV3,
     job_input: dict[str, Any],
-) -> list[TableOutputColumnV2]:
+) -> list[TableOutputColumnV3]:
     columns = list(output.columns)
 
     for column_group in output.batched_columns:
@@ -289,18 +289,18 @@ def _expand_table_output_columns(
         for source_value in source_values:
             template_context = _batched_template_context(source_value)
             name = _expand_batched_template(
-                column_group.name_template,
+                column_group.name,
                 template_context,
             )
             if not name:
                 msg = "Batched column templates must produce non-empty names."
                 raise ValueError(msg)
             description = _expand_batched_template(
-                column_group.description_template,
+                column_group.description,
                 template_context,
             )
             columns.append(
-                TableOutputColumnV2(
+                TableOutputColumnV3(
                     name=name,
                     type=column_group.type,
                     unit=column_group.unit,
@@ -339,7 +339,7 @@ def _expected_table_index(
 def _validate_table_result(
     result: TableJobResult,
     job: JobEnvelope,
-    output: TableMetricOutputV2,
+    output: TableOutputV3,
 ) -> TableJobResult | FailedJobResult:
     expected_index = _expected_table_index(job)
     if isinstance(expected_index, FailedJobResult):
@@ -388,7 +388,7 @@ def _validate_table_result(
 def _validate_file_result(
     result: FileJobResult,
     job: JobEnvelope,
-    output: FileMetricOutputV2,
+    output: FileOutputV3,
     context: WorkerRunContext,
 ) -> FileJobResult | FailedJobResult:
     if result.media_type != output.media_type:
@@ -432,13 +432,13 @@ def _validate_file_result(
 def _validate_success_result(
     result: TerminalJobResult,
     job: JobEnvelope,
-    output: MetricOutputV2,
+    output: OutputSpecV3,
     context: WorkerRunContext,
 ) -> TerminalJobResult:
     if isinstance(result, FailedJobResult | CancelledJobResult):
         return result
 
-    if isinstance(output, TableMetricOutputV2):
+    if isinstance(output, TableOutputV3):
         if not isinstance(result, TableJobResult):
             return _failed_result(
                 job.job_id,
@@ -459,7 +459,7 @@ def _validate_success_result(
 def _normalise_plugin_result(
     raw_result: Any,
     job: JobEnvelope,
-    entry: RunnerMetricEntryV2,
+    entry: RunnerMetricEntry,
     context: WorkerRunContext,
 ) -> TerminalJobResult:
     try:
@@ -534,7 +534,7 @@ refresh_runner_registry()
 __all__ = [
     "GENERIC_TASK_NAME",
     "RUNNER_REGISTRY",
-    "RunnerMetricEntryV2",
+    "RunnerMetricEntry",
     "WorkerRunContext",
     "build_run_context",
     "execute_job",

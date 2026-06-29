@@ -45,8 +45,10 @@ The API catalog does not import plugin Python code.
 
 Workers sync plugin repositories into `LYRA_PLUGIN_INSTALL_DIR`, defaulting to
 `/lyra_plugins`. They check install compatibility, install plugins editable into
-the worker Python environment, parse v2 manifests, and import only metrics whose
-`execution.queue` matches `LYRA_RUNNER_QUEUES`.
+the worker Python environment, parse v2 manifests, and import metrics selected
+by `LYRA_RUNNER_QUEUES`. If `LYRA_RUNNER_QUEUES` is unset, a worker imports all
+installed plugin metrics; Celery's `-Q` setting still controls which queue
+messages it receives.
 
 All metric execution goes through one Celery task name: `lyra.run_metric`.
 

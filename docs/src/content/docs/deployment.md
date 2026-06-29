@@ -22,7 +22,7 @@ Worker containers:
 
 - Clone and install plugin repositories at startup through the worker startup path.
 - Read v2 manifests from installed plugins.
-- Filter metrics by `LYRA_RUNNER_QUEUES`.
+- Filter metrics by `LYRA_RUNNER_QUEUES` when it is set.
 - Import matching metric entrypoints.
 - Consume matching Celery queues with `-Q`.
 
@@ -47,6 +47,10 @@ its own `/lyra_plugins` volume, while the API mounts only
 To add another queue, add another worker service using the same image, set
 `LYRA_RUNNER_QUEUES` to the new queue name, and set Celery `-Q` to the same
 queue.
+
+If `LYRA_RUNNER_QUEUES` is unset, the worker imports every installed plugin
+metric. Queue-specific deployments should set it explicitly so import failures
+in unrelated queues cannot prevent that worker pool from starting.
 
 `CELERY_WORKER_CONCURRENCY` controls worker concurrency in the development
 Compose file. The production Compose file uses Celery defaults unless the

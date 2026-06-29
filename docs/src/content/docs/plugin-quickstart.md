@@ -130,7 +130,9 @@ uv run python -c "import json; from pathlib import Path; from lyra.sdk.models im
 
 The worker uses the same install path: it checks compatibility, installs
 compatible plugins editable, and imports entrypoints for matching queues. If a
-check fails here, fix it before publishing the plugin branch.
+check fails here, fix it before publishing the plugin branch. If a selected
+entrypoint cannot be imported after install, the worker registry will not load
+for that worker process.
 
 ## Connect The Plugin To Lyra
 
@@ -146,6 +148,10 @@ Run an API process and a worker whose queue matches the manifest:
 LYRA_RUNNER_QUEUES=interactive \
 uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
 ```
+
+`LYRA_RUNNER_QUEUES` selects which manifest queues the worker imports. Keep it
+aligned with Celery's `-Q` value. If it is unset, the worker imports every
+installed plugin metric.
 
 Refresh the catalog after changing plugin code or manifests:
 

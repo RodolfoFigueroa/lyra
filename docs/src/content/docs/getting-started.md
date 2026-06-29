@@ -84,8 +84,9 @@ uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactiv
 ```
 
 `LYRA_RUNNER_QUEUES` controls which v2 manifest metrics the worker imports.
-Celery's `-Q` value controls which queue messages the worker receives. Keep
-them aligned.
+If it is unset, the worker imports every installed plugin metric. Celery's `-Q`
+value controls which queue messages the worker receives. Keep them aligned for
+queue-specific worker pools.
 
 ## Start The API
 

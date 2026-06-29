@@ -17,7 +17,7 @@ Core application settings:
 | `LYRA_PLUGIN_CATALOG_DIR` | Directory containing API catalog manifests. |
 | `LYRA_PLUGIN_INSTALL_DIR` | Directory where workers install plugin code. |
 | `LYRA_PORT` | API server port for direct `python -m lyra_app.main` runs. Defaults to `5219`. |
-| `LYRA_RUNNER_QUEUES` | Comma-separated queue names a worker should import and execute. |
+| `LYRA_RUNNER_QUEUES` | Optional comma-separated queue names a worker should import and execute. If unset, the worker imports every installed plugin metric. |
 | `LYRA_RUNNER_TEMP_DIR` | Optional base directory for runner temporary job files. |
 | `LYRA_CACHE_DIR` | Cache directory used as a fallback for runner temp files. |
 | `LYRA_JOB_STORE_TTL_SECONDS` | TTL for job status, result, and event keys. Defaults to `600`. |

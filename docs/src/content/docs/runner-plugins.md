@@ -18,12 +18,20 @@ publish-time checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 ## Worker Install And Import
 
 Workers sync configured repositories, run `uv pip install --dry-run`, install
-compatible packages editable, and import only metrics whose
-`execution.queue` matches `LYRA_RUNNER_QUEUES`.
+compatible packages editable, and import metrics selected by
+`LYRA_RUNNER_QUEUES`. When `LYRA_RUNNER_QUEUES` is set, a worker imports only
+metrics whose `execution.queue` is in that comma-separated list. When it is
+unset, the worker imports every metric from installed plugins. Celery's `-Q`
+setting still controls which queue messages that worker receives.
 
 If a plugin fails compatibility checks or editable install, that worker skips
 the plugin. The API can still expose the metric when its manifest is valid, so
 worker logs are the best place to diagnose install and import problems.
+
+A manifest parse failure for any installed plugin, duplicate selected metric
+name, or import failure for a selected entrypoint prevents the worker registry
+from loading. Verify each selected entrypoint with the preflight import command
+before publishing the branch or tag that Lyra will run.
 
 ## Entrypoint Contract
 

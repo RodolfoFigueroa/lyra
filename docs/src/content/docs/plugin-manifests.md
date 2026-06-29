@@ -112,13 +112,17 @@ example_plugin.runner:run
 ```
 
 The referenced module must be importable after the plugin package is installed
-by the worker.
+by each worker that selects the metric's queue. If a selected entrypoint cannot
+be imported, that worker registry will not load.
 
 ## Queue Ownership
 
 Queue names are deployment-owned. A manifest can use any queue name as long as
 the deployment has a worker service with matching `LYRA_RUNNER_QUEUES` and
 Celery `-Q` settings.
+
+If `LYRA_RUNNER_QUEUES` is unset on a worker, that worker imports every
+installed plugin metric. Queue-specific deployments should set it explicitly.
 
 The checked-in Compose examples use `interactive` and `batch`, but those names
 are not special to Lyra.

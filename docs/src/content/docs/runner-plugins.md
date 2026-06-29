@@ -179,4 +179,13 @@ FailedJobResult(
 Successful table results use a split-table wire shape with `index`, `columns`,
 and row-major `data`. The worker requires `index` to match the resolved
 `location` feature IDs after string conversion and `columns` to match the
-manifest output declaration exactly.
+manifest output declaration exactly. For table outputs with `batched_columns`,
+the worker expands those columns from the validated source array first. A
+manifest with `name_template: "job_accessibility_{value}"` and input
+`sectors: ["01", "32"]` must return columns `job_accessibility_01` and
+`job_accessibility_32`, in that order.
+
+Use `batched_columns` only when the runner can reuse substantial work across
+source values, such as sharing a network graph or travel-time matrix across
+sector queries. Prefer separate jobs for independent parameter sweeps, such as
+temperature by year or season, where batching would only make the table wider.

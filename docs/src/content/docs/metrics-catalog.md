@@ -43,7 +43,8 @@ repositories do not contain valid v2 manifests.
           "description": "Computed value for each input feature.",
           "nullable": false
         }
-      ]
+      ],
+      "batched_columns": []
     }
   }
 ]
@@ -56,8 +57,34 @@ Each item includes:
 - `request_schema`
 - `output`
 
-`output.kind` is either `table` or `file`. Table outputs include ordered column
-metadata; file outputs include a `media_type` and allowed `extensions`.
+`output.kind` is either `table` or `file`. Table outputs include ordered static
+column metadata and may include `batched_columns`, which describe columns the
+worker expands from a bounded input array for each job. File outputs include a
+`media_type` and allowed `extensions`.
+
+A table metric that batches over `sectors` can expose:
+
+```json
+{
+  "kind": "table",
+  "columns": [],
+  "batched_columns": [
+    {
+      "source": "sectors",
+      "name_template": "job_accessibility_{value}",
+      "type": "number",
+      "unit": "jobs",
+      "description_template": "Job accessibility for sector {value}.",
+      "nullable": false,
+      "batching_reason": "Reuses the network graph and travel-time matrix across all sector queries."
+    }
+  ]
+}
+```
+
+Clients should treat `batched_columns` as a declaration. Concrete result column
+names are available after submitting a job, using the source array order from
+the validated input.
 
 ## Fetch One Metric
 

@@ -89,8 +89,10 @@ runner shapes.
 
 For table outputs, workers validate that the returned table index exactly
 matches the resolved `location` feature IDs and that columns match the manifest
-declaration. For file outputs, workers validate the file media type, extension,
-existence, and that the artifact is inside `context.temp_dir`.
+declaration. If a table declares `batched_columns`, the worker first expands
+those declarations from the validated job input, then validates the concrete
+result columns. For file outputs, workers validate the file media type,
+extension, existence, and that the artifact is inside `context.temp_dir`.
 
 ## Output Declarations
 
@@ -123,6 +125,53 @@ Table metrics return one row per geometry in the resolved `location` input:
 Table column types are `number`, `integer`, `string`, and `boolean`. Column
 names must be unique. `unit` and `description` are required; `nullable`
 defaults to `false`.
+
+Use `batched_columns` only when one job can reuse substantial work across a
+bounded input array. For example, a job accessibility metric can build a
+network graph and travel-time matrix once, then calculate one output column for
+each requested economic sector:
+
+```json
+{
+  "request_schema": {
+    "type": "object",
+    "properties": {
+      "location": {},
+      "sectors": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^[0-9]{2}$" },
+        "minItems": 1,
+        "maxItems": 20,
+        "uniqueItems": true
+      }
+    },
+    "required": ["location", "sectors"]
+  },
+  "output": {
+    "kind": "table",
+    "columns": [],
+    "batched_columns": [
+      {
+        "source": "sectors",
+        "name_template": "job_accessibility_{value}",
+        "type": "number",
+        "unit": "jobs",
+        "description_template": "Job accessibility for sector {value}.",
+        "nullable": false,
+        "batching_reason": "Reuses the network graph and travel-time matrix across all sector queries."
+      }
+    ]
+  }
+}
+```
+
+For input `sectors: ["01", "32"]`, the worker expects result columns
+`job_accessibility_01` and `job_accessibility_32`, in that order. The source
+field must be a required top-level array with `minItems`, `maxItems`, and
+`uniqueItems: true`; array items must be scalar strings, integers, numbers, or
+booleans. Avoid `batched_columns` for independent parameter sweeps, such as a
+temperature metric where each year or season can be queried with separate jobs
+without shared preprocessing.
 
 File metrics produce one job-level artifact:
 

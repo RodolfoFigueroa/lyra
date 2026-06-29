@@ -96,10 +96,6 @@ Keep raw GeoJSON out of top-level request field schemas. Spatial request
 fields are placeholders in the manifest; Lyra replaces them with canonical
 wrapper schemas in `/metrics`.
 
-If `request_schema.$defs` already contains a definition name used by a
-canonical spatial wrapper, it must be identical to Lyra's definition. Conflicts
-are rejected when the catalog is built.
-
 Metric names must be unique inside a manifest and across all configured plugin
 repositories. Use plugin-specific prefixes if separate repositories might expose
 similar metric names.

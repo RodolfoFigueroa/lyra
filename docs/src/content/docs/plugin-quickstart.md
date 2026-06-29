@@ -51,6 +51,10 @@ Every metric declares at least one spatial input. Read
 [Spatial Plugin Inputs](../spatial-plugin-inputs/) after this quickstart for the
 full wrapper contract and conversion flow.
 
+For table, file, static column, and generated column design choices, read
+[Metric Output Design](../metric-output-design/) before expanding this minimal
+example into a production metric.
+
 ## lyra.plugin.json
 
 ```json

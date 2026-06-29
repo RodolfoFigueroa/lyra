@@ -96,7 +96,12 @@ extension, existence, and that the artifact is inside `context.temp_dir`.
 
 ## Output Declarations
 
-Table metrics return one row per geometry in the resolved `location` input:
+Choose the output shape with [Metric Output Design](../metric-output-design/).
+This section documents the manifest fields and validation rules.
+
+Table metrics return one row per geometry in the resolved `location` input.
+They must declare at least one static `columns` entry or one `batched_columns`
+entry:
 
 ```json
 {
@@ -126,57 +131,13 @@ Table column types are `number`, `integer`, `string`, and `boolean`. Column
 names must be unique. `unit` and `description` are required; `nullable`
 defaults to `false`.
 
-Use `batched_columns` only when one job can reuse substantial work across a
-bounded input array. For example, a job accessibility metric can build a
-network graph and travel-time matrix once, then calculate one output column for
-each requested economic-sector filter. Batched inputs are arrays of objects
-with fixed fields:
-
-- `key`: required stable column identity.
-- `value`: required plugin-specific computation value, such as a regex.
-- `label`: optional human-readable text. If omitted, Lyra uses `key`.
+Batched column groups declare columns generated from a required top-level
+request array:
 
 ```json
 {
-  "request_schema": {
-    "type": "object",
-    "properties": {
-      "location": {},
-      "sector_filters": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "required": ["key", "value"],
-          "properties": {
-            "key": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-              "minLength": 1,
-              "maxLength": 64
-            },
-            "value": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            },
-            "label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120
-            }
-          },
-          "additionalProperties": false
-        },
-        "minItems": 1,
-        "maxItems": 20,
-        "uniqueItems": true
-      }
-    },
-    "required": ["location", "sector_filters"]
-  },
   "output": {
     "kind": "table",
-    "columns": [],
     "batched_columns": [
       {
         "source": "sector_filters",
@@ -185,14 +146,35 @@ with fixed fields:
         "unit": "jobs",
         "description_template": "Job accessibility for {label}.",
         "nullable": false,
-        "batching_reason": "Reuses the network graph and travel-time matrix across all sector filters."
+        "batching_reason": "Reuses shared network data across all sector filters."
       }
     ]
   }
 }
 ```
 
-For input:
+Each `batched_columns` entry uses:
+
+- `source`: required top-level request field that produces columns.
+- `name_template`: required column name template. It must contain `{key}` and
+  may not contain any other template field.
+- `type`, `unit`, `nullable`: shared metadata for every generated column.
+  `nullable` defaults to `false`.
+- `description_template`: required description template. It may contain `{key}`
+  and `{label}`, and may not contain any other template field.
+- `batching_reason`: required non-empty explanation of the shared work.
+
+The `source` field must point to a required `request_schema` property. That
+property must be an array with `minItems >= 1`, `maxItems >= 1`, and
+`uniqueItems: true`. Its `items` schema must be an object with
+`additionalProperties: false`, exactly `key` and `value` in `required`, and only
+these properties:
+
+- `key`: required bounded string matching `^[A-Za-z_][A-Za-z0-9_]*$`.
+- `value`: required plugin-specific computation value.
+- `label`: optional string display text. If omitted, Lyra uses `key`.
+
+For this source input:
 
 ```json
 {
@@ -213,10 +195,8 @@ For input:
 the worker expects result columns `job_accessibility_sectors_091_092` and
 `job_accessibility_retail`, in that order. The plugin uses each item's `value`
 for computation, while Lyra uses `key` for column names and `label` for
-descriptions. Do not derive public column names from free-form values such as
-regex patterns. Avoid `batched_columns` for independent parameter sweeps, such
-as a temperature metric where each year or season can be queried with separate
-jobs without shared preprocessing.
+descriptions. Static columns are expanded first, followed by batched groups in
+manifest order and source-array order. Expanded column names must be unique.
 
 File metrics produce one job-level artifact:
 

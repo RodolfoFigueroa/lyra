@@ -24,9 +24,11 @@ queue-specific Celery workers.
   [Testing And Quality](testing-and-quality/).
 - Build a plugin: start with [Plugin Quickstart](plugin-quickstart/), follow
   the [Plugin Author Checklist](plugin-author-checklist/), then read
+  [Metric Output Design](metric-output-design/),
   [Plugin Manifests](plugin-manifests/),
-  [Spatial Plugin Inputs](spatial-plugin-inputs/), [Runner Plugins](runner-plugins/),
-  [lyra-sdk](lyra-sdk/), and [lyra-utils](lyra-utils/).
+  [Spatial Plugin Inputs](spatial-plugin-inputs/),
+  [Runner Plugins](runner-plugins/), [lyra-sdk](lyra-sdk/), and
+  [lyra-utils](lyra-utils/).
 - Call Lyra from another application: use [Job API](job-api/) and
   [Metrics Catalog](metrics-catalog/) for HTTP behavior, [Python Client](python-client/)
   for client workflows, and [lyra-api](lyra-api/) for package reference.

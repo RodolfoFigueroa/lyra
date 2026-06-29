@@ -57,36 +57,20 @@ Each item includes:
 - `request_schema`
 - `output`
 
-`output.kind` is either `table` or `file`. Table outputs include ordered static
-column metadata and may include `batched_columns`, which describe columns the
-worker expands from a bounded input array for each job. File outputs include a
-`media_type` and allowed `extensions`.
+`output.kind` is either `table` or `file`. File outputs include a `media_type`
+and allowed `extensions`.
 
-A table metric that batches over `sector_filters` can expose:
+Table outputs include ordered static `columns` and may include
+`batched_columns`. Static columns are concrete result columns known from the
+catalog before a job is submitted. Batched columns are declarations: the final
+column names depend on the submitted source array and are available in the
+terminal table result.
 
-```json
-{
-  "kind": "table",
-  "columns": [],
-  "batched_columns": [
-    {
-      "source": "sector_filters",
-      "name_template": "job_accessibility_{key}",
-      "type": "number",
-      "unit": "jobs",
-      "description_template": "Job accessibility for {label}.",
-      "nullable": false,
-      "batching_reason": "Reuses the network graph and travel-time matrix across all sector filters."
-    }
-  ]
-}
-```
-
-Clients should treat `batched_columns` as a declaration. Concrete result column
-names are available after submitting a job, using the source array order from
-the validated input. Batched source items use fixed fields: `key` is the stable
-column identity, `value` is plugin-specific computation input such as a regex,
-and optional `label` is display text.
+For `batched_columns`, clients should use the source array order from the
+validated input. Each source item has a stable `key`, plugin-specific `value`,
+and optional display `label`; Lyra uses `key` for column names and `label` for
+descriptions. Plugin authors should use
+[Metric Output Design](../metric-output-design/) when choosing an output shape.
 
 ## Fetch One Metric
 

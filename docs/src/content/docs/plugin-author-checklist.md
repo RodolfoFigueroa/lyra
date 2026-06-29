@@ -32,6 +32,8 @@ accounts scoped to what plugin code is allowed to use.
 - Keep runner entrypoints under the installed package, such as
   `example_plugin.runner:run`.
 - Import runtime contracts from `lyra-sdk` rather than from `lyra_app`.
+- Choose the table, file, static column, or generated column shape with
+  [Metric Output Design](../metric-output-design/).
 
 ## Repository Entries
 
@@ -87,7 +89,8 @@ assert that the returned `TableJobResult` or `FileJobResult` has the expected
 choose the `TableJobResult` constructor that matches the computation result:
 `from_mapping()` for dictionaries or aligned sequences, `from_dataframe()` for
 table-shaped Pandas or GeoPandas outputs, and `from_series()` for one-column
-Pandas outputs.
+Pandas outputs. For batched table metrics, include at least two source items and
+assert the expanded column names and order.
 
 The manifest is strict v2 JSON. Extra fields are rejected, schemas must be valid
 JSON Schemas, metric names must be unique across the loaded catalog, and each
@@ -143,5 +146,6 @@ example payload without checking it.
 | Spatial resolution returns `503` | Database-backed wrappers such as `cvegeo_list` or `met_zone_code` could not be resolved. Check database settings and availability. |
 | Worker returns `invalid_result` | Return `TableJobResult` or `FileJobResult` with the same `job_id` as the envelope and a payload matching the manifest `output`. |
 
-For manifest details, see [Plugin Manifests](../plugin-manifests/). For runner
+For output design, see [Metric Output Design](../metric-output-design/). For
+manifest details, see [Plugin Manifests](../plugin-manifests/). For runner
 behavior, see [Runner Plugins](../runner-plugins/).

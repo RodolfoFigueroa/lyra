@@ -187,7 +187,6 @@ return column `job_accessibility_sectors_091_092`. The plugin uses each
 batched item's `value` for computation, but Lyra uses `key` for column names
 and optional `label` for descriptions.
 
-Use `batched_columns` only when the runner can reuse substantial work across
-source values, such as sharing a network graph or travel-time matrix across
-sector queries. Prefer separate jobs for independent parameter sweeps, such as
-temperature by year or season, where batching would only make the table wider.
+For deciding between static columns, batched columns, file outputs, separate
+jobs, and separate metrics, see
+[Metric Output Design](../metric-output-design/).

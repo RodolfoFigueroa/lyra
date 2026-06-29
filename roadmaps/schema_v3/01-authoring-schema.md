@@ -60,7 +60,8 @@ Every metric must define at least one spatial input using `kind: "location"` or
 `kind: "bounds"`. Table metrics must define an input named `location` with
 `kind: "location"`.
 
-Inputs default to required. Optional inputs must set `required: false`.
+Inputs default to required. Plugin-owned scalar, enum, and `json_schema` inputs
+may set `required: false`. Spatial inputs and batch inputs must remain required.
 `nullable` defaults to `false`; optional absence and explicit `null` are separate
 states.
 
@@ -88,6 +89,7 @@ Common metadata rules:
   must validate against the compiled input schema.
 - `required` defaults to `true`.
 - `nullable` defaults to `false`.
+- `required: false` must not be used on `location`, `bounds`, or `batch` inputs.
 - `nullable: true` must not be used on `location`, `bounds`, or `batch` inputs.
 - `default` must not be used on `location`, `bounds`, or `batch` inputs.
 
@@ -110,6 +112,8 @@ wrapper for it.
 Lyra compiles `location` into the canonical location wrapper schema for clients
 and resolves it to GeoJSON before workers run.
 
+`location` inputs must be required.
+
 ### `bounds`
 
 `bounds` is a Lyra-owned spatial input for one enclosing geometry.
@@ -125,6 +129,8 @@ and resolves it to GeoJSON before workers run.
 
 Lyra compiles `bounds` into the canonical bounds wrapper schema for clients and
 resolves it to a single GeoJSON feature collection before workers run.
+
+`bounds` inputs must be required.
 
 ### `string`
 

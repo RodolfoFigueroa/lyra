@@ -104,8 +104,9 @@ Rules:
 - The compiled root schema must always use `additionalProperties: false`.
 - Inputs with `required` omitted or `required: true` must be included in the
   root `required` list.
-- Inputs with `required: false` must not be included in the root `required`
-  list.
+- Plugin-owned inputs with `required: false` must not be included in the root
+  `required` list. Spatial inputs and batch inputs must reject
+  `required: false` before compilation.
 - Input property order must preserve authoring `inputs` order.
 
 ## Common Metadata Compilation

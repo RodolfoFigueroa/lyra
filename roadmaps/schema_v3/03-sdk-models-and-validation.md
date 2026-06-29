@@ -67,6 +67,7 @@ Required model rules:
 - Metric names must be unique inside one manifest.
 - Output column types must be `number`, `integer`, `string`, or `boolean`.
 - File extensions must start with `.` and must be unique case-insensitively.
+- `location`, `bounds`, and `batch` inputs must reject `required: false`.
 
 ## Compiler Validation
 
@@ -166,6 +167,7 @@ Add SDK tests for invalid manifests:
 - Duplicate metric names.
 - Invalid entrypoint format.
 - Table metric missing `inputs.location`.
+- Optional `location`, `bounds`, or `batch` input.
 - Batch input not referenced by a batched column.
 - Batched column source missing from inputs.
 - Batched column source referencing a non-batch input.

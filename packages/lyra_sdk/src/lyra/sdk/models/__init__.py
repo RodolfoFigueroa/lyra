@@ -34,6 +34,8 @@ from lyra.sdk.models.plugin_v3 import (
     BatchInputV3,
     BooleanInputV3,
     BoundsInputV3,
+    CompiledMetricManifestV3,
+    CompiledPluginManifestV3,
     EnumInputV3,
     FileOutputV3,
     InputSpecV3,
@@ -50,6 +52,7 @@ from lyra.sdk.models.plugin_v3 import (
     StringInputV3,
     TableOutputColumnV3,
     TableOutputV3,
+    compile_plugin_manifest,
 )
 
 __all__ = [
@@ -59,6 +62,8 @@ __all__ = [
     "BooleanInputV3",
     "BoundsInputV3",
     "CancelledJobResult",
+    "CompiledMetricManifestV3",
+    "CompiledPluginManifestV3",
     "DataTypeSchemaInfo",
     "DataTypesResponse",
     "EnumInputV3",
@@ -100,5 +105,6 @@ __all__ = [
     "TableOutputV3",
     "TerminalJobResult",
     "TerminalJobStatus",
+    "compile_plugin_manifest",
     "parse_job_result",
 ]

@@ -1,18 +1,32 @@
 import json
 import math
 import re
+from copy import deepcopy
 from typing import Annotated, Any, Literal, Self
 
 from jsonschema.exceptions import SchemaError
+from jsonschema.exceptions import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
+from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 from lyra.sdk.models.strict import StrictBaseModel
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 _ENTRYPOINT_PATTERN = re.compile(
     rf"^{_IDENTIFIER}(?:\.{_IDENTIFIER})*:{_IDENTIFIER}$",
 )
 _TEMPLATE_FIELD_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_BATCH_KEY_SCHEMA = {
+    "type": "string",
+    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+    "minLength": 1,
+    "maxLength": 64,
+}
+_BATCH_LABEL_SCHEMA = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 120,
+}
 
 
 def _validate_json_schema(schema: dict[str, Any], field_name: str) -> None:
@@ -29,6 +43,51 @@ def _template_fields(template: str) -> set[str]:
 
 def _json_scalar_identity(value: Any) -> str:
     return f"{type(value).__name__}:{json.dumps(value, sort_keys=True)}"
+
+
+def _const_to_enum(value: Any) -> Any:
+    if isinstance(value, dict):
+        converted = {
+            key: _const_to_enum(item) for key, item in value.items() if key != "const"
+        }
+        if "const" in value:
+            converted["enum"] = [deepcopy(value["const"])]
+        return converted
+    if isinstance(value, list):
+        return [_const_to_enum(item) for item in value]
+    return deepcopy(value)
+
+
+class CVEGEOListWrapperV3(StrictBaseModel):
+    data_type: Literal["cvegeo_list"]
+    value: list[str]
+
+
+class GeoJSONLocationWrapperV3(StrictBaseModel):
+    data_type: Literal["geojson"]
+    value: GeoJSON
+
+
+class GeoJSONBoundsWrapperV3(StrictBaseModel):
+    data_type: Literal["geojson"]
+    value: SingleGeoJSON
+
+
+class MetZoneCodeWrapperV3(StrictBaseModel):
+    data_type: Literal["met_zone_code"]
+    value: str = Field(min_length=1)
+
+
+_LocationWrapperUnionV3 = Annotated[
+    CVEGEOListWrapperV3 | GeoJSONLocationWrapperV3 | MetZoneCodeWrapperV3,
+    Field(discriminator="data_type"),
+]
+_BoundsWrapperUnionV3 = Annotated[
+    CVEGEOListWrapperV3 | GeoJSONBoundsWrapperV3 | MetZoneCodeWrapperV3,
+    Field(discriminator="data_type"),
+]
+_LOCATION_WRAPPER_ADAPTER = TypeAdapter(_LocationWrapperUnionV3)
+_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(_BoundsWrapperUnionV3)
 
 
 class PluginInfoV3(StrictBaseModel):
@@ -94,6 +153,9 @@ class BoundsInputV3(CommonInputMetadataV3):
             msg = "bounds inputs must not be nullable"
             raise ValueError(msg)
         return self
+
+
+SpatialInputKindV3 = Literal["location", "bounds"]
 
 
 class StringInputV3(CommonInputMetadataV3):
@@ -510,11 +572,309 @@ class PluginManifestV3(StrictBaseModel):
         return self
 
 
+class CompiledMetricManifestV3(StrictBaseModel):
+    """Compiled schema v3 metric contract consumed by Lyra runtime services."""
+
+    name: str = Field(min_length=1, description="Public metric name.")
+    description: str = Field(description="Human-readable metric description.")
+    queue: str = Field(min_length=1, description="Worker dispatch queue.")
+    entrypoint: str = Field(description="Python module:function runner reference.")
+    spatial_inputs: dict[str, SpatialInputKindV3] = Field(
+        min_length=1,
+        description="Request fields Lyra resolves into spatial GeoJSON inputs.",
+    )
+    request_schema: dict[str, Any] = Field(
+        description="Effective JSON Schema for unresolved client requests.",
+    )
+    output: OutputSpecV3 = Field(description="Successful metric output declaration.")
+
+    @field_validator("request_schema")
+    @classmethod
+    def validate_request_schema(cls, schema: dict[str, Any]) -> dict[str, Any]:
+        _validate_json_schema(schema, "request_schema")
+        return schema
+
+
+class CompiledPluginManifestV3(StrictBaseModel):
+    """Compiled schema v3 plugin manifest contract."""
+
+    schema_version: Literal[3] = Field(description="Manifest schema version.")
+    plugin: PluginInfoV3 = Field(description="Plugin metadata.")
+    metrics: list[CompiledMetricManifestV3] = Field(
+        min_length=1,
+        description="Compiled executable metrics exposed by the plugin.",
+    )
+
+
+def _adapter_for_spatial_kind(kind: SpatialInputKindV3) -> TypeAdapter[Any]:
+    return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
+
+
+def _wrapper_field_schema(
+    kind: SpatialInputKindV3,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    schema = _const_to_enum(_adapter_for_spatial_kind(kind).json_schema())
+    defs = schema.pop("$defs", {})
+    if not isinstance(defs, dict):
+        msg = f"spatial wrapper schema for {kind!r} did not contain object $defs"
+        raise TypeError(msg)
+    return schema, defs
+
+
+def _schema_with_defs(
+    schema: dict[str, Any],
+    defs: dict[str, Any],
+) -> dict[str, Any]:
+    if not defs:
+        return schema
+
+    schema_with_defs = deepcopy(schema)
+    schema_with_defs["$defs"] = deepcopy(defs)
+    return schema_with_defs
+
+
+def _validate_value_against_schema(
+    schema: dict[str, Any],
+    value: Any,
+    path: str,
+) -> None:
+    validator_cls = validator_for(schema)
+    try:
+        validator_cls.check_schema(schema)
+        validator_cls(schema).validate(value)
+    except SchemaError as exc:
+        msg = f"{path} compiled schema is invalid: {exc.message}"
+        raise ValueError(msg) from exc
+    except JSONSchemaValidationError as exc:
+        msg = f"{path} must validate against its compiled schema: {exc.message}"
+        raise ValueError(msg) from exc
+
+
+def _apply_common_metadata(
+    schema: dict[str, Any],
+    input_spec: CommonInputMetadataV3,
+) -> dict[str, Any]:
+    compiled = deepcopy(schema)
+    if input_spec.nullable:
+        compiled = {"anyOf": [compiled, {"type": "null"}]}
+
+    if input_spec.description is not None:
+        compiled["description"] = input_spec.description
+    if "default" in input_spec.model_fields_set:
+        compiled["default"] = deepcopy(input_spec.default)
+    if input_spec.examples is not None:
+        compiled["examples"] = deepcopy(input_spec.examples)
+    return compiled
+
+
+def _validate_common_values(
+    schema: dict[str, Any],
+    defs: dict[str, Any],
+    input_spec: CommonInputMetadataV3,
+    path: str,
+) -> None:
+    validation_schema = _schema_with_defs(schema, defs)
+    if "default" in input_spec.model_fields_set:
+        _validate_value_against_schema(
+            validation_schema,
+            input_spec.default,
+            f"{path}.default",
+        )
+    if input_spec.examples is not None:
+        for index, example in enumerate(input_spec.examples):
+            _validate_value_against_schema(
+                validation_schema,
+                example,
+                f"{path}.examples[{index}]",
+            )
+
+
+def _compile_string_input(input_spec: StringInputV3) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "string"}
+    if input_spec.min_length is not None:
+        schema["minLength"] = input_spec.min_length
+    if input_spec.max_length is not None:
+        schema["maxLength"] = input_spec.max_length
+    if input_spec.pattern is not None:
+        schema["pattern"] = input_spec.pattern
+    return schema
+
+
+def _compile_number_input(input_spec: NumberInputV3) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "number"}
+    if input_spec.minimum is not None:
+        schema["minimum"] = input_spec.minimum
+    if input_spec.maximum is not None:
+        schema["maximum"] = input_spec.maximum
+    return schema
+
+
+def _compile_integer_input(input_spec: IntegerInputV3) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "integer"}
+    if input_spec.minimum is not None:
+        schema["minimum"] = input_spec.minimum
+    if input_spec.maximum is not None:
+        schema["maximum"] = input_spec.maximum
+    return schema
+
+
+def _compile_plugin_owned_input(
+    input_spec: PluginOwnedInputSpecV3,
+    path: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    defs: dict[str, Any] = {}
+    if isinstance(input_spec, StringInputV3):
+        schema = _compile_string_input(input_spec)
+    elif isinstance(input_spec, NumberInputV3):
+        schema = _compile_number_input(input_spec)
+    elif isinstance(input_spec, IntegerInputV3):
+        schema = _compile_integer_input(input_spec)
+    elif isinstance(input_spec, BooleanInputV3):
+        schema = {"type": "boolean"}
+    elif isinstance(input_spec, EnumInputV3):
+        schema = {"enum": deepcopy(input_spec.values)}
+    elif isinstance(input_spec, JsonSchemaInputV3):
+        schema = deepcopy(input_spec.schema)
+    else:
+        msg = f"{path}.kind is not a plugin-owned input kind"
+        raise TypeError(msg)
+
+    compiled = _apply_common_metadata(schema, input_spec)
+    _validate_common_values(compiled, defs, input_spec, path)
+    return compiled, defs
+
+
+def _compile_spatial_input(
+    input_spec: LocationInputV3 | BoundsInputV3,
+    path: str,
+) -> tuple[dict[str, Any], dict[str, Any], SpatialInputKindV3]:
+    kind: SpatialInputKindV3 = input_spec.kind
+    schema, defs = _wrapper_field_schema(kind)
+    compiled = _apply_common_metadata(schema, input_spec)
+    _validate_common_values(compiled, defs, input_spec, path)
+    return compiled, defs, kind
+
+
+def _compile_batch_input(
+    input_spec: BatchInputV3,
+    path: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    value_schema, defs = _compile_plugin_owned_input(input_spec.value, f"{path}.value")
+    properties = {
+        "key": deepcopy(_BATCH_KEY_SCHEMA),
+        "value": value_schema,
+    }
+    if input_spec.label:
+        properties["label"] = deepcopy(_BATCH_LABEL_SCHEMA)
+
+    schema = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": input_spec.max_items,
+        "uniqueItems": True,
+        "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "additionalProperties": False,
+            "properties": properties,
+        },
+    }
+    compiled = _apply_common_metadata(schema, input_spec)
+    _validate_common_values(compiled, defs, input_spec, path)
+    return compiled, defs
+
+
+def _compile_input_property(
+    input_spec: InputSpecV3,
+    path: str,
+) -> tuple[dict[str, Any], dict[str, Any], SpatialInputKindV3 | None]:
+    if isinstance(input_spec, LocationInputV3 | BoundsInputV3):
+        return _compile_spatial_input(input_spec, path)
+    if isinstance(input_spec, BatchInputV3):
+        schema, defs = _compile_batch_input(input_spec, path)
+        return schema, defs, None
+
+    schema, defs = _compile_plugin_owned_input(input_spec, path)
+    return schema, defs, None
+
+
+def _merge_defs(
+    root_defs: dict[str, Any],
+    defs: dict[str, Any],
+    path: str,
+) -> None:
+    for name, definition in defs.items():
+        existing_definition = root_defs.get(name)
+        if existing_definition is not None and existing_definition != definition:
+            msg = f"{path} conflicts with canonical schema definition {name!r}"
+            raise ValueError(msg)
+        root_defs[name] = definition
+
+
+def _compile_metric_request_schema(
+    metric: MetricManifestV3,
+    metric_index: int,
+) -> tuple[dict[str, Any], dict[str, SpatialInputKindV3]]:
+    required: list[str] = []
+    properties: dict[str, Any] = {}
+    spatial_inputs: dict[str, SpatialInputKindV3] = {}
+    root_defs: dict[str, Any] = {}
+
+    for field_name, input_spec in metric.inputs.items():
+        path = f"metrics[{metric_index}].inputs.{field_name}"
+        property_schema, defs, spatial_kind = _compile_input_property(input_spec, path)
+        properties[field_name] = property_schema
+        if input_spec.required:
+            required.append(field_name)
+        if spatial_kind is not None:
+            spatial_inputs[field_name] = spatial_kind
+        _merge_defs(root_defs, defs, path)
+
+    request_schema: dict[str, Any] = {
+        "type": "object",
+        "required": required,
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if root_defs:
+        request_schema["$defs"] = root_defs
+
+    _validate_json_schema(request_schema, f"metrics[{metric_index}].request_schema")
+    return request_schema, spatial_inputs
+
+
+def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifestV3:
+    """Compile a schema v3 authoring manifest into Lyra's runtime contract."""
+
+    compiled_metrics: list[CompiledMetricManifestV3] = []
+    for index, metric in enumerate(manifest.metrics):
+        request_schema, spatial_inputs = _compile_metric_request_schema(metric, index)
+        compiled_metrics.append(
+            CompiledMetricManifestV3(
+                name=metric.name,
+                description=metric.description,
+                queue=metric.queue,
+                entrypoint=metric.entrypoint,
+                spatial_inputs=spatial_inputs,
+                request_schema=request_schema,
+                output=metric.output.model_copy(deep=True),
+            )
+        )
+
+    return CompiledPluginManifestV3(
+        schema_version=3,
+        plugin=manifest.plugin.model_copy(deep=True),
+        metrics=compiled_metrics,
+    )
+
+
 __all__ = [
     "BatchInputV3",
     "BatchedTableOutputColumnV3",
     "BooleanInputV3",
     "BoundsInputV3",
+    "CompiledMetricManifestV3",
+    "CompiledPluginManifestV3",
     "EnumInputV3",
     "FileOutputV3",
     "InputSpecV3",
@@ -528,7 +888,9 @@ __all__ = [
     "PluginInfoV3",
     "PluginManifestV3",
     "PluginOwnedInputSpecV3",
+    "SpatialInputKindV3",
     "StringInputV3",
     "TableOutputColumnV3",
     "TableOutputV3",
+    "compile_plugin_manifest",
 ]

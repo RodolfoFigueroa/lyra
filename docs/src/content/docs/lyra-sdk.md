@@ -36,11 +36,11 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     context.check_cancelled()
 
     location = GeoJSON.model_validate(job.input["location"])
-    return TableJobResult(
+    return TableJobResult.from_mapping(
         job_id=job.job_id,
-        index=[feature.id for feature in location.features],
+        input_index=[feature.id for feature in location.features],
         columns=["value"],
-        data=[[42] for _feature in location.features],
+        values={"value": [42 for _feature in location.features]},
     )
 ```
 
@@ -85,14 +85,14 @@ All constructors validate table shape. The helper constructors convert index and
 column labels to strings and reject duplicates after string conversion, such as
 `1` and `"1"`.
 
-Build a result directly when you already have the split-table fields:
+Use `from_dataframe()` when your metric returns a table object:
 
 ```python
-return TableJobResult(
+summary = compute_summary_dataframe(gdf)
+
+return TableJobResult.from_dataframe(
     job_id=job.job_id,
-    index=["area-1", "area-2"],
-    columns=["mean_temperature"],
-    data=[[24.8], [23.1]],
+    dataframe=summary,
 )
 ```
 
@@ -107,17 +107,6 @@ return TableJobResult.from_mapping(
     input_index=gdf.index,
     columns=["area_m2"],
     values={"area_m2": area_by_feature},
-)
-```
-
-Use `from_dataframe()` when your metric returns a table object:
-
-```python
-summary = compute_summary_dataframe(gdf)
-
-return TableJobResult.from_dataframe(
-    job_id=job.job_id,
-    dataframe=summary,
 )
 ```
 

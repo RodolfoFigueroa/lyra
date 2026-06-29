@@ -49,11 +49,11 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     context.check_cancelled()
 
     location = GeoJSON.model_validate(job.input["location"])
-    return TableJobResult(
+    return TableJobResult.from_mapping(
         job_id=job.job_id,
-        index=[str(feature.id) for feature in location.features],
+        input_index=[feature.id for feature in location.features],
         columns=["value"],
-        data=[[42] for _feature in location.features],
+        values={"value": [42 for _feature in location.features]},
     )
 ```
 

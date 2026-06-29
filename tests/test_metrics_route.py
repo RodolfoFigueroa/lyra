@@ -46,10 +46,24 @@ def _manifest() -> dict[str, Any]:
 def _batched_manifest() -> dict[str, Any]:
     manifest = _manifest()
     metric = manifest["metrics"][0]
-    metric["request_schema"]["required"] = ["location", "sectors"]
-    metric["request_schema"]["properties"]["sectors"] = {
+    metric["request_schema"]["required"] = ["location", "sector_filters"]
+    metric["request_schema"]["properties"]["sector_filters"] = {
         "type": "array",
-        "items": {"type": "string"},
+        "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "minLength": 1,
+                    "maxLength": 64,
+                },
+                "value": {"type": "string", "minLength": 1, "maxLength": 128},
+                "label": {"type": "string", "minLength": 1, "maxLength": 120},
+            },
+            "additionalProperties": False,
+        },
         "minItems": 1,
         "maxItems": 20,
         "uniqueItems": True,
@@ -59,13 +73,13 @@ def _batched_manifest() -> dict[str, Any]:
         "columns": [],
         "batched_columns": [
             {
-                "source": "sectors",
-                "name_template": "job_accessibility_{value}",
+                "source": "sector_filters",
+                "name_template": "job_accessibility_{key}",
                 "type": "number",
                 "unit": "jobs",
-                "description_template": "Job accessibility for sector {value}.",
+                "description_template": "Job accessibility for {label}.",
                 "batching_reason": (
-                    "Reuses the network graph and travel-time matrix across sectors."
+                    "Reuses the network graph and travel-time matrix across filters."
                 ),
             }
         ],
@@ -134,9 +148,9 @@ def test_metrics_route_returns_batched_column_metadata(
     payload = response.model_dump()
     assert payload["output"]["kind"] == "table"
     assert payload["output"]["columns"] == []
-    assert payload["output"]["batched_columns"][0]["source"] == "sectors"
+    assert payload["output"]["batched_columns"][0]["source"] == "sector_filters"
     assert "oneOf" in payload["request_schema"]["properties"]["location"]
-    assert payload["request_schema"]["properties"]["sectors"]["maxItems"] == 20
+    assert payload["request_schema"]["properties"]["sector_filters"]["maxItems"] == 20
 
 
 def test_metric_route_returns_404_for_unknown_metric(

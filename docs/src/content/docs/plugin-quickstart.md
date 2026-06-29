@@ -5,6 +5,9 @@ description: Create a minimal installable Lyra runner plugin with one v2 metric.
 
 A Lyra plugin is an installable Python package with a root `lyra.plugin.json` manifest and one or more importable runner entrypoints.
 
+For a publish-and-debug checklist, see
+[Plugin Author Checklist](../plugin-author-checklist/).
+
 ## Minimal Repository
 
 ```text
@@ -111,6 +114,21 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
     )
 ```
 
+## Preflight Before Publishing
+
+Run these checks from the plugin repository before pushing the branch or tag
+that Lyra will load:
+
+```bash
+uv pip install --python "$(which python)" --dry-run .
+uv pip install --python "$(which python)" -e .
+uv run python -c "from example_plugin.runner import run; print(run)"
+uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV2; PluginManifestV2.model_validate(json.loads(Path('lyra.plugin.json').read_text())); print('manifest ok')"
+```
+
+The worker uses the same install path: it checks compatibility, installs
+compatible plugins editable, and imports entrypoints for matching queues.
+
 ## Connect The Plugin To Lyra
 
 Push the plugin to GitHub and add it to `LYRA_PLUGIN_REPOS`:
@@ -133,4 +151,48 @@ curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
-Then call `GET /metrics` and submit a job for `example_metric`.
+Confirm the API exposes the metric and its effective wrapper schema:
+
+```bash
+curl http://localhost:5219/metrics/example_metric
+```
+
+Submit a minimal job:
+
+```bash
+curl -X POST http://localhost:5219/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "metric": "example_metric",
+    "input": {
+      "location": {
+        "data_type": "geojson",
+        "value": {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "id": "area-1",
+              "type": "Feature",
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                  [-99.20, 19.30],
+                  [-99.10, 19.30],
+                  [-99.10, 19.40],
+                  [-99.20, 19.40],
+                  [-99.20, 19.30]
+                ]]
+              },
+              "properties": {}
+            }
+          ],
+          "crs": {
+            "type": "name",
+            "properties": { "name": "EPSG:4326" }
+          }
+        }
+      },
+      "value": 1
+    }
+  }'
+```

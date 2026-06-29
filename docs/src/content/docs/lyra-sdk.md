@@ -114,6 +114,8 @@ Always handle the optional case:
 ```python
 from lyra.sdk.context import RunContext
 from lyra.sdk.models import JobEnvelope, JobResult
+from lyra.sdk.models.geometry import SingleGeoJSON
+from lyra.utils.geometry import convert_geojson_to_gdf
 
 
 def run(job: JobEnvelope, context: RunContext) -> JobResult:
@@ -124,7 +126,9 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
             error={"type": "configuration", "message": "Database is unavailable"},
         )
 
-    xmin, ymin, xmax, ymax = job.input["bounds"]
+    bounds = SingleGeoJSON.model_validate(job.input["bounds"])
+    bounds_gdf = convert_geojson_to_gdf(bounds)
+    xmin, ymin, xmax, ymax = bounds_gdf.total_bounds
     census = context.db.load_census_from_bounds(
         xmin,
         ymin,

@@ -21,6 +21,14 @@ fields through a wrapper object:
 Raw GeoJSON is valid only as the `value` of the `geojson` wrapper. Do not expose
 a top-level raw GeoJSON field in a metric manifest.
 
+Wrapper payloads are strict. `cvegeo_list` values must contain CVEGEO strings of
+one geographic level, so all strings must have the same valid length. A
+`bounds` field using `data_type: "geojson"` must contain exactly one feature,
+and that feature may be a point or polygon, not a multipolygon.
+
+For a full plugin validation flow, see
+[Plugin Author Checklist](../plugin-author-checklist/).
+
 ## Manifest Contract
 
 Each metric declares its spatial fields with `spatial_inputs`. Keys are
@@ -132,6 +140,24 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
 ```
 
 Use `SingleGeoJSON` for fields declared as `"bounds"`.
+
+For a bounds metric, declare the field as `"bounds"` and parse it with
+`SingleGeoJSON`:
+
+```json
+{
+  "spatial_inputs": {
+    "bounds": "bounds"
+  },
+  "request_schema": {
+    "type": "object",
+    "required": ["bounds"],
+    "properties": {
+      "bounds": {}
+    }
+  }
+}
+```
 
 ## Sample Job
 

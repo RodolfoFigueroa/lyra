@@ -7,6 +7,9 @@ Lyra reads plugin catalog metadata from `lyra.plugin.json` files. The API loads 
 
 The manifest is strict: extra fields are rejected. JSON Schemas are checked when the manifest is parsed.
 
+For end-to-end publishing checks, see
+[Plugin Author Checklist](../plugin-author-checklist/).
+
 ## Manifest Shape
 
 ```json
@@ -77,6 +80,27 @@ runner shapes.
 `result_schema` is client-facing metadata. Lyra validates that the schema is
 well formed, but the worker does not validate successful plugin output against
 it at runtime.
+
+## Validation Rules
+
+Lyra parses manifests with strict SDK models. Unknown top-level, plugin,
+metric, or execution fields are rejected.
+
+`request_schema` must be an object schema with `properties` and `required`.
+Every `spatial_inputs` field must appear in both places, and spatial input
+fields are always required.
+
+Do not define a raw GeoJSON or `FeatureCollection` schema for a top-level
+request field. Spatial request fields are placeholders in the manifest; Lyra
+replaces them with canonical wrapper schemas in `/metrics`.
+
+If `request_schema.$defs` already contains a definition name used by a
+canonical spatial wrapper, it must be identical to Lyra's definition. Conflicts
+are rejected when the catalog is built.
+
+Metric names must be unique inside a manifest and across all configured plugin
+repositories. Use plugin-specific prefixes if separate repositories might expose
+similar metric names.
 
 ## Entrypoints
 

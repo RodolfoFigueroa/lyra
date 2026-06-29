@@ -102,6 +102,7 @@ export default defineConfig({
           label: 'Build Plugins',
           items: [
             { label: 'Plugin Quickstart', slug: 'plugin-quickstart' },
+            { label: 'Plugin Author Checklist', slug: 'plugin-author-checklist' },
             { label: 'Plugin Manifests', slug: 'plugin-manifests' },
             { label: 'Spatial Plugin Inputs', slug: 'spatial-plugin-inputs' },
             { label: 'Runner Plugins', slug: 'runner-plugins' },

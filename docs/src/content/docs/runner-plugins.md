@@ -5,12 +5,29 @@ description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and J
 
 Worker processes install runner plugin code at startup, read v2 manifests, import each matching entrypoint, and execute matching metrics through the generic `lyra.run_metric` Celery task.
 
+Plugin repositories are trusted code. The API reads manifests without importing
+plugin modules, but workers install and execute plugin packages with the worker
+container's permissions.
+
 For the complete Python package surface available to plugin code, see the
 [lyra-sdk](../lyra-sdk/) and [lyra-utils](../lyra-utils/) references.
+For publish-time checks, see
+[Plugin Author Checklist](../plugin-author-checklist/).
+
+## Worker Install And Import
+
+Workers sync configured repositories, run `uv pip install --dry-run`, install
+compatible packages editable, and import only metrics whose
+`execution.queue` matches `LYRA_RUNNER_QUEUES`.
+
+If a plugin fails compatibility checks or editable install, that worker skips
+the plugin. The API can still expose the metric if its manifest is valid, so use
+worker logs to diagnose install and import problems.
 
 ## Entrypoint Contract
 
-Each metric entrypoint must expose a sync function:
+Each metric entrypoint must expose a sync function. The documented return value
+is `JobResult`:
 
 ```python
 from lyra.sdk.context import RunContext
@@ -27,7 +44,13 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
     )
 ```
 
-The worker calls `run(job, context)` and validates the returned `JobResult`. Unknown metrics, plugin exceptions, invalid return payloads, and mismatched result `job_id` values become failed `JobResult`s.
+The worker calls `run(job, context)` and validates the returned `JobResult`.
+Internally it can normalize compatible dictionaries as `JobResult`, but plugin
+authors should return `JobResult` directly so type checks and tests catch shape
+errors early.
+
+Unknown metrics, plugin exceptions, invalid return payloads, and mismatched
+result `job_id` values become failed `JobResult`s.
 
 The worker validates the returned object as `JobResult`; it does not validate
 `result` against the metric's `result_schema`. Treat `result_schema` as

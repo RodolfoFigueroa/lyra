@@ -14,6 +14,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Local Development: https://rodolfofigueroa.github.io/lyra/local-development/
 - Testing And Quality: https://rodolfofigueroa.github.io/lyra/testing-and-quality/
 - Plugin Quickstart: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
+- Plugin Author Checklist: https://rodolfofigueroa.github.io/lyra/plugin-author-checklist/
 - Plugin Manifests: https://rodolfofigueroa.github.io/lyra/plugin-manifests/
 - Spatial Plugin Inputs: https://rodolfofigueroa.github.io/lyra/spatial-plugin-inputs/
 - Runner Plugins: https://rodolfofigueroa.github.io/lyra/runner-plugins/

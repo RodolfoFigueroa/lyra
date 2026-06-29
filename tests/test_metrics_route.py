@@ -13,18 +13,16 @@ from lyra_app.routes import metrics
 
 def _manifest() -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
         "metrics": [
             {
                 "name": "light_metric",
                 "description": "A lightweight metric.",
-                "request_schema": {
-                    "type": "object",
-                    "required": ["location", "value"],
-                    "properties": {"location": {}, "value": {"type": "integer"}},
+                "inputs": {
+                    "location": {"kind": "location"},
+                    "value": {"kind": "integer"},
                 },
-                "spatial_inputs": {"location": "location"},
                 "output": {
                     "kind": "table",
                     "columns": [
@@ -36,7 +34,7 @@ def _manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "execution": {"queue": "lightweight"},
+                "queue": "lightweight",
                 "entrypoint": "fake_plugin.runner:run",
             }
         ],
@@ -46,27 +44,14 @@ def _manifest() -> dict[str, Any]:
 def _batched_manifest() -> dict[str, Any]:
     manifest = _manifest()
     metric = manifest["metrics"][0]
-    metric["request_schema"]["required"] = ["location", "sector_filters"]
-    metric["request_schema"]["properties"]["sector_filters"] = {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "required": ["key", "value"],
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-                    "minLength": 1,
-                    "maxLength": 64,
-                },
-                "value": {"type": "string", "minLength": 1, "maxLength": 128},
-                "label": {"type": "string", "minLength": 1, "maxLength": 120},
-            },
-            "additionalProperties": False,
+    metric["inputs"] = {
+        "location": {"kind": "location"},
+        "sector_filters": {
+            "kind": "batch",
+            "max_items": 20,
+            "value": {"kind": "string", "min_length": 1, "max_length": 128},
+            "label": True,
         },
-        "minItems": 1,
-        "maxItems": 20,
-        "uniqueItems": True,
     }
     metric["output"] = {
         "kind": "table",
@@ -74,13 +59,10 @@ def _batched_manifest() -> dict[str, Any]:
         "batched_columns": [
             {
                 "source": "sector_filters",
-                "name_template": "job_accessibility_{key}",
+                "name": "job_accessibility_{key}",
                 "type": "number",
                 "unit": "jobs",
-                "description_template": "Job accessibility for {label}.",
-                "batching_reason": (
-                    "Reuses the network graph and travel-time matrix across filters."
-                ),
+                "description": "Job accessibility for {label}.",
             }
         ],
     }
@@ -149,6 +131,8 @@ def test_metrics_route_returns_batched_column_metadata(
     assert payload["output"]["kind"] == "table"
     assert payload["output"]["columns"] == []
     assert payload["output"]["batched_columns"][0]["source"] == "sector_filters"
+    assert payload["output"]["batched_columns"][0]["name"] == "job_accessibility_{key}"
+    assert "name_template" not in payload["output"]["batched_columns"][0]
     assert "oneOf" in payload["request_schema"]["properties"]["location"]
     assert payload["request_schema"]["properties"]["sector_filters"]["maxItems"] == 20
 

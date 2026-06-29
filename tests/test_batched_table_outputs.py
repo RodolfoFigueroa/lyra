@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from lyra.sdk.models import JobEnvelope, PluginManifestV2, TableJobResult
 from lyra.sdk.models.plugin_v2 import TableMetricOutputV2
+from lyra.sdk.models.plugin_v3 import TableOutputV3
 from pydantic import ValidationError
 
 from lyra_app import registry
@@ -49,6 +50,47 @@ def _manifest(metric_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         "schema_version": 2,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
         "metrics": [_metric(metric_overrides)],
+    }
+
+
+def _v3_batched_manifest() -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+        "metrics": [
+            {
+                "name": "light_metric",
+                "description": "A lightweight metric.",
+                "queue": "lightweight",
+                "entrypoint": "fake_plugin.runner:run",
+                "inputs": {
+                    "location": {"kind": "location"},
+                    "sector_filters": {
+                        "kind": "batch",
+                        "max_items": 20,
+                        "value": {
+                            "kind": "string",
+                            "min_length": 1,
+                            "max_length": 128,
+                        },
+                        "label": True,
+                    },
+                },
+                "output": {
+                    "kind": "table",
+                    "columns": [],
+                    "batched_columns": [
+                        {
+                            "source": "sector_filters",
+                            "name": "job_accessibility_{key}",
+                            "type": "number",
+                            "unit": "jobs",
+                            "description": "Job accessibility for {label}.",
+                        }
+                    ],
+                },
+            }
+        ],
     }
 
 
@@ -164,22 +206,18 @@ def _table_output(
     columns: list[dict[str, Any]] | None = None,
     name_template: str = "job_accessibility_{key}",
     description_template: str = "Job accessibility for {label}.",
-) -> TableMetricOutputV2:
-    return TableMetricOutputV2.model_validate(
+) -> TableOutputV3:
+    return TableOutputV3.model_validate(
         {
             "kind": "table",
             "columns": [] if columns is None else columns,
             "batched_columns": [
                 {
                     "source": "sector_filters",
-                    "name_template": name_template,
+                    "name": name_template,
                     "type": "number",
                     "unit": "jobs",
-                    "description_template": description_template,
-                    "batching_reason": (
-                        "Reuses the network graph and travel-time matrix across "
-                        "filters."
-                    ),
+                    "description": description_template,
                 }
             ],
         }
@@ -523,15 +561,7 @@ def test_catalog_refresh_preserves_batched_column_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
-    _write_manifest(
-        repo,
-        _manifest(
-            {
-                "request_schema": _batched_request_schema(),
-                "output": _batched_output(),
-            }
-        ),
-    )
+    _write_manifest(repo, _v3_batched_manifest())
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
 
     registry.refresh_catalog()
@@ -591,7 +621,7 @@ def test_batched_table_result_expands_columns_from_key_order(
             data=[[1.5, 2.5]],
         )
 
-    worker_module.RUNNER_REGISTRY["batched_metric"] = worker_module.RunnerMetricEntryV2(
+    worker_module.RUNNER_REGISTRY["batched_metric"] = worker_module.RunnerMetricEntry(
         metric_name="batched_metric",
         queue="heavy",
         entrypoint="batched_plugin:run",
@@ -647,7 +677,7 @@ def test_mixed_static_and_batched_table_result_persists_success(
         )
 
     worker_module.RUNNER_REGISTRY["mixed_batched_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="mixed_batched_metric",
             queue="heavy",
             entrypoint="mixed_batched_plugin:run",
@@ -717,7 +747,7 @@ def test_invalid_batched_table_columns_persist_failed_result(
         )
 
     worker_module.RUNNER_REGISTRY["invalid_batched_columns_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="invalid_batched_columns_metric",
             queue="heavy",
             entrypoint="invalid_batched_columns_plugin:run",
@@ -770,7 +800,7 @@ def test_invalid_batched_table_values_persist_failed_result(
         )
 
     worker_module.RUNNER_REGISTRY["invalid_batched_value_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="invalid_batched_value_metric",
             queue="heavy",
             entrypoint="invalid_batched_value_plugin:run",
@@ -829,7 +859,7 @@ def test_invalid_batched_source_values_persist_failed_result(
         )
 
     worker_module.RUNNER_REGISTRY["invalid_batched_source_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="invalid_batched_source_metric",
             queue="heavy",
             entrypoint="invalid_batched_source_plugin:run",
@@ -870,7 +900,7 @@ def test_batched_table_generated_column_collision_persists_failed_result(
         )
 
     worker_module.RUNNER_REGISTRY["batched_collision_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="batched_collision_metric",
             queue="heavy",
             entrypoint="batched_collision_plugin:run",

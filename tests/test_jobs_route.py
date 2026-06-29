@@ -20,18 +20,16 @@ from lyra_app.routes import jobs
 
 def _manifest() -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
         "metrics": [
             {
                 "name": "heavy_metric",
                 "description": "A heavy metric.",
-                "request_schema": {
-                    "type": "object",
-                    "required": ["location", "value"],
-                    "properties": {"location": {}, "value": {"type": "integer"}},
+                "inputs": {
+                    "location": {"kind": "location"},
+                    "value": {"kind": "integer"},
                 },
-                "spatial_inputs": {"location": "location"},
                 "output": {
                     "kind": "table",
                     "columns": [
@@ -43,7 +41,7 @@ def _manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "execution": {"queue": "priority-lane"},
+                "queue": "priority-lane",
                 "entrypoint": "fake_plugin.runner:run",
             }
         ],

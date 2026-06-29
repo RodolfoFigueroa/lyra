@@ -13,23 +13,19 @@ def _metric(
     *,
     name: str = "light_metric",
     description: str = "A metric.",
-    request_schema: dict[str, Any] | None = None,
+    inputs: dict[str, Any] | None = None,
     output: dict[str, Any] | None = None,
-    spatial_inputs: dict[str, str] | None = None,
     queue: str = "lightweight",
     entrypoint: str = "fake_plugin.runner:run",
 ) -> dict[str, Any]:
     return {
         "name": name,
         "description": description,
-        "request_schema": request_schema
+        "inputs": inputs
         or {
-            "type": "object",
-            "required": ["location", "value"],
-            "properties": {"location": {}, "value": {"type": "integer"}},
-            "additionalProperties": False,
+            "location": {"kind": "location"},
+            "value": {"kind": "integer"},
         },
-        "spatial_inputs": spatial_inputs or {"location": "location"},
         "output": output
         or {
             "kind": "table",
@@ -42,7 +38,7 @@ def _metric(
                 }
             ],
         },
-        "execution": {"queue": queue},
+        "queue": queue,
         "entrypoint": entrypoint,
     }
 
@@ -53,7 +49,7 @@ def _manifest(
     metric: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "plugin": {"name": plugin_name, "version": "1.0.0"},
         "metrics": [metric or _metric()],
     }
@@ -80,7 +76,7 @@ def reset_catalog() -> None:
     registry.reset_catalog()
 
 
-def test_catalog_refresh_reads_v2_manifests_without_importing_plugin_code(
+def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -108,7 +104,7 @@ def test_catalog_refresh_reads_v2_manifests_without_importing_plugin_code(
     assert info_payload["request_schema"]["required"] == ["location", "value"]
     assert info_payload["request_schema"]["properties"]["value"] == {"type": "integer"}
     assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
-    assert "GeoJSONWrapper" in info_payload["request_schema"]["$defs"]
+    assert "GeoJSONLocationWrapperV3" in info_payload["request_schema"]["$defs"]
     assert entry is not None
     assert entry.queue == "lightweight"
     assert entry.entrypoint == "fake_plugin.runner:run"
@@ -132,12 +128,59 @@ def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
         registry.refresh_catalog()
 
 
+def test_catalog_refresh_reads_v3_file_metric(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        name="raster_metric",
+        description="A raster metric.",
+        inputs={
+            "bounds": {"kind": "bounds"},
+            "year": {"kind": "integer", "minimum": 2020, "maximum": 2026},
+        },
+        output={
+            "kind": "file",
+            "media_type": "image/tiff",
+            "extensions": [".tif", ".tiff"],
+        },
+        queue="heavy",
+        entrypoint="fake_plugin.runner:run_raster",
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+
+    registry.refresh_catalog()
+    info = registry.get_metric_info("raster_metric")
+    entry = registry.get_metric_entry("raster_metric")
+
+    assert info is not None
+    assert info.output.model_dump(mode="json") == {
+        "kind": "file",
+        "media_type": "image/tiff",
+        "extensions": [".tif", ".tiff"],
+    }
+    assert info.request_schema["required"] == ["bounds", "year"]
+    assert "GeoJSONBoundsWrapperV3" in info.request_schema["$defs"]
+    assert entry is not None
+    assert entry.queue == "heavy"
+
+
 def test_catalog_refresh_rejects_invalid_request_json_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
-    metric = _metric(request_schema={"type": "not-a-json-schema-type"})
+    metric = _metric(
+        inputs={
+            "location": {"kind": "location"},
+            "bad": {
+                "kind": "json_schema",
+                "schema": {"type": "not-a-json-schema-type"},
+            },
+        }
+    )
     _write_manifest(repo, _manifest(metric=metric))
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
 
@@ -194,22 +237,19 @@ def test_validate_metric_payload_uses_manifest_json_schema(
     assert exc_info.value.errors[0]["type"] == "type"
 
 
-def test_validate_metric_payload_honors_declared_json_schema_draft(
+def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
     metric = _metric(
-        request_schema={
-            "$schema": "http://json-schema.org/draft-04/schema#",
-            "type": "object",
-            "required": ["location", "value"],
-            "properties": {
-                "location": {},
-                "value": {
+        inputs={
+            "location": {"kind": "location"},
+            "value": {
+                "kind": "json_schema",
+                "schema": {
                     "type": "number",
                     "minimum": 0,
-                    "exclusiveMinimum": True,
                 },
             },
         }
@@ -231,40 +271,52 @@ def test_validate_metric_payload_honors_declared_json_schema_draft(
             "light_metric",
             {
                 "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-                "value": 0,
+                "value": -1,
             },
         )
 
     assert exc_info.value.errors[0]["type"] == "minimum"
 
 
-def test_catalog_refresh_rejects_raw_geojson_request_schema(
+def test_catalog_refresh_rejects_legacy_v2_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
-    metric = _metric(
-        request_schema={
+    legacy_metric = {
+        "name": "legacy_metric",
+        "description": "Legacy metric.",
+        "request_schema": {
             "type": "object",
             "required": ["location"],
-            "properties": {"location": {"$ref": "#/$defs/geoJSON"}},
-            "$defs": {
-                "geoJSON": {
-                    "type": "object",
-                    "required": ["type", "features", "crs"],
-                    "properties": {
-                        "type": {"const": "FeatureCollection"},
-                        "features": {"type": "array"},
-                        "crs": {"type": "object"},
-                    },
-                },
-            },
+            "properties": {"location": {}},
+        },
+        "spatial_inputs": {"location": "location"},
+        "output": {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Value.",
+                }
+            ],
+        },
+        "execution": {"queue": "legacy"},
+        "entrypoint": "legacy_plugin.runner:run",
+    }
+    _write_manifest(
+        repo,
+        {
+            "schema_version": 2,
+            "plugin": {"name": "legacy-plugin", "version": "1.0.0"},
+            "metrics": [legacy_metric],
         },
     )
-    _write_manifest(repo, _manifest(metric=metric))
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
 
-    with pytest.raises(RuntimeError, match="raw GeoJSON"):
+    with pytest.raises(RuntimeError, match=r"Plugin manifest .* is invalid"):
         registry.refresh_catalog()
 
 
@@ -274,17 +326,11 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
 ) -> None:
     repo = tmp_path / "repo"
     metric = _metric(
-        request_schema={
-            "type": "object",
-            "required": ["location", "bounds", "value"],
-            "properties": {
-                "location": {},
-                "bounds": {},
-                "value": {"type": "integer"},
-            },
-            "additionalProperties": False,
+        inputs={
+            "location": {"kind": "location"},
+            "bounds": {"kind": "bounds"},
+            "value": {"kind": "integer"},
         },
-        spatial_inputs={"location": "location", "bounds": "bounds"},
     )
     _write_manifest(repo, _manifest(metric=metric))
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
@@ -301,5 +347,5 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
     info = registry.get_metric_info("light_metric")
     assert info is not None
     schema_defs = info.request_schema["$defs"]
-    assert "GeoJSONWrapper" in schema_defs
-    assert "SingleGeoJSONWrapper" in schema_defs
+    assert "GeoJSONLocationWrapperV3" in schema_defs
+    assert "GeoJSONBoundsWrapperV3" in schema_defs

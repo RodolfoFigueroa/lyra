@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
-from lyra.sdk.models.plugin_v2 import FileMetricOutputV2, TableMetricOutputV2
+from lyra.sdk.models.plugin_v3 import FileOutputV3, TableOutputV3
 
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 
@@ -20,12 +20,10 @@ def _metric(
     return {
         "name": name,
         "description": f"{name} metric.",
-        "request_schema": {
-            "type": "object",
-            "required": ["location"],
-            "properties": {"location": {}, "value": {"type": "integer"}},
+        "inputs": {
+            "location": {"kind": "location"},
+            "value": {"kind": "integer", "required": False},
         },
-        "spatial_inputs": {"location": "location"},
         "output": output
         or {
             "kind": "table",
@@ -38,14 +36,14 @@ def _metric(
                 }
             ],
         },
-        "execution": {"queue": queue},
+        "queue": queue,
         "entrypoint": entrypoint,
     }
 
 
 def _manifest(metrics: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
         "metrics": metrics,
     }
@@ -88,8 +86,8 @@ def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
     }
 
 
-def _table_output() -> TableMetricOutputV2:
-    return TableMetricOutputV2.model_validate(
+def _table_output() -> TableOutputV3:
+    return TableOutputV3.model_validate(
         {
             "kind": "table",
             "columns": [
@@ -104,8 +102,8 @@ def _table_output() -> TableMetricOutputV2:
     )
 
 
-def _file_output() -> FileMetricOutputV2:
-    return FileMetricOutputV2(
+def _file_output() -> FileOutputV3:
+    return FileOutputV3(
         kind="file",
         media_type="image/tiff",
         extensions=[".tif", ".tiff"],
@@ -349,7 +347,7 @@ def test_plugin_exception_persists_failed_result(
         msg = "boom"
         raise RuntimeError(msg)
 
-    worker_module.RUNNER_REGISTRY["bad_metric"] = worker_module.RunnerMetricEntryV2(
+    worker_module.RUNNER_REGISTRY["bad_metric"] = worker_module.RunnerMetricEntry(
         metric_name="bad_metric",
         queue="heavy",
         entrypoint="bad_plugin:run",
@@ -389,7 +387,7 @@ def test_invalid_plugin_result_persists_failed_result(
     def run(job: JobEnvelope, context: Any) -> Any:  # noqa: ARG001
         return plugin_result
 
-    worker_module.RUNNER_REGISTRY["invalid_metric"] = worker_module.RunnerMetricEntryV2(
+    worker_module.RUNNER_REGISTRY["invalid_metric"] = worker_module.RunnerMetricEntry(
         metric_name="invalid_metric",
         queue="heavy",
         entrypoint="invalid_plugin:run",
@@ -448,7 +446,7 @@ def test_invalid_table_result_persists_failed_result(
         return plugin_result
 
     worker_module.RUNNER_REGISTRY["invalid_table_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="invalid_table_metric",
             queue="heavy",
             entrypoint="invalid_table_plugin:run",
@@ -491,7 +489,7 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
     location["features"].append(location["features"][0].copy())
 
     worker_module.RUNNER_REGISTRY["duplicate_location_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="duplicate_location_metric",
             queue="heavy",
             entrypoint="duplicate_location_plugin:run",
@@ -543,7 +541,7 @@ def test_file_result_persists_through_generic_result_path(
         )
 
     monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
-    worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntryV2(
+    worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntry(
         metric_name="file_metric",
         queue="heavy",
         entrypoint="file_plugin:run",
@@ -593,7 +591,7 @@ def test_invalid_file_result_persists_failed_result(
 
     monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
     worker_module.RUNNER_REGISTRY["invalid_file_metric"] = (
-        worker_module.RunnerMetricEntryV2(
+        worker_module.RunnerMetricEntry(
             metric_name="invalid_file_metric",
             queue="heavy",
             entrypoint="invalid_file_plugin:run",
@@ -630,7 +628,7 @@ def test_check_cancelled_persists_cancelled_result(
             data=[[1]],
         )
 
-    worker_module.RUNNER_REGISTRY["cancel_metric"] = worker_module.RunnerMetricEntryV2(
+    worker_module.RUNNER_REGISTRY["cancel_metric"] = worker_module.RunnerMetricEntry(
         metric_name="cancel_metric",
         queue="heavy",
         entrypoint="cancel_plugin:run",

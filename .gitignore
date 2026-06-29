@@ -225,3 +225,5 @@ docs/dist/
 .zed
 *.gpkg
 *.tif
+service-account.json
+cache/

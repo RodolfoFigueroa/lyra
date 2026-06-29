@@ -475,6 +475,59 @@ def test_invalid_table_result_persists_failed_result(
     )
 
 
+def test_duplicate_resolved_location_ids_persist_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["value"],
+            data=[[1]],
+        )
+
+    location = _feature_collection()
+    location["features"].append(location["features"][0].copy())
+
+    worker_module.RUNNER_REGISTRY["duplicate_location_metric"] = (
+        worker_module.RunnerMetricEntryV2(
+            metric_name="duplicate_location_metric",
+            queue="heavy",
+            entrypoint="duplicate_location_plugin:run",
+            output=_table_output(),
+            run=run,
+        )
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-duplicate-location",
+            "metric": "duplicate_location_metric",
+            "input": {"location": location, "value": 1},
+        },
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"] == {
+        "type": "invalid_result",
+        "message": (
+            "Resolved location feature IDs must be unique after string conversion."
+        ),
+    }
+    assert (
+        _decode_stored_result(
+            worker_module,
+            fake_redis,
+            "job-duplicate-location",
+        )
+        == result
+    )
+
+
 def test_file_result_persists_through_generic_result_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

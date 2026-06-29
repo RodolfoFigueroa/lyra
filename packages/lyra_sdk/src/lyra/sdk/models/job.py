@@ -1,3 +1,4 @@
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
@@ -15,8 +16,51 @@ JobLifecycleStatus = Literal[
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
 
 
-def _axis_values(values: Any) -> list[str]:
-    return [str(value) for value in values]
+def _string_axis_values(values: Iterable[Any], *, axis: str) -> list[str]:
+    string_values = [str(value) for value in values]
+    if len(string_values) != len(set(string_values)):
+        msg = f"table {axis} values must be unique after string conversion"
+        raise ValueError(msg)
+    return string_values
+
+
+def _string_keyed_mapping(values: Mapping[Any, Any], *, axis: str) -> dict[str, Any]:
+    string_keys = _string_axis_values(values.keys(), axis=axis)
+    return dict(zip(string_keys, values.values(), strict=True))
+
+
+def _is_sequence_values(values: Any) -> bool:
+    return isinstance(values, Sequence) and not isinstance(
+        values,
+        str | bytes | bytearray,
+    )
+
+
+def _mapping_column_values(
+    column: str,
+    column_values: Mapping[Any, Any] | Sequence[Any],
+    input_index: Sequence[Any],
+) -> list[Any]:
+    if isinstance(column_values, Mapping):
+        try:
+            return [column_values[feature_id] for feature_id in input_index]
+        except KeyError as exc:
+            msg = (
+                f"values for column {column!r} are missing index value {exc.args[0]!r}"
+            )
+            raise ValueError(msg) from exc
+
+    if not _is_sequence_values(column_values):
+        msg = f"values for column {column!r} must be a mapping or sequence"
+        raise ValueError(msg)
+
+    if len(column_values) != len(input_index):
+        msg = (
+            f"values for column {column!r} must contain exactly "
+            f"{len(input_index)} item(s)"
+        )
+        raise ValueError(msg)
+    return list(column_values)
 
 
 class JobEnvelope(StrictBaseModel):
@@ -70,8 +114,8 @@ class TableJobResult(StrictBaseModel):
 
         return cls(
             job_id=job_id,
-            index=_axis_values(dataframe.index),
-            columns=_axis_values(dataframe.columns),
+            index=_string_axis_values(dataframe.index, axis="index"),
+            columns=_string_axis_values(dataframe.columns, axis="column"),
             data=dataframe.to_numpy().tolist(),
         )
 
@@ -88,13 +132,57 @@ class TableJobResult(StrictBaseModel):
         column_name = name or series.name or "value"
         return cls(
             job_id=job_id,
-            index=_axis_values(series.index),
-            columns=[str(column_name)],
+            index=_string_axis_values(series.index, axis="index"),
+            columns=_string_axis_values([column_name], axis="column"),
             data=[[value] for value in series.tolist()],
+        )
+
+    @classmethod
+    def from_mapping(
+        cls,
+        job_id: str,
+        input_index: Iterable[Any],
+        columns: Sequence[str],
+        values: Mapping[str, Mapping[Any, Any] | Sequence[Any]],
+    ) -> Self:
+        """Build a table result from values keyed by the original input index."""
+
+        raw_index = list(input_index)
+        result_index = _string_axis_values(raw_index, axis="index")
+        result_columns = _string_axis_values(columns, axis="column")
+        values_by_column = _string_keyed_mapping(values, axis="column")
+
+        expected_columns = set(result_columns)
+        actual_columns = set(values_by_column)
+        if actual_columns != expected_columns:
+            missing = sorted(expected_columns - actual_columns)
+            extra = sorted(actual_columns - expected_columns)
+            details: list[str] = []
+            if missing:
+                details.append(f"missing column value(s): {', '.join(missing)}")
+            if extra:
+                details.append(f"unexpected column value(s): {', '.join(extra)}")
+            msg = "; ".join(details)
+            raise ValueError(msg)
+
+        data_by_column = [
+            _mapping_column_values(column, values_by_column[column], raw_index)
+            for column in result_columns
+        ]
+        data = [list(row) for row in zip(*data_by_column, strict=True)]
+
+        return cls(
+            job_id=job_id,
+            index=result_index,
+            columns=result_columns,
+            data=data,
         )
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> Self:
+        _string_axis_values(self.index, axis="index")
+        _string_axis_values(self.columns, axis="column")
+
         if len(self.index) != len(self.data):
             msg = "table index length must match data row count"
             raise ValueError(msg)

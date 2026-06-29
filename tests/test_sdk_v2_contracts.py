@@ -135,6 +135,119 @@ def test_terminal_result_rejects_non_terminal_status() -> None:
         )
 
 
+def test_table_result_from_mapping_builds_result_from_original_index_keys() -> None:
+    result = TableJobResult.from_mapping(
+        "job-1",
+        input_index=[101, 102],
+        columns=["urbanized_area_m2"],
+        values={"urbanized_area_m2": {101: 12.5, 102: 9.0}},
+    )
+
+    assert result.index == ["101", "102"]
+    assert result.columns == ["urbanized_area_m2"]
+    assert result.data == [[12.5], [9.0]]
+
+
+def test_table_result_from_mapping_supports_multiple_columns_and_sequences() -> None:
+    result = TableJobResult.from_mapping(
+        "job-1",
+        input_index=[2, 3],
+        columns=["area_m2", "area_fraction"],
+        values={
+            "area_m2": [10.0, 20.0],
+            "area_fraction": {2: 0.1, 3: 0.2},
+        },
+    )
+
+    assert result.index == ["2", "3"]
+    assert result.columns == ["area_m2", "area_fraction"]
+    assert result.data == [[10.0, 0.1], [20.0, 0.2]]
+
+
+@pytest.mark.parametrize(
+    ("input_index", "columns", "values", "match"),
+    [
+        ([1, "1"], ["value"], {"value": {1: 10, "1": 20}}, "index"),
+        ([1], ["value", "value"], {"value": [10]}, "column"),
+        ([1], ["value"], {}, "missing column"),
+        ([1], ["value"], {"value": [10], "other": [20]}, "unexpected column"),
+        ([1, 2], ["value"], {"value": {1: 10}}, "missing index value"),
+        ([1, 2], ["value"], {"value": [10]}, "exactly 2 item"),
+        ([1, 2, 3], ["value"], {"value": "abc"}, "mapping or sequence"),
+    ],
+)
+def test_table_result_from_mapping_rejects_invalid_inputs(
+    input_index: list[Any],
+    columns: list[str],
+    values: dict[str, Any],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        TableJobResult.from_mapping(
+            "job-1",
+            input_index=input_index,
+            columns=columns,
+            values=values,
+        )
+
+
+def test_table_result_rejects_duplicate_serialized_axes() -> None:
+    with pytest.raises(ValidationError, match="index"):
+        TableJobResult(
+            job_id="job-1",
+            index=["1", "1"],
+            columns=["value"],
+            data=[[1], [2]],
+        )
+
+    with pytest.raises(ValidationError, match="column"):
+        TableJobResult(
+            job_id="job-1",
+            index=["1"],
+            columns=["value", "value"],
+            data=[[1, 2]],
+        )
+
+
+def test_table_result_dataframe_and_series_helpers_reject_duplicate_axes() -> None:
+    class Array:
+        def tolist(self) -> list[list[int]]:
+            return [[1], [2]]
+
+    class Frame:
+        def __init__(self) -> None:
+            self.index = [1, "1"]
+            self.columns = ["value"]
+
+        def to_numpy(self) -> Array:
+            return Array()
+
+    class FrameWithDuplicateColumns:
+        def __init__(self) -> None:
+            self.index = [1]
+            self.columns = [1, "1"]
+
+        def to_numpy(self) -> Array:
+            return Array()
+
+    class Series:
+        def __init__(self) -> None:
+            self.index = [1, "1"]
+            self.name = "value"
+
+        def tolist(self) -> list[int]:
+            return [1, 2]
+
+    with pytest.raises(ValueError, match="index"):
+        TableJobResult.from_dataframe("job-1", Frame())
+
+    with pytest.raises(ValueError, match="column"):
+        TableJobResult.from_dataframe("job-1", FrameWithDuplicateColumns())
+
+    with pytest.raises(ValueError, match="index"):
+        TableJobResult.from_series("job-1", Series())
+
+
 def test_failed_terminal_result_accepts_error_payload() -> None:
     result = FailedJobResult(
         job_id="job-1",

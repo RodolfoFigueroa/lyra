@@ -239,7 +239,14 @@ def _validate_table_result(
     except PydanticValidationError as exc:
         return _failed_result(job.job_id, "invalid_result", str(exc))
 
-    expected_index = [feature.id for feature in location.features]
+    expected_index = [str(feature.id) for feature in location.features]
+    if len(expected_index) != len(set(expected_index)):
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Resolved location feature IDs must be unique after string conversion.",
+        )
+
     if result.index != expected_index:
         return _failed_result(
             job.job_id,

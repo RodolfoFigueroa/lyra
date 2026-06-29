@@ -2,6 +2,7 @@ import importlib
 import logging
 import math
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -37,6 +38,8 @@ from lyra_app.registry import load_plugin_manifest
 logger = logging.getLogger(__name__)
 
 GENERIC_TASK_NAME = "lyra.run_metric"
+_BATCHED_ITEM_FIELDS = {"key", "value", "label"}
+_BATCHED_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 MetricRunCallable = Callable[
     [JobEnvelope, "WorkerRunContext"], TerminalJobResult | dict[str, Any]
@@ -230,15 +233,42 @@ def _cell_error(
     return error
 
 
-def _batched_source_value_text(value: Any) -> str:
-    if type(value) is bool or type(value) is str or type(value) is int:
-        return str(value)
+def _batched_template_context(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        msg = "Batched column source values must be objects."
+        raise TypeError(msg)
 
-    if type(value) is float and math.isfinite(value):
-        return str(value)
+    invalid_fields = sorted(set(value) - _BATCHED_ITEM_FIELDS)
+    if invalid_fields:
+        names = ", ".join(invalid_fields)
+        msg = f"Batched column source values contain unsupported fields: {names}."
+        raise ValueError(msg)
 
-    msg = "Batched column source values must be JSON scalars."
-    raise TypeError(msg)
+    key = value.get("key")
+    if not isinstance(key, str) or not _BATCHED_KEY_PATTERN.fullmatch(key):
+        msg = (
+            "Batched column source value 'key' must be a non-empty string matching "
+            "Lyra's batched key pattern."
+        )
+        raise ValueError(msg)
+
+    if "value" not in value:
+        msg = "Batched column source values must contain 'value'."
+        raise ValueError(msg)
+
+    label = value.get("label", key)
+    if not isinstance(label, str):
+        msg = "Batched column source value 'label' must be a string when provided."
+        raise TypeError(msg)
+
+    return {"key": key, "label": label}
+
+
+def _expand_batched_template(template: str, context: dict[str, str]) -> str:
+    value = template
+    for name, replacement in context.items():
+        value = value.replace(f"{{{name}}}", replacement)
+    return value
 
 
 def _expand_table_output_columns(
@@ -257,14 +287,17 @@ def _expand_table_output_columns(
             raise TypeError(msg)
 
         for source_value in source_values:
-            value_text = _batched_source_value_text(source_value)
-            name = column_group.name_template.replace("{value}", value_text)
+            template_context = _batched_template_context(source_value)
+            name = _expand_batched_template(
+                column_group.name_template,
+                template_context,
+            )
             if not name:
                 msg = "Batched column templates must produce non-empty names."
                 raise ValueError(msg)
-            description = column_group.description_template.replace(
-                "{value}",
-                value_text,
+            description = _expand_batched_template(
+                column_group.description_template,
+                template_context,
             )
             columns.append(
                 TableOutputColumnV2(

@@ -10,6 +10,7 @@ _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 _ENTRYPOINT_PATTERN = re.compile(
     rf"^{_IDENTIFIER}(?:\.{_IDENTIFIER})*:{_IDENTIFIER}$",
 )
+_TEMPLATE_FIELD_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _validate_json_schema(schema: dict[str, Any], field_name: str) -> None:
@@ -18,6 +19,19 @@ def _validate_json_schema(schema: dict[str, Any], field_name: str) -> None:
     except SchemaError as exc:
         msg = f"invalid {field_name}: {exc.message}"
         raise ValueError(msg) from exc
+
+
+def _schema_int_at_least(
+    schema: dict[str, Any],
+    field_name: str,
+    minimum: int,
+) -> bool:
+    value = schema.get(field_name)
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
+def _template_fields(template: str) -> set[str]:
+    return set(_TEMPLATE_FIELD_PATTERN.findall(template))
 
 
 class PluginInfoV2(StrictBaseModel):
@@ -35,7 +49,8 @@ class MetricExecutionV2(StrictBaseModel):
 
 SpatialInputKind = Literal["location", "bounds"]
 OutputColumnType = Literal["number", "integer", "string", "boolean"]
-_SCALAR_JSON_SCHEMA_TYPES = {"boolean", "integer", "number", "string"}
+_BATCHED_ITEM_FIELDS = {"key", "value", "label"}
+_BATCHED_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 
 
 class TableOutputColumnV2(StrictBaseModel):
@@ -55,7 +70,7 @@ class TableOutputColumnV2(StrictBaseModel):
 
 
 class BatchedTableOutputColumnV2(StrictBaseModel):
-    """Column group generated from a bounded input array."""
+    """Column group generated from a bounded input object array."""
 
     source: str = Field(
         min_length=1,
@@ -63,13 +78,13 @@ class BatchedTableOutputColumnV2(StrictBaseModel):
     )
     name_template: str = Field(
         min_length=1,
-        description="Column name template containing '{value}'.",
+        description="Column name template containing '{key}'.",
     )
     type: OutputColumnType = Field(description="Scalar value type for these columns.")
     unit: str = Field(min_length=1, description="Measurement unit for these columns.")
     description_template: str = Field(
         min_length=1,
-        description="Column description template containing '{value}'.",
+        description="Column description template using '{key}' and/or '{label}'.",
     )
     nullable: bool = Field(
         default=False,
@@ -83,16 +98,31 @@ class BatchedTableOutputColumnV2(StrictBaseModel):
     @field_validator("name_template")
     @classmethod
     def validate_name_template(cls, template: str) -> str:
-        if "{value}" not in template:
-            msg = "name_template must contain '{value}'"
+        fields = _template_fields(template)
+        if "value" in fields:
+            msg = "name_template must not contain '{value}'"
+            raise ValueError(msg)
+        if "key" not in fields:
+            msg = "name_template must contain '{key}'"
+            raise ValueError(msg)
+        invalid_fields = sorted(fields - {"key"})
+        if invalid_fields:
+            names = ", ".join(invalid_fields)
+            msg = f"name_template contains unsupported field(s): {names}"
             raise ValueError(msg)
         return template
 
     @field_validator("description_template")
     @classmethod
     def validate_description_template(cls, template: str) -> str:
-        if "{value}" not in template:
-            msg = "description_template must contain '{value}'"
+        fields = _template_fields(template)
+        if "value" in fields:
+            msg = "description_template must not contain '{value}'"
+            raise ValueError(msg)
+        invalid_fields = sorted(fields - {"key", "label"})
+        if invalid_fields:
+            names = ", ".join(invalid_fields)
+            msg = f"description_template contains unsupported field(s): {names}"
             raise ValueError(msg)
         return template
 
@@ -135,6 +165,127 @@ class TableMetricOutputV2(StrictBaseModel):
             msg = f"duplicate table output column name(s): {names}"
             raise ValueError(msg)
         return self
+
+
+def _validate_batched_key_schema(
+    column: BatchedTableOutputColumnV2,
+    key_schema: Any,
+) -> None:
+    if not isinstance(key_schema, dict):
+        msg = f"batched column source {column.source!r} key must be an object schema"
+        raise TypeError(msg)
+
+    if (
+        key_schema.get("type") != "string"
+        or key_schema.get("pattern") != _BATCHED_KEY_PATTERN
+        or not _schema_int_at_least(key_schema, "minLength", 1)
+        or not _schema_int_at_least(key_schema, "maxLength", 1)
+    ):
+        msg = (
+            f"batched column source {column.source!r} key must be a bounded "
+            "string matching Lyra's batched key pattern"
+        )
+        raise ValueError(msg)
+
+
+def _validate_batched_label_schema(
+    column: BatchedTableOutputColumnV2,
+    label_schema: Any,
+) -> None:
+    if label_schema is None:
+        return
+    if not isinstance(label_schema, dict):
+        msg = f"batched column source {column.source!r} label must be an object schema"
+        raise TypeError(msg)
+    if label_schema.get("type") != "string":
+        msg = f"batched column source {column.source!r} label must be a string"
+        raise ValueError(msg)
+
+
+def _validate_batched_item_properties(
+    column: BatchedTableOutputColumnV2,
+    item_properties: Any,
+) -> None:
+    if not isinstance(item_properties, dict):
+        msg = f"batched column source {column.source!r} items must declare properties"
+        raise TypeError(msg)
+
+    property_names = set(item_properties)
+    invalid_properties = sorted(property_names - _BATCHED_ITEM_FIELDS)
+    if invalid_properties:
+        names = ", ".join(invalid_properties)
+        msg = (
+            f"batched column source {column.source!r} items contain unsupported "
+            f"properties: {names}"
+        )
+        raise ValueError(msg)
+
+    if {"key", "value"} - property_names:
+        msg = (
+            f"batched column source {column.source!r} items must declare key and "
+            "value properties"
+        )
+        raise ValueError(msg)
+
+    _validate_batched_key_schema(column, item_properties["key"])
+    _validate_batched_label_schema(column, item_properties.get("label"))
+
+
+def _validate_batched_item_schema(
+    column: BatchedTableOutputColumnV2,
+    items_schema: Any,
+) -> None:
+    if not isinstance(items_schema, dict):
+        msg = f"batched column source {column.source!r} must declare items"
+        raise TypeError(msg)
+
+    if items_schema.get("type") != "object":
+        msg = f"batched column source {column.source!r} items must be objects"
+        raise ValueError(msg)
+
+    if items_schema.get("additionalProperties") is not False:
+        msg = (
+            f"batched column source {column.source!r} items must declare "
+            "additionalProperties: false"
+        )
+        raise ValueError(msg)
+
+    item_required = items_schema.get("required")
+    if not isinstance(item_required, list) or set(item_required) != {"key", "value"}:
+        msg = (
+            f"batched column source {column.source!r} items must require key and "
+            "value only"
+        )
+        raise ValueError(msg)
+
+    _validate_batched_item_properties(column, items_schema.get("properties"))
+
+
+def _validate_batched_source_schema(
+    column: BatchedTableOutputColumnV2,
+    source_schema: Any,
+) -> None:
+    if not isinstance(source_schema, dict):
+        msg = f"batched column source {column.source!r} must be an object schema"
+        raise TypeError(msg)
+
+    if source_schema.get("type") != "array":
+        msg = f"batched column source {column.source!r} must be an array"
+        raise ValueError(msg)
+
+    if not _schema_int_at_least(source_schema, "minItems", 1):
+        msg = f"batched column source {column.source!r} must declare minItems >= 1"
+        raise ValueError(msg)
+
+    if not _schema_int_at_least(source_schema, "maxItems", 1):
+        msg = f"batched column source {column.source!r} must declare maxItems >= 1"
+        raise ValueError(msg)
+
+    if source_schema.get("uniqueItems") is not True:
+        msg = f"batched column source {column.source!r} must declare uniqueItems: true"
+        raise ValueError(msg)
+
+    _validate_batched_item_schema(column, source_schema.get("items"))
 
 
 class FileMetricOutputV2(StrictBaseModel):
@@ -298,60 +449,7 @@ class MetricManifestV2(StrictBaseModel):
                 )
                 raise ValueError(msg)
 
-            source_schema = properties[column.source]
-            if not isinstance(source_schema, dict):
-                msg = (
-                    f"batched column source {column.source!r} must be an object schema"
-                )
-                raise TypeError(msg)
-
-            if source_schema.get("type") != "array":
-                msg = f"batched column source {column.source!r} must be an array"
-                raise ValueError(msg)
-
-            min_items = source_schema.get("minItems")
-            if (
-                not isinstance(min_items, int)
-                or isinstance(min_items, bool)
-                or min_items < 1
-            ):
-                msg = (
-                    f"batched column source {column.source!r} must declare "
-                    "minItems >= 1"
-                )
-                raise ValueError(msg)
-
-            max_items = source_schema.get("maxItems")
-            if (
-                not isinstance(max_items, int)
-                or isinstance(max_items, bool)
-                or max_items < 1
-            ):
-                msg = (
-                    f"batched column source {column.source!r} must declare "
-                    "maxItems >= 1"
-                )
-                raise ValueError(msg)
-
-            if source_schema.get("uniqueItems") is not True:
-                msg = (
-                    f"batched column source {column.source!r} must declare "
-                    "uniqueItems: true"
-                )
-                raise ValueError(msg)
-
-            items_schema = source_schema.get("items")
-            if not isinstance(items_schema, dict):
-                msg = f"batched column source {column.source!r} must declare items"
-                raise TypeError(msg)
-
-            item_type = items_schema.get("type")
-            if item_type not in _SCALAR_JSON_SCHEMA_TYPES:
-                msg = (
-                    f"batched column source {column.source!r} items must be "
-                    "string, integer, number, or boolean"
-                )
-                raise ValueError(msg)
+            _validate_batched_source_schema(column, properties[column.source])
 
         return self
 

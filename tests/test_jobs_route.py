@@ -48,6 +48,41 @@ def _manifest() -> dict[str, Any]:
     }
 
 
+def _batched_manifest() -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+        "metrics": [
+            {
+                "name": "batched_metric",
+                "description": "A batched metric.",
+                "inputs": {
+                    "location": {"kind": "location"},
+                    "sector_filters": {
+                        "kind": "batch",
+                        "max_items": 5,
+                        "value": {"kind": "string"},
+                    },
+                },
+                "output": {
+                    "kind": "table",
+                    "batched_columns": [
+                        {
+                            "source": "sector_filters",
+                            "name": "accessibility_{key}",
+                            "type": "number",
+                            "unit": "jobs",
+                            "description": "Accessibility for {label}.",
+                        }
+                    ],
+                },
+                "queue": "priority-lane",
+                "entrypoint": "fake_plugin.runner:run",
+            }
+        ],
+    }
+
+
 def _synced_repo(repo: Path) -> SyncedPluginRepo:
     entry = PluginRepoEntry(
         raw="owner/repo",
@@ -247,10 +282,15 @@ def reset_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 def _use_repo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    manifest: dict[str, Any] | None = None,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / MANIFEST_FILENAME).write_text(json.dumps(_manifest()), encoding="utf-8")
+    (repo / MANIFEST_FILENAME).write_text(
+        json.dumps(manifest or _manifest()),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
     registry.refresh_catalog()
 
@@ -346,6 +386,48 @@ def test_create_job_rejects_invalid_input(
         asyncio.run(jobs.create_job(JobCreateRequest(metric="heavy_metric", input={})))
 
     assert exc_info.value.status_code == 422
+
+
+def test_create_job_rejects_duplicate_batch_keys_before_queueing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch, manifest=_batched_manifest())
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric="batched_metric",
+                    input={
+                        "location": {
+                            "data_type": "geojson",
+                            "value": _feature_collection(),
+                        },
+                        "sector_filters": [
+                            {"key": "retail", "value": "^46.*"},
+                            {"key": "retail", "value": "^47.*"},
+                        ],
+                    },
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == [
+        {
+            "loc": ["sector_filters"],
+            "msg": "Batch input keys must be unique: retail.",
+            "type": "unique_batch_keys",
+        }
+    ]
+    assert celery.sent == []
+    assert redis.values == {}
+    assert redis.streams == {}
 
 
 def test_create_job_rejects_raw_geojson_spatial_field(

@@ -278,6 +278,133 @@ def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
     assert exc_info.value.errors[0]["type"] == "minimum"
 
 
+def test_validate_metric_payload_rejects_duplicate_batch_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        name="batched_metric",
+        inputs={
+            "location": {"kind": "location"},
+            "sector_filters": {
+                "kind": "batch",
+                "max_items": 5,
+                "value": {"kind": "string"},
+            },
+        },
+        output={
+            "kind": "table",
+            "batched_columns": [
+                {
+                    "source": "sector_filters",
+                    "name": "accessibility_{key}",
+                    "type": "number",
+                    "unit": "jobs",
+                    "description": "Accessibility for {label}.",
+                }
+            ],
+        },
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    registry.refresh_catalog()
+
+    with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
+        registry.validate_metric_payload(
+            "batched_metric",
+            {
+                "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+                "sector_filters": [
+                    {"key": "retail", "value": "^46.*"},
+                    {"key": "retail", "value": "^47.*"},
+                ],
+            },
+        )
+
+    assert exc_info.value.errors == [
+        {
+            "loc": ["sector_filters"],
+            "msg": "Batch input keys must be unique: retail.",
+            "type": "unique_batch_keys",
+        }
+    ]
+
+
+def test_validate_metric_payload_reports_duplicate_keys_per_batch_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        name="multi_batched_metric",
+        inputs={
+            "location": {"kind": "location"},
+            "sector_filters": {
+                "kind": "batch",
+                "max_items": 5,
+                "value": {"kind": "string"},
+            },
+            "destination_categories": {
+                "kind": "batch",
+                "max_items": 5,
+                "value": {"kind": "string"},
+            },
+        },
+        output={
+            "kind": "table",
+            "batched_columns": [
+                {
+                    "source": "sector_filters",
+                    "name": "sector_{key}",
+                    "type": "number",
+                    "unit": "jobs",
+                    "description": "Sector {label}.",
+                },
+                {
+                    "source": "destination_categories",
+                    "name": "destination_{key}",
+                    "type": "number",
+                    "unit": "destinations",
+                    "description": "Destination {label}.",
+                },
+            ],
+        },
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    registry.refresh_catalog()
+
+    with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
+        registry.validate_metric_payload(
+            "multi_batched_metric",
+            {
+                "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+                "sector_filters": [
+                    {"key": "retail", "value": "^46.*"},
+                    {"key": "retail", "value": "^47.*"},
+                ],
+                "destination_categories": [
+                    {"key": "schools", "value": "^61.*"},
+                    {"key": "schools", "value": "^62.*"},
+                ],
+            },
+        )
+
+    assert exc_info.value.errors == [
+        {
+            "loc": ["sector_filters"],
+            "msg": "Batch input keys must be unique: retail.",
+            "type": "unique_batch_keys",
+        },
+        {
+            "loc": ["destination_categories"],
+            "msg": "Batch input keys must be unique: schools.",
+            "type": "unique_batch_keys",
+        },
+    ]
+
+
 def test_catalog_refresh_rejects_legacy_v2_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

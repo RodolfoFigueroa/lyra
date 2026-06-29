@@ -111,6 +111,7 @@ def test_compile_v3_static_table_metric_request_schema() -> None:
 
     assert metric["queue"] == "interactive"
     assert metric["spatial_inputs"] == {"location": "location"}
+    assert metric["batch_inputs"] == []
     assert schema["type"] == "object"
     assert schema["required"] == ["location", "year"]
     assert schema["additionalProperties"] is False
@@ -206,6 +207,7 @@ def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
     metric = compiled["metrics"][0]
     batch_schema = metric["request_schema"]["properties"]["destination_categories"]
 
+    assert metric["batch_inputs"] == ["destination_categories"]
     assert metric["request_schema"]["required"] == [
         "location",
         "destination_categories",
@@ -281,6 +283,7 @@ def test_compile_v3_file_metric_with_bounds_spatial_schema() -> None:
     schema = metric["request_schema"]
 
     assert metric["spatial_inputs"] == {"bounds": "bounds"}
+    assert metric["batch_inputs"] == []
     assert schema["required"] == ["bounds", "year"]
     assert "GeoJSONBoundsWrapperV3" in schema["$defs"]
     assert metric["output"] == {

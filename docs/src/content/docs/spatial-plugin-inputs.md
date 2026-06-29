@@ -134,13 +134,18 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     geojson = GeoJSON.model_validate(job.input["location"])
     gdf = convert_geojson_to_gdf(geojson)
 
-    return TableJobResult(
+    values = {feature_id: 1 for feature_id in gdf.index}
+    return TableJobResult.from_mapping(
         job_id=job.job_id,
-        index=[str(feature_id) for feature_id in gdf.index],
+        input_index=gdf.index,
         columns=["feature_value"],
-        data=[[1] for _feature_id in gdf.index],
+        values={"feature_value": values},
     )
 ```
+
+If your spatial computation already returns a Pandas or GeoPandas DataFrame,
+use `TableJobResult.from_dataframe()` instead. If it returns one Pandas Series
+indexed like the input `gdf`, use `TableJobResult.from_series()`.
 
 Use `SingleGeoJSON` for fields declared as `"bounds"`.
 

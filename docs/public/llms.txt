@@ -33,7 +33,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 ## Current Contracts
 
 - Plugin manifests: `PluginManifestV2` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v2.py`
-- Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `JobResult`, `JobStatusInfo` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
+- Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `TableJobResult`, `FileJobResult`, `FailedJobResult`, `CancelledJobResult`, `TerminalJobResult`, `JobStatusInfo` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
 - Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
 - Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
 - Explicit spatial inputs: `ExplicitLocationAPI` and `ExplicitBoundsAPI` in `packages/lyra_sdk/src/lyra/sdk/types.py`

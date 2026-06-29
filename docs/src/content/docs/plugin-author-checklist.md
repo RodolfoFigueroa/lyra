@@ -26,6 +26,9 @@ accounts scoped to what plugin code is allowed to use.
 - Depend on `lyra-sdk` for runner contracts.
 - Add `lyra-utils` only when plugin code uses GeoDataFrame, date, or Earth
   Engine helpers.
+- Declare `geopandas`, `pandas`, or other libraries directly when plugin code
+  imports them directly, even if another Lyra helper package also depends on
+  them.
 - Keep runner entrypoints under the installed package, such as
   `example_plugin.runner:run`.
 - Import runtime contracts from `lyra-sdk` rather than from `lyra_app`.
@@ -76,6 +79,15 @@ Parse the manifest with the public SDK model:
 ```bash
 uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV2; PluginManifestV2.model_validate(json.loads(Path('lyra.plugin.json').read_text())); print('manifest ok')"
 ```
+
+Add at least one local runner test before publishing. Construct a resolved
+`JobEnvelope`, pass a small fake `RunContext`, call the entrypoint directly, and
+assert that the returned `TableJobResult` or `FileJobResult` has the expected
+`job_id`, columns or media type, and serialized table index. For table metrics,
+choose the `TableJobResult` constructor that matches the computation result:
+`from_mapping()` for dictionaries or aligned sequences, `from_dataframe()` for
+table-shaped Pandas or GeoPandas outputs, and `from_series()` for one-column
+Pandas outputs.
 
 The manifest is strict v2 JSON. Extra fields are rejected, schemas must be valid
 JSON Schemas, metric names must be unique across the loaded catalog, and each

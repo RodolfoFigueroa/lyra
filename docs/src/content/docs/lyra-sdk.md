@@ -69,10 +69,23 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
 ## Returning Results
 
 Successful value metrics return `TableJobResult`. The table must match the
-metric manifest's `output.columns` and must be indexed by the resolved
-`location` feature IDs.
+metric manifest's `output.columns` and its serialized `index` must contain the
+resolved `location` feature IDs as strings.
 
-Return table results with split-table fields:
+Choose the constructor that matches the shape your metric already produced:
+
+| Method | Use when |
+| --- | --- |
+| `TableJobResult(...)` | You already have serialized `index`, `columns`, and row-major `data`. |
+| `TableJobResult.from_mapping()` | Your values are keyed by the original input index, or by column-aligned sequences. |
+| `TableJobResult.from_dataframe()` | Your metric already produced a Pandas or GeoPandas DataFrame. |
+| `TableJobResult.from_series()` | Your metric produced one output column as a Pandas Series. |
+
+All constructors validate table shape. The helper constructors convert index and
+column labels to strings and reject duplicates after string conversion, such as
+`1` and `"1"`.
+
+Build a result directly when you already have the split-table fields:
 
 ```python
 return TableJobResult(
@@ -80,6 +93,43 @@ return TableJobResult(
     index=["area-1", "area-2"],
     columns=["mean_temperature"],
     data=[[24.8], [23.1]],
+)
+```
+
+Use `from_mapping()` when metric dictionaries are keyed by the original
+`GeoDataFrame` index:
+
+```python
+area_by_feature = compute_area(gdf)
+
+return TableJobResult.from_mapping(
+    job_id=job.job_id,
+    input_index=gdf.index,
+    columns=["area_m2"],
+    values={"area_m2": area_by_feature},
+)
+```
+
+Use `from_dataframe()` when your metric returns a table object:
+
+```python
+summary = compute_summary_dataframe(gdf)
+
+return TableJobResult.from_dataframe(
+    job_id=job.job_id,
+    dataframe=summary,
+)
+```
+
+Use `from_series()` for one-column Pandas outputs:
+
+```python
+mean_temperature = compute_mean_temperature(gdf)
+
+return TableJobResult.from_series(
+    job_id=job.job_id,
+    series=mean_temperature,
+    name="mean_temperature",
 )
 ```
 
@@ -142,11 +192,11 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult | FailedJobResu
         columns=["pobtot", "geometry"],
     )
 
-    return TableJobResult(
+    return TableJobResult.from_mapping(
         job_id=job.job_id,
-        index=[str(feature_id) for feature_id in gdf.index],
+        input_index=gdf.index,
         columns=["census_rows"],
-        data=[[len(census)] for _feature_id in gdf.index],
+        values={"census_rows": [len(census) for _feature_id in gdf.index]},
     )
 ```
 

@@ -20,6 +20,10 @@ dependencies = [
 ]
 ```
 
+`lyra-utils` depends on packages such as GeoPandas and Pandas for its helpers.
+If plugin code imports `geopandas`, `pandas`, or another package directly,
+declare that package in the plugin's own dependencies as well.
+
 ## GeoJSON Helpers
 
 Import `convert_geojson_to_gdf` from `lyra.utils.geometry`.
@@ -52,6 +56,11 @@ The returned GeoDataFrame:
 | Rows | One row per GeoJSON feature. |
 | Index | Feature IDs become the GeoDataFrame index. |
 | Columns | Feature properties plus `geometry`. |
+
+`convert_geojson_to_gdf()` preserves the CRS declared by the resolved GeoJSON;
+it does not reproject geometries. For area or length calculations, reproject to
+an appropriate projected CRS before using GeoPandas or Shapely area/length
+properties.
 
 ## Date Helpers
 

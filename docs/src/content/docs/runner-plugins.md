@@ -51,7 +51,7 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     location = GeoJSON.model_validate(job.input["location"])
     return TableJobResult(
         job_id=job.job_id,
-        index=[feature.id for feature in location.features],
+        index=[str(feature.id) for feature in location.features],
         columns=["value"],
         data=[[42] for _feature in location.features],
     )
@@ -118,16 +118,40 @@ For `LyraDB` methods, explicit spatial input aliases such as
 
 ## Terminal Results
 
-Table result example:
+Table result constructors:
 
 ```python
-TableJobResult(
+TableJobResult.from_mapping(
     job_id=job.job_id,
-    index=["area-1", "area-2"],
+    input_index=gdf.index,
     columns=["area_m2", "area_frac"],
-    data=[[12345.6, 0.42], [9876.5, 0.31]],
+    values={
+        "area_m2": area_by_feature_id,
+        "area_frac": fraction_by_feature_id,
+    },
 )
 ```
+
+```python
+TableJobResult.from_dataframe(
+    job_id=job.job_id,
+    dataframe=summary_dataframe,
+)
+```
+
+```python
+TableJobResult.from_series(
+    job_id=job.job_id,
+    series=area_by_feature,
+    name="area_m2",
+)
+```
+
+Use the constructor that matches your metric output: `from_mapping()` for
+mapping or sequence values, `from_dataframe()` for table-shaped Pandas or
+GeoPandas results, and `from_series()` for one-column Pandas results. The helper
+constructors serialize result indices to strings and reject duplicate
+stringified axes.
 
 File result example:
 
@@ -154,5 +178,5 @@ FailedJobResult(
 
 Successful table results use a split-table wire shape with `index`, `columns`,
 and row-major `data`. The worker requires `index` to match the resolved
-`location` feature IDs exactly and `columns` to match the manifest output
-declaration exactly.
+`location` feature IDs after string conversion and `columns` to match the
+manifest output declaration exactly.

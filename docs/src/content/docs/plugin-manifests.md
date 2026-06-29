@@ -129,7 +129,12 @@ defaults to `false`.
 Use `batched_columns` only when one job can reuse substantial work across a
 bounded input array. For example, a job accessibility metric can build a
 network graph and travel-time matrix once, then calculate one output column for
-each requested economic sector:
+each requested economic-sector filter. Batched inputs are arrays of objects
+with fixed fields:
+
+- `key`: required stable column identity.
+- `value`: required plugin-specific computation value, such as a regex.
+- `label`: optional human-readable text. If omitted, Lyra uses `key`.
 
 ```json
 {
@@ -137,41 +142,81 @@ each requested economic sector:
     "type": "object",
     "properties": {
       "location": {},
-      "sectors": {
+      "sector_filters": {
         "type": "array",
-        "items": { "type": "string", "pattern": "^[0-9]{2}$" },
+        "items": {
+          "type": "object",
+          "required": ["key", "value"],
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "additionalProperties": false
+        },
         "minItems": 1,
         "maxItems": 20,
         "uniqueItems": true
       }
     },
-    "required": ["location", "sectors"]
+    "required": ["location", "sector_filters"]
   },
   "output": {
     "kind": "table",
     "columns": [],
     "batched_columns": [
       {
-        "source": "sectors",
-        "name_template": "job_accessibility_{value}",
+        "source": "sector_filters",
+        "name_template": "job_accessibility_{key}",
         "type": "number",
         "unit": "jobs",
-        "description_template": "Job accessibility for sector {value}.",
+        "description_template": "Job accessibility for {label}.",
         "nullable": false,
-        "batching_reason": "Reuses the network graph and travel-time matrix across all sector queries."
+        "batching_reason": "Reuses the network graph and travel-time matrix across all sector filters."
       }
     ]
   }
 }
 ```
 
-For input `sectors: ["01", "32"]`, the worker expects result columns
-`job_accessibility_01` and `job_accessibility_32`, in that order. The source
-field must be a required top-level array with `minItems`, `maxItems`, and
-`uniqueItems: true`; array items must be scalar strings, integers, numbers, or
-booleans. Avoid `batched_columns` for independent parameter sweeps, such as a
-temperature metric where each year or season can be queried with separate jobs
-without shared preprocessing.
+For input:
+
+```json
+{
+  "sector_filters": [
+    {
+      "key": "sectors_091_092",
+      "value": "^09[12].*",
+      "label": "Sectors 091 and 092"
+    },
+    {
+      "key": "retail",
+      "value": "^46.*"
+    }
+  ]
+}
+```
+
+the worker expects result columns `job_accessibility_sectors_091_092` and
+`job_accessibility_retail`, in that order. The plugin uses each item's `value`
+for computation, while Lyra uses `key` for column names and `label` for
+descriptions. Do not derive public column names from free-form values such as
+regex patterns. Avoid `batched_columns` for independent parameter sweeps, such
+as a temperature metric where each year or season can be queried with separate
+jobs without shared preprocessing.
 
 File metrics produce one job-level artifact:
 

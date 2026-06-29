@@ -181,9 +181,11 @@ and row-major `data`. The worker requires `index` to match the resolved
 `location` feature IDs after string conversion and `columns` to match the
 manifest output declaration exactly. For table outputs with `batched_columns`,
 the worker expands those columns from the validated source array first. A
-manifest with `name_template: "job_accessibility_{value}"` and input
-`sectors: ["01", "32"]` must return columns `job_accessibility_01` and
-`job_accessibility_32`, in that order.
+manifest with `name_template: "job_accessibility_{key}"` and input
+`sector_filters: [{"key": "sectors_091_092", "value": "^09[12].*"}]` must
+return column `job_accessibility_sectors_091_092`. The plugin uses each
+batched item's `value` for computation, but Lyra uses `key` for column names
+and optional `label` for descriptions.
 
 Use `batched_columns` only when the runner can reuse substantial work across
 source values, such as sharing a network graph or travel-time matrix across

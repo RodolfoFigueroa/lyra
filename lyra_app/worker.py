@@ -25,6 +25,7 @@ from lyra.sdk.models.plugin_v2 import (
     MetricOutputV2,
     OutputColumnType,
     TableMetricOutputV2,
+    TableOutputColumnV2,
 )
 from pydantic import ValidationError as PydanticValidationError
 
@@ -229,11 +230,63 @@ def _cell_error(
     return error
 
 
-def _validate_table_result(
-    result: TableJobResult,
-    job: JobEnvelope,
+def _batched_source_value_text(value: Any) -> str:
+    if type(value) is bool or type(value) is str or type(value) is int:
+        return str(value)
+
+    if type(value) is float and math.isfinite(value):
+        return str(value)
+
+    msg = "Batched column source values must be JSON scalars."
+    raise TypeError(msg)
+
+
+def _expand_table_output_columns(
     output: TableMetricOutputV2,
-) -> TableJobResult | FailedJobResult:
+    job_input: dict[str, Any],
+) -> list[TableOutputColumnV2]:
+    columns = list(output.columns)
+
+    for column_group in output.batched_columns:
+        source_values = job_input.get(column_group.source)
+        if not isinstance(source_values, list):
+            msg = (
+                f"Batched column source {column_group.source!r} must be present "
+                "as an array."
+            )
+            raise TypeError(msg)
+
+        for source_value in source_values:
+            value_text = _batched_source_value_text(source_value)
+            name = column_group.name_template.replace("{value}", value_text)
+            if not name:
+                msg = "Batched column templates must produce non-empty names."
+                raise ValueError(msg)
+            description = column_group.description_template.replace(
+                "{value}",
+                value_text,
+            )
+            columns.append(
+                TableOutputColumnV2(
+                    name=name,
+                    type=column_group.type,
+                    unit=column_group.unit,
+                    description=description,
+                    nullable=column_group.nullable,
+                )
+            )
+
+    names = [column.name for column in columns]
+    if len(names) != len(set(names)):
+        msg = "Expanded table output columns must be unique."
+        raise ValueError(msg)
+
+    return columns
+
+
+def _expected_table_index(
+    job: JobEnvelope,
+) -> list[str] | FailedJobResult:
     try:
         location = GeoJSON.model_validate(job.input["location"])
     except PydanticValidationError as exc:
@@ -247,6 +300,18 @@ def _validate_table_result(
             "Resolved location feature IDs must be unique after string conversion.",
         )
 
+    return expected_index
+
+
+def _validate_table_result(
+    result: TableJobResult,
+    job: JobEnvelope,
+    output: TableMetricOutputV2,
+) -> TableJobResult | FailedJobResult:
+    expected_index = _expected_table_index(job)
+    if isinstance(expected_index, FailedJobResult):
+        return expected_index
+
     if result.index != expected_index:
         return _failed_result(
             job.job_id,
@@ -254,7 +319,12 @@ def _validate_table_result(
             "Table result index must match the resolved location feature IDs.",
         )
 
-    expected_columns = [column.name for column in output.columns]
+    try:
+        expanded_columns = _expand_table_output_columns(output, job.input)
+    except (TypeError, ValueError) as exc:
+        return _failed_result(job.job_id, "invalid_result", str(exc))
+
+    expected_columns = [column.name for column in expanded_columns]
     if result.columns != expected_columns:
         return _failed_result(
             job.job_id,
@@ -263,7 +333,7 @@ def _validate_table_result(
         )
 
     for row_position, row in enumerate(result.data):
-        for column_position, column in enumerate(output.columns):
+        for column_position, column in enumerate(expanded_columns):
             error = _cell_error(
                 row[column_position],
                 column.type,

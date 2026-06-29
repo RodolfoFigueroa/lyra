@@ -43,6 +43,36 @@ def _manifest() -> dict[str, Any]:
     }
 
 
+def _batched_manifest() -> dict[str, Any]:
+    manifest = _manifest()
+    metric = manifest["metrics"][0]
+    metric["request_schema"]["required"] = ["location", "sectors"]
+    metric["request_schema"]["properties"]["sectors"] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 1,
+        "maxItems": 20,
+        "uniqueItems": True,
+    }
+    metric["output"] = {
+        "kind": "table",
+        "columns": [],
+        "batched_columns": [
+            {
+                "source": "sectors",
+                "name_template": "job_accessibility_{value}",
+                "type": "number",
+                "unit": "jobs",
+                "description_template": "Job accessibility for sector {value}.",
+                "batching_reason": (
+                    "Reuses the network graph and travel-time matrix across sectors."
+                ),
+            }
+        ],
+    }
+    return manifest
+
+
 def _synced_repo(repo: Path) -> SyncedPluginRepo:
     entry = PluginRepoEntry(
         raw="owner/repo",
@@ -84,6 +114,29 @@ def test_metrics_route_returns_schema_metadata_only(
     assert "oneOf" in payload["request_schema"]["properties"]["location"]
     assert payload["output"]["kind"] == "table"
     assert payload["output"]["columns"][0]["name"] == "value"
+
+
+def test_metrics_route_returns_batched_column_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / MANIFEST_FILENAME).write_text(
+        json.dumps(_batched_manifest()),
+        encoding="utf-8",
+    )
+
+    _use_repo(repo, monkeypatch)
+    response = asyncio.run(metrics.list_metrics("light_metric"))
+
+    assert not isinstance(response, list)
+    payload = response.model_dump()
+    assert payload["output"]["kind"] == "table"
+    assert payload["output"]["columns"] == []
+    assert payload["output"]["batched_columns"][0]["source"] == "sectors"
+    assert "oneOf" in payload["request_schema"]["properties"]["location"]
+    assert payload["request_schema"]["properties"]["sectors"]["maxItems"] == 20
 
 
 def test_metric_route_returns_404_for_unknown_metric(

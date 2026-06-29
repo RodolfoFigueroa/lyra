@@ -17,6 +17,7 @@ from lyra.sdk.models.job import (
 )
 from lyra.sdk.models.metric import MetricInfoV2
 from lyra.sdk.models.plugin_v2 import (
+    BatchedTableOutputColumnV2,
     FileMetricOutputV2,
     MetricExecutionV2,
     MetricManifestV2,
@@ -30,6 +31,7 @@ from lyra.sdk.models.plugin_v2 import (
 )
 
 __all__ = [
+    "BatchedTableOutputColumnV2",
     "CancelledJobResult",
     "DataTypeSchemaInfo",
     "DataTypesResponse",

@@ -35,6 +35,7 @@ class MetricExecutionV2(StrictBaseModel):
 
 SpatialInputKind = Literal["location", "bounds"]
 OutputColumnType = Literal["number", "integer", "string", "boolean"]
+_SCALAR_JSON_SCHEMA_TYPES = {"boolean", "integer", "number", "string"}
 
 
 class TableOutputColumnV2(StrictBaseModel):
@@ -53,17 +54,76 @@ class TableOutputColumnV2(StrictBaseModel):
     )
 
 
+class BatchedTableOutputColumnV2(StrictBaseModel):
+    """Column group generated from a bounded input array."""
+
+    source: str = Field(
+        min_length=1,
+        description="Top-level request array field used to generate columns.",
+    )
+    name_template: str = Field(
+        min_length=1,
+        description="Column name template containing '{value}'.",
+    )
+    type: OutputColumnType = Field(description="Scalar value type for these columns.")
+    unit: str = Field(min_length=1, description="Measurement unit for these columns.")
+    description_template: str = Field(
+        min_length=1,
+        description="Column description template containing '{value}'.",
+    )
+    nullable: bool = Field(
+        default=False,
+        description="Whether these columns may contain null values.",
+    )
+    batching_reason: str = Field(
+        min_length=1,
+        description="Why one job can reuse work across source values.",
+    )
+
+    @field_validator("name_template")
+    @classmethod
+    def validate_name_template(cls, template: str) -> str:
+        if "{value}" not in template:
+            msg = "name_template must contain '{value}'"
+            raise ValueError(msg)
+        return template
+
+    @field_validator("description_template")
+    @classmethod
+    def validate_description_template(cls, template: str) -> str:
+        if "{value}" not in template:
+            msg = "description_template must contain '{value}'"
+            raise ValueError(msg)
+        return template
+
+    @field_validator("batching_reason")
+    @classmethod
+    def validate_batching_reason(cls, reason: str) -> str:
+        if not reason.strip():
+            msg = "batching_reason must be non-empty"
+            raise ValueError(msg)
+        return reason
+
+
 class TableMetricOutputV2(StrictBaseModel):
     """Output declaration for per-feature value metrics."""
 
     kind: Literal["table"] = Field(description="Metric output kind.")
     columns: list[TableOutputColumnV2] = Field(
-        min_length=1,
-        description="Ordered result columns.",
+        default_factory=list,
+        description="Ordered static result columns.",
+    )
+    batched_columns: list[BatchedTableOutputColumnV2] = Field(
+        default_factory=list,
+        description="Ordered input-array-backed result column groups.",
     )
 
     @model_validator(mode="after")
-    def validate_unique_columns(self) -> Self:
+    def validate_columns(self) -> Self:
+        if not self.columns and not self.batched_columns:
+            msg = "table outputs must declare columns or batched_columns"
+            raise ValueError(msg)
+
         seen: set[str] = set()
         duplicates: set[str] = set()
         for column in self.columns:
@@ -216,6 +276,85 @@ class MetricManifestV2(StrictBaseModel):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def validate_batched_column_sources(self) -> Self:
+        if not isinstance(self.output, TableMetricOutputV2):
+            return self
+
+        properties = self.request_schema["properties"]
+        required_fields = set(self.request_schema["required"])
+        for column in self.output.batched_columns:
+            if column.source not in properties:
+                msg = (
+                    "batched column source field missing from "
+                    f"request_schema.properties: {column.source}"
+                )
+                raise ValueError(msg)
+
+            if column.source not in required_fields:
+                msg = (
+                    "batched column source field missing from "
+                    f"request_schema.required: {column.source}"
+                )
+                raise ValueError(msg)
+
+            source_schema = properties[column.source]
+            if not isinstance(source_schema, dict):
+                msg = (
+                    f"batched column source {column.source!r} must be an object schema"
+                )
+                raise TypeError(msg)
+
+            if source_schema.get("type") != "array":
+                msg = f"batched column source {column.source!r} must be an array"
+                raise ValueError(msg)
+
+            min_items = source_schema.get("minItems")
+            if (
+                not isinstance(min_items, int)
+                or isinstance(min_items, bool)
+                or min_items < 1
+            ):
+                msg = (
+                    f"batched column source {column.source!r} must declare "
+                    "minItems >= 1"
+                )
+                raise ValueError(msg)
+
+            max_items = source_schema.get("maxItems")
+            if (
+                not isinstance(max_items, int)
+                or isinstance(max_items, bool)
+                or max_items < 1
+            ):
+                msg = (
+                    f"batched column source {column.source!r} must declare "
+                    "maxItems >= 1"
+                )
+                raise ValueError(msg)
+
+            if source_schema.get("uniqueItems") is not True:
+                msg = (
+                    f"batched column source {column.source!r} must declare "
+                    "uniqueItems: true"
+                )
+                raise ValueError(msg)
+
+            items_schema = source_schema.get("items")
+            if not isinstance(items_schema, dict):
+                msg = f"batched column source {column.source!r} must declare items"
+                raise TypeError(msg)
+
+            item_type = items_schema.get("type")
+            if item_type not in _SCALAR_JSON_SCHEMA_TYPES:
+                msg = (
+                    f"batched column source {column.source!r} items must be "
+                    "string, integer, number, or boolean"
+                )
+                raise ValueError(msg)
+
+        return self
+
 
 class PluginManifestV2(StrictBaseModel):
     """Top-level v2 plugin manifest file."""
@@ -243,6 +382,7 @@ class PluginManifestV2(StrictBaseModel):
 
 
 __all__ = [
+    "BatchedTableOutputColumnV2",
     "FileMetricOutputV2",
     "MetricExecutionV2",
     "MetricManifestV2",

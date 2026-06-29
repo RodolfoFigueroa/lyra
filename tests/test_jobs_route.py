@@ -219,8 +219,30 @@ class FakeRequest:
         return False
 
 
+class FakeAsyncPath:
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+
+    @property
+    def name(self) -> str:
+        return self._path.name
+
+    def __fspath__(self) -> str:
+        return str(self._path)
+
+    async def exists(self) -> bool:
+        return self._path.exists()
+
+    async def unlink(self) -> None:
+        self._path.unlink()
+
+
 @pytest.fixture(autouse=True)
-def reset_catalog() -> None:
+def reset_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run_inline(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(jobs.asyncio, "to_thread", run_inline)
     registry.reset_catalog()
 
 
@@ -623,6 +645,7 @@ def test_job_result_returns_file_and_cleans_result(
         ).model_dump(mode="json", exclude_none=True)
     )
     background_tasks = BackgroundTasks()
+    monkeypatch.setattr(jobs, "Path", FakeAsyncPath)
 
     response = asyncio.run(jobs.get_job_result("job-1", background_tasks))
     asyncio.run(background_tasks())

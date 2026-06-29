@@ -312,6 +312,24 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+class FakeAsyncFile:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._file: Any = None
+
+    async def __aenter__(self) -> Self:
+        self._file = self._path.open("wb")
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        assert self._file is not None
+        self._file.close()
+
+    async def write(self, chunk: bytes) -> int:
+        assert self._file is not None
+        return self._file.write(chunk)
+
+
 def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeSession.responses = [
         FakeAsyncResponse(status=202, payload=_job_response()),
@@ -363,10 +381,15 @@ def test_async_client_downloads_file_job_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fake_aiofiles_open(path: Path, mode: str) -> FakeAsyncFile:
+        assert mode == "wb"
+        return FakeAsyncFile(path)
+
     FakeSession.responses = [
         FakeAsyncResponse(headers={"content-type": "image/tiff"}, chunks=[b"abc"]),
     ]
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+    monkeypatch.setattr("lyra.api.client.async_.aiofiles.open", fake_aiofiles_open)
     output = tmp_path / "result.tif"
 
     asyncio.run(

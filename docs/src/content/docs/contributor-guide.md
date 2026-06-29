@@ -19,27 +19,27 @@ This page is for developers changing Lyra itself.
 
 ## Common Source Areas
 
-Use `lyra_app/routes/jobs.py` for public job route behavior.
-
-Use `lyra_app/registry.py` for manifest catalog loading, metric lookup, request validation, and catalog fingerprinting.
-
-Use `lyra_app/worker.py` for generic Celery task execution and runner plugin loading.
-
-Use `lyra_app/job_store.py` for Redis status, result, and stream event operations.
-
-Use `packages/lyra_sdk/src/lyra/sdk/models/` when changing public contracts.
-
-Use `packages/lyra_api/src/lyra/api/client/` when changing client behavior.
+| Area | Start here |
+| --- | --- |
+| Public job routes | `lyra_app/routes/jobs.py` |
+| Manifest catalog and request validation | `lyra_app/registry.py` |
+| Generic Celery task and runner plugin loading | `lyra_app/worker.py` |
+| Redis status, result, and stream event operations | `lyra_app/job_store.py` |
+| Public SDK contracts | `packages/lyra_sdk/src/lyra/sdk/models/` |
+| Python client behavior | `packages/lyra_api/src/lyra/api/client/` |
 
 ## Change Discipline
 
-Keep API catalog behavior separate from worker execution behavior. The API reads manifest metadata and validates requests; workers install and import plugin code.
+Keep API catalog behavior separate from worker execution behavior. The API reads
+manifest metadata and validates requests; workers install and import plugin
+code.
 
 When changing public contracts, update the SDK models, route/client behavior, tests, and docs together.
 
 When changing job lifecycle behavior, update route tests, job store tests, worker tests, and client expectations together.
 
-Docs are part of the product. If a behavior is visible to plugin authors, API clients, deployers, or agents, update the Starlight docs in the same change.
+Docs are part of the product. If a behavior is visible to plugin authors, API
+clients, deployers, or agents, update the Starlight docs in the same change.
 
 ## Useful Searches
 

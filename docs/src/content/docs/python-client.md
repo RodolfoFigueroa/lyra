@@ -110,6 +110,6 @@ asyncio.run(main())
 
 ## Metric Payloads
 
-Do not hard-code example payloads from these docs. Fetch the metric's
-`request_schema` and submit an `input` object that matches it. Every metric has
+Avoid hard-coding example payloads from these docs. Fetch the metric's
+`request_schema` and submit an `input` object that matches it; every metric has
 at least one required spatial wrapper field.

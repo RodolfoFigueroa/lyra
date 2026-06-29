@@ -9,7 +9,8 @@ Lyra separates catalog metadata, public job submission, and runner execution.
 
 `lyra_app` is the FastAPI application and worker runtime.
 
-`packages/lyra_sdk` contains public Pydantic contracts for manifests, jobs, metric metadata, and runner context typing.
+`packages/lyra_sdk` contains public Pydantic contracts for manifests, jobs,
+metric metadata, and runner context typing.
 
 `packages/lyra_api` contains sync and async Python clients for the public HTTP API.
 
@@ -42,7 +43,10 @@ The API catalog does not import plugin Python code.
 
 ## Worker Flow
 
-Workers sync plugin repositories into `LYRA_PLUGIN_INSTALL_DIR`, defaulting to `/lyra_plugins`. They check install compatibility, install plugins editable into the worker Python environment, parse v2 manifests, and import only metrics whose `execution.queue` matches `LYRA_RUNNER_QUEUES`.
+Workers sync plugin repositories into `LYRA_PLUGIN_INSTALL_DIR`, defaulting to
+`/lyra_plugins`. They check install compatibility, install plugins editable into
+the worker Python environment, parse v2 manifests, and import only metrics whose
+`execution.queue` matches `LYRA_RUNNER_QUEUES`.
 
 All metric execution goes through one Celery task name: `lyra.run_metric`.
 

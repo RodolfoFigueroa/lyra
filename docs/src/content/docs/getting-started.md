@@ -3,11 +3,13 @@ title: Getting Started
 description: Install Lyra, run Redis, start a worker, and launch the API server.
 ---
 
-This page gets a development instance running. Use Docker Compose for the smoothest path because it mounts the Earth Engine service account file where the application expects it.
+This page gets a development instance running. Docker Compose is the smoothest
+path because it mounts the Earth Engine service account file where the
+application expects it.
 
 ## Prerequisites
 
-Lyra expects:
+You will need:
 
 - Python managed by `uv`.
 - Redis for the Celery broker, result backend, and job/event store.
@@ -30,7 +32,9 @@ LYRA_LOG_LEVEL=INFO
 LYRA_LOG_FILE=logs/lyra.log
 ```
 
-The application initializes Earth Engine from `/app/service-account.json`. Docker Compose creates that path from `SERVICE_ACCOUNT_BIND_PATH`. Direct local runs must make the same absolute path available.
+The application initializes Earth Engine from `/app/service-account.json`.
+Docker Compose creates that path from `SERVICE_ACCOUNT_BIND_PATH`. Direct local
+runs must make the same absolute path available.
 
 ## Install
 
@@ -56,25 +60,32 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 
 ## Configure Plugins
 
-Lyra only lists metrics from configured plugin repositories. `LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub repository entries:
+Lyra only lists metrics from configured plugin repositories.
+`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub repository entries:
 
 ```text
 LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
 ```
 
-Each plugin repository must contain `lyra.plugin.json` at its root. If `GET /metrics` returns an empty list, configure at least one plugin repo and refresh the catalog.
-`LYRA_PLUGIN_REPOS` accepts GitHub-style repository entries, not local filesystem paths.
+Each plugin repository needs `lyra.plugin.json` at its root. If `GET /metrics`
+returns an empty list, configure at least one plugin repo and refresh the
+catalog.
+`LYRA_PLUGIN_REPOS` accepts GitHub-style repository entries, not local
+filesystem paths.
 
 ## Start A Worker
 
-Workers consume deployment-owned queues. This example starts one worker pool for the `interactive` queue:
+Workers consume deployment-owned queues. This example starts one worker pool for
+the `interactive` queue:
 
 ```bash
 LYRA_RUNNER_QUEUES=interactive \
 uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
 ```
 
-`LYRA_RUNNER_QUEUES` controls which v2 manifest metrics the worker imports. Celery's `-Q` value controls which queue messages the worker receives. Keep them aligned.
+`LYRA_RUNNER_QUEUES` controls which v2 manifest metrics the worker imports.
+Celery's `-Q` value controls which queue messages the worker receives. Keep
+them aligned.
 
 ## Start The API
 
@@ -96,7 +107,9 @@ The development Compose file starts the API, Redis, and warm worker pools:
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-The checked-in Compose shape uses two example queues, `interactive` and `batch`. They are examples owned by the deployment. Plugin manifests choose a queue with each metric's `execution.queue` field.
+The checked-in Compose shape uses two example queues, `interactive` and
+`batch`. They are examples owned by the deployment. Plugin manifests choose a
+queue with each metric's `execution.queue` field.
 
 ## Smoke Test
 
@@ -106,7 +119,8 @@ List the metrics exposed by the current plugin catalog:
 curl http://localhost:5219/metrics
 ```
 
-Choose one metric name from that response. Submit a job using an input payload that matches that metric's `request_schema`:
+Choose one metric name from that response. Submit a job using an input payload
+that matches that metric's `request_schema`:
 
 ```bash
 curl -X POST http://localhost:5219/jobs \
@@ -114,5 +128,6 @@ curl -X POST http://localhost:5219/jobs \
   -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"cvegeo_list","value":["090020001"]}}}'
 ```
 
-Every metric includes at least one required spatial wrapper field. Then stream
-events and fetch the terminal result using the returned `job_id`.
+Every metric includes at least one required spatial wrapper field. After the job
+is accepted, stream events and fetch the terminal result using the returned
+`job_id`.

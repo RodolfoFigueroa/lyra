@@ -3,8 +3,9 @@ title: Spatial Plugin Inputs
 description: Author mandatory spatial wrapper inputs for Lyra runner plugins.
 ---
 
-Every Lyra metric has at least one spatial input. Clients always submit spatial
-fields through a wrapper object:
+Every Lyra metric has at least one spatial input. Clients submit spatial fields
+through a wrapper object so the API can validate and resolve them before a
+worker starts:
 
 ```json
 { "data_type": "geojson", "value": { "...": "FeatureCollection" } }
@@ -18,8 +19,9 @@ fields through a wrapper object:
 { "data_type": "met_zone_code", "value": "MET_ZONE_CODE" }
 ```
 
-Raw GeoJSON is valid only as the `value` of the `geojson` wrapper. Do not expose
-a top-level raw GeoJSON field in a metric manifest.
+Raw GeoJSON belongs inside the `value` of the `geojson` wrapper. Keep
+top-level manifest fields as placeholders so Lyra can inject the canonical
+wrapper schemas.
 
 Wrapper payloads are strict. `cvegeo_list` values must contain CVEGEO strings of
 one geographic level, so all strings must have the same valid length. A
@@ -67,8 +69,8 @@ canonical wrapper schemas when it builds the catalog exposed by `/metrics`.
 ```
 
 Fetch `GET /metrics/{metric_name}` to see the complete effective schema clients
-must submit. `GET /data_types` still exposes the individual wrapper schemas for
-UI builders and client tooling.
+need to submit. `GET /data_types` still exposes the individual wrapper schemas
+for UI builders and client tooling.
 
 ## API Resolution
 

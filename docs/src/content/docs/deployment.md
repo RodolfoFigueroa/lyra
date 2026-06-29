@@ -12,7 +12,7 @@ API containers:
 - Read static plugin manifests from `/lyra_plugin_catalog`.
 - Validate job requests using metric `request_schema` values.
 - Dispatch the generic `lyra.run_metric` Celery task to the metric's manifest queue.
-- Do not install or import runner plugin code.
+- Skip runner plugin installation and imports.
 
 This keeps API startup and request validation independent from plugin runtime dependencies.
 
@@ -40,11 +40,17 @@ The Compose examples define two generic worker pools:
 - `interactive`
 - `batch`
 
-Both use the same Lyra image and generic Celery task code. Each worker pool has its own `/lyra_plugins` volume, while the API mounts only `/lyra_plugin_catalog`.
+Both use the same Lyra image and generic Celery task code. Each worker pool has
+its own `/lyra_plugins` volume, while the API mounts only
+`/lyra_plugin_catalog`.
 
-To add another queue, add another worker service using the same image, set `LYRA_RUNNER_QUEUES` to the new queue name, and set Celery `-Q` to the same queue.
+To add another queue, add another worker service using the same image, set
+`LYRA_RUNNER_QUEUES` to the new queue name, and set Celery `-Q` to the same
+queue.
 
-`CELERY_WORKER_CONCURRENCY` controls worker concurrency in the development Compose file. The production Compose file uses Celery defaults unless the command is changed.
+`CELERY_WORKER_CONCURRENCY` controls worker concurrency in the development
+Compose file. The production Compose file uses Celery defaults unless the
+command is changed.
 
 ## Plugin Updates
 

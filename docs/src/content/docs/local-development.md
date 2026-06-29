@@ -15,7 +15,8 @@ The root project requires Python `>=3.11` and includes the workspace packages un
 
 ## Environment File
 
-Create `.env` in the repository root. Start from `.env.example` and fill in the values needed for your run mode.
+Create `.env` in the repository root. Start from `.env.example` and fill in the
+values needed for your run mode.
 
 Minimum values for most local work:
 
@@ -28,7 +29,9 @@ LYRA_PLUGIN_REPOS=owner/plugin-repo@branch
 LYRA_ADMIN_API_KEY=local-admin-secret
 ```
 
-The app reads the Earth Engine key from `/app/service-account.json`. Compose mounts `SERVICE_ACCOUNT_BIND_PATH` to that path. Direct local runs need that path to exist.
+The app reads the Earth Engine key from `/app/service-account.json`. Compose
+mounts `SERVICE_ACCOUNT_BIND_PATH` to that path. Direct local runs need that
+path to exist.
 
 ## Redis
 
@@ -63,7 +66,9 @@ Run the development stack:
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-The development stack starts the API, Redis, and two worker pools for `interactive` and `batch`. The API mounts `/lyra_plugin_catalog`. Each worker pool mounts its own `/lyra_plugins` volume.
+The development stack starts the API, Redis, and two worker pools for
+`interactive` and `batch`. The API mounts `/lyra_plugin_catalog`. Each worker
+pool mounts its own `/lyra_plugins` volume.
 
 ## Plugin Catalog During Development
 
@@ -73,11 +78,12 @@ The development stack starts the API, Redis, and two worker pools for `interacti
 owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
 ```
 
-Local filesystem plugin paths are not supported by `LYRA_PLUGIN_REPOS`. For
-local plugin iteration, push a branch to GitHub, point `LYRA_PLUGIN_REPOS` at
-that branch, and refresh the catalog.
+`LYRA_PLUGIN_REPOS` does not support local filesystem paths. For local plugin
+iteration, push a branch to GitHub, point `LYRA_PLUGIN_REPOS` at that branch,
+and refresh the catalog.
 
-The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.
+The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync
+and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.
 
 Refresh the catalog and restart worker pools:
 

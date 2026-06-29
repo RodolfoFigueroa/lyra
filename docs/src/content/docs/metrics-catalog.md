@@ -3,9 +3,12 @@ title: Metrics Catalog
 description: Read client-facing metric metadata and JSON Schemas from the API catalog.
 ---
 
-The API catalog is built from v2 plugin manifests. It exposes client-facing schema metadata only; it does not expose worker queue names or Python entrypoints.
+The API catalog is built from v2 plugin manifests. It exposes the schema
+metadata clients need without including worker queue names or Python
+entrypoints.
 
-The catalog can be empty when `LYRA_PLUGIN_REPOS` is empty or configured repositories do not contain valid v2 manifests.
+The catalog can be empty when `LYRA_PLUGIN_REPOS` is empty or configured
+repositories do not contain valid v2 manifests.
 
 ## List Metrics
 
@@ -46,7 +49,8 @@ Each item includes:
 
 ## Fetch One Metric
 
-`GET /metrics/{metric_name}` returns one `MetricInfoV2`. Missing metrics return `404`.
+`GET /metrics/{metric_name}` returns one `MetricInfoV2`. Missing metrics return
+`404`.
 
 ## Payload Validation
 
@@ -59,4 +63,6 @@ After validation, the API resolves spatial wrappers into canonical GeoJSON for
 the worker. Clients should treat the `/metrics` schema as the source of truth
 for request payloads.
 
-Keep request schemas focused on the public client payload. Worker-only details belong in the plugin manifest's internal `execution` and `entrypoint` fields, not in `/metrics`.
+Keep request schemas focused on the public client payload. Worker-only details
+belong in the plugin manifest's internal `execution` and `entrypoint` fields,
+not in `/metrics`.

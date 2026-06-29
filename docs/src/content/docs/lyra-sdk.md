@@ -105,8 +105,9 @@ return JobResult(
 
 ## LyraDB
 
-`LyraDB` is the SDK database interface available as `context.db`. Do not
-construct `LyraDB` directly inside a plugin. The worker provides an
+`LyraDB` is the SDK database interface available as `context.db`. Plugin code
+should use the object provided by the worker instead of constructing `LyraDB`
+directly. The worker provides an
 implementation when database settings are available.
 
 Always handle the optional case:

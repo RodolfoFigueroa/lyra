@@ -3,16 +3,17 @@ title: Runner Plugins
 description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and JobResult.
 ---
 
-Worker processes install runner plugin code at startup, read v2 manifests, import each matching entrypoint, and execute matching metrics through the generic `lyra.run_metric` Celery task.
+Runner plugins are the code that workers actually execute. At startup, each
+worker installs plugin code, reads v2 manifests, imports matching entrypoints,
+and runs matching metrics through the generic `lyra.run_metric` Celery task.
 
 Plugin repositories are trusted code. The API reads manifests without importing
 plugin modules, but workers install and execute plugin packages with the worker
 container's permissions.
 
-For the complete Python package surface available to plugin code, see the
-[lyra-sdk](../lyra-sdk/) and [lyra-utils](../lyra-utils/) references.
-For publish-time checks, see
-[Plugin Author Checklist](../plugin-author-checklist/).
+For the Python package surface available to plugin code, see the
+[lyra-sdk](../lyra-sdk/) and [lyra-utils](../lyra-utils/) references. For
+publish-time checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 
 ## Worker Install And Import
 
@@ -21,8 +22,8 @@ compatible packages editable, and import only metrics whose
 `execution.queue` matches `LYRA_RUNNER_QUEUES`.
 
 If a plugin fails compatibility checks or editable install, that worker skips
-the plugin. The API can still expose the metric if its manifest is valid, so use
-worker logs to diagnose install and import problems.
+the plugin. The API can still expose the metric when its manifest is valid, so
+worker logs are the best place to diagnose install and import problems.
 
 ## Entrypoint Contract
 
@@ -84,17 +85,21 @@ or `SingleGeoJSON.model_validate()` before using `lyra-utils`.
 - `emit_event(event, data=None)`
 - `check_cancelled()`
 
-`emit_event()` appends a durable `JobEvent` to the Redis Stream and marks the job status as `progress`.
+`emit_event()` appends a durable `JobEvent` to the Redis Stream and marks the
+job status as `progress`.
 
 Use non-terminal event names for plugin progress, such as `progress`, `loaded_input`, or `export_started`.
 
-`check_cancelled()` raises an internal worker cancellation signal if the job status is already `cancelled`; the worker then persists a terminal cancelled result.
+`check_cancelled()` raises an internal worker cancellation signal if the job
+status is already `cancelled`; the worker then persists a terminal cancelled
+result.
 
 Use `temp_dir` for intermediate files. The worker creates a per-job directory before calling the plugin.
 
-`db` is optional. Plugins must handle `context.db is None`.
+`db` is optional. Plugins should handle `context.db is None` gracefully.
 
-For file results, return a `JobResult` with `result_type="file"` and `file_path` set to the produced file.
+For file results, return a `JobResult` with `result_type="file"` and
+`file_path` set to the produced file.
 
 For `LyraDB` methods, explicit spatial input aliases such as
 `ExplicitLocationAPI` and `ExplicitBoundsAPI`, and SDK geometry models, see

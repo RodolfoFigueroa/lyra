@@ -3,9 +3,11 @@ title: Plugin Manifests
 description: Define v2 plugin metadata, metric schemas, queues, and runner entrypoints.
 ---
 
-Lyra reads plugin catalog metadata from `lyra.plugin.json` files. The API loads v2 manifests only.
+Lyra reads plugin catalog metadata from `lyra.plugin.json` files. This page is
+the field-by-field reference for the v2 manifest format.
 
-The manifest is strict: extra fields are rejected. JSON Schemas are checked when the manifest is parsed.
+Manifests are intentionally strict: extra fields are rejected, and JSON Schemas
+are checked when the manifest is parsed.
 
 For end-to-end publishing checks, see
 [Plugin Author Checklist](../plugin-author-checklist/).
@@ -90,9 +92,9 @@ metric, or execution fields are rejected.
 Every `spatial_inputs` field must appear in both places, and spatial input
 fields are always required.
 
-Do not define a raw GeoJSON or `FeatureCollection` schema for a top-level
-request field. Spatial request fields are placeholders in the manifest; Lyra
-replaces them with canonical wrapper schemas in `/metrics`.
+Keep raw GeoJSON out of top-level request field schemas. Spatial request
+fields are placeholders in the manifest; Lyra replaces them with canonical
+wrapper schemas in `/metrics`.
 
 If `request_schema.$defs` already contains a definition name used by a
 canonical spatial wrapper, it must be identical to Lyra's definition. Conflicts
@@ -106,16 +108,21 @@ similar metric names.
 
 Entrypoints must be exactly `module:function`.
 
-The module must be dot-separated Python identifiers, and the function must be one Python identifier:
+The module must be dot-separated Python identifiers, and the function must be
+one Python identifier:
 
 ```text
 example_plugin.runner:run
 ```
 
-The referenced module must be importable after the plugin package is installed by the worker.
+The referenced module must be importable after the plugin package is installed
+by the worker.
 
 ## Queue Ownership
 
-Queue names are deployment-owned. A manifest can use any queue name as long as the deployment has a worker service with matching `LYRA_RUNNER_QUEUES` and Celery `-Q` settings.
+Queue names are deployment-owned. A manifest can use any queue name as long as
+the deployment has a worker service with matching `LYRA_RUNNER_QUEUES` and
+Celery `-Q` settings.
 
-The checked-in Compose examples use `interactive` and `batch`, but those names are not special to Lyra.
+The checked-in Compose examples use `interactive` and `batch`, but those names
+are not special to Lyra.

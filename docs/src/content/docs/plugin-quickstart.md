@@ -3,7 +3,8 @@ title: Plugin Quickstart
 description: Create a minimal installable Lyra runner plugin with one v2 metric.
 ---
 
-A Lyra plugin is an installable Python package with a root `lyra.plugin.json` manifest and one or more importable runner entrypoints.
+A Lyra plugin is a regular installable Python package with a root
+`lyra.plugin.json` manifest and one or more importable runner entrypoints.
 
 For a publish-and-debug checklist, see
 [Plugin Author Checklist](../plugin-author-checklist/).
@@ -38,7 +39,8 @@ build-backend = "hatchling.build"
 packages = ["example_plugin"]
 ```
 
-Workers check plugin install compatibility with `uv pip install --dry-run` and then install compatible plugins editable into the worker environment.
+Workers check plugin install compatibility with `uv pip install --dry-run`,
+then install compatible plugins editable into the worker environment.
 
 For spatial helpers, date helpers, or Earth Engine reduction utilities, add
 `lyra-utils` to the plugin dependencies and see the [lyra-utils package
@@ -116,8 +118,8 @@ def run(job: JobEnvelope, context: RunContext) -> JobResult:
 
 ## Preflight Before Publishing
 
-Run these checks from the plugin repository before pushing the branch or tag
-that Lyra will load:
+Run these quick checks from the plugin repository before pushing the branch or
+tag that Lyra will load:
 
 ```bash
 uv pip install --python "$(which python)" --dry-run .
@@ -127,7 +129,8 @@ uv run python -c "import json; from pathlib import Path; from lyra.sdk.models im
 ```
 
 The worker uses the same install path: it checks compatibility, installs
-compatible plugins editable, and imports entrypoints for matching queues.
+compatible plugins editable, and imports entrypoints for matching queues. If a
+check fails here, fix it before publishing the plugin branch.
 
 ## Connect The Plugin To Lyra
 

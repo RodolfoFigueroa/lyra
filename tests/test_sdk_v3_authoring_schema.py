@@ -350,6 +350,33 @@ def test_manifest_v3_rejects_lyra_owned_input_defaults() -> None:
     _assert_invalid(raw, "location inputs must not define default")
 
 
+@pytest.mark.parametrize(
+    ("metric_overrides", "match"),
+    [
+        (
+            {"inputs": {"location": {"kind": "location", "required": False}}},
+            "location inputs must be required",
+        ),
+        (
+            {
+                "inputs": {"bounds": {"kind": "bounds", "required": False}},
+                "output": {
+                    "kind": "file",
+                    "media_type": "image/tiff",
+                    "extensions": [".tif"],
+                },
+            },
+            "bounds inputs must be required",
+        ),
+    ],
+)
+def test_manifest_v3_rejects_optional_spatial_inputs(
+    metric_overrides: dict[str, Any],
+    match: str,
+) -> None:
+    _assert_invalid(_manifest(metric_overrides), match)
+
+
 def test_manifest_v3_rejects_optional_batch_inputs() -> None:
     raw = _manifest()
     raw["metrics"][0] = _dynamic_metric()

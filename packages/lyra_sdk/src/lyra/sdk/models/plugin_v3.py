@@ -136,6 +136,9 @@ class LocationInputV3(CommonInputMetadataV3):
         if self.nullable:
             msg = "location inputs must not be nullable"
             raise ValueError(msg)
+        if not self.required:
+            msg = "location inputs must be required"
+            raise ValueError(msg)
         return self
 
 
@@ -151,6 +154,9 @@ class BoundsInputV3(CommonInputMetadataV3):
             raise ValueError(msg)
         if self.nullable:
             msg = "bounds inputs must not be nullable"
+            raise ValueError(msg)
+        if not self.required:
+            msg = "bounds inputs must be required"
             raise ValueError(msg)
         return self
 

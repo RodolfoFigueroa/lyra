@@ -1,3 +1,10 @@
+x-lyra-app-volumes: &lyra-app-volumes
+  - lyra_data:/lyra_data
+  - ${LYRA_CONFIG_FILE}:/lyra_data/config/lyra.toml:ro
+  - ${LYRA_POSTGRES_PASSWORD_FILE}:/lyra_data/secrets/postgres_password:ro
+  - ${LYRA_ADMIN_API_KEY_FILE}:/lyra_data/secrets/admin_api_key:ro
+  - ${LYRA_SERVICE_ACCOUNT_FILE}:/lyra_data/secrets/service-account.json:ro
+
 services:
   lyra-dev:
     image: lyra-dev:latest
@@ -5,8 +12,7 @@ services:
     restart: unless-stopped
     ports:
       - 5219:5219
-    volumes:
-      - lyra_data:/lyra_data
+    volumes: *lyra-app-volumes
     networks:
       - lyra_net
     depends_on:
@@ -37,8 +43,7 @@ services:
     container_name: lyra-celery-worker-interactive-dev
     restart: unless-stopped
     command: python -m lyra_app.worker_launcher interactive
-    volumes:
-      - lyra_data:/lyra_data
+    volumes: *lyra-app-volumes
     networks:
       - lyra_net
     depends_on:
@@ -63,8 +68,7 @@ services:
     container_name: lyra-celery-worker-batch-dev
     restart: unless-stopped
     command: python -m lyra_app.worker_launcher batch
-    volumes:
-      - lyra_data:/lyra_data
+    volumes: *lyra-app-volumes
     networks:
       - lyra_net
     depends_on:

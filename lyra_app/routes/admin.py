@@ -1,10 +1,11 @@
-import os
+import hmac
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
+from lyra_app.config import ConfigLoadError, ConfigSecretError, get_config
 from lyra_app.plugins import format_update_message
 from lyra_app.registry import refresh_catalog
 from lyra_app.worker_control import graceful_worker_restart
@@ -19,23 +20,24 @@ def require_admin_key(
 ) -> None:
     """FastAPI dependency that enforces admin API-key authentication.
 
-    Reads the expected key from the `LYRA_ADMIN_API_KEY` environment variable.
+    Reads the expected key from the TOML-configured secret file.
 
     Args:
         credentials (HTTPAuthorizationCredentials): Bearer token extracted by
             FastAPI's `HTTPBearer` scheme.
 
     Raises:
-        HTTPException: With status 500 if `LYRA_ADMIN_API_KEY` is not
-            configured, or status 403 if the supplied token does not match.
+        HTTPException: With status 500 if the configured secret cannot be
+            loaded, or status 403 if the supplied token does not match.
     """
-    expected = os.environ.get("LYRA_ADMIN_API_KEY", "").strip()
-    if not expected:
+    try:
+        expected = get_config().admin.read_api_key()
+    except (ConfigLoadError, ConfigSecretError) as exc:
         raise HTTPException(
             status_code=500,
-            detail="LYRA_ADMIN_API_KEY is not configured on the server.",
-        )
-    if credentials.credentials != expected:
+            detail="Admin API key is not configured on the server.",
+        ) from exc
+    if not hmac.compare_digest(credentials.credentials, expected):
         raise HTTPException(status_code=403, detail="Invalid admin API key.")
 
 

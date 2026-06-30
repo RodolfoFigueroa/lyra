@@ -1,7 +1,6 @@
 import importlib
 import logging
 import math
-import os
 import re
 import tempfile
 from collections.abc import Callable
@@ -81,13 +80,17 @@ class WorkerRunContext:
 
 
 RUNNER_REGISTRY: dict[str, RunnerMetricEntry] = {}
+_RUNNER_TEMP_BASE: Path | None = None
+
+
+def set_runner_temp_base(path: Path | None) -> None:
+    global _RUNNER_TEMP_BASE  # noqa: PLW0603
+
+    _RUNNER_TEMP_BASE = path
 
 
 def _configured_runner_queues() -> set[str]:
-    raw = os.environ.get("LYRA_RUNNER_QUEUES", "").strip()
-    if not raw:
-        return set()
-    return {queue.strip() for queue in raw.split(",") if queue.strip()}
+    return set()
 
 
 def _load_entrypoint(spec: str) -> MetricRunCallable:
@@ -182,9 +185,19 @@ def refresh_runner_registry(
     *,
     config: LyraConfig | None = None,
 ) -> dict[str, RunnerMetricEntry]:
+    global _RUNNER_TEMP_BASE  # noqa: PLW0603
+
+    if worker_name is not None and config is None:
+        config = get_config()
+
     registry = load_runner_metric_entries(worker_name, config=config)
     RUNNER_REGISTRY.clear()
     RUNNER_REGISTRY.update(registry)
+    _RUNNER_TEMP_BASE = (
+        config.worker_temp_dir(worker_name)
+        if worker_name is not None and config is not None
+        else None
+    )
     logger.info(
         "Loaded %d v3 runner metric(s) for generic task %s.",
         len(RUNNER_REGISTRY),
@@ -194,17 +207,14 @@ def refresh_runner_registry(
 
 
 def _runner_temp_base() -> Path:
-    configured = os.environ.get("LYRA_RUNNER_TEMP_DIR") or os.environ.get(
-        "LYRA_CACHE_DIR"
-    )
-    if configured:
-        return Path(configured)
+    if _RUNNER_TEMP_BASE is not None:
+        return _RUNNER_TEMP_BASE
 
-    cache_dir = Path("/lyra_cache")
+    cache_dir = Path("/lyra_data/cache")
     if cache_dir.exists():
-        return cache_dir
+        return cache_dir / "jobs"
 
-    return Path(tempfile.gettempdir()) / "lyra"
+    return Path(tempfile.gettempdir()) / "lyra" / "jobs"
 
 
 def _safe_path_segment(value: str) -> str:
@@ -215,7 +225,7 @@ def _safe_path_segment(value: str) -> str:
 
 
 def build_run_context(job: JobEnvelope) -> WorkerRunContext:
-    temp_dir = _runner_temp_base() / "jobs" / _safe_path_segment(job.job_id)
+    temp_dir = _runner_temp_base() / _safe_path_segment(job.job_id)
     temp_dir.mkdir(parents=True, exist_ok=True)
     return WorkerRunContext(
         job_id=job.job_id,
@@ -229,8 +239,8 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
 def _build_db_context() -> Any | None:
     try:
         from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
-    except KeyError as exc:
-        logger.info("DB context unavailable: missing environment variable %s.", exc)
+    except (ConfigLoadError, KeyError) as exc:
+        logger.info("DB context unavailable: %s.", exc)
         return None
     return LyraDBImplicit()
 
@@ -599,4 +609,5 @@ __all__ = [
     "load_runner_metric_entries",
     "refresh_runner_registry",
     "run_metric_task",
+    "set_runner_temp_base",
 ]

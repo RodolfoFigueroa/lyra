@@ -1,30 +1,37 @@
 import logging
-import os
 from pathlib import Path
 
+from lyra_app.config import ConfigLoadError, LyraConfig, get_config
 from lyra_app.constants import DEFAULT_LOG_FORMAT, DEFAULT_LOG_LEVEL
 
 
-def _build_log_handler() -> logging.Handler:
-    log_file_var = os.environ.get("LYRA_LOG_FILE")
-
-    if log_file_var is None:
+def _build_log_handler(log_file: Path | None) -> logging.Handler:
+    if log_file is None:
         return logging.StreamHandler()
 
-    log_file_path = Path(log_file_var)
-    log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    return logging.FileHandler(log_file_path, encoding="utf-8")
+    return logging.FileHandler(log_file, encoding="utf-8")
 
 
-def configure_logging() -> logging.Logger:
+def _logging_config(config: LyraConfig | None) -> tuple[str, Path | None]:
+    if config is None:
+        try:
+            config = get_config()
+        except ConfigLoadError:
+            return DEFAULT_LOG_LEVEL, None
+    return config.logging.level, config.logging.file
+
+
+def configure_logging(config: LyraConfig | None = None) -> logging.Logger:
     logger = logging.getLogger("lyra_app")
-    logger.setLevel(os.environ.get("LYRA_LOG_LEVEL", DEFAULT_LOG_LEVEL).upper())
+    level, log_file = _logging_config(config)
+    logger.setLevel(level.upper())
 
     if logger.handlers:
         return logger
 
-    handler = _build_log_handler()
+    handler = _build_log_handler(log_file)
     handler.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT))
     logger.addHandler(handler)
     logger.propagate = False

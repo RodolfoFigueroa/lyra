@@ -1,5 +1,4 @@
 import logging
-import os
 from contextlib import asynccontextmanager
 from types import AsyncGeneratorType
 
@@ -7,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from lyra_app.auth import initialize_earth_engine
+from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
 from lyra_app.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -14,23 +14,27 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGeneratorType:  # noqa: ARG001
-    configure_logging()
-    initialize_earth_engine()
     yield
 
     logger.info("Shutting down worker.")
 
 
-if __name__ == "__main__":
-    configure_logging()
-    initialize_earth_engine()
+def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:
+    config = get_config() if config is None else config
+    ensure_runtime_directories(config)
+    configure_logging(config)
+    initialize_earth_engine(config)
+    return config
 
-    from lyra_app.registry import ensure_catalog_loaded
+
+def create_app(config: LyraConfig | None = None) -> FastAPI:
+    config = bootstrap_runtime(config)
+    from lyra_app.registry import ensure_catalog_loaded  # noqa: PLC0415
 
     ensure_catalog_loaded()
 
     # Defer imports until after authenticating with Earth Engine
-    from lyra_app.routes import (
+    from lyra_app.routes import (  # noqa: PLC0415
         admin,
         data_types,
         jobs,
@@ -44,10 +48,16 @@ if __name__ == "__main__":
     app.include_router(data_types.router)
     app.include_router(metrics.router)
     app.include_router(met_zone.router)
+    return app
+
+
+if __name__ == "__main__":
+    runtime_config = get_config()
+    app = create_app(runtime_config)
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=int(os.environ.get("LYRA_PORT", "5219")),
+        host=runtime_config.api.host,
+        port=runtime_config.api.port,
         reload=False,
     )

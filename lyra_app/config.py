@@ -26,6 +26,7 @@ DEFAULT_API_PORT = 5219
 DEFAULT_JOB_STORE_TTL_SECONDS = 600
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_WORKER_CONCURRENCY = 1
+DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
@@ -444,6 +445,20 @@ def validate_config_secret_references(config: LyraConfig) -> None:
     )
 
 
+def ensure_runtime_directories(config: LyraConfig) -> None:
+    """Create non-secret runtime directories declared by the server config."""
+    paths = {config.plugins.catalog_dir, config.plugins.runner_base_dir}
+    if config.logging.file is not None:
+        paths.add(config.logging.file.parent)
+
+    for worker_name in config.workers:
+        paths.add(config.worker_install_dir(worker_name))
+        paths.add(config.worker_temp_dir(worker_name))
+
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
+
+
 def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
     config_path = Path(path)
     try:
@@ -635,6 +650,7 @@ __all__ = [
     "DEFAULT_API_PORT",
     "DEFAULT_CONFIG_PATH",
     "DEFAULT_JOB_STORE_TTL_SECONDS",
+    "DEFAULT_LOG_DIR",
     "DEFAULT_LOG_LEVEL",
     "DEFAULT_WORKER_CONCURRENCY",
     "LYRA_DATA_DIR",
@@ -651,6 +667,7 @@ __all__ = [
     "RedisConfig",
     "WorkerConfig",
     "clear_config_cache",
+    "ensure_runtime_directories",
     "get_config",
     "get_config_path",
     "load_config",

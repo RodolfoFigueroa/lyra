@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import UTC, datetime
 from typing import Any, Literal, TypeAlias
 
@@ -7,6 +6,12 @@ from lyra.sdk.models import JobEnvelope, JobEvent, TerminalJobResult
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
 
+from lyra_app.config import (
+    DEFAULT_JOB_STORE_TTL_SECONDS,
+    ConfigLoadError,
+    LyraConfig,
+    get_config,
+)
 from lyra_app.db.redis import redis_client, redis_client_sync
 
 JobStatus: TypeAlias = Literal[
@@ -20,7 +25,7 @@ JobStatus: TypeAlias = Literal[
 
 TerminalJobStatus: TypeAlias = Literal["succeeded", "failed", "cancelled"]
 
-JOB_STORE_TTL_SECONDS = int(os.getenv("LYRA_JOB_STORE_TTL_SECONDS", "600"))
+JOB_STORE_TTL_SECONDS = DEFAULT_JOB_STORE_TTL_SECONDS
 STREAM_START = "0-0"
 STREAM_LATEST = "$"
 DEFAULT_STREAM_BLOCK_MS = 5000
@@ -75,15 +80,24 @@ def _loads_json(payload: Any) -> Any:
     return json.loads(payload, parse_constant=_json_non_finite_constant)
 
 
+def _job_store_ttl_seconds(config: LyraConfig | None = None) -> int:
+    if config is not None:
+        return config.job_store.ttl_seconds
+    try:
+        return get_config().job_store.ttl_seconds
+    except ConfigLoadError:
+        return JOB_STORE_TTL_SECONDS
+
+
 def _apply_ttl_sync(client: Any, job_id: str) -> None:
-    ttl = JOB_STORE_TTL_SECONDS
+    ttl = _job_store_ttl_seconds()
     client.expire(status_key(job_id), ttl)
     client.expire(result_key(job_id), ttl)
     client.expire(events_key(job_id), ttl)
 
 
 async def _apply_ttl_async(client: Any, job_id: str) -> None:
-    ttl = JOB_STORE_TTL_SECONDS
+    ttl = _job_store_ttl_seconds()
     await client.expire(status_key(job_id), ttl)
     await client.expire(result_key(job_id), ttl)
     await client.expire(events_key(job_id), ttl)
@@ -173,7 +187,7 @@ def set_job_status(
 ) -> JobStatusSnapshot:
     client = redis_client_sync if client is None else client
     payload = _status_payload(job_id, status, metric=metric, error=error)
-    client.set(status_key(job_id), _dump_json(payload), ex=JOB_STORE_TTL_SECONDS)
+    client.set(status_key(job_id), _dump_json(payload), ex=_job_store_ttl_seconds())
     _apply_ttl_sync(client, job_id)
     snapshot = JobStatusSnapshot.model_validate(payload)
     if emit_event:
@@ -194,7 +208,11 @@ def save_job_result(
 ) -> dict[str, Any]:
     client = redis_client_sync if client is None else client
     payload = result.model_dump(mode="json", exclude_none=True)
-    client.set(result_key(result.job_id), _dump_json(payload), ex=JOB_STORE_TTL_SECONDS)
+    client.set(
+        result_key(result.job_id),
+        _dump_json(payload),
+        ex=_job_store_ttl_seconds(),
+    )
     set_job_status(
         result.job_id,
         result.status,
@@ -294,7 +312,7 @@ async def set_job_status_async(
     await client.set(
         status_key(job_id),
         _dump_json(payload),
-        ex=JOB_STORE_TTL_SECONDS,
+        ex=_job_store_ttl_seconds(),
     )
     await _apply_ttl_async(client, job_id)
     snapshot = JobStatusSnapshot.model_validate(payload)

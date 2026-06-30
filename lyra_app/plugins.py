@@ -1,7 +1,6 @@
 import hashlib
 import importlib
 import logging
-import os
 import re
 import site
 import subprocess
@@ -15,8 +14,8 @@ from urllib.parse import unquote, urlparse
 logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "lyra.plugin.json"
-DEFAULT_CATALOG_DIR = Path("/lyra_plugin_catalog")
-DEFAULT_INSTALL_DIR = Path("/lyra_plugins")
+DEFAULT_CATALOG_DIR = Path("/lyra_data/plugins/catalog")
+DEFAULT_INSTALL_DIR = Path("/lyra_data/plugins/runners/default")
 RepoSourceKind = Literal["github", "local"]
 
 
@@ -102,13 +101,11 @@ def _parse_local_repo_entry(raw: str) -> PluginRepoEntry:
 
 
 def get_catalog_dir() -> Path:
-    raw = os.environ.get("LYRA_PLUGIN_CATALOG_DIR", "").strip()
-    return Path(raw) if raw else DEFAULT_CATALOG_DIR
+    return DEFAULT_CATALOG_DIR
 
 
 def get_install_dir() -> Path:
-    raw = os.environ.get("LYRA_PLUGIN_INSTALL_DIR", "").strip()
-    return Path(raw) if raw else DEFAULT_INSTALL_DIR
+    return DEFAULT_INSTALL_DIR
 
 
 def _run_git(*args: str, cwd: Path | None = None) -> str:
@@ -151,10 +148,7 @@ def iter_plugin_entries(
     raw_entries: Iterable[str] | None = None,
 ) -> Iterable[PluginRepoEntry]:
     if raw_entries is None:
-        raw = os.environ.get("LYRA_PLUGIN_REPOS", "").strip()
-        if not raw:
-            return []
-        raw_entries = raw.split(",")
+        return []
 
     entries_to_parse = [value.strip() for value in raw_entries if value.strip()]
     if not entries_to_parse:

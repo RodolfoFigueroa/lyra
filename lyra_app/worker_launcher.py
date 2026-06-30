@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import argparse
+from typing import TYPE_CHECKING
+
+from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
+from lyra_app.logging_config import configure_logging
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+
+def build_celery_worker_args(config: LyraConfig, worker_name: str) -> list[str]:
+    worker = config.get_worker(worker_name)
+    return [
+        "worker",
+        "--loglevel",
+        config.logging.level,
+        "--concurrency",
+        str(worker.concurrency),
+        "-Q",
+        ",".join(worker.queues),
+    ]
+
+
+def launch_worker(worker_name: str, *, config: LyraConfig | None = None) -> None:
+    config = get_config() if config is None else config
+    ensure_runtime_directories(config)
+    configure_logging(config)
+
+    from lyra_app.celery_app import celery_app  # noqa: PLC0415
+    from lyra_app.worker import refresh_runner_registry  # noqa: PLC0415
+
+    celery_app.conf.update(
+        broker_url=config.redis.url,
+        result_backend=config.redis.url,
+    )
+    refresh_runner_registry(worker_name, config=config)
+    celery_app.worker_main(build_celery_worker_args(config, worker_name))
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        description="Launch a Lyra Celery worker from /lyra_data/config/lyra.toml."
+    )
+    parser.add_argument("worker_name", help="Name from the [workers.<name>] table.")
+    args = parser.parse_args(argv)
+    launch_worker(args.worker_name)
+
+
+if __name__ == "__main__":
+    main()

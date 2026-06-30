@@ -1,9 +1,19 @@
-import os
-
 import redis
 import redis.asyncio as aioredis
 
-redis_url = os.getenv("CELERY_BROKER_URL", "redis://lyra-redis:6379/0")
+from lyra_app.config import ConfigLoadError, get_config
+
+_FALLBACK_REDIS_URL = "redis://lyra-redis:6379/0"
+
+
+def get_redis_url() -> str:
+    try:
+        return get_config().redis.url
+    except ConfigLoadError:
+        return _FALLBACK_REDIS_URL
+
+
+redis_url = get_redis_url()
 
 redis_client = aioredis.from_url(
     redis_url,

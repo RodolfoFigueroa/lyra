@@ -69,10 +69,9 @@ preflight checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync
 and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.
 
-Set `LYRA_RUNNER_QUEUES` on each worker pool to the manifest queue names that
-pool should import. If it is unset, the worker imports every installed plugin
-metric, while Celery's `-Q` setting still controls which queue messages it
-receives.
+Assign metric queues in `/lyra_data/config/lyra.toml`. Each worker pool should
+import the queues listed in its `[workers.<name>]` table, while Celery's `-Q`
+setting still controls which queue messages it receives.
 
 Refresh the catalog and restart worker pools:
 

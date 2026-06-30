@@ -106,5 +106,4 @@ the worker. Clients should treat the `/metrics` schema as the source of truth
 for request payloads.
 
 Keep request payloads focused on public metric inputs. Worker-only details
-belong in the plugin manifest's `queue` and `entrypoint` fields, not in
-`/metrics`.
+belong in server configuration and plugin entrypoints, not in `/metrics`.

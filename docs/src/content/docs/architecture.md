@@ -37,7 +37,7 @@ The API catalog does not import plugin Python code.
 1. A client submits `POST /jobs` with `metric`, `input`, and optional `idempotency_key`.
 2. The API validates `input` against the selected metric's effective `request_schema`.
 3. The API resolves each declared spatial wrapper into canonical GeoJSON.
-4. The API creates a `JobEnvelope`, stores a queued job snapshot, and dispatches `lyra.run_metric` to the metric's manifest queue.
+4. The API creates a `JobEnvelope`, stores a queued job snapshot, and dispatches `lyra.run_metric` to the metric's server-assigned queue.
 5. A worker consuming that queue validates the envelope, builds a `RunContext`, and calls the metric entrypoint.
 6. The worker stores progress events, terminal status, and a normalized terminal result.
 7. Clients read status, stream events, and fetch results through the `/jobs/{job_id}` routes.

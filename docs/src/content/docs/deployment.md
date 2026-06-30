@@ -11,7 +11,7 @@ API containers:
 
 - Read static plugin manifests from `/lyra_plugin_catalog`.
 - Validate job requests using compiled metric `request_schema` values.
-- Dispatch the generic `lyra.run_metric` Celery task to the metric's manifest queue.
+- Dispatch the generic `lyra.run_metric` Celery task to the metric's server-assigned queue.
 - Skip runner plugin installation and imports.
 
 This keeps API startup and request validation independent from plugin runtime dependencies.

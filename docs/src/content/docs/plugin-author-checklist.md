@@ -151,8 +151,8 @@ example payload without checking it.
 | --- | --- |
 | `GET /metrics` is empty | `LYRA_PLUGIN_REPOS` is set in the API environment, repos are reachable, and each repo has a root `lyra.plugin.json`. |
 | Worker exits or restarts at startup | An installed manifest failed to parse, a selected metric name is duplicated, or a selected entrypoint failed to import. Run the preflight commands and check worker logs. |
-| Metric appears in `/metrics`, but the job fails as `unknown_metric` | The worker skipped an incompatible plugin, editable install failed, or `LYRA_RUNNER_QUEUES` does not include the metric queue. Check worker logs. |
-| Job remains `queued` | No worker is consuming the manifest queue with matching Celery `-Q` settings. |
+| Metric appears in `/metrics`, but the job fails as `unknown_metric` | The worker skipped an incompatible plugin, editable install failed, or the worker config does not include the metric's assigned queue. Check worker logs. |
+| Job remains `queued` | No worker is consuming the metric's assigned queue with matching Celery `-Q` settings. |
 | `POST /jobs` returns `422` | Fetch `/metrics/{metric_name}` and match the effective schema. Spatial fields must use wrapper objects, not top-level raw GeoJSON. |
 | Spatial resolution returns `503` | Database-backed wrappers such as `cvegeo_list` or `met_zone_code` could not be resolved. Check database settings and availability. |
 | Worker returns `invalid_result` | Return `TableJobResult` or `FileJobResult` with the same `job_id` as the envelope and a payload matching the manifest `output`. |

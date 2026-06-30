@@ -48,7 +48,6 @@ Declare spatial fields inside the metric's `inputs` object:
 {
   "name": "average_temperature_by_location",
   "description": "Return average temperature for each submitted location.",
-  "queue": "interactive",
   "entrypoint": "temperature_plugin.runner:run",
   "inputs": {
     "location": { "kind": "location" },
@@ -161,7 +160,6 @@ Use `SingleGeoJSON` for fields declared with `kind: "bounds"`:
 {
   "name": "land_cover_raster",
   "description": "Generate a land cover raster for one area.",
-  "queue": "batch",
   "entrypoint": "land_cover.runner:run",
   "inputs": {
     "bounds": { "kind": "bounds" },

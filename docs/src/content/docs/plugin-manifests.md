@@ -1,6 +1,6 @@
 ---
 title: Plugin Manifests
-description: Define schema v3 plugin metadata, semantic inputs, outputs, queues, and runner entrypoints.
+description: Define schema v3 plugin metadata, semantic inputs, outputs, and runner entrypoints.
 ---
 
 Lyra reads plugin catalog metadata from `lyra.plugin.json` files. This page is
@@ -31,7 +31,6 @@ For end-to-end publishing checks, see
     {
       "name": "example_metric",
       "description": "Compute an example metric for each input feature.",
-      "queue": "interactive",
       "entrypoint": "example_plugin.runner:run",
       "inputs": {
         "location": { "kind": "location" },
@@ -71,7 +70,6 @@ Metric fields:
 
 - `name`: unique metric name within the manifest and across the loaded catalog.
 - `description`: client-facing summary.
-- `queue`: queue name used by the API to dispatch jobs and by workers to select metrics.
 - `entrypoint`: Python `module:function` reference imported by worker processes.
 - `inputs`: semantic request input declarations.
 - `output`: successful output declaration. Use `kind: "table"` for per-feature value metrics and `kind: "file"` for file-producing metrics.
@@ -359,17 +357,20 @@ example_plugin.runner:run
 ```
 
 The referenced module must be importable after the plugin package is installed
-by each worker that selects the metric's queue. If a selected entrypoint cannot
-be imported, that worker registry will not load.
+by each worker that selects the metric's server-assigned queue. If a selected
+entrypoint cannot be imported, that worker registry will not load.
 
 ## Queue Ownership
 
-Queue names are deployment-owned. A manifest can use any queue name as long as
-the deployment has a worker service with matching `LYRA_RUNNER_QUEUES` and
-Celery `-Q` settings.
+Queue names are deployment-owned. Operators choose any queue names they want as
+long as each assignment in `/lyra_data/config/lyra.toml` under
+`[plugins.metric_queues]` appears in `plugins.allowed_queues`.
 
-If `LYRA_RUNNER_QUEUES` is unset on a worker, that worker imports every
-installed plugin metric. Queue-specific deployments should set it explicitly.
+Plugin authors do not declare queues in `lyra.plugin.json`. During API catalog
+refresh, newly discovered metrics without an assignment are added to
+`[plugins.metric_queues]` with `plugins.default_queue`. Workers read those
+assignments and import only metrics whose resolved queue appears in their
+`[workers.<name>].queues` config.
 
 The checked-in Compose examples use `interactive` and `batch`, but those names
 are not special to Lyra.

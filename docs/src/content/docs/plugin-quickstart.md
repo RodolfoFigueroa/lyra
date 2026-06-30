@@ -69,7 +69,6 @@ example into a production metric.
     {
       "name": "example_metric",
       "description": "Return the submitted value for each input feature.",
-      "queue": "interactive",
       "entrypoint": "example_plugin.runner:run",
       "inputs": {
         "location": { "kind": "location" },
@@ -147,16 +146,16 @@ Push the plugin to GitHub and add it to `LYRA_PLUGIN_REPOS`:
 LYRA_PLUGIN_REPOS=owner/example-lyra-plugin@main
 ```
 
-Run an API process and a worker whose queue matches the manifest:
+Run an API process and a worker whose queue matches the server assignment:
 
 ```bash
 LYRA_RUNNER_QUEUES=interactive \
 uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
 ```
 
-`LYRA_RUNNER_QUEUES` selects which manifest queues the worker imports. Keep it
-aligned with Celery's `-Q` value. If it is unset, the worker imports every
-installed plugin metric.
+Metric queues are assigned in `/lyra_data/config/lyra.toml`, not in
+`lyra.plugin.json`. Keep the worker's configured queues aligned with Celery's
+`-Q` value.
 
 Refresh the catalog after changing plugin code or manifests:
 

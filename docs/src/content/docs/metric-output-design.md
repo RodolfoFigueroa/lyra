@@ -72,9 +72,9 @@ is submitted.
 ## Batched Columns
 
 Use `batched_columns` when one job can reuse meaningful shared work across a
-bounded list of related variants. The request schema declares a required source
-array, and the output declaration says how each source item becomes one result
-column.
+bounded list of related variants. The manifest declares a metric-local
+`kind: "batch"` input, and the output declaration says how each submitted item
+becomes one result column.
 
 Good fits include:
 
@@ -83,62 +83,45 @@ Good fits include:
 - one raster load or preprocessing pass reused across bounded class filters.
 
 Each source item has a stable `key`, a plugin-specific `value`, and an optional
-display `label`. Lyra uses `key` for column names, uses `label` for descriptions
-when present, and leaves `value` for plugin computation.
+display `label`. Lyra owns the `key` and `label` protocol fields: it uses `key`
+for column names, uses `label` for descriptions when present, and leaves
+`value` for plugin computation. The plugin author defines the schema for
+`value`.
 
 ```json
 {
-  "request_schema": {
-    "type": "object",
-    "properties": {
-      "location": {},
-      "sector_filters": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "required": ["key", "value"],
-          "properties": {
-            "key": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-              "minLength": 1,
-              "maxLength": 64
-            },
-            "value": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            },
-            "label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120
-            }
-          },
-          "additionalProperties": false
-        },
-        "minItems": 1,
-        "maxItems": 20,
-        "uniqueItems": true
+  "inputs": {
+    "location": { "kind": "location" },
+    "sector_filters": {
+      "kind": "batch",
+      "max_items": 20,
+      "label": true,
+      "value": {
+        "kind": "string",
+        "min_length": 1,
+        "max_length": 128
       }
-    },
-    "required": ["location", "sector_filters"]
+    }
   },
   "output": {
     "kind": "table",
     "batched_columns": [
       {
         "source": "sector_filters",
-        "name_template": "job_accessibility_{key}",
+        "name": "job_accessibility_{key}",
         "type": "number",
         "unit": "jobs",
-        "description_template": "Job accessibility for {label}.",
-        "batching_reason": "Reuses shared network data across all sector filters."
+        "description": "Job accessibility for {label}."
       }
     ]
   }
 }
 ```
+
+Lyra compiles `sector_filters` into a strict request array with `minItems: 1`,
+`uniqueItems: true`, `additionalProperties: false`, and a canonical `key`
+schema. Plugin authors do not configure the `key` pattern; they choose the
+batch input name and the plugin-owned `value` schema.
 
 For a request with keys `sectors_091_092` and `retail`, the runner must return
 columns `job_accessibility_sectors_091_092` and `job_accessibility_retail` in

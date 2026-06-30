@@ -1,6 +1,6 @@
 ---
 title: Lyra Docs
-description: Documentation for Lyra's v2 plugin runner, async job API, and warm-worker deployment model.
+description: Documentation for Lyra's plugin runner, async job API, and warm-worker deployment model.
 ---
 
 Lyra is a REST API for computing accessibility and land-use metrics for spatial
@@ -10,7 +10,7 @@ queue-specific Celery workers.
 
 ## Current Model
 
-- API processes read v2 plugin manifests and validate job requests.
+- API processes read schema v3 plugin manifests and validate job requests.
 - Worker processes install plugin code and run the generic `lyra.run_metric` task.
 - Redis stores queued, progress, terminal event, status, and result records.
 - Public execution uses `/jobs`, `/jobs/{job_id}`, `/jobs/{job_id}/events`, and `/jobs/{job_id}/result`.

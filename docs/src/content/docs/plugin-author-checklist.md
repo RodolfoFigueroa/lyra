@@ -79,7 +79,7 @@ uv run python -c "from example_plugin.runner import run; print(run)"
 Parse the manifest with the public SDK model:
 
 ```bash
-uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV2; PluginManifestV2.model_validate(json.loads(Path('lyra.plugin.json').read_text())); print('manifest ok')"
+uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV3, compile_plugin_manifest; manifest = PluginManifestV3.model_validate(json.loads(Path('lyra.plugin.json').read_text())); compile_plugin_manifest(manifest); print('manifest ok')"
 ```
 
 Add at least one local runner test before publishing. Construct a resolved
@@ -92,9 +92,15 @@ table-shaped Pandas or GeoPandas outputs, and `from_series()` for one-column
 Pandas outputs. For batched table metrics, include at least two source items and
 assert the expanded column names and order.
 
-The manifest is strict v2 JSON. Extra fields are rejected, schemas must be valid
-JSON Schemas, metric names must be unique across the loaded catalog, and each
-spatial input must be a required object property.
+The manifest is strict schema v3 JSON. Extra fields are rejected, metric names
+must be unique across the loaded catalog, each metric must declare at least one
+spatial input, and Lyra must be able to compile `inputs` into effective JSON
+Schema.
+
+Plugin authors should not write the compiled request JSON Schema by hand.
+Declare semantic `inputs` instead. Use `kind: "json_schema"` only for
+plugin-owned input fields that need a custom shape, and keep spatial fields as
+`kind: "location"` or `kind: "bounds"`.
 
 Workers import entrypoints only for selected queues. If `LYRA_RUNNER_QUEUES` is
 unset, the worker selects every installed plugin metric. If a selected

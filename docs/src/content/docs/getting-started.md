@@ -83,7 +83,7 @@ LYRA_RUNNER_QUEUES=interactive \
 uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
 ```
 
-`LYRA_RUNNER_QUEUES` controls which v2 manifest metrics the worker imports.
+`LYRA_RUNNER_QUEUES` controls which manifest metrics the worker imports.
 If it is unset, the worker imports every installed plugin metric. Celery's `-Q`
 value controls which queue messages the worker receives. Keep them aligned for
 queue-specific worker pools.
@@ -110,7 +110,7 @@ docker compose -f docker/docker-compose-dev.yml up --build
 
 The checked-in Compose shape uses two example queues, `interactive` and
 `batch`. They are examples owned by the deployment. Plugin manifests choose a
-queue with each metric's `execution.queue` field.
+queue with each metric's `queue` field.
 
 ## Smoke Test
 

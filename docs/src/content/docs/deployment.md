@@ -3,14 +3,14 @@ title: Deployment
 description: Run the API as a manifest-only service and workers as warm queue-specific runners.
 ---
 
-Lyra v2 separates API catalog loading from runner execution.
+Lyra separates API catalog loading from runner execution.
 
 ## API Containers
 
 API containers:
 
 - Read static plugin manifests from `/lyra_plugin_catalog`.
-- Validate job requests using metric `request_schema` values.
+- Validate job requests using compiled metric `request_schema` values.
 - Dispatch the generic `lyra.run_metric` Celery task to the metric's manifest queue.
 - Skip runner plugin installation and imports.
 
@@ -21,7 +21,7 @@ This keeps API startup and request validation independent from plugin runtime de
 Worker containers:
 
 - Clone and install plugin repositories at startup through the worker startup path.
-- Read v2 manifests from installed plugins.
+- Read schema v3 manifests from installed plugins.
 - Filter metrics by `LYRA_RUNNER_QUEUES` when it is set.
 - Import matching metric entrypoints.
 - Consume matching Celery queues with `-Q`.

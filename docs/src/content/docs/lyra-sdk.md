@@ -206,10 +206,10 @@ function signatures. They document whether a helper expects resolved
 client-selected features (`GeoJSON`) or one resolved enclosing geometry
 (`SingleGeoJSON`).
 
-All metrics declare spatial fields in `spatial_inputs`. Clients submit wrappers
-for those fields, and Lyra resolves them before the worker calls the runner.
-Runner code parses the resolved `job.input` field into `GeoJSON` or
-`SingleGeoJSON`.
+All metrics declare spatial fields in schema v3 `inputs` with
+`kind: "location"` or `kind: "bounds"`. Clients submit wrappers for those
+fields, and Lyra resolves them before the worker calls the runner. Runner code
+parses the resolved `job.input` field into `GeoJSON` or `SingleGeoJSON`.
 
 ```python
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
@@ -283,6 +283,7 @@ these models are also available for tests, clients, and manifest tooling:
 | `FileJobResult` | Successful terminal result for file metrics. |
 | `FailedJobResult` | Terminal result for expected or runtime failures. |
 | `CancelledJobResult` | Terminal result persisted by the worker for cancelled jobs. |
-| `MetricInfoV2` | Public metric catalog item exposed by `/metrics`. |
-| `PluginManifestV2` | Strict v2 `lyra.plugin.json` manifest model. |
-| `MetricManifestV2` | One metric entry inside a plugin manifest. |
+| `MetricInfoV3` | Public metric catalog item exposed by `/metrics`. |
+| `PluginManifestV3` | Strict schema v3 `lyra.plugin.json` authoring model. |
+| `MetricManifestV3` | One metric entry inside a plugin manifest. |
+| `compile_plugin_manifest()` | Compiler from compact authoring manifests to Lyra's runtime contract. |

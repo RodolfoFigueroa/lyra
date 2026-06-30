@@ -1,11 +1,15 @@
 ---
 title: Spatial Plugin Inputs
-description: Author mandatory spatial wrapper inputs for Lyra runner plugins.
+description: Declare schema v3 spatial inputs and consume resolved GeoJSON in runner plugins.
 ---
 
-Every Lyra metric has at least one spatial input. Clients submit spatial fields
-through a wrapper object so the API can validate and resolve them before a
-worker starts:
+Every Lyra metric has at least one spatial input. Plugin authors declare those
+fields with `kind: "location"` or `kind: "bounds"` in `lyra.plugin.json`.
+Lyra compiles the declarations into the wrapper schemas that clients see in
+`/metrics`.
+
+Clients submit spatial fields through a wrapper object so the API can validate
+and resolve them before a worker starts:
 
 ```json
 { "data_type": "geojson", "value": { "...": "FeatureCollection" } }
@@ -19,9 +23,9 @@ worker starts:
 { "data_type": "met_zone_code", "value": "MET_ZONE_CODE" }
 ```
 
-Raw GeoJSON belongs inside the `value` of the `geojson` wrapper. Keep
-top-level manifest fields as placeholders so Lyra can inject the canonical
-wrapper schemas.
+Raw GeoJSON belongs inside the `value` of the `geojson` wrapper. The manifest
+does not define the wrapper shape; Lyra owns that protocol and injects the
+canonical JSON Schema during compilation.
 
 Wrapper payloads are strict. `cvegeo_list` values must contain CVEGEO strings of
 one geographic level, so all strings must have the same valid length. A
@@ -33,44 +37,48 @@ For a full plugin validation flow, see
 
 ## Manifest Contract
 
-Each metric declares its spatial fields with `spatial_inputs`. Keys are
-top-level request field names. Values are:
+Declare spatial fields inside the metric's `inputs` object:
 
-| Value | Runner receives |
+| Input kind | Runner receives |
 | --- | --- |
 | `location` | `GeoJSON` with one or more features. |
 | `bounds` | `SingleGeoJSON` with one enclosing geometry. |
-
-The same fields must exist in `request_schema.properties` and
-`request_schema.required`. Lyra replaces those placeholder field schemas with
-canonical wrapper schemas when it builds the catalog exposed by `/metrics`.
 
 ```json
 {
   "name": "average_temperature_by_location",
   "description": "Return average temperature for each submitted location.",
-  "spatial_inputs": {
-    "location": "location"
-  },
-  "request_schema": {
-    "type": "object",
-    "required": ["location", "year"],
-    "additionalProperties": false,
-    "properties": {
-      "location": {},
-      "year": { "type": "integer", "minimum": 2020 }
+  "queue": "interactive",
+  "entrypoint": "temperature_plugin.runner:run",
+  "inputs": {
+    "location": { "kind": "location" },
+    "year": {
+      "kind": "integer",
+      "minimum": 2020
     }
   },
-  "execution": {
-    "queue": "interactive"
-  },
-  "entrypoint": "temperature_plugin.runner:run"
+  "output": {
+    "kind": "table",
+    "columns": [
+      {
+        "name": "mean_temperature",
+        "type": "number",
+        "unit": "C",
+        "description": "Mean temperature for the input feature."
+      }
+    ]
+  }
 }
 ```
 
 Fetch `GET /metrics/{metric_name}` to see the complete effective schema clients
-need to submit. `GET /data_types` still exposes the individual wrapper schemas
+need to submit. `GET /data_types` also exposes the individual wrapper schemas
 for UI builders and client tooling.
+
+Spatial inputs must be required. Table metrics must use an input named
+`location` with `kind: "location"` because result rows are validated against
+the resolved location feature IDs. File metrics can use whichever spatial input
+shape they need.
 
 ## API Resolution
 
@@ -147,22 +155,22 @@ If your spatial computation already returns a Pandas or GeoPandas DataFrame,
 use `TableJobResult.from_dataframe()` instead. If it returns one Pandas Series
 indexed like the input `gdf`, use `TableJobResult.from_series()`.
 
-Use `SingleGeoJSON` for fields declared as `"bounds"`.
-
-For a bounds metric, declare the field as `"bounds"` and parse it with
-`SingleGeoJSON`:
+Use `SingleGeoJSON` for fields declared with `kind: "bounds"`:
 
 ```json
 {
-  "spatial_inputs": {
-    "bounds": "bounds"
+  "name": "land_cover_raster",
+  "description": "Generate a land cover raster for one area.",
+  "queue": "batch",
+  "entrypoint": "land_cover.runner:run",
+  "inputs": {
+    "bounds": { "kind": "bounds" },
+    "year": { "kind": "integer", "minimum": 2020 }
   },
-  "request_schema": {
-    "type": "object",
-    "required": ["bounds"],
-    "properties": {
-      "bounds": {}
-    }
+  "output": {
+    "kind": "file",
+    "media_type": "image/tiff",
+    "extensions": [".tif", ".tiff"]
   }
 }
 ```

@@ -3,7 +3,7 @@ title: Operations
 description: Understand Redis job storage, event streams, TTLs, cancellation, and worker interruption behavior.
 ---
 
-Lyra uses Redis for Celery transport and for the v2 job store.
+Lyra uses Redis for Celery transport and for the job store.
 
 The Redis URL comes from `CELERY_BROKER_URL`. The same URL is used by Celery and
 by the async/sync Redis clients.

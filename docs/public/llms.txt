@@ -3,7 +3,7 @@
 Site: https://rodolfofigueroa.github.io/lyra/
 Repository: https://github.com/RodolfoFigueroa/lyra
 
-Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redis-backed jobs, and warm queue-specific Celery workers.
+Lyra is a FastAPI service for metric execution through schema v3 plugin manifests, Redis-backed jobs, and warm queue-specific Celery workers.
 
 ## Primary Docs
 
@@ -32,7 +32,7 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 
 ## Current Contracts
 
-- Plugin manifests: `PluginManifestV2` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v2.py`
+- Plugin manifests: `PluginManifestV3` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v3.py`
 - Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `TableJobResult`, `FileJobResult`, `FailedJobResult`, `CancelledJobResult`, `TerminalJobResult`, `JobStatusInfo` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
 - Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
 - Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
@@ -64,6 +64,6 @@ Lyra is a FastAPI service for metric execution through v2 plugin manifests, Redi
 - Metrics are not built into the app. They come from GitHub repositories listed in `LYRA_PLUGIN_REPOS`.
 - Use `/metrics` to discover metric names and JSON Schemas before submitting jobs.
 - Use the Python Client page for end-to-end `lyra-api` workflows, and the lyra-api page for constructor, method, and exception reference.
-- For spatial plugins, use the Spatial Plugin Inputs page. Every metric declares `spatial_inputs`; the API validates wrapper payloads and resolves them to GeoJSON dictionaries before workers receive `JobEnvelope.input`.
+- For spatial plugins, use the Spatial Plugin Inputs page. Every metric declares spatial fields in schema v3 `inputs`; the API validates wrapper payloads and resolves them to GeoJSON dictionaries before workers receive `JobEnvelope.input`.
 - Public metric execution uses the `lyra.run_metric` Celery task internally.
 - API containers read manifests. Worker containers install and import plugin code.

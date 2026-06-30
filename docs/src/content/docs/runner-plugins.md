@@ -1,11 +1,12 @@
 ---
 title: Runner Plugins
-description: Implement v2 runner entrypoints with JobEnvelope, RunContext, and terminal result models.
+description: Implement schema v3 runner entrypoints with JobEnvelope, RunContext, and terminal result models.
 ---
 
 Runner plugins are the code that workers actually execute. At startup, each
-worker installs plugin code, reads v2 manifests, imports matching entrypoints,
-and runs matching metrics through the generic `lyra.run_metric` Celery task.
+worker installs plugin code, reads schema v3 manifests, imports matching
+entrypoints, and runs matching metrics through the generic `lyra.run_metric`
+Celery task.
 
 Plugin repositories are trusted code. The API reads manifests without importing
 plugin modules, but workers install and execute plugin packages with the worker
@@ -20,7 +21,7 @@ publish-time checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 Workers sync configured repositories, run `uv pip install --dry-run`, install
 compatible packages editable, and import metrics selected by
 `LYRA_RUNNER_QUEUES`. When `LYRA_RUNNER_QUEUES` is set, a worker imports only
-metrics whose `execution.queue` is in that comma-separated list. When it is
+metrics whose manifest `queue` is in that comma-separated list. When it is
 unset, the worker imports every metric from installed plugins. Celery's `-Q`
 setting still controls which queue messages that worker receives.
 
@@ -81,8 +82,9 @@ the cancelled result.
 The `input` payload has already passed API-side JSON Schema validation before
 dispatch. Spatial wrapper fields have also been resolved by the API, so
 `job.input` contains canonical GeoJSON dictionaries under the manifest's
-declared spatial field names. Parse those fields with `GeoJSON.model_validate()`
-or `SingleGeoJSON.model_validate()` before using `lyra-utils`.
+declared `inputs` field names. Parse those fields with
+`GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before using
+`lyra-utils`.
 
 ## RunContext
 
@@ -181,7 +183,7 @@ and row-major `data`. The worker requires `index` to match the resolved
 `location` feature IDs after string conversion and `columns` to match the
 manifest output declaration exactly. For table outputs with `batched_columns`,
 the worker expands those columns from the validated source array first. A
-manifest with `name_template: "job_accessibility_{key}"` and input
+manifest with `name: "job_accessibility_{key}"` and input
 `sector_filters: [{"key": "sectors_091_092", "value": "^09[12].*"}]` must
 return column `job_accessibility_sectors_091_092`. The plugin uses each
 batched item's `value` for computation, but Lyra uses `key` for column names

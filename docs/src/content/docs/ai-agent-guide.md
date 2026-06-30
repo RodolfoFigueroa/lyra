@@ -33,7 +33,7 @@ Supporting routes:
 | Plugin sync and install helpers | `lyra_app/plugins.py` |
 | Admin plugin refresh route | `lyra_app/routes/admin.py` |
 | SDK job and API models | `packages/lyra_sdk/src/lyra/sdk/models/job.py` |
-| SDK manifest models | `packages/lyra_sdk/src/lyra/sdk/models/plugin_v2.py` |
+| SDK manifest models | `packages/lyra_sdk/src/lyra/sdk/models/plugin_v3.py` |
 | Runner context protocol | `packages/lyra_sdk/src/lyra/sdk/context.py` |
 | Sync Python client | `packages/lyra_api/src/lyra/api/client/sync.py` |
 | Async Python client | `packages/lyra_api/src/lyra/api/client/async_.py` |
@@ -42,7 +42,9 @@ Supporting routes:
 
 ## Contracts
 
-Plugin manifests are `PluginManifestV2` with integer `schema_version: 2`.
+Plugin manifests are `PluginManifestV3` with integer `schema_version: 3`.
+Plugin authors write semantic `inputs`; Lyra compiles them into effective JSON
+Schema for `/metrics` and `POST /jobs`.
 
 Metric entrypoints are sync functions shaped as:
 
@@ -59,9 +61,10 @@ Terminal result models include `TableJobResult`, `FileJobResult`,
 Job lifecycle status can be `queued`, `started`, `progress`, `succeeded`, `failed`, or `cancelled`.
 
 For spatial plugins, read [Spatial Plugin Inputs](../spatial-plugin-inputs/).
-Every metric manifest declares required `spatial_inputs`. The API injects
-wrapper schemas into `/metrics`, validates client wrappers, and resolves them
-to GeoJSON dictionaries before workers receive `JobEnvelope.input`.
+Every metric manifest declares required spatial inputs with `kind: "location"`
+or `kind: "bounds"`. The API exposes compiled wrapper schemas in `/metrics`,
+validates client wrappers, and resolves them to GeoJSON dictionaries before
+workers receive `JobEnvelope.input`.
 
 ## Commands
 

@@ -1,6 +1,6 @@
 ---
 title: Plugin Quickstart
-description: Create a minimal installable Lyra runner plugin with one v2 metric.
+description: Create a minimal installable Lyra runner plugin with one schema v3 metric.
 ---
 
 A Lyra plugin is a regular installable Python package with a root
@@ -47,9 +47,10 @@ For spatial helpers, date helpers, or Earth Engine reduction utilities, add
 reference](../lyra-utils/). Plugins that only need runner contracts can depend
 on `lyra-sdk` alone.
 
-Every metric declares at least one spatial input. Read
-[Spatial Plugin Inputs](../spatial-plugin-inputs/) after this quickstart for the
-full wrapper contract and conversion flow.
+Every metric declares at least one spatial input with `kind: "location"` or
+`kind: "bounds"`. Authors write compact semantic `inputs`; Lyra compiles those
+inputs into the effective JSON Schema exposed by `/metrics` and used by
+`POST /jobs`.
 
 For table, file, static column, and generated column design choices, read
 [Metric Output Design](../metric-output-design/) before expanding this minimal
@@ -59,7 +60,7 @@ example into a production metric.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "plugin": {
     "name": "example-lyra-plugin",
     "version": "0.1.0"
@@ -68,17 +69,14 @@ example into a production metric.
     {
       "name": "example_metric",
       "description": "Return the submitted value for each input feature.",
-      "spatial_inputs": {
-        "location": "location"
-      },
-      "request_schema": {
-        "type": "object",
-        "properties": {
-          "location": {},
-          "value": { "type": "number" }
-        },
-        "required": ["location", "value"],
-        "additionalProperties": false
+      "queue": "interactive",
+      "entrypoint": "example_plugin.runner:run",
+      "inputs": {
+        "location": { "kind": "location" },
+        "value": {
+          "kind": "number",
+          "description": "Value copied into each output row."
+        }
       },
       "output": {
         "kind": "table",
@@ -90,15 +88,15 @@ example into a production metric.
             "description": "Submitted numeric value."
           }
         ]
-      },
-      "execution": {
-        "queue": "interactive"
-      },
-      "entrypoint": "example_plugin.runner:run"
+      }
     }
   ]
 }
 ```
+
+`location` is deliberately small in the manifest. Lyra owns the spatial wrapper
+schema and injects it into the compiled request schema. Clients still submit a
+wrapper object, as shown in the job example below.
 
 ## runner.py
 
@@ -120,6 +118,9 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
     )
 ```
 
+The worker receives `job.input["location"]` after the API has resolved the
+client wrapper into canonical GeoJSON.
+
 ## Preflight Before Publishing
 
 Run these quick checks from the plugin repository before pushing the branch or
@@ -129,7 +130,7 @@ tag that Lyra will load:
 uv pip install --python "$(which python)" --dry-run .
 uv pip install --python "$(which python)" -e .
 uv run python -c "from example_plugin.runner import run; print(run)"
-uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV2; PluginManifestV2.model_validate(json.loads(Path('lyra.plugin.json').read_text())); print('manifest ok')"
+uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV3, compile_plugin_manifest; manifest = PluginManifestV3.model_validate(json.loads(Path('lyra.plugin.json').read_text())); compile_plugin_manifest(manifest); print('manifest ok')"
 ```
 
 The worker uses the same install path: it checks compatibility, installs
@@ -164,7 +165,7 @@ curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
-Confirm the API exposes the metric and its effective wrapper schema:
+Confirm the API exposes the metric and its compiled request schema:
 
 ```bash
 curl http://localhost:5219/metrics/example_metric

@@ -25,7 +25,7 @@ The `input` object is validated against the metric's compiled `request_schema`.
 Unknown metrics return `404`. Invalid input returns `422`. Redis availability
 errors return `503`.
 
-`GET /data_types` exposes grouped wrapper schemas for `location` and `bounds`
+`GET /data-types` exposes grouped wrapper schemas for `location` and `bounds`
 inputs. Metric-specific payloads come from the selected metric's `/metrics`
 entry, where Lyra has injected those wrapper schemas into the metric's compiled
 request schema. Raw GeoJSON is accepted only inside a `geojson` wrapper's

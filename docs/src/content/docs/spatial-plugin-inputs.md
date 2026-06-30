@@ -71,7 +71,7 @@ Declare spatial fields inside the metric's `inputs` object:
 ```
 
 Fetch `GET /metrics/{metric_name}` to see the complete effective schema clients
-need to submit. `GET /data_types` also exposes the individual wrapper schemas
+need to submit. `GET /data-types` also exposes the individual wrapper schemas
 for UI builders and client tooling.
 
 Spatial inputs must be required. Table metrics must use an input named

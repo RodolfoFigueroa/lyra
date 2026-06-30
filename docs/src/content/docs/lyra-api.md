@@ -65,7 +65,7 @@ submit, wait, and result workflow, see [Python Client](../python-client/).
 
 | Method | Returns | Use when |
 | --- | --- | --- |
-| `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data_types`. |
+| `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data-types`. |
 | `get_metrics()` | `list[MetricInfoV3]` | You need all metric names, descriptions, request schemas, and output declarations. |
 | `get_metrics(metric_name)` | `MetricInfoV3` | You need one metric's schema metadata. |
 

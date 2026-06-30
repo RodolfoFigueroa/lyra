@@ -88,7 +88,7 @@ commit plugin changes, then refresh the catalog.
 
 For local plugin development, use an explicit `dir://` source. Directory
 sources do not require git, do not support branch or tag refs, and copy the
-current directory contents on pull or refresh, including uncommitted edits:
+current directory contents on sync or refresh, including uncommitted edits:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \

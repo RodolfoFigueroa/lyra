@@ -242,7 +242,7 @@ a `value`. Lyra validates and resolves those wrappers before constructing the
 `JobEnvelope`. For the full wrapper lifecycle, request shapes, and sample jobs,
 see [Spatial Plugin Inputs](../spatial-plugin-inputs/).
 
-`GET /data_types` and `client.get_data_types()` expose grouped wrapper schemas:
+`GET /data-types` and `client.get_data_types()` expose grouped wrapper schemas:
 
 | Group | Use when |
 | --- | --- |

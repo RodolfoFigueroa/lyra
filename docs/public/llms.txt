@@ -49,14 +49,14 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 
 ## Public Routes
 
-- `GET /data_types` returns grouped `location` and `bounds` wrapper schemas
+- `GET /data-types` returns grouped `location` and `bounds` wrapper schemas
 - `GET /metrics`
 - `GET /metrics/{metric_name}`
 - `POST /jobs`
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
 - `GET /jobs/{job_id}/result`
-- `GET /met_zone_code`
+- `GET /lookups/met-zones`
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`
 - `GET /admin/plugin-routing`

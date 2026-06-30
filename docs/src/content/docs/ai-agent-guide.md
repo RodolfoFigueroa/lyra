@@ -18,8 +18,8 @@ Supporting routes:
 
 - `GET /metrics`
 - `GET /metrics/{metric_name}`
-- `GET /data_types` for grouped `location` and `bounds` wrapper schemas
-- `GET /met_zone_code`
+- `GET /data-types` for grouped `location` and `bounds` wrapper schemas
+- `GET /lookups/met-zones`
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`
 - `GET /admin/plugin-routing`

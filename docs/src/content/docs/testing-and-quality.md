@@ -85,7 +85,7 @@ Scan documented route paths against current route modules:
 
 ```bash
 rg "@router\\." lyra_app/routes
-rg "`/(data_types|metrics|jobs|met_zone_code|admin/)" docs/src/content/docs README.md
+rg "`/(data-types|metrics|jobs|lookups/met-zones|admin/)" docs/src/content/docs README.md
 ```
 
 Use the current route source as the final authority.

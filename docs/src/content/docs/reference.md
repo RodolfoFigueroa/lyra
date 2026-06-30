@@ -96,19 +96,19 @@ npm run preview --prefix docs
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/data_types` | Return grouped `location` and `bounds` wrapper schemas for explicit spatial inputs. |
+| `GET` | `/data-types` | Return grouped `location` and `bounds` wrapper schemas for explicit spatial inputs. |
 | `GET` | `/metrics` | List metric schema metadata. |
 | `GET` | `/metrics/{metric_name}` | Fetch one metric schema metadata record. |
 | `POST` | `/jobs` | Submit a metric job. |
 | `GET` | `/jobs/{job_id}` | Fetch current job status. |
 | `GET` | `/jobs/{job_id}/events` | Stream typed SSE job events. |
 | `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file. |
-| `GET` | `/met_zone_code` | Look up a metropolitan zone code by name. |
+| `GET` | `/lookups/met-zones` | Look up a metropolitan zone code by name. |
 | `GET` | `/admin/plugin-repos` | List configured plugin repositories. |
 | `POST` | `/admin/plugin-repos` | Add a plugin repository to Lyra-owned state. |
 | `PATCH` | `/admin/plugin-repos/{repo_id}` | Update a plugin repository. |
 | `DELETE` | `/admin/plugin-repos/{repo_id}` | Remove a plugin repository from state. |
-| `POST` | `/admin/plugin-repos/{repo_id}/pull` | Sync one enabled plugin repository. |
+| `POST` | `/admin/plugin-repos/{repo_id}/sync` | Sync one enabled plugin source. |
 | `POST` | `/admin/plugin-catalog/refresh` | Refresh plugin catalog repos and restart worker pools. |
 | `GET` | `/admin/plugin-routing` | List metric queue assignments. |
 | `PUT` | `/admin/plugin-routing/{metric_name}` | Set a metric queue assignment. |

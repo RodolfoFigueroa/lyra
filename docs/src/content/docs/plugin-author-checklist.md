@@ -62,7 +62,7 @@ Local git repositories must use explicit `file://` URIs; raw filesystem paths
 are not supported. `file://` entries do not support `@branch-or-tag` selectors,
 and uncommitted changes are ignored. Development directory sources must use
 explicit `dir://` URIs, do not support refs, and are copied into Lyra-managed
-catalog and runner directories on pull or refresh. Omit a trailing `.git` suffix
+catalog and runner directories on sync or refresh. Omit a trailing `.git` suffix
 for GitHub entries. Make sure the API and worker containers can reach each
 GitHub or `file://` repository with `git`.
 

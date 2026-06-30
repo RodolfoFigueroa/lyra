@@ -288,6 +288,61 @@ def test_runner_syncs_enabled_state_repos_only(
     ]
 
 
+def test_runner_loads_repo_and_routing_from_plugin_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    plugin_state_store(tmp_path, get_config()).add_repo(
+        "owner/runner-plugin@main",
+        repo_id="runner-plugin",
+    )
+    repo = tmp_path / "repo"
+    _write_manifest(
+        repo,
+        _manifest(
+            [
+                _metric(
+                    name="heavy_metric",
+                    entrypoint="heavy_plugin:run",
+                )
+            ]
+        ),
+    )
+    _write_module(
+        tmp_path,
+        "heavy_plugin",
+        "def run(job, context):\n"
+        "    raise AssertionError('entrypoint should only be imported')\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(worker_module, "install_runner_plugins", list)
+    calls: list[tuple[Path, list[str], bool]] = []
+
+    def sync_repos(
+        target_dir: Path,
+        raw_entries: list[str],
+        *,
+        raise_on_error: bool,
+    ) -> list[SyncedPluginRepo]:
+        calls.append((target_dir, raw_entries, raise_on_error))
+        return [_synced_repo(repo)]
+
+    monkeypatch.setattr(worker_module, "sync_plugin_repos", sync_repos)
+
+    entries = worker_module.refresh_runner_registry("heavy")
+
+    assert calls == [
+        (
+            tmp_path / "plugins" / "runners" / "heavy",
+            ["owner/runner-plugin@main"],
+            True,
+        )
+    ]
+    assert list(entries) == ["heavy_metric"]
+    assert entries["heavy_metric"].queue == "heavy"
+
+
 def test_runner_uses_configured_worker_temp_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

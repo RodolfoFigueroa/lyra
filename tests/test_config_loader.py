@@ -125,6 +125,20 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.plugins.allowed_queues == ["interactive", "batch"]
 
 
+def test_load_config_reads_read_only_config_file_mount_shape(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config" / "lyra.toml"
+    contents = _valid_toml(tmp_path)
+    _write_config(config_path, contents)
+    config_path.chmod(0o444)
+
+    config = load_config(config_path)
+
+    assert config.api.port == 5219
+    assert config_path.read_text(encoding="utf-8") == contents
+
+
 def test_load_config_fails_for_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigLoadError, match="does not exist"):
         load_config(tmp_path / "config" / "missing.toml")

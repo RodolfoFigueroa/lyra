@@ -167,6 +167,39 @@ def test_catalog_sync_uses_enabled_state_repos_only(
     ]
 
 
+def test_catalog_refresh_syncs_enabled_repos_from_plugin_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    plugin_state_store(tmp_path, get_config()).add_repo(
+        "owner/example-plugin@main",
+        repo_id="example",
+    )
+    calls: list[tuple[Path, list[str], bool]] = []
+
+    def sync_repos(
+        target_dir: Path,
+        raw_entries: list[str],
+        *,
+        raise_on_error: bool,
+    ) -> list[SyncedPluginRepo]:
+        calls.append((target_dir, raw_entries, raise_on_error))
+        return [_synced_repo(repo)]
+
+    monkeypatch.setattr(registry, "sync_plugin_repos", sync_repos)
+
+    registry.refresh_catalog()
+
+    entry = registry.get_metric_entry("light_metric")
+    assert calls == [
+        (tmp_path / "plugins" / "catalog", ["owner/example-plugin@main"], True)
+    ]
+    assert entry is not None
+    assert entry.queue == "lightweight"
+
+
 def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -244,6 +277,31 @@ def test_catalog_refresh_auto_assigns_new_metric_queue_to_state(
     persisted = plugin_state_store(tmp_path, get_config()).load()
     entry = registry.get_metric_entry("new_metric")
     assert persisted.metric_queues["new_metric"] == "interactive"
+    assert entry is not None
+    assert entry.queue == "interactive"
+
+
+def test_catalog_refresh_recreates_deleted_metric_route_with_default_queue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
+    )
+    store = plugin_state_store(tmp_path, get_config())
+
+    assert store.delete_metric_queue("light_metric") is True
+
+    result = registry.refresh_catalog()
+
+    persisted = store.load()
+    entry = registry.get_metric_entry("light_metric")
+    assert result.assigned_metric_queues == ["light_metric"]
+    assert persisted.metric_queues["light_metric"] == "interactive"
     assert entry is not None
     assert entry.queue == "interactive"
 

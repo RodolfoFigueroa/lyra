@@ -82,7 +82,7 @@ def test_admin_router_requires_bearer_key_for_all_routes() -> None:
     )
 
 
-def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:  # noqa: ARG001
+def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:
     created = admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(
             id="example",
@@ -106,6 +106,7 @@ def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:  # noq
         "ref": "main",
         "enabled": True,
     }
+    assert "schema_version = 1" in admin_context.read_text(encoding="utf-8")
     assert listed.model_dump()["repos"] == [created.model_dump()]
     assert updated.model_dump() == {
         "id": "example",

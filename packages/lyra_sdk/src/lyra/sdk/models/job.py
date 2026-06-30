@@ -304,16 +304,37 @@ class JobStatusInfo(StrictBaseModel):
     )
 
 
+class JobListResponse(StrictBaseModel):
+    """Admin response containing recent job status snapshots."""
+
+    jobs: list[JobStatusInfo] = Field(description="Recent jobs ordered newest-first.")
+
+
+class JobCancelResponse(StrictBaseModel):
+    """Admin response returned after a job cancellation request."""
+
+    job_id: str = Field(min_length=1, description="Job that was cancelled.")
+    status: Literal["cancelled"] = Field(description="Status after cancellation.")
+    cancellation_requested: bool = Field(
+        description="Whether Lyra accepted the cancellation request.",
+    )
+    revoke_requested: bool = Field(
+        description="Whether Lyra attempted to revoke the Celery task.",
+    )
+
+
 __all__ = [
     "CancelledJobResult",
     "FailedJobResult",
     "FileJobResult",
+    "JobCancelResponse",
     "JobCreateRequest",
     "JobCreateResponse",
     "JobEnvelope",
     "JobEvent",
     "JobLifecycleStatus",
     "JobLinks",
+    "JobListResponse",
     "JobStatusInfo",
     "TableJobResult",
     "TerminalJobResult",

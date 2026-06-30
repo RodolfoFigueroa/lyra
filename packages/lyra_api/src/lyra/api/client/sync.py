@@ -10,8 +10,11 @@ from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     DataTypesResponse,
     FileJobResult,
+    JobCancelResponse,
     JobCreateResponse,
     JobEvent,
+    JobLifecycleStatus,
+    JobListResponse,
     JobStatusInfo,
     TableJobResult,
     TerminalJobResult,
@@ -90,6 +93,56 @@ class LyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch job. HTTP {response.status_code}: {response.text}"
             raise DownloadError(err)
         return JobStatusInfo.model_validate(response.json())
+
+    def list_admin_jobs(
+        self,
+        *,
+        limit: int = 50,
+        status: JobLifecycleStatus | None = None,
+        metric: str | None = None,
+    ) -> JobListResponse:
+        params: dict[str, int | str] = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        if metric is not None:
+            params["metric"] = metric
+        try:
+            response = requests.get(
+                self._http_url("admin/jobs"),
+                params=params,
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin job list error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to list admin jobs. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return JobListResponse.model_validate(response.json())
+
+    def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
+        try:
+            response = requests.post(
+                self._http_url(f"admin/jobs/{job_id}/cancel"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin job cancellation error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to cancel admin job. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return JobCancelResponse.model_validate(response.json())
 
     def iter_job_events(
         self,

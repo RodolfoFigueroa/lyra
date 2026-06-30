@@ -505,6 +505,7 @@ def format_update_message(
     *,
     catalog_changed: bool,
     catalog_fingerprint: str,
+    workers_restarting: bool = True,
 ) -> str:
     if updated:
         names = ", ".join(updated)
@@ -513,6 +514,9 @@ def format_update_message(
         prefix = "No plugin repo changes detected."
 
     changed = "changed" if catalog_changed else "unchanged"
-    return (
-        f"{prefix} Catalog {changed} ({catalog_fingerprint}). Workers are restarting."
+    worker_message = (
+        "Workers are restarting."
+        if workers_restarting
+        else "Workers were not restarted."
     )
+    return f"{prefix} Catalog {changed} ({catalog_fingerprint}). {worker_message}"

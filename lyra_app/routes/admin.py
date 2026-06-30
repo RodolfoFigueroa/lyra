@@ -5,8 +5,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from lyra.sdk.models import (
+    JobCancelResponse,
+    JobLifecycleStatus,
+    JobListResponse,
+    JobStatusInfo,
+)
 from pydantic import BaseModel, ConfigDict
+from redis.exceptions import RedisError
 
+from lyra_app import job_store
 from lyra_app.config import ConfigLoadError, ConfigSecretError, LyraConfig, get_config
 from lyra_app.plugin_state import (
     DEFAULT_PLUGIN_STATE_PATH,
@@ -26,7 +34,7 @@ from lyra_app.plugins import (
     sync_plugin_repo as sync_plugin_source,
 )
 from lyra_app.registry import CatalogRefreshResult, refresh_catalog_from_state
-from lyra_app.worker_control import graceful_worker_restart
+from lyra_app.worker_control import graceful_worker_restart, revoke_job
 
 _bearer = HTTPBearer()
 
@@ -103,6 +111,14 @@ class PluginCatalogRefreshResponse(BaseModel):
     previous_catalog_fingerprint: str | None
     catalog_fingerprint: str
     assigned_metric_queues: list[str]
+    workers_restarted: bool
+    workers_restart_recommended: bool
+    message: str
+
+
+class WorkerRestartResponse(BaseModel):
+    requested: bool
+    timeout: float
     message: str
 
 
@@ -131,6 +147,12 @@ _TIMEOUT_QUERY = Query(
     description=(
         "Seconds to wait for in-flight tasks to drain before forcing a worker restart."
     ),
+)
+
+_JOB_LIMIT_QUERY = Query(
+    ge=1,
+    le=100,
+    description="Maximum number of recent jobs to return.",
 )
 
 
@@ -183,6 +205,13 @@ def _not_found_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=404, detail=str(exc))
 
 
+def _redis_unavailable_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Cannot connect to Redis. Please try again later.",
+    )
+
+
 def _sync_error_detail(exc: PluginSyncError | subprocess.CalledProcessError) -> str:
     if isinstance(exc, PluginSyncError):
         return str(exc)
@@ -196,16 +225,24 @@ def _sync_error_detail(exc: PluginSyncError | subprocess.CalledProcessError) -> 
 def _catalog_refresh_response(
     result: CatalogRefreshResult,
 ) -> PluginCatalogRefreshResponse:
+    restart_recommended = bool(
+        result.updated_plugins
+        or result.catalog_changed
+        or result.assigned_metric_queues
+    )
     return PluginCatalogRefreshResponse(
         updated_plugins=result.updated_plugins,
         catalog_changed=result.catalog_changed,
         previous_catalog_fingerprint=result.previous_catalog_fingerprint,
         catalog_fingerprint=result.catalog_fingerprint,
         assigned_metric_queues=result.assigned_metric_queues,
+        workers_restarted=False,
+        workers_restart_recommended=restart_recommended,
         message=format_update_message(
             result.updated_plugins,
             catalog_changed=result.catalog_changed,
             catalog_fingerprint=result.catalog_fingerprint,
+            workers_restarting=False,
         ),
     )
 
@@ -299,9 +336,7 @@ def sync_plugin_repo(repo_id: str) -> SyncPluginRepoResponse:
 
 
 @router.post("/plugin-catalog/refresh")
-def refresh_plugin_catalog(
-    timeout: Annotated[float, _TIMEOUT_QUERY] = 30.0,
-) -> PluginCatalogRefreshResponse:
+def refresh_plugin_catalog() -> PluginCatalogRefreshResponse:
     config = _load_config()
     store = _state_store(config)
     try:
@@ -313,8 +348,63 @@ def refresh_plugin_catalog(
             status_code=500,
             detail=f"Plugin state could not be used: {exc}",
         ) from exc
-    graceful_worker_restart(timeout=timeout)
     return _catalog_refresh_response(result)
+
+
+@router.post("/workers/restart")
+def restart_workers(
+    timeout: Annotated[float, _TIMEOUT_QUERY] = 30.0,
+) -> WorkerRestartResponse:
+    graceful_worker_restart(timeout=timeout)
+    return WorkerRestartResponse(
+        requested=True,
+        timeout=timeout,
+        message="Worker restart requested.",
+    )
+
+
+@router.get("/jobs")
+def list_jobs(
+    limit: Annotated[int, _JOB_LIMIT_QUERY] = 50,
+    status: JobLifecycleStatus | None = None,
+    metric: str | None = None,
+) -> JobListResponse:
+    try:
+        snapshots = job_store.list_job_statuses(
+            limit=limit,
+            status=status,
+            metric=metric,
+        )
+    except RedisError as exc:
+        raise _redis_unavailable_error() from exc
+    return JobListResponse(
+        jobs=[
+            JobStatusInfo.model_validate(snapshot.model_dump(mode="json"))
+            for snapshot in snapshots
+        ]
+    )
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> JobCancelResponse:
+    try:
+        snapshot, cancelled = job_store.cancel_job(job_id)
+    except RedisError as exc:
+        raise _redis_unavailable_error() from exc
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Job expired or not found")
+    if not cancelled:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is already terminal: {snapshot.status}",
+        )
+    revoke_job(job_id)
+    return JobCancelResponse(
+        job_id=snapshot.job_id,
+        status="cancelled",
+        cancellation_requested=True,
+        revoke_requested=True,
+    )
 
 
 @router.get("/plugin-routing")

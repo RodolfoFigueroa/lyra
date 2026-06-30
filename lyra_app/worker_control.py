@@ -27,6 +27,11 @@ def notify_interrupted_tasks(task_ids: list[str]) -> None:
         logger.info("Notified task %s of interruption.", task_id)
 
 
+def revoke_job(job_id: str) -> None:
+    celery_app.control.revoke(job_id)
+    logger.info("Requested cancellation for task %s.", job_id)
+
+
 def graceful_worker_restart(timeout: float = 30.0) -> None:
     inspector = celery_app.control.inspect()
     deadline = time.monotonic() + timeout

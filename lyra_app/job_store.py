@@ -28,6 +28,8 @@ JOB_STORE_TTL_SECONDS = DEFAULT_JOB_STORE_TTL_SECONDS
 STREAM_START = "0-0"
 STREAM_LATEST = "$"
 DEFAULT_STREAM_BLOCK_MS = 5000
+JOB_INDEX_KEY = "jobs:index"
+TERMINAL_STATUSES: set[TerminalJobStatus] = {"succeeded", "failed", "cancelled"}
 
 
 class JobStatusSnapshot(StrictBaseModel):
@@ -59,6 +61,10 @@ def result_key(job_id: str) -> str:
 
 def events_key(job_id: str) -> str:
     return f"job:{job_id}:events"
+
+
+def job_index_key() -> str:
+    return JOB_INDEX_KEY
 
 
 def _now() -> datetime:
@@ -97,6 +103,32 @@ async def _apply_ttl_async(client: Any, job_id: str) -> None:
     await client.expire(status_key(job_id), ttl)
     await client.expire(result_key(job_id), ttl)
     await client.expire(events_key(job_id), ttl)
+
+
+def _prune_job_index_sync(client: Any, *, now: datetime | None = None) -> None:
+    cutoff = (now or _now()).timestamp() - _job_store_ttl_seconds()
+    client.zremrangebyscore(JOB_INDEX_KEY, "-inf", cutoff)
+
+
+async def _prune_job_index_async(client: Any, *, now: datetime | None = None) -> None:
+    cutoff = (now or _now()).timestamp() - _job_store_ttl_seconds()
+    await client.zremrangebyscore(JOB_INDEX_KEY, "-inf", cutoff)
+
+
+def _index_job_status_sync(client: Any, snapshot: "JobStatusSnapshot") -> None:
+    client.zadd(JOB_INDEX_KEY, {snapshot.job_id: snapshot.updated_at.timestamp()})
+    _prune_job_index_sync(client, now=snapshot.updated_at)
+
+
+async def _index_job_status_async(client: Any, snapshot: "JobStatusSnapshot") -> None:
+    await client.zadd(JOB_INDEX_KEY, {snapshot.job_id: snapshot.updated_at.timestamp()})
+    await _prune_job_index_async(client, now=snapshot.updated_at)
+
+
+def _decode_job_index_member(member: Any) -> str:
+    if isinstance(member, bytes):
+        return member.decode()
+    return str(member)
 
 
 def _append_job_event_record_sync(
@@ -186,6 +218,7 @@ def set_job_status(
     client.set(status_key(job_id), _dump_json(payload), ex=_job_store_ttl_seconds())
     _apply_ttl_sync(client, job_id)
     snapshot = JobStatusSnapshot.model_validate(payload)
+    _index_job_status_sync(client, snapshot)
     if emit_event:
         _append_job_event_record_sync(
             job_id,
@@ -236,6 +269,73 @@ def get_job_status(
     if payload is None:
         return None
     return JobStatusSnapshot.model_validate(_loads_json(payload))
+
+
+def is_terminal_status(status: JobStatus) -> bool:
+    return status in TERMINAL_STATUSES
+
+
+def list_job_statuses(
+    *,
+    limit: int = 50,
+    status: JobStatus | None = None,
+    metric: str | None = None,
+    client: Any | None = None,
+) -> list[JobStatusSnapshot]:
+    client = redis_client_sync if client is None else client
+    _prune_job_index_sync(client)
+    jobs: list[JobStatusSnapshot] = []
+    stale_job_ids: list[str] = []
+    start = 0
+    page_size = max(limit * 3, 50)
+
+    while len(jobs) < limit:
+        stop = start + page_size - 1
+        members = client.zrevrange(JOB_INDEX_KEY, start, stop) or []
+        if not members:
+            break
+
+        for member in members:
+            job_id = _decode_job_index_member(member)
+            snapshot = get_job_status(job_id, client=client)
+            if snapshot is None:
+                stale_job_ids.append(job_id)
+                continue
+            if status is not None and snapshot.status != status:
+                continue
+            if metric is not None and snapshot.metric != metric:
+                continue
+            jobs.append(snapshot)
+            if len(jobs) >= limit:
+                break
+
+        if len(members) < page_size:
+            break
+        start += page_size
+
+    if stale_job_ids:
+        client.zrem(JOB_INDEX_KEY, *stale_job_ids)
+    return jobs
+
+
+def cancel_job(
+    job_id: str,
+    *,
+    client: Any | None = None,
+) -> tuple[JobStatusSnapshot | None, bool]:
+    client = redis_client_sync if client is None else client
+    snapshot = get_job_status(job_id, client=client)
+    if snapshot is None:
+        return None, False
+    if is_terminal_status(snapshot.status):
+        return snapshot, False
+    cancelled = set_job_status(
+        job_id,
+        "cancelled",
+        metric=snapshot.metric,
+        client=client,
+    )
+    return cancelled, True
 
 
 def is_job_cancelled(job_id: str, client: Any | None = None) -> bool:
@@ -312,6 +412,7 @@ async def set_job_status_async(
     )
     await _apply_ttl_async(client, job_id)
     snapshot = JobStatusSnapshot.model_validate(payload)
+    await _index_job_status_async(client, snapshot)
     if emit_event:
         await _append_job_event_record_async(
             job_id,
@@ -402,15 +503,18 @@ def _stored_event_from_record(record: Any) -> StoredJobEvent:
 
 
 __all__ = [
+    "JOB_INDEX_KEY",
     "JOB_STORE_TTL_SECONDS",
     "STREAM_LATEST",
     "STREAM_START",
+    "TERMINAL_STATUSES",
     "JobCancelledError",
     "JobStatus",
     "JobStatusSnapshot",
     "StoredJobEvent",
     "TerminalJobStatus",
     "append_job_event",
+    "cancel_job",
     "create_job",
     "create_job_async",
     "delete_job_result_async",
@@ -419,6 +523,9 @@ __all__ = [
     "get_job_status",
     "get_job_status_async",
     "is_job_cancelled",
+    "is_terminal_status",
+    "job_index_key",
+    "list_job_statuses",
     "raise_if_cancelled",
     "read_job_events",
     "read_job_events_async",

@@ -11,8 +11,11 @@ from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     DataTypesResponse,
     FileJobResult,
+    JobCancelResponse,
     JobCreateResponse,
     JobEvent,
+    JobLifecycleStatus,
+    JobListResponse,
     JobStatusInfo,
     TableJobResult,
     TerminalJobResult,
@@ -100,6 +103,56 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 return JobStatusInfo.model_validate(await response.json())
         except aiohttp.ClientError as exc:
             err = f"Job status error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def list_admin_jobs(
+        self,
+        *,
+        limit: int = 50,
+        status: JobLifecycleStatus | None = None,
+        metric: str | None = None,
+    ) -> JobListResponse:
+        params: dict[str, int | str] = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        if metric is not None:
+            params["metric"] = metric
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("admin/jobs"),
+                    params=params,
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to list admin jobs. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return JobListResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin job list error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.post(
+                    self._http_url(f"admin/jobs/{job_id}/cancel"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to cancel admin job. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return JobCancelResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin job cancellation error: {exc}"
             raise DownloadError(err) from exc
 
     async def iter_job_events(

@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 import logging
 import os
@@ -8,12 +9,15 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "lyra.plugin.json"
 DEFAULT_CATALOG_DIR = Path("/lyra_plugin_catalog")
 DEFAULT_INSTALL_DIR = Path("/lyra_plugins")
+RepoSourceKind = Literal["github", "local"]
 
 
 @dataclass(frozen=True)
@@ -23,13 +27,23 @@ class PluginRepoEntry:
     owner: str
     repo: str
     ref: str | None
+    source_kind: RepoSourceKind = "github"
+    source_path: Path | None = None
 
     @property
     def display_name(self) -> str:
+        if self.source_kind == "local" and self.source_path is not None:
+            return f"local:{self.source_path}"
         return f"{self.owner}/{self.repo}"
 
     @property
     def target_name(self) -> str:
+        if self.source_kind == "local":
+            hash_source = str(self.source_path or self.clone_url)
+            path_hash = hashlib.sha256(hash_source.encode()).hexdigest()[:12]
+            safe_repo = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.repo) or "repo"
+            return f"local__{safe_repo}__{path_hash}"
+
         safe_owner = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.owner)
         safe_repo = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.repo)
         return f"{safe_owner}__{safe_repo}"
@@ -47,6 +61,44 @@ _REPO_RE = re.compile(
     r"(?P<owner>[^/@]+)/(?P<repo>[^@]+)"
     r"(?:@(?P<ref>[^@\s]+))?$",
 )
+
+
+def _parse_local_repo_entry(raw: str) -> PluginRepoEntry:
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() != "file":
+        msg = f"Cannot parse plugin repo entry: {raw!r}"
+        raise ValueError(msg)
+    if parsed.netloc not in {"", "localhost"}:
+        msg = f"Local plugin repo file URI must use an empty or localhost host: {raw!r}"
+        raise ValueError(msg)
+    if parsed.params or parsed.query or parsed.fragment:
+        msg = (
+            "Local plugin repo file URI cannot include params, query, or "
+            f"fragment: {raw!r}"
+        )
+        raise ValueError(msg)
+
+    raw_path = unquote(parsed.path)
+    if not raw_path or "@" in raw_path:
+        msg = f"Local plugin repo file URI cannot include refs: {raw!r}"
+        raise ValueError(msg)
+
+    source_path = Path(raw_path)
+    if not source_path.is_absolute():
+        msg = f"Local plugin repo file URI must use an absolute path: {raw!r}"
+        raise ValueError(msg)
+
+    source_path = source_path.resolve(strict=False)
+    repo = source_path.name or "repo"
+    return PluginRepoEntry(
+        raw=raw,
+        clone_url=source_path.as_uri(),
+        owner="local",
+        repo=repo,
+        ref=None,
+        source_kind="local",
+        source_path=source_path,
+    )
 
 
 def get_catalog_dir() -> Path:
@@ -74,6 +126,9 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
 
 def parse_repo_entry(entry: str) -> PluginRepoEntry:
     raw = entry.strip().rstrip("/")
+    if raw.lower().startswith("file:"):
+        return _parse_local_repo_entry(raw)
+
     match = _REPO_RE.match(raw)
     if match is None:
         msg = f"Cannot parse plugin repo entry: {entry!r}"

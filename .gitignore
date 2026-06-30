@@ -229,3 +229,4 @@ docs/dist/
 service-account.json
 cache/
 lyra_data/
+config.toml

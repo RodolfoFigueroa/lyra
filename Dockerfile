@@ -47,12 +47,15 @@ COPY pyproject.toml uv.lock .python-version ./
 COPY packages ./packages
 COPY lyra_app ./lyra_app
 
-# Plugin manifests are cloned into /lyra_plugin_catalog by the API. Plugin code
-# is cloned and installed into /lyra_plugins by runner workers.
-# Set LYRA_PLUGIN_REPOS to a comma-separated list of plugin repos to load.
-RUN mkdir -p /lyra_plugin_catalog /lyra_plugins
-VOLUME /lyra_plugin_catalog
-VOLUME /lyra_plugins
+# Durable Lyra app files live under /lyra_data. Secret files are provided by the
+# deployment and are intentionally not generated in the image.
+RUN mkdir -p \
+        /lyra_data/config \
+        /lyra_data/cache/jobs \
+        /lyra_data/plugins/catalog \
+        /lyra_data/plugins/runners \
+        /lyra_data/logs
+VOLUME /lyra_data
 
 EXPOSE 5219
 

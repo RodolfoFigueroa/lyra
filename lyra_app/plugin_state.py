@@ -120,6 +120,16 @@ def normalize_repo_source(raw_source: str) -> NormalizedRepoSource:
             source_kind=entry.source_kind,
             generated_id=entry.target_name,
         )
+    if entry.source_kind == "directory":
+        if entry.source_path is None:
+            msg = f"Directory plugin source could not be resolved: {raw_source!r}"
+            raise ValueError(msg)
+        return NormalizedRepoSource(
+            source=entry.clone_url,
+            ref=None,
+            source_kind=entry.source_kind,
+            generated_id=entry.target_name,
+        )
 
     return NormalizedRepoSource(
         source=f"{entry.owner}/{entry.repo}",
@@ -186,6 +196,10 @@ class PluginRepoRecord(StrictPluginStateModel):
 
         if normalized.source_kind == "local" and self.ref is not None:
             msg = "local plugin repo sources cannot include refs"
+            raise ValueError(msg)
+
+        if normalized.source_kind == "directory" and self.ref is not None:
+            msg = "directory plugin sources cannot include refs"
             raise ValueError(msg)
 
         return self

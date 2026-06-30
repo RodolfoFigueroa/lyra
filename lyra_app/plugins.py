@@ -1,20 +1,42 @@
+import fnmatch
 import hashlib
 import importlib
 import logging
+import os
 import re
+import shutil
 import site
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "lyra.plugin.json"
-RepoSourceKind = Literal["github", "local"]
+RepoSourceKind = Literal["github", "local", "directory"]
+_DIRECTORY_IGNORE_NAMES = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".ty",
+        ".venv",
+        "build",
+        "dist",
+    }
+)
+_DIRECTORY_IGNORE_PATTERNS = ("*.egg-info", "*.pyc")
+
+
+class PluginSyncError(RuntimeError):
+    """Raised when a non-git plugin source cannot be synced."""
 
 
 @dataclass(frozen=True)
@@ -31,15 +53,18 @@ class PluginRepoEntry:
     def display_name(self) -> str:
         if self.source_kind == "local" and self.source_path is not None:
             return f"local:{self.source_path}"
+        if self.source_kind == "directory" and self.source_path is not None:
+            return f"dir:{self.source_path}"
         return f"{self.owner}/{self.repo}"
 
     @property
     def target_name(self) -> str:
-        if self.source_kind == "local":
+        if self.source_kind in {"directory", "local"}:
             hash_source = str(self.source_path or self.clone_url)
             path_hash = hashlib.sha256(hash_source.encode()).hexdigest()[:12]
             safe_repo = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.repo) or "repo"
-            return f"local__{safe_repo}__{path_hash}"
+            prefix = "dir" if self.source_kind == "directory" else "local"
+            return f"{prefix}__{safe_repo}__{path_hash}"
 
         safe_owner = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.owner)
         safe_repo = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.repo)
@@ -58,6 +83,10 @@ _REPO_RE = re.compile(
     r"(?P<owner>[^/@]+)/(?P<repo>[^@]+)"
     r"(?:@(?P<ref>[^@\s]+))?$",
 )
+
+
+def _directory_uri_from_path(path: Path) -> str:
+    return f"dir://{quote(path.as_posix(), safe='/')}"
 
 
 def _parse_local_repo_entry(raw: str) -> PluginRepoEntry:
@@ -98,6 +127,42 @@ def _parse_local_repo_entry(raw: str) -> PluginRepoEntry:
     )
 
 
+def _parse_directory_entry(raw: str) -> PluginRepoEntry:
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() != "dir":
+        msg = f"Cannot parse plugin repo entry: {raw!r}"
+        raise ValueError(msg)
+    if parsed.netloc not in {"", "localhost"}:
+        msg = f"Directory plugin URI must use an empty or localhost host: {raw!r}"
+        raise ValueError(msg)
+    if parsed.params or parsed.query or parsed.fragment:
+        msg = f"Directory plugin URI cannot include params, query, or fragment: {raw!r}"
+        raise ValueError(msg)
+
+    raw_path = unquote(parsed.path)
+    if not raw_path or "@" in raw_path:
+        msg = f"Directory plugin URI cannot include refs: {raw!r}"
+        raise ValueError(msg)
+
+    source_path = Path(raw_path)
+    if not source_path.is_absolute():
+        msg = f"Directory plugin URI must use an absolute path: {raw!r}"
+        raise ValueError(msg)
+
+    source_path = source_path.resolve(strict=False)
+    repo = source_path.name or "plugin"
+    source_uri = _directory_uri_from_path(source_path)
+    return PluginRepoEntry(
+        raw=raw,
+        clone_url=source_uri,
+        owner="dir",
+        repo=repo,
+        ref=None,
+        source_kind="directory",
+        source_path=source_path,
+    )
+
+
 def _run_git(*args: str, cwd: Path | None = None) -> str:
     cmd = ["git"]
     if cwd is not None:
@@ -115,6 +180,8 @@ def parse_repo_entry(entry: str) -> PluginRepoEntry:
     raw = entry.strip().rstrip("/")
     if raw.lower().startswith("file:"):
         return _parse_local_repo_entry(raw)
+    if raw.lower().startswith("dir:"):
+        return _parse_directory_entry(raw)
 
     match = _REPO_RE.match(raw)
     if match is None:
@@ -153,7 +220,7 @@ def iter_plugin_entries(
     return entries
 
 
-def _sync_repo(target: Path, entry: PluginRepoEntry) -> bool:
+def _sync_git_repo(target: Path, entry: PluginRepoEntry) -> bool:
     if not target.exists():
         cmd = ["clone", "--depth=1"]
         if entry.ref:
@@ -175,6 +242,143 @@ def _sync_repo(target: Path, entry: PluginRepoEntry) -> bool:
 
     _run_git("reset", "--hard", "FETCH_HEAD", cwd=target)
     return True
+
+
+def _directory_name_ignored(name: str) -> bool:
+    return name in _DIRECTORY_IGNORE_NAMES or any(
+        fnmatch.fnmatch(name, pattern) for pattern in _DIRECTORY_IGNORE_PATTERNS
+    )
+
+
+def _directory_path_ignored(relative_path: Path) -> bool:
+    return any(_directory_name_ignored(part) for part in relative_path.parts)
+
+
+def _directory_copy_ignore(_directory: str, names: list[str]) -> set[str]:
+    return {name for name in names if _directory_name_ignored(name)}
+
+
+def _hash_file(path: Path) -> str:
+    file_hash = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            file_hash.update(chunk)
+    return file_hash.hexdigest()
+
+
+def _iter_directory_snapshot_paths(source: Path) -> list[Path]:
+    paths: list[Path] = []
+    try:
+        for root, dir_names, file_names in os.walk(source, followlinks=False):
+            dir_names[:] = sorted(
+                name for name in dir_names if not _directory_name_ignored(name)
+            )
+            root_path = Path(root)
+            paths.extend(root_path / name for name in dir_names)
+            paths.extend(
+                root_path / name
+                for name in sorted(file_names)
+                if not _directory_name_ignored(name)
+            )
+    except OSError as exc:
+        msg = f"Directory plugin source could not be read: {source}"
+        raise PluginSyncError(msg) from exc
+
+    return sorted(paths, key=lambda path: path.relative_to(source).as_posix())
+
+
+def _directory_fingerprint(source: Path) -> str:
+    fingerprint = hashlib.sha256()
+    for path in _iter_directory_snapshot_paths(source):
+        relative_path = path.relative_to(source)
+        if _directory_path_ignored(relative_path):
+            continue
+
+        relative_name = relative_path.as_posix()
+        try:
+            if path.is_symlink():
+                entry_type = "symlink"
+                entry_value = path.readlink().as_posix()
+            elif path.is_dir():
+                entry_type = "directory"
+                entry_value = ""
+            elif path.is_file():
+                entry_type = "file"
+                entry_value = _hash_file(path)
+            else:
+                msg = f"Directory plugin source contains unsupported entry: {path}"
+                raise PluginSyncError(msg)
+        except OSError as exc:
+            msg = f"Directory plugin source entry could not be read: {path}"
+            raise PluginSyncError(msg) from exc
+
+        fingerprint.update(entry_type.encode())
+        fingerprint.update(b"\0")
+        fingerprint.update(relative_name.encode())
+        fingerprint.update(b"\0")
+        fingerprint.update(entry_value.encode())
+        fingerprint.update(b"\0")
+
+    return fingerprint.hexdigest()
+
+
+def _remove_managed_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+        return
+    path.unlink(missing_ok=True)
+
+
+def _sync_directory_source(target: Path, entry: PluginRepoEntry) -> bool:
+    if entry.source_path is None:
+        msg = f"Directory plugin source could not be resolved: {entry.raw!r}"
+        raise PluginSyncError(msg)
+
+    source = entry.source_path
+    if not source.exists():
+        msg = f"Directory plugin source does not exist: {source}"
+        raise PluginSyncError(msg)
+    if not source.is_dir():
+        msg = f"Directory plugin source is not a directory: {source}"
+        raise PluginSyncError(msg)
+
+    fingerprint = _directory_fingerprint(source)
+    fingerprint_path = target.parent / f".{target.name}.fingerprint"
+    if target.exists() and fingerprint_path.exists():
+        try:
+            if fingerprint_path.read_text(encoding="utf-8") == fingerprint:
+                return False
+        except OSError as exc:
+            msg = f"Directory plugin fingerprint could not be read: {fingerprint_path}"
+            raise PluginSyncError(msg) from exc
+
+    logger.info("Copying plugin directory %s -> %s", source, target)
+    with tempfile.TemporaryDirectory(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+    ) as temp_root:
+        temp_target = Path(temp_root) / target.name
+        try:
+            shutil.copytree(
+                source,
+                temp_target,
+                ignore=_directory_copy_ignore,
+                symlinks=True,
+            )
+            _remove_managed_path(target)
+            temp_target.replace(target)
+            fingerprint_path.write_text(fingerprint, encoding="utf-8")
+        except OSError as exc:
+            msg = f"Directory plugin source could not be copied: {source}"
+            raise PluginSyncError(msg) from exc
+
+    return True
+
+
+def _sync_plugin_source(target: Path, entry: PluginRepoEntry) -> bool:
+    if entry.source_kind == "directory":
+        return _sync_directory_source(target, entry)
+    return _sync_git_repo(target, entry)
 
 
 def sync_plugin_repos(
@@ -203,7 +407,7 @@ def sync_plugin_repos(
 
         target = target_dir / entry.target_name
         try:
-            changed = _sync_repo(target, entry)
+            changed = _sync_plugin_source(target, entry)
         except subprocess.CalledProcessError:
             if raise_on_error:
                 raise
@@ -220,6 +424,16 @@ def sync_plugin_repos(
                 )
                 synced.append(SyncedPluginRepo(entry=entry, path=target, changed=False))
             continue
+        except PluginSyncError as exc:
+            if raise_on_error:
+                raise
+            logger.warning(
+                "Failed to sync plugin source %r from %s: %s",
+                entry.display_name,
+                entry.clone_url,
+                exc,
+            )
+            continue
         synced.append(SyncedPluginRepo(entry=entry, path=target, changed=changed))
 
     return synced
@@ -229,7 +443,7 @@ def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
     entry = parse_repo_entry(raw_entry)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / entry.target_name
-    changed = _sync_repo(target, entry)
+    changed = _sync_plugin_source(target, entry)
     return SyncedPluginRepo(entry=entry, path=target, changed=changed)
 
 

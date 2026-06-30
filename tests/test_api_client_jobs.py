@@ -226,7 +226,7 @@ def test_sync_client_returns_grouped_data_type_schemas(
         timeout: float,  # noqa: ARG001
         headers: dict[str, str],  # noqa: ARG001
     ) -> FakeSyncResponse:
-        assert url == "http://example.test/data_types"
+        assert url == "http://example.test/data-types"
         return FakeSyncResponse(payload=_data_types_response())
 
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)

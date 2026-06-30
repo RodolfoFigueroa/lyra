@@ -136,10 +136,10 @@ def test_plugin_repo_endpoints_manage_directory_source(
         )
     )
     listed = admin.list_plugin_repos()
-    pulled = admin.pull_plugin_repo("mock")
-    pulled_again = admin.pull_plugin_repo("mock")
+    synced = admin.sync_plugin_repo("mock")
+    synced_again = admin.sync_plugin_repo("mock")
     manifest_path.write_text('{"changed": true}', encoding="utf-8")
-    pulled_edited = admin.pull_plugin_repo("mock")
+    synced_edited = admin.sync_plugin_repo("mock")
 
     assert created.model_dump() == {
         "id": "mock",
@@ -148,17 +148,17 @@ def test_plugin_repo_endpoints_manage_directory_source(
         "enabled": True,
     }
     assert listed.model_dump()["repos"] == [created.model_dump()]
-    assert pulled.model_dump() == {
+    assert synced.model_dump() == {
         "repo_id": "mock",
         "changed": True,
         "display_name": f"dir:{source.resolve()}",
     }
-    assert pulled_again.model_dump() == {
+    assert synced_again.model_dump() == {
         "repo_id": "mock",
         "changed": False,
         "display_name": f"dir:{source.resolve()}",
     }
-    assert pulled_edited.model_dump() == {
+    assert synced_edited.model_dump() == {
         "repo_id": "mock",
         "changed": True,
         "display_name": f"dir:{source.resolve()}",
@@ -222,17 +222,17 @@ def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(
     assert "duplicate enabled plugin repo sources" in str(duplicate_source.detail)
 
 
-def test_pull_plugin_repo_syncs_enabled_repo(
+def test_sync_plugin_repo_syncs_enabled_repo(
     admin_context: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[Path, str]] = []
 
-    def sync_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
+    def sync_source(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
         calls.append((target_dir, raw_entry))
         return _synced_repo(changed=True)
 
-    monkeypatch.setattr(admin, "sync_plugin_repo", sync_repo)
+    monkeypatch.setattr(admin, "sync_plugin_source", sync_source)
     admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(
             id="example",
@@ -240,7 +240,7 @@ def test_pull_plugin_repo_syncs_enabled_repo(
         )
     )
 
-    response = admin.pull_plugin_repo("example")
+    response = admin.sync_plugin_repo("example")
 
     assert response.model_dump() == {
         "repo_id": "example",
@@ -252,7 +252,7 @@ def test_pull_plugin_repo_syncs_enabled_repo(
     assert calls[0][1] == "owner/example-plugin@main"
 
 
-def test_pull_plugin_repo_returns_contract_errors(
+def test_sync_plugin_repo_returns_contract_errors(
     admin_context: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -263,8 +263,8 @@ def test_pull_plugin_repo_returns_contract_errors(
             enabled=False,
         )
     )
-    disabled = _assert_http_error(409, admin.pull_plugin_repo, "disabled")
-    missing = _assert_http_error(404, admin.pull_plugin_repo, "missing")
+    disabled = _assert_http_error(409, admin.sync_plugin_repo, "disabled")
+    missing = _assert_http_error(404, admin.sync_plugin_repo, "missing")
 
     def fail_sync(_target_dir: Path, _raw_entry: str) -> SyncedPluginRepo:
         raise subprocess.CalledProcessError(
@@ -273,18 +273,18 @@ def test_pull_plugin_repo_returns_contract_errors(
             stderr="git failed",
         )
 
-    monkeypatch.setattr(admin, "sync_plugin_repo", fail_sync)
+    monkeypatch.setattr(admin, "sync_plugin_source", fail_sync)
     admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(id="broken", source="owner/broken-plugin")
     )
-    failed = _assert_http_error(502, admin.pull_plugin_repo, "broken")
+    failed = _assert_http_error(502, admin.sync_plugin_repo, "broken")
 
     assert "disabled" in str(disabled.detail)
     assert "missing" in str(missing.detail)
     assert failed.detail == "git failed"
 
 
-def test_pull_plugin_repo_reports_directory_sync_failures(
+def test_sync_plugin_repo_reports_directory_sync_failures(
     admin_context: Path,  # noqa: ARG001
     tmp_path: Path,
 ) -> None:
@@ -296,7 +296,7 @@ def test_pull_plugin_repo_reports_directory_sync_failures(
         )
     )
 
-    failed = _assert_http_error(502, admin.pull_plugin_repo, "missing-dir")
+    failed = _assert_http_error(502, admin.sync_plugin_repo, "missing-dir")
 
     assert "Directory plugin source does not exist" in str(failed.detail)
 
@@ -432,7 +432,8 @@ def test_admin_openapi_exposes_new_paths_without_old_update_route() -> None:
 
     assert "/admin/plugin-repos" in paths
     assert "/admin/plugin-repos/{repo_id}" in paths
-    assert "/admin/plugin-repos/{repo_id}/pull" in paths
+    assert "/admin/plugin-repos/{repo_id}/sync" in paths
+    assert "/admin/plugin-repos/{repo_id}/pull" not in paths
     assert "/admin/plugin-catalog/refresh" in paths
     assert "/admin/plugin-routing" in paths
     assert "/admin/plugin-routing/{metric_name}" in paths

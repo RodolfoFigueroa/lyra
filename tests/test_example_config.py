@@ -27,7 +27,7 @@ def test_example_config_matches_config_contract(
     monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, "lyra")
     monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "postgres-secret")
     monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "admin-secret")
-    example_path = Path(__file__).resolve().parents[1] / "lyra.toml.example"
+    example_path = Path(__file__).resolve().parents[1] / "config.example.toml"
     raw_config = tomllib.loads(example_path.read_text(encoding="utf-8"))
 
     config = LyraConfig.model_validate(raw_config)

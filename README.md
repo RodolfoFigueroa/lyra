@@ -36,7 +36,7 @@ Start from the checked-in example:
 
 ```bash
 mkdir -p lyra_data/config secrets
-cp lyra.toml.example lyra_data/config/lyra.toml
+cp config.example.toml lyra_data/config/lyra.toml
 cp .env.example .env
 ```
 

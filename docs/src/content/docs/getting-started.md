@@ -28,13 +28,13 @@ lyra_data/config/lyra.toml
 secrets/service-account.json
 ```
 
-The repository includes a copyable starting file at `lyra.toml.example`.
+The repository includes a copyable starting file at `config.example.toml`.
 Copy `.env.example` to `.env` so Compose knows where those host files live and
 which runtime env vars to pass into Lyra:
 
 ```bash
 mkdir -p lyra_data/config secrets
-cp lyra.toml.example lyra_data/config/lyra.toml
+cp config.example.toml lyra_data/config/lyra.toml
 cp .env.example .env
 ```
 

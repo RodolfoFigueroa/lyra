@@ -15,7 +15,7 @@ API containers:
 
 - Read `/lyra_data/config/lyra.toml`.
 - Create non-secret runtime directories under `/lyra_data`.
-- Read plugin repositories and metric routing from
+- Read plugin sources and metric routing from
   `/lyra_data/state/plugins.toml`.
 - Sync plugin manifests into `plugins.catalog_dir`.
 - Validate job requests using compiled metric `request_schema` values.
@@ -39,9 +39,9 @@ install directory, and temp directory. It then starts Celery with the matching
 
 Workers:
 
-- Read plugin repositories and metric routing from
+- Read plugin sources and metric routing from
   `/lyra_data/state/plugins.toml`.
-- Clone and install enabled plugin repositories at startup.
+- Sync and install enabled plugin sources at startup.
 - Read schema v3 manifests from installed plugins.
 - Import only metrics whose server-assigned queue belongs to the worker.
 - Consume the same queues through Celery.
@@ -127,7 +127,7 @@ or override `earth_engine.service_account_file` in TOML.
 
 Plugin updates are explicit:
 
-1. Add or update plugin repositories with `/admin/plugin-repos`.
+1. Add or update plugin sources with `/admin/plugin-repos`.
 2. Refresh the API manifest catalog with
    `POST /admin/plugin-catalog/refresh`.
 3. Review or adjust metric routing with `/admin/plugin-routing`.
@@ -135,5 +135,12 @@ Plugin updates are explicit:
    runner registries.
 
 Workers do not hot-reload plugin code in-process.
+
+Production deployments should normally use GitHub or `file://` local git
+sources. Development `dir://` sources are supported for local mock plugins and
+executor testing; they copy uncommitted directory contents on refresh. If a
+deployment uses `dir://`, mount the source directory into every API and worker
+container at the same absolute path, for example `/plugins/mock-plugin`, and
+register `dir:///plugins/mock-plugin`.
 
 Kubernetes manifests are not part of the checked-in deployment shape.

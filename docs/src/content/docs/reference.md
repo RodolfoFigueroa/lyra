@@ -34,11 +34,11 @@ account remains a file reference through `service_account_file`; by default
 Lyra reads `/lyra_data/secrets/service-account.json`.
 
 Docker-oriented runtime paths also default under `/lyra_data`: plugin catalog
-repos use `/lyra_data/plugins/catalog`, runner installs use
+sources use `/lyra_data/plugins/catalog`, runner installs use
 `/lyra_data/plugins/runners/<worker>`, and worker temp files use
 `/lyra_data/cache/jobs/<worker>`.
 
-Plugin repositories and metric routing live in
+Plugin sources and metric routing live in
 `/lyra_data/state/plugins.toml`. Lyra owns that state file, and operators update
 it through the admin API rather than by editing `lyra.toml`.
 
@@ -113,3 +113,18 @@ npm run preview --prefix docs
 | `GET` | `/admin/plugin-routing` | List metric queue assignments. |
 | `PUT` | `/admin/plugin-routing/{metric_name}` | Set a metric queue assignment. |
 | `DELETE` | `/admin/plugin-routing/{metric_name}` | Delete a metric queue assignment. |
+
+## Plugin Source Forms
+
+| Form | Meaning |
+| --- | --- |
+| `owner/repo` | Clone a GitHub repository's default branch. |
+| `owner/repo@branch-or-tag` | Clone a GitHub branch or tag. |
+| `https://github.com/owner/repo` | Clone a GitHub repository with an explicit URL prefix. |
+| `https://github.com/owner/repo@branch-or-tag` | Clone a GitHub branch or tag with an explicit URL prefix. |
+| `file:///absolute/path/to/repo` | Clone a local git repository from committed state. |
+| `dir:///absolute/path/to/plugin` | Copy a development directory snapshot, including uncommitted edits. |
+
+Raw filesystem paths are not supported. `file://` and `dir://` sources do not
+support branch or tag refs. `dir://` is intended for development and testing;
+refresh the catalog so workers restart and reinstall copied snapshots.

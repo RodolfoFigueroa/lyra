@@ -129,7 +129,7 @@ the plugin's file result.
 
 ## Refresh Plugins
 
-`POST /admin/plugin-catalog/refresh` syncs enabled plugin repositories from
+`POST /admin/plugin-catalog/refresh` syncs enabled plugin sources from
 Lyra-owned state, refreshes the API manifest catalog, auto-assigns missing
 metric routes with `plugins.default_queue`, and asks workers to restart.
 

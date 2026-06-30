@@ -141,8 +141,8 @@ The API listens on the host and port configured in `[api]`.
 
 ## Plugins And Queues
 
-Plugin repositories and metric routing are managed through the admin API, not
-by editing `lyra.toml`. Add a plugin repo after the API is running:
+Plugin sources and metric routing are managed through the admin API, not by
+editing `lyra.toml`. Add a plugin source after the API is running:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
@@ -150,6 +150,10 @@ curl -X POST http://localhost:5219/admin/plugin-repos \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/plugin-repo@main"}'
 ```
+
+Supported sources include GitHub entries, explicit `file://` local git
+repositories, and development `dir://` directory snapshots. Use `dir://` for a
+local mock plugin when you want refreshes to include uncommitted edits.
 
 Refresh the catalog and restart workers:
 

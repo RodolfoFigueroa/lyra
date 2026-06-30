@@ -10,12 +10,12 @@ publishing.
 
 ## Trust Model
 
-Treat Lyra plugin repositories as trusted code. API containers read only
-`lyra.plugin.json` manifests, but worker containers clone plugin repositories,
-run `uv pip install`, install compatible packages editable, import matching
+Treat Lyra plugin sources as trusted code. API containers read only
+`lyra.plugin.json` manifests, but worker containers sync plugin sources, run
+`uv pip install`, install compatible packages editable, import matching
 entrypoints, and execute plugin code with the worker container's permissions.
 
-Configure only repositories you are willing to run inside the worker
+Configure only plugin sources you are willing to run inside the worker
 environment. Keep worker secrets, network access, mounted volumes, and service
 accounts scoped to what plugin code is allowed to use.
 
@@ -37,8 +37,8 @@ accounts scoped to what plugin code is allowed to use.
 
 ## Repository Sources
 
-`POST /admin/plugin-repos` accepts GitHub entries or explicit `file://` local
-git repositories:
+`POST /admin/plugin-repos` accepts GitHub entries, explicit `file://` local git
+repositories, and development `dir://` directory sources:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
@@ -56,13 +56,33 @@ Supported forms are:
 | `https://github.com/owner/repo` | Clone the repository's default branch with an explicit GitHub URL prefix. |
 | `https://github.com/owner/repo@branch-or-tag` | Clone the named branch or tag with an explicit GitHub URL prefix. |
 | `file:///absolute/path/to/repo` | Clone a local git repository from its current committed state. |
+| `dir:///absolute/path/to/plugin` | Copy a development plugin directory snapshot, including uncommitted edits. |
 
-Local repositories must use explicit `file://` URIs; raw filesystem paths are
-not supported. Local entries do not support `@branch-or-tag` selectors, and
-uncommitted changes are ignored. Omit a trailing `.git` suffix for GitHub
-entries. Make sure the API and worker containers can reach each repository with
-`git`. For Docker Compose, local repositories must be reachable inside every
-API and worker container at the same absolute path used in the repo source.
+Local git repositories must use explicit `file://` URIs; raw filesystem paths
+are not supported. `file://` entries do not support `@branch-or-tag` selectors,
+and uncommitted changes are ignored. Development directory sources must use
+explicit `dir://` URIs, do not support refs, and are copied into Lyra-managed
+catalog and runner directories on pull or refresh. Omit a trailing `.git` suffix
+for GitHub entries. Make sure the API and worker containers can reach each
+GitHub or `file://` repository with `git`.
+
+For Docker Compose, `file://` and `dir://` paths must be reachable inside every
+API and worker container at the same absolute path used in the repo source. A
+development directory source usually needs a bind mount:
+
+```yaml
+volumes:
+  - ./mock-plugin:/plugins/mock-plugin
+```
+
+Then register it with:
+
+```json
+{"source": "dir:///plugins/mock-plugin"}
+```
+
+Workers do not hot-reload plugin code in process. Refresh the catalog so the API
+reloads manifests and worker pools restart and reinstall copied plugin snapshots.
 
 ## Preflight Checks
 

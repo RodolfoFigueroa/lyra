@@ -8,7 +8,7 @@ worker installs plugin code, reads schema v3 manifests, imports matching
 entrypoints, and runs matching metrics through the generic `lyra.run_metric`
 Celery task.
 
-Plugin repositories are trusted code. The API reads manifests without importing
+Plugin sources are trusted code. The API reads manifests without importing
 plugin modules, but workers install and execute plugin packages with the worker
 container's permissions.
 
@@ -18,7 +18,7 @@ publish-time checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 
 ## Worker Install And Import
 
-Workers sync enabled repositories from Lyra-owned plugin state, run
+Workers sync enabled plugin sources from Lyra-owned plugin state, run
 `uv pip install --dry-run`, install compatible packages editable, and import
 metrics selected by the worker's queue list. Start workers with
 `python -m lyra_app.worker_launcher <name>`; the launcher reads

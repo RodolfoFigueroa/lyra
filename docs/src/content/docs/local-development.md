@@ -84,12 +84,31 @@ curl -X POST http://localhost:5219/admin/plugin-repos \
 ```
 
 Local `file://` entries are committed-code sync sources, not live-edit mounts:
-commit plugin changes, then refresh the catalog. When using Docker Compose,
-local plugin repositories must be reachable from the API and worker containers
-at the same absolute path used in the admin API repo source.
+commit plugin changes, then refresh the catalog.
 
-The API syncs catalog repositories into `plugins.catalog_dir`. Workers sync and
-install runner repositories under `plugins.runner_base_dir` or the selected
+For local plugin development, use an explicit `dir://` source. Directory
+sources do not require git, do not support branch or tag refs, and copy the
+current directory contents on pull or refresh, including uncommitted edits:
+
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"dir:///plugins/mock-plugin"}'
+```
+
+Raw filesystem paths are not supported. When using Docker Compose, every
+`file://` or `dir://` source path must be reachable from the API and worker
+containers at the same absolute path used in the admin API repo source. For a
+development directory source, bind mount the directory into every app container:
+
+```yaml
+volumes:
+  - ./mock-plugin:/plugins/mock-plugin
+```
+
+The API syncs catalog sources into `plugins.catalog_dir`. Workers sync and
+install runner sources under `plugins.runner_base_dir` or the selected
 worker's `install_dir`.
 
 Metric queues live in `/lyra_data/state/plugins.toml` and are managed through

@@ -203,6 +203,36 @@ def test_catalog_refresh_auto_assigns_new_metric_queue_to_toml(
     assert entry.queue == "interactive"
 
 
+def test_catalog_refresh_ignores_stale_metric_queue_assignments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_test_config(
+        tmp_path,
+        metric_queues={
+            "light_metric": "lightweight",
+            "removed_metric": "heavy",
+        },
+    )
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_repos",
+        lambda _config: [_synced_repo(repo)],
+    )
+    config_path = get_config_path()
+
+    registry.refresh_catalog()
+
+    persisted = load_config(config_path)
+    entry = registry.get_metric_entry("light_metric")
+    assert persisted.plugins.metric_queues["removed_metric"] == "heavy"
+    assert entry is not None
+    assert entry.queue == "lightweight"
+    assert registry.get_metric_entry("removed_metric") is None
+
+
 def test_catalog_refresh_keeps_previous_registry_when_assignment_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

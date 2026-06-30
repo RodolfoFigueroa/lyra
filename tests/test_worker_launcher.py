@@ -54,6 +54,19 @@ def test_build_celery_worker_args_uses_toml_worker_settings(tmp_path: Path) -> N
     ]
 
 
+def test_main_reports_unknown_worker_name(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    load_test_config(tmp_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        worker_launcher.main(["missing"])
+
+    assert exc_info.value.code == 2
+    assert "unknown worker config: missing" in capsys.readouterr().err
+
+
 def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

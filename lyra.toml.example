@@ -37,21 +37,10 @@ level = "INFO"
 ttl_seconds = 600
 
 [plugins]
-repos = [
-  "owner/plugin-repo@main",
-  # "https://github.com/owner/another-plugin@v0.1.0",
-  # "file:///lyra_data/plugins/local/example-plugin",
-]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
 # catalog_dir = "/lyra_data/plugins/catalog"
 # runner_base_dir = "/lyra_data/plugins/runners"
-
-[plugins.metric_queues]
-# The API adds missing metrics here during catalog refresh, using
-# plugins.default_queue. You can also preassign metrics manually:
-# walkability_score = "interactive"
-# regional_accessibility = "batch"
 
 [workers.interactive]
 queues = ["interactive"]

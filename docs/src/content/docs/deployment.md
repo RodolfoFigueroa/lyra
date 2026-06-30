@@ -1,67 +1,91 @@
 ---
 title: Deployment
-description: Run the API as a manifest-only service and workers as warm queue-specific runners.
+description: Run the API and workers from one server-owned TOML config and data volume.
 ---
 
-Lyra separates API catalog loading from runner execution.
+Lyra separates API catalog loading from runner execution, but both roles read
+the same `/lyra_data/config/lyra.toml` file and mount the same durable
+`lyra_data` volume.
 
 ## API Containers
 
 API containers:
 
-- Read static plugin manifests from `/lyra_plugin_catalog`.
+- Read `/lyra_data/config/lyra.toml`.
+- Create non-secret runtime directories under `/lyra_data`.
+- Sync plugin manifests into `plugins.catalog_dir`.
 - Validate job requests using compiled metric `request_schema` values.
-- Dispatch the generic `lyra.run_metric` Celery task to the metric's server-assigned queue.
-- Skip runner plugin installation and imports.
+- Assign missing metric queues in `[plugins.metric_queues]` using
+  `plugins.default_queue`.
+- Dispatch the generic `lyra.run_metric` Celery task to the metric's
+  server-assigned queue.
 
-This keeps API startup and request validation independent from plugin runtime dependencies.
+The API catalog does not import plugin Python code.
 
 ## Worker Containers
 
-Worker containers:
-
-- Clone and install plugin repositories at startup through the worker startup path.
-- Read schema v3 manifests from installed plugins.
-- Filter metrics by `LYRA_RUNNER_QUEUES` when it is set.
-- Import matching metric entrypoints.
-- Consume matching Celery queues with `-Q`.
-
-Example:
+Worker containers start with a worker name:
 
 ```bash
-LYRA_RUNNER_QUEUES=interactive \
-celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
+python -m lyra_app.worker_launcher interactive
 ```
+
+The launcher reads `[workers.interactive]` for queue membership, concurrency,
+install directory, and temp directory. It then starts Celery with the matching
+`-Q` and concurrency values.
+
+Workers:
+
+- Clone and install plugin repositories at startup.
+- Read schema v3 manifests from installed plugins.
+- Import only metrics whose server-assigned queue belongs to the worker.
+- Consume the same queues through Celery.
 
 ## Docker Compose
 
-The Compose examples define two generic worker pools:
+The Compose examples define one named volume:
+
+```yaml
+volumes:
+  lyra_data:
+    name: lyra_data
+```
+
+Every Lyra app container mounts it at `/lyra_data`. There are no separate plugin
+catalog, worker plugin, cache, service-account, or env-file mounts.
+
+The checked-in examples include two worker pools:
 
 - `interactive`
 - `batch`
 
-Both use the same Lyra image and generic Celery task code. Each worker pool has
-its own `/lyra_plugins` volume, while the API mounts only
-`/lyra_plugin_catalog`.
+To add another worker pool, add a `[workers.<name>]` table in TOML and another
+service that runs `python -m lyra_app.worker_launcher <name>`.
 
-To add another queue, add another worker service using the same image, set
-`LYRA_RUNNER_QUEUES` to the new queue name, and set Celery `-Q` to the same
-queue.
+## Filesystem Layout
 
-If `LYRA_RUNNER_QUEUES` is unset, the worker imports every installed plugin
-metric. Queue-specific deployments should set it explicitly so import failures
-in unrelated queues cannot prevent that worker pool from starting.
+Use this tree inside the volume:
 
-`CELERY_WORKER_CONCURRENCY` controls worker concurrency in the development
-Compose file. The production Compose file uses Celery defaults unless the
-command is changed.
+```text
+/lyra_data/
+  config/lyra.toml
+  cache/jobs/
+  plugins/catalog/
+  plugins/runners/
+  secrets/
+  logs/
+```
+
+Secret files are deployment-owned. Lyra references them by path and does not
+generate placeholder secrets.
 
 ## Plugin Updates
 
 Plugin updates are explicit:
 
 1. Refresh the API manifest catalog with `POST /update-plugins`.
-2. Restart warm worker pools so they reinstall plugin code and rebuild their runner registries.
+2. Let the API persist any new metric queue assignments to `lyra.toml`.
+3. Restart warm worker pools so they reinstall plugin code and rebuild their runner registries.
 
 Workers do not hot-reload plugin code in-process.
 

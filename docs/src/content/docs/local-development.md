@@ -4,8 +4,7 @@ description: Run Lyra locally, configure plugins, and work with the docs site.
 ---
 
 This page is for contributors working in the Lyra repository. For first-run
-environment setup, `.env` values, Redis, and the basic API/worker startup flow,
-start with [Getting Started](../getting-started/).
+configuration, start with [Getting Started](../getting-started/).
 
 ## Workspace
 
@@ -18,15 +17,35 @@ uv sync
 The root project requires Python `>=3.11` and includes workspace packages under
 `packages/*`.
 
+## Local Data Tree
+
+Lyra runtime state belongs under `/lyra_data`:
+
+```text
+/lyra_data/
+  config/lyra.toml
+  cache/jobs/
+  plugins/catalog/
+  plugins/runners/
+  secrets/
+  logs/
+```
+
+The app creates non-secret runtime directories when it starts. Create secret
+files yourself under `/lyra_data/secrets`, then reference those absolute paths
+from `lyra.toml`.
+
+A repo-local `lyra_data/` directory is ignored by git and can be used as a
+staging tree when copying files into the Docker volume.
+
 ## Direct API And Worker
 
 Use direct processes when you are iterating on application or worker code and
-want fast restarts. Run Redis and configure `.env` as described in
-[Getting Started](../getting-started/), then start one worker queue:
+want fast restarts. Start Redis, make sure `/lyra_data/config/lyra.toml` points
+at `redis://localhost:6379/0`, then start one named worker:
 
 ```bash
-LYRA_RUNNER_QUEUES=interactive \
-uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
 Start the API:
@@ -35,49 +54,51 @@ Start the API:
 uv run python -m lyra_app.main
 ```
 
-The API defaults to port `5219`. Set `LYRA_PORT` to change it.
+The API host and port come from `[api]`.
 
 ## Docker Compose
 
-Use Compose when you want the same mounted service-account path, plugin catalog
-volume, and worker plugin volumes used by the deployment examples:
+Use Compose when you want the same single-volume shape used by deployment:
 
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
 The development stack starts the API, Redis, and two worker pools for
-`interactive` and `batch`. The API mounts `/lyra_plugin_catalog`. Each worker
-pool mounts its own `/lyra_plugins` volume.
+`interactive` and `batch`. Every Lyra app container mounts only
+`lyra_data:/lyra_data`.
 
 ## Plugin Catalog During Development
 
-Plugin repositories must be reachable through `LYRA_PLUGIN_REPOS` entries.
-Use GitHub-style entries for remote repositories or explicit `file://` URIs for
-local git repositories:
+Configure plugin repositories in `[plugins].repos`:
 
-```text
-owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0,file:///absolute/path/to/plugin-d
+```toml
+[plugins]
+repos = [
+  "owner/plugin-a",
+  "owner/plugin-b@main",
+  "https://github.com/owner/plugin-c@v0.1.0",
+  "file:///absolute/path/to/plugin-d",
+]
 ```
 
 Local `file://` entries are committed-code sync sources, not live-edit mounts:
 commit plugin changes, then refresh the catalog. When using Docker Compose,
-mount the local plugin repository into the API and worker containers at the same
-absolute path used in `LYRA_PLUGIN_REPOS`. For repository entry formats and
-preflight checks, see [Plugin Author Checklist](../plugin-author-checklist/).
+local plugin repositories must be reachable from the API and worker containers
+at the same absolute path used in `lyra.toml`.
 
-The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync
-and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.
+The API syncs catalog repositories into `plugins.catalog_dir`. Workers sync and
+install runner repositories under `plugins.runner_base_dir` or the selected
+worker's `install_dir`.
 
-Assign metric queues in `/lyra_data/config/lyra.toml`. Each worker pool should
-import the queues listed in its `[workers.<name>]` table, while Celery's `-Q`
-setting still controls which queue messages it receives.
+Assign metric queues in `[plugins.metric_queues]`. Each worker pool imports and
+consumes the queues listed in its `[workers.<name>]` table.
 
 Refresh the catalog and restart worker pools:
 
 ```bash
 curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
-  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
 ```
 
 Workers do not hot-reload plugin code in process. The refresh route reloads the

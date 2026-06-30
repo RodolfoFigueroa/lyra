@@ -1,39 +1,28 @@
 ---
 title: Reference
-description: Environment variables, commands, and public API paths.
+description: Server config, commands, and public API paths.
 ---
 
-## Environment Variables
+## Server Config
 
-Core application settings:
+Lyra reads `/lyra_data/config/lyra.toml` by default. The config owns these
+runtime settings:
 
-| Variable | Purpose |
+| Section | Purpose |
 | --- | --- |
-| `EARTHENGINE_PROJECT` | Google Earth Engine project ID. |
-| `SERVICE_ACCOUNT_BIND_PATH` | Host path for the Earth Engine service account JSON in Compose. |
-| `CELERY_BROKER_URL` | Redis URL used by Celery and the Redis clients. |
-| `CELERY_WORKER_CONCURRENCY` | Worker concurrency used by the development Compose worker command. |
-| `LYRA_PLUGIN_REPOS` | Plugin repository list used by plugin sync/install paths. |
-| `LYRA_PLUGIN_CATALOG_DIR` | Directory containing API catalog manifests. |
-| `LYRA_PLUGIN_INSTALL_DIR` | Directory where workers install plugin code. |
-| `LYRA_PORT` | API server port for direct `python -m lyra_app.main` runs. Defaults to `5219`. |
-| `LYRA_RUNNER_QUEUES` | Optional comma-separated queue names a worker should import and execute. If unset, the worker imports every installed plugin metric. |
-| `LYRA_RUNNER_TEMP_DIR` | Optional base directory for runner temporary job files. |
-| `LYRA_CACHE_DIR` | Cache directory used as a fallback for runner temp files. |
-| `LYRA_JOB_STORE_TTL_SECONDS` | TTL for job status, result, and event keys. Defaults to `600`. |
-| `LYRA_ADMIN_API_KEY` | Required by admin routes such as plugin update. |
-| `LYRA_LOG_LEVEL` | Application log level. |
-| `LYRA_LOG_FILE` | Optional log file path. |
+| `[api]` | API host and port. |
+| `[redis]` | Redis URL used by Celery and the Redis clients. |
+| `[database]` | PostgreSQL host, port, database, user, and password file reference. |
+| `[earth_engine]` | Earth Engine project and service account file reference. |
+| `[admin]` | Admin API-key file reference. |
+| `[logging]` | Application log level and optional log file. |
+| `[job_store]` | Job status, result, and event TTL. |
+| `[plugins]` | Plugin repositories, catalog path, runner base path, default queue, and allowed queues. |
+| `[plugins.metric_queues]` | Server-owned metric-to-queue assignments. |
+| `[workers.<name>]` | Worker queues, concurrency, install directory, and temp directory. |
 
-Database settings from `.env.example`:
-
-| Variable | Purpose |
-| --- | --- |
-| `POSTGRES_USER` | PostgreSQL username. |
-| `POSTGRES_PASSWORD` | PostgreSQL password. |
-| `POSTGRES_DB` | PostgreSQL database name. |
-| `POSTGRES_HOST` | PostgreSQL host. |
-| `POSTGRES_PORT` | PostgreSQL port. |
+Secret values are not stored inline. Use `password_file`, `api_key_file`, and
+`service_account_file` paths under `/lyra_data/secrets`.
 
 ## Local Commands
 
@@ -59,6 +48,18 @@ Run ruff:
 
 ```bash
 uv run ruff check
+```
+
+Start a worker from TOML:
+
+```bash
+uv run python -m lyra_app.worker_launcher interactive
+```
+
+Start the API from TOML:
+
+```bash
+uv run python -m lyra_app.main
 ```
 
 Build docs locally:

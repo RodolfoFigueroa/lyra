@@ -1,11 +1,12 @@
 ---
 title: Getting Started
-description: Install Lyra, run Redis, start a worker, and launch the API server.
+description: Configure Lyra with TOML, start Redis, run workers, and launch the API server.
 ---
 
-This page gets a development instance running. Docker Compose is the smoothest
-path because it mounts the Earth Engine service account file where the
-application expects it.
+Lyra reads server settings from `/lyra_data/config/lyra.toml`. The same
+`lyra_data` volume is mounted by the API and every worker, so plugin catalogs,
+worker installs, job cache files, logs, and config all live under one durable
+tree.
 
 ## Prerequisites
 
@@ -14,27 +15,76 @@ You will need:
 - Python managed by `uv`.
 - Redis for the Celery broker, result backend, and job/event store.
 - A Google Earth Engine service account key saved as JSON.
-- A `.env` file in the project root.
+- Secret files under `/lyra_data/secrets`.
+
+## Configure
+
+Create these files:
 
 ```text
-EARTHENGINE_PROJECT=your-gee-project-id
-SERVICE_ACCOUNT_BIND_PATH=C:\path\to\service-account.json
-LYRA_CACHE_BIND_PATH=C:\path\to\lyra-cache
-CELERY_BROKER_URL=redis://localhost:6379/0
-LYRA_PLUGIN_REPOS=owner/plugin-repo@branch
-LYRA_ADMIN_API_KEY=local-admin-secret
+/lyra_data/config/lyra.toml
+/lyra_data/secrets/admin_api_key
+/lyra_data/secrets/postgres_password
+/lyra_data/secrets/service-account.json
 ```
 
-Optional logging settings:
+Use this as a starting point for `/lyra_data/config/lyra.toml`:
 
-```text
-LYRA_LOG_LEVEL=INFO
-LYRA_LOG_FILE=logs/lyra.log
+```toml
+schema_version = 1
+
+[api]
+host = "0.0.0.0"
+port = 5219
+
+[redis]
+url = "redis://lyra-redis-dev:6379/0"
+
+[database]
+host = "postgres"
+port = 5432
+name = "lyra"
+user = "lyra"
+password_file = "/lyra_data/secrets/postgres_password"
+
+[earth_engine]
+project = "your-gee-project-id"
+service_account_file = "/lyra_data/secrets/service-account.json"
+
+[admin]
+api_key_file = "/lyra_data/secrets/admin_api_key"
+
+[logging]
+level = "INFO"
+file = "/lyra_data/logs/lyra.log"
+
+[job_store]
+ttl_seconds = 600
+
+[plugins]
+repos = ["owner/plugin-repo@main"]
+catalog_dir = "/lyra_data/plugins/catalog"
+runner_base_dir = "/lyra_data/plugins/runners"
+default_queue = "interactive"
+allowed_queues = ["interactive", "batch"]
+
+[plugins.metric_queues]
+
+[workers.interactive]
+queues = ["interactive"]
+concurrency = 4
+
+[workers.batch]
+queues = ["batch"]
+concurrency = 2
 ```
 
-The application initializes Earth Engine from `/app/service-account.json`.
-Docker Compose creates that path from `SERVICE_ACCOUNT_BIND_PATH`. Direct local
-runs must make the same absolute path available.
+For direct local processes, use `redis://localhost:6379/0` instead of the
+Compose Redis hostname. For the production Compose file, use
+`redis://redis:6379/0`.
+
+Secrets are file references only. Do not put API keys, database passwords, or
+service account JSON inline in TOML.
 
 ## Install
 
@@ -44,7 +94,19 @@ Install the workspace dependencies:
 uv sync
 ```
 
-## Run Redis
+## Docker Compose
+
+The development Compose file starts the API, Redis, and two named worker pools:
+
+```bash
+docker compose -f docker/docker-compose-dev.yml up --build
+```
+
+All Lyra app containers mount only `lyra_data:/lyra_data`. The worker commands
+pass `interactive` or `batch`; queues, concurrency, install directories, and
+temp directories come from `[workers.<name>]`.
+
+## Direct Processes
 
 Start Redis locally:
 
@@ -52,64 +114,28 @@ Start Redis locally:
 docker run -d -p 6379:6379 redis:alpine
 ```
 
-Set the broker URL if you are not using the Docker Compose defaults:
+Start a worker by name:
 
 ```bash
-CELERY_BROKER_URL=redis://localhost:6379/0
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
-## Configure Plugins
-
-Lyra only lists metrics from configured plugin repositories.
-`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub repository entries or
-explicit `file://` local git repositories:
-
-```text
-LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0,file:///absolute/path/to/plugin-d
-```
-
-Each plugin repository needs `lyra.plugin.json` at its root. If `GET /metrics`
-returns an empty list, configure at least one plugin repo and refresh the
-catalog. Local `file://` entries must point at git repositories and Lyra syncs
-committed changes only.
-
-## Start A Worker
-
-Workers consume deployment-owned queues. This example starts one worker pool for
-the `interactive` queue:
-
-```bash
-LYRA_RUNNER_QUEUES=interactive \
-uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
-```
-
-Worker queue membership controls which server-assigned metrics the worker
-imports. Celery's `-Q` value controls which queue messages the worker receives.
-Keep them aligned for queue-specific worker pools.
-
-## Start The API
-
-Run the API server:
+Start the API:
 
 ```bash
 uv run python -m lyra_app.main
 ```
 
-The API listens on `http://localhost:5219` by default.
+The API listens on the host and port configured in `[api]`.
 
-Use `LYRA_PORT` to choose another port.
+## Plugin Queues
 
-## Docker Compose
+Plugin manifests do not choose queues. Lyra assigns each metric in
+`[plugins.metric_queues]`. During API catalog refresh, missing metrics are added
+with `plugins.default_queue` and written back to `lyra.toml`.
 
-The development Compose file starts the API, Redis, and warm worker pools:
-
-```bash
-docker compose -f docker/docker-compose-dev.yml up --build
-```
-
-The checked-in Compose shape uses two example queues, `interactive` and
-`batch`. They are examples owned by the deployment. Plugin manifests choose a
-queue with each metric's `queue` field.
+If a worker starts before a new metric has an assignment, refresh the API
+catalog first and restart the worker.
 
 ## Smoke Test
 

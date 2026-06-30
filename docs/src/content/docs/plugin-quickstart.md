@@ -140,17 +140,20 @@ for that worker process.
 
 ## Connect The Plugin To Lyra
 
-Push the plugin to GitHub and add it to `LYRA_PLUGIN_REPOS`:
+Push the plugin to GitHub and add it to `/lyra_data/config/lyra.toml`:
 
-```text
-LYRA_PLUGIN_REPOS=owner/example-lyra-plugin@main
+```toml
+[plugins]
+repos = ["owner/example-lyra-plugin@main"]
+
+[plugins.metric_queues]
+example_metric = "interactive"
 ```
 
 Run an API process and a worker whose queue matches the server assignment:
 
 ```bash
-LYRA_RUNNER_QUEUES=interactive \
-uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
 Metric queues are assigned in `/lyra_data/config/lyra.toml`, not in
@@ -161,7 +164,7 @@ Refresh the catalog after changing plugin code or manifests:
 
 ```bash
 curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
-  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
 ```
 
 Confirm the API exposes the metric and its compiled request schema:

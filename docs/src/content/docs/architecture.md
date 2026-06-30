@@ -20,14 +20,17 @@ Redis is used for Celery transport and for job status, result, and event storage
 
 ## Catalog Flow
 
-1. `LYRA_PLUGIN_REPOS` lists plugin repositories, either GitHub entries or
+1. `[plugins].repos` lists plugin repositories, either GitHub entries or
    explicit `file://` local git repositories.
-2. The API syncs those repositories into `LYRA_PLUGIN_CATALOG_DIR`, defaulting to `/lyra_plugin_catalog`.
+2. The API syncs those repositories into `plugins.catalog_dir`, usually
+   `/lyra_data/plugins/catalog`.
 3. Each repository must contain `lyra.plugin.json`.
 4. `lyra_app.registry` parses each manifest as `PluginManifestV3`.
 5. The registry compiles each metric's semantic `inputs` into an effective
    `request_schema`, spatial runtime metadata, and batch runtime metadata.
-6. `/metrics` exposes only `name`, `description`, the effective
+6. Missing metric queue assignments are added to `[plugins.metric_queues]`
+   using `plugins.default_queue`.
+7. `/metrics` exposes only `name`, `description`, the effective
    `request_schema`, and the `output` declaration.
 
 The API catalog does not import plugin Python code.
@@ -44,12 +47,11 @@ The API catalog does not import plugin Python code.
 
 ## Worker Flow
 
-Workers sync plugin repositories into `LYRA_PLUGIN_INSTALL_DIR`, defaulting to
-`/lyra_plugins`. They check install compatibility, install plugins editable into
-the worker Python environment, parse schema v3 manifests, compile them, and
-import metrics selected by `LYRA_RUNNER_QUEUES`. If `LYRA_RUNNER_QUEUES` is
-unset, a worker imports all installed plugin metrics; Celery's `-Q` setting
-still controls which queue messages it receives.
+Workers start with `python -m lyra_app.worker_launcher <worker-name>`. The
+launcher reads `[workers.<name>]`, syncs plugin repositories into the worker's
+install directory under `/lyra_data/plugins/runners`, parses schema v3
+manifests, compiles them, imports metrics assigned to that worker's queues, and
+starts Celery with matching `-Q` and concurrency values.
 
 All metric execution goes through one Celery task name: `lyra.run_metric`.
 

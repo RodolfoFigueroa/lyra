@@ -94,4 +94,5 @@ Keep docs and public contracts synchronized. If route behavior, SDK models, plug
 Use source code as authority over examples. Replace placeholder metric names and payloads with values from the active `/metrics` catalog when testing a live deployment.
 
 Avoid inferring runtime plugin availability from this repository alone. Metrics
-come from repositories listed in `LYRA_PLUGIN_REPOS`.
+come from repositories listed in `[plugins].repos` in
+`/lyra_data/config/lyra.toml`.

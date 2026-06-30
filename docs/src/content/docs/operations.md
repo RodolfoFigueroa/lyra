@@ -5,8 +5,8 @@ description: Understand Redis job storage, event streams, TTLs, cancellation, an
 
 Lyra uses Redis for Celery transport and for the job store.
 
-The Redis URL comes from `CELERY_BROKER_URL`. The same URL is used by Celery and
-by the async/sync Redis clients.
+The Redis URL comes from `[redis].url` in `/lyra_data/config/lyra.toml`. The
+same URL is used by Celery and by the async/sync Redis clients.
 
 ## Job Store Keys
 
@@ -26,7 +26,7 @@ Status snapshots include:
 
 ## TTL
 
-Job store keys use `LYRA_JOB_STORE_TTL_SECONDS`. The default is `600` seconds.
+Job store keys use `[job_store].ttl_seconds`. The default is `600` seconds.
 
 File result cleanup deletes only `job:{job_id}:result` after the file response
 completes. Status and events remain until their TTL expires.

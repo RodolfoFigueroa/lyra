@@ -25,30 +25,35 @@ Install dependencies:
 uv sync
 ```
 
-Start Redis:
+Create the server config and secret files under `/lyra_data`:
 
-```bash
-docker run -d -p 6379:6379 redis:alpine
+```text
+/lyra_data/config/lyra.toml
+/lyra_data/secrets/admin_api_key
+/lyra_data/secrets/postgres_password
+/lyra_data/secrets/service-account.json
 ```
 
-Start a worker for the `interactive` queue:
+The config file owns Redis, database, Earth Engine, plugin repositories, metric
+queue assignments, worker pools, logging, job TTL, and API host/port settings.
+Secrets are referenced by file path from the TOML file instead of stored inline.
 
-```bash
-LYRA_RUNNER_QUEUES=interactive \
-uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
-```
-
-Start the API server:
-
-```bash
-uv run python -m lyra_app.main
-```
-
-Or run the development Compose stack:
+Run the development Compose stack:
 
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
+
+For direct local processes, start Redis, then launch a configured worker and the
+API:
+
+```bash
+docker run -d -p 6379:6379 redis:alpine
+uv run python -m lyra_app.worker_launcher interactive
+uv run python -m lyra_app.main
+```
+
+Both commands read `/lyra_data/config/lyra.toml`.
 
 ## Job API
 

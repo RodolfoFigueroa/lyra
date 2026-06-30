@@ -7,7 +7,7 @@ The API catalog is built from schema v3 plugin manifests. Plugin authors write
 compact semantic `inputs`; Lyra compiles those inputs into the effective JSON
 Schema that clients use for job submission.
 
-The catalog can be empty when `LYRA_PLUGIN_REPOS` is empty or configured
+The catalog can be empty when `[plugins].repos` is empty or configured
 repositories do not contain valid schema v3 manifests.
 
 ## List Metrics

@@ -3,10 +3,10 @@ title: Plugin Author Checklist
 description: Validate, publish, connect, and troubleshoot a third-party Lyra plugin.
 ---
 
-When your plugin works locally, use this checklist before you point
-`LYRA_PLUGIN_REPOS` at its repository. If you are starting from an empty repo,
-begin with [Plugin Quickstart](../plugin-quickstart/) and come back here before
-publishing.
+When your plugin works locally, use this checklist before you add its repository
+to `[plugins].repos` in `/lyra_data/config/lyra.toml`. If you are starting from
+an empty repo, begin with [Plugin Quickstart](../plugin-quickstart/) and come
+back here before publishing.
 
 ## Trust Model
 
@@ -37,11 +37,17 @@ accounts scoped to what plugin code is allowed to use.
 
 ## Repository Entries
 
-`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub entries or explicit
-`file://` local git repositories:
+`[plugins].repos` is a TOML list of GitHub entries or explicit `file://` local
+git repositories:
 
-```text
-LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0,file:///absolute/path/to/plugin-d
+```toml
+[plugins]
+repos = [
+  "owner/plugin-a",
+  "owner/plugin-b@main",
+  "https://github.com/owner/plugin-c@v0.1.0",
+  "file:///absolute/path/to/plugin-d",
+]
 ```
 
 Supported forms are:
@@ -58,8 +64,8 @@ Local repositories must use explicit `file://` URIs; raw filesystem paths are
 not supported. Local entries do not support `@branch-or-tag` selectors, and
 uncommitted changes are ignored. Omit a trailing `.git` suffix for GitHub
 entries. Make sure the API and worker containers can reach each repository with
-`git`. For Docker Compose, mount local repositories into every API and worker
-container at the same absolute path used in `LYRA_PLUGIN_REPOS`.
+`git`. For Docker Compose, local repositories must be reachable inside every
+API and worker container at the same absolute path used in `lyra.toml`.
 
 ## Preflight Checks
 
@@ -107,30 +113,33 @@ Declare semantic `inputs` instead. Use `kind: "json_schema"` only for
 plugin-owned input fields that need a custom shape, and keep spatial fields as
 `kind: "location"` or `kind: "bounds"`.
 
-Workers import entrypoints only for selected queues. If `LYRA_RUNNER_QUEUES` is
-unset, the worker selects every installed plugin metric. If a selected
-entrypoint cannot be imported after editable install, the worker registry will
-not load for that worker process.
+Workers import entrypoints only for metrics whose server-assigned queue belongs
+to the worker's `[workers.<name>].queues` list. If a selected entrypoint cannot
+be imported after editable install, the worker registry will not load for that
+worker process.
 
 ## Connect And Smoke Test
 
 After pushing the plugin, configure the repository and run at least one worker
-whose queue matches the metric manifest:
+whose queue matches the metric's server assignment:
 
-```text
-LYRA_PLUGIN_REPOS=owner/example-lyra-plugin@main
+```toml
+[plugins]
+repos = ["owner/example-lyra-plugin@main"]
+
+[plugins.metric_queues]
+example_metric = "interactive"
 ```
 
 ```bash
-LYRA_RUNNER_QUEUES=interactive \
-uv run celery -A lyra_app.worker.celery_app worker --loglevel=info -Q interactive
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
 Refresh the API catalog and restart workers:
 
 ```bash
 curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
-  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
 ```
 
 Confirm the metric is listed:
@@ -149,7 +158,7 @@ example payload without checking it.
 
 | Symptom | What to try |
 | --- | --- |
-| `GET /metrics` is empty | `LYRA_PLUGIN_REPOS` is set in the API environment, repos are reachable, and each repo has a root `lyra.plugin.json`. |
+| `GET /metrics` is empty | `[plugins].repos` lists reachable repositories and each repo has a root `lyra.plugin.json`. |
 | Worker exits or restarts at startup | An installed manifest failed to parse, a selected metric name is duplicated, or a selected entrypoint failed to import. Run the preflight commands and check worker logs. |
 | Metric appears in `/metrics`, but the job fails as `unknown_metric` | The worker skipped an incompatible plugin, editable install failed, or the worker config does not include the metric's assigned queue. Check worker logs. |
 | Job remains `queued` | No worker is consuming the metric's assigned queue with matching Celery `-Q` settings. |

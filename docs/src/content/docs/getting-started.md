@@ -3,10 +3,10 @@ title: Getting Started
 description: Configure Lyra with TOML, start Redis, run workers, and launch the API server.
 ---
 
-Lyra reads server settings from `/lyra_data/config/lyra.toml`. The same
-`lyra_data` volume is mounted by the API and every worker, so plugin catalogs,
-worker installs, job cache files, logs, and config all live under one durable
-tree.
+Lyra reads server settings from `/lyra_data/config/lyra.toml`. Docker Compose
+mounts that config and each secret as read-only files, while the shared
+`lyra_data` volume stores Lyra-owned runtime state such as plugin checkouts,
+`/lyra_data/state/plugins.toml`, job cache files, and optional logs.
 
 ## Prerequisites
 
@@ -15,20 +15,27 @@ You will need:
 - Python managed by `uv`.
 - Redis for the Celery broker, result backend, and job/event store.
 - A Google Earth Engine service account key saved as JSON.
-- Secret files under `/lyra_data/secrets`.
+- Local secret files that Compose can mount into `/lyra_data/secrets`.
 
 ## Configure
 
 Create these files:
 
 ```text
-/lyra_data/config/lyra.toml
-/lyra_data/secrets/admin_api_key
-/lyra_data/secrets/postgres_password
-/lyra_data/secrets/service-account.json
+lyra_data/config/lyra.toml
+secrets/admin_api_key
+secrets/postgres_password
+secrets/service-account.json
 ```
 
 The repository includes a copyable starting file at `lyra.toml.example`.
+Copy `.env.example` to `.env` so Compose knows where those host files live:
+
+```bash
+mkdir -p lyra_data/config secrets
+cp lyra.toml.example lyra_data/config/lyra.toml
+cp .env.example .env
+```
 
 Use this as a starting point for `/lyra_data/config/lyra.toml`:
 
@@ -64,13 +71,10 @@ level = "INFO"
 ttl_seconds = 600
 
 [plugins]
-repos = ["owner/plugin-repo@main"]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
 # catalog_dir = "/lyra_data/plugins/catalog"
 # runner_base_dir = "/lyra_data/plugins/runners"
-
-[plugins.metric_queues]
 
 [workers.interactive]
 queues = ["interactive"]
@@ -89,8 +93,8 @@ Secrets are file references only. Do not put API keys, database passwords, or
 service account JSON inline in TOML.
 
 The commented path fields use Docker-oriented defaults under `/lyra_data`.
-Mount local secret files into `/lyra_data/secrets` or uncomment those fields if
-your deployment uses different container paths.
+Compose mounts local secret files into `/lyra_data/secrets`; uncomment those
+fields only if your deployment uses different container paths.
 
 ## Install
 
@@ -108,9 +112,10 @@ The development Compose file starts the API, Redis, and two named worker pools:
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-All Lyra app containers mount only `lyra_data:/lyra_data`. The worker commands
-pass `interactive` or `batch`; queues, concurrency, install directories, and
-temp directories come from `[workers.<name>]`.
+All Lyra app containers mount `lyra_data:/lyra_data` plus read-only file mounts
+for `lyra.toml` and each secret. The worker commands pass `interactive` or
+`batch`; queues, concurrency, install directories, and temp directories come
+from `[workers.<name>]`.
 
 ## Direct Processes
 
@@ -134,11 +139,27 @@ uv run python -m lyra_app.main
 
 The API listens on the host and port configured in `[api]`.
 
-## Plugin Queues
+## Plugins And Queues
 
-Plugin manifests do not choose queues. Lyra assigns each metric in
-`[plugins.metric_queues]`. During API catalog refresh, missing metrics are added
-with `plugins.default_queue` and written back to `lyra.toml`.
+Plugin repositories and metric routing are managed through the admin API, not
+by editing `lyra.toml`. Add a plugin repo after the API is running:
+
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer $(cat secrets/admin_api_key)" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/plugin-repo@main"}'
+```
+
+Refresh the catalog and restart workers:
+
+```bash
+curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+  -H "Authorization: Bearer $(cat secrets/admin_api_key)"
+```
+
+Missing metric routes are added to `/lyra_data/state/plugins.toml` with
+`plugins.default_queue`. Review or change routes through `/admin/plugin-routing`.
 
 If a worker starts before a new metric has an assignment, refresh the API
 catalog first and restart the worker.

@@ -363,14 +363,14 @@ entrypoint cannot be imported, that worker registry will not load.
 ## Queue Ownership
 
 Queue names are deployment-owned. Operators choose any queue names they want as
-long as each assignment in `/lyra_data/config/lyra.toml` under
-`[plugins.metric_queues]` appears in `plugins.allowed_queues`.
+long as each assignment in `/lyra_data/state/plugins.toml` appears in
+`plugins.allowed_queues`.
 
 Plugin authors do not declare queues in `lyra.plugin.json`. During API catalog
-refresh, newly discovered metrics without an assignment are added to
-`[plugins.metric_queues]` with `plugins.default_queue`. Workers read those
-assignments and import only metrics whose resolved queue appears in their
-`[workers.<name>].queues` config.
+refresh, newly discovered metrics without an assignment are added to Lyra-owned
+plugin state with `plugins.default_queue`. Workers read those assignments and
+import only metrics whose resolved queue appears in their `[workers.<name>].queues`
+config.
 
 The checked-in Compose examples use `interactive` and `batch`, but those names
 are not special to Lyra.

@@ -140,14 +140,13 @@ for that worker process.
 
 ## Connect The Plugin To Lyra
 
-Push the plugin to GitHub and add it to `/lyra_data/config/lyra.toml`:
+Push the plugin to GitHub and add it through the admin API:
 
-```toml
-[plugins]
-repos = ["owner/example-lyra-plugin@main"]
-
-[plugins.metric_queues]
-example_metric = "interactive"
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/example-lyra-plugin@main"}'
 ```
 
 Run an API process and a worker whose queue matches the server assignment:
@@ -156,14 +155,14 @@ Run an API process and a worker whose queue matches the server assignment:
 uv run python -m lyra_app.worker_launcher interactive
 ```
 
-Metric queues are assigned in `/lyra_data/config/lyra.toml`, not in
-`lyra.plugin.json`. Keep the worker's configured queues aligned with Celery's
-`-Q` value.
+Metric queues are assigned by Lyra-owned plugin state, not in
+`lyra.plugin.json` or `lyra.toml`. Missing routes use `plugins.default_queue`
+during catalog refresh. Use `/admin/plugin-routing` to inspect or change them.
 
 Refresh the catalog after changing plugin code or manifests:
 
 ```bash
-curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
+curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
   -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
 ```
 

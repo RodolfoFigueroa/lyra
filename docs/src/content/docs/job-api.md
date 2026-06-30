@@ -129,12 +129,14 @@ the plugin's file result.
 
 ## Refresh Plugins
 
-`POST /update-plugins` reclones or updates configured plugin repositories, refreshes the API manifest catalog, and asks workers to restart.
+`POST /admin/plugin-catalog/refresh` syncs enabled plugin repositories from
+Lyra-owned state, refreshes the API manifest catalog, auto-assigns missing
+metric routes with `plugins.default_queue`, and asks workers to restart.
 
 The route requires Bearer authentication:
 
 ```bash
-curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
+curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
   -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
 ```
 

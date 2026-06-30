@@ -25,28 +25,32 @@ Install dependencies:
 uv sync
 ```
 
-Create the server config and secret files under `/lyra_data`:
+Create local host files for the server config and secrets:
 
 ```text
-/lyra_data/config/lyra.toml
-/lyra_data/secrets/admin_api_key
-/lyra_data/secrets/postgres_password
-/lyra_data/secrets/service-account.json
+lyra_data/config/lyra.toml
+secrets/admin_api_key
+secrets/postgres_password
+secrets/service-account.json
 ```
 
 Start from the checked-in example:
 
 ```bash
-mkdir -p /lyra_data/config /lyra_data/secrets
-cp lyra.toml.example /lyra_data/config/lyra.toml
+mkdir -p lyra_data/config secrets
+cp lyra.toml.example lyra_data/config/lyra.toml
+cp .env.example .env
 ```
 
-The config file owns Redis, database, Earth Engine, plugin repositories, metric
-queue assignments, worker pools, logging, job TTL, and API host/port settings.
-Secrets are referenced by file path from the TOML file instead of stored inline.
-By default, Lyra reads secret files from `/lyra_data/secrets`, so Docker users
-can mount or copy local secret files to those container paths without editing
-the commented path settings.
+The Compose stack mounts `lyra.toml` and each secret as an individual read-only
+file. The `lyra_data` named volume remains writable for Lyra-owned runtime
+state, including `/lyra_data/state/plugins.toml`, plugin checkouts, runner
+installs, cache files, and optional logs.
+
+The config file owns Redis, database, Earth Engine, worker pools, plugin queue
+policy, logging, job TTL, and API host/port settings. Plugin repositories and
+metric queue assignments are managed through admin API endpoints and persisted
+by Lyra in `/lyra_data/state/plugins.toml`.
 
 Run the development Compose stack:
 
@@ -64,6 +68,18 @@ uv run python -m lyra_app.main
 ```
 
 Both commands read `/lyra_data/config/lyra.toml`.
+
+After the stack is running, add plugins through the admin API:
+
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer $(cat secrets/admin_api_key)" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/plugin-repo@main"}'
+
+curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+  -H "Authorization: Bearer $(cat secrets/admin_api_key)"
+```
 
 ## Job API
 

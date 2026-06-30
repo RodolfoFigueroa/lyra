@@ -18,11 +18,12 @@ publish-time checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 
 ## Worker Install And Import
 
-Workers sync configured repositories, run `uv pip install --dry-run`, install
-compatible packages editable, and import metrics selected by the worker's TOML
-queue list. Start workers with `python -m lyra_app.worker_launcher <name>`; the
-launcher reads `[workers.<name>]`, filters metrics by `[plugins.metric_queues]`,
-and starts Celery with matching `-Q` and concurrency values.
+Workers sync enabled repositories from Lyra-owned plugin state, run
+`uv pip install --dry-run`, install compatible packages editable, and import
+metrics selected by the worker's queue list. Start workers with
+`python -m lyra_app.worker_launcher <name>`; the launcher reads
+`[workers.<name>]`, filters metrics by `/lyra_data/state/plugins.toml`, and
+starts Celery with matching `-Q` and concurrency values.
 
 If a plugin fails compatibility checks or editable install, that worker skips
 the plugin. The API can still expose the metric when its manifest is valid, so

@@ -24,6 +24,7 @@ Lyra runtime state belongs under `/lyra_data`:
 ```text
 /lyra_data/
   config/lyra.toml
+  state/plugins.toml
   cache/jobs/
   plugins/catalog/
   plugins/runners/
@@ -66,40 +67,39 @@ docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
 The development stack starts the API, Redis, and two worker pools for
-`interactive` and `batch`. Every Lyra app container mounts only
-`lyra_data:/lyra_data`.
+`interactive` and `batch`. Every Lyra app container mounts `lyra_data:/lyra_data`
+plus read-only file mounts for `lyra.toml` and each secret. Copy
+`.env.example` to `.env` and point the mount variables at your local files.
 
 ## Plugin Catalog During Development
 
-Configure plugin repositories in `[plugins].repos`:
+Configure plugin repositories through the admin API:
 
-```toml
-[plugins]
-repos = [
-  "owner/plugin-a",
-  "owner/plugin-b@main",
-  "https://github.com/owner/plugin-c@v0.1.0",
-  "file:///absolute/path/to/plugin-d",
-]
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer $(cat secrets/admin_api_key)" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/plugin-a@main"}'
 ```
 
 Local `file://` entries are committed-code sync sources, not live-edit mounts:
 commit plugin changes, then refresh the catalog. When using Docker Compose,
 local plugin repositories must be reachable from the API and worker containers
-at the same absolute path used in `lyra.toml`.
+at the same absolute path used in the admin API repo source.
 
 The API syncs catalog repositories into `plugins.catalog_dir`. Workers sync and
 install runner repositories under `plugins.runner_base_dir` or the selected
 worker's `install_dir`.
 
-Assign metric queues in `[plugins.metric_queues]`. Each worker pool imports and
-consumes the queues listed in its `[workers.<name>]` table.
+Metric queues live in `/lyra_data/state/plugins.toml` and are managed through
+`/admin/plugin-routing`. Each worker pool imports and consumes the queues listed
+in its `[workers.<name>]` table.
 
 Refresh the catalog and restart worker pools:
 
 ```bash
-curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
+curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+  -H "Authorization: Bearer $(cat secrets/admin_api_key)"
 ```
 
 Workers do not hot-reload plugin code in process. The refresh route reloads the

@@ -20,7 +20,9 @@ Supporting routes:
 - `GET /metrics/{metric_name}`
 - `GET /data_types` for grouped `location` and `bounds` wrapper schemas
 - `GET /met_zone_code`
-- `POST /update-plugins`
+- `GET /admin/plugin-repos`
+- `POST /admin/plugin-catalog/refresh`
+- `GET /admin/plugin-routing`
 
 ## Source Map
 
@@ -31,7 +33,7 @@ Supporting routes:
 | Redis job status, result, and event store | `lyra_app/job_store.py` |
 | Generic Celery worker execution | `lyra_app/worker.py` |
 | Plugin sync and install helpers | `lyra_app/plugins.py` |
-| Admin plugin refresh route | `lyra_app/routes/admin.py` |
+| Admin plugin routes | `lyra_app/routes/admin.py` |
 | SDK job and API models | `packages/lyra_sdk/src/lyra/sdk/models/job.py` |
 | SDK manifest models | `packages/lyra_sdk/src/lyra/sdk/models/plugin_v3.py` |
 | Runner context protocol | `packages/lyra_sdk/src/lyra/sdk/context.py` |
@@ -94,5 +96,5 @@ Keep docs and public contracts synchronized. If route behavior, SDK models, plug
 Use source code as authority over examples. Replace placeholder metric names and payloads with values from the active `/metrics` catalog when testing a live deployment.
 
 Avoid inferring runtime plugin availability from this repository alone. Metrics
-come from repositories listed in `[plugins].repos` in
-`/lyra_data/config/lyra.toml`.
+come from repositories stored in `/lyra_data/state/plugins.toml` and managed
+through `/admin/plugin-repos`.

@@ -17,8 +17,7 @@ runtime settings:
 | `[admin]` | Admin API-key file reference. |
 | `[logging]` | Application log level and optional log file. |
 | `[job_store]` | Job status, result, and event TTL. |
-| `[plugins]` | Plugin repositories, catalog path, runner base path, default queue, and allowed queues. |
-| `[plugins.metric_queues]` | Server-owned metric-to-queue assignments. |
+| `[plugins]` | Plugin runtime paths, default queue, and allowed queues. |
 | `[workers.<name>]` | Worker queues, concurrency, install directory, and temp directory. |
 
 Secret values are not stored inline. Use `password_file`, `api_key_file`, and
@@ -30,6 +29,10 @@ Docker-oriented runtime paths also default under `/lyra_data`: plugin catalog
 repos use `/lyra_data/plugins/catalog`, runner installs use
 `/lyra_data/plugins/runners/<worker>`, and worker temp files use
 `/lyra_data/cache/jobs/<worker>`.
+
+Plugin repositories and metric routing live in
+`/lyra_data/state/plugins.toml`. Lyra owns that state file, and operators update
+it through the admin API rather than by editing `lyra.toml`.
 
 ## Local Commands
 
@@ -93,4 +96,12 @@ npm run preview --prefix docs
 | `GET` | `/jobs/{job_id}/events` | Stream typed SSE job events. |
 | `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file. |
 | `GET` | `/met_zone_code` | Look up a metropolitan zone code by name. |
-| `POST` | `/update-plugins` | Refresh plugin catalog repos and restart worker pools. |
+| `GET` | `/admin/plugin-repos` | List configured plugin repositories. |
+| `POST` | `/admin/plugin-repos` | Add a plugin repository to Lyra-owned state. |
+| `PATCH` | `/admin/plugin-repos/{repo_id}` | Update a plugin repository. |
+| `DELETE` | `/admin/plugin-repos/{repo_id}` | Remove a plugin repository from state. |
+| `POST` | `/admin/plugin-repos/{repo_id}/pull` | Sync one enabled plugin repository. |
+| `POST` | `/admin/plugin-catalog/refresh` | Refresh plugin catalog repos and restart worker pools. |
+| `GET` | `/admin/plugin-routing` | List metric queue assignments. |
+| `PUT` | `/admin/plugin-routing/{metric_name}` | Set a metric queue assignment. |
+| `DELETE` | `/admin/plugin-routing/{metric_name}` | Delete a metric queue assignment. |

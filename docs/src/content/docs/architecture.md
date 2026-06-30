@@ -20,16 +20,16 @@ Redis is used for Celery transport and for job status, result, and event storage
 
 ## Catalog Flow
 
-1. `[plugins].repos` lists plugin repositories, either GitHub entries or
-   explicit `file://` local git repositories.
-2. The API syncs those repositories into `plugins.catalog_dir`, usually
+1. `/lyra_data/state/plugins.toml` lists plugin repositories, either GitHub
+   entries or explicit `file://` local git repositories.
+2. The API syncs enabled repositories into `plugins.catalog_dir`, usually
    `/lyra_data/plugins/catalog`.
 3. Each repository must contain `lyra.plugin.json`.
 4. `lyra_app.registry` parses each manifest as `PluginManifestV3`.
 5. The registry compiles each metric's semantic `inputs` into an effective
    `request_schema`, spatial runtime metadata, and batch runtime metadata.
-6. Missing metric queue assignments are added to `[plugins.metric_queues]`
-   using `plugins.default_queue`.
+6. Missing metric queue assignments are added to plugin state using
+   `plugins.default_queue`.
 7. `/metrics` exposes only `name`, `description`, the effective
    `request_schema`, and the `output` declaration.
 
@@ -48,7 +48,8 @@ The API catalog does not import plugin Python code.
 ## Worker Flow
 
 Workers start with `python -m lyra_app.worker_launcher <worker-name>`. The
-launcher reads `[workers.<name>]`, syncs plugin repositories into the worker's
+launcher reads `[workers.<name>]`, loads plugin repos and routing from
+`/lyra_data/state/plugins.toml`, syncs enabled repositories into the worker's
 install directory under `/lyra_data/plugins/runners`, parses schema v3
 manifests, compiles them, imports metrics assigned to that worker's queues, and
 starts Celery with matching `-Q` and concurrency values.

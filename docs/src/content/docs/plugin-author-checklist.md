@@ -4,9 +4,9 @@ description: Validate, publish, connect, and troubleshoot a third-party Lyra plu
 ---
 
 When your plugin works locally, use this checklist before you add its repository
-to `[plugins].repos` in `/lyra_data/config/lyra.toml`. If you are starting from
-an empty repo, begin with [Plugin Quickstart](../plugin-quickstart/) and come
-back here before publishing.
+through `/admin/plugin-repos`. If you are starting from an empty repo, begin
+with [Plugin Quickstart](../plugin-quickstart/) and come back here before
+publishing.
 
 ## Trust Model
 
@@ -35,19 +35,16 @@ accounts scoped to what plugin code is allowed to use.
 - Choose the table, file, static column, or generated column shape with
   [Metric Output Design](../metric-output-design/).
 
-## Repository Entries
+## Repository Sources
 
-`[plugins].repos` is a TOML list of GitHub entries or explicit `file://` local
+`POST /admin/plugin-repos` accepts GitHub entries or explicit `file://` local
 git repositories:
 
-```toml
-[plugins]
-repos = [
-  "owner/plugin-a",
-  "owner/plugin-b@main",
-  "https://github.com/owner/plugin-c@v0.1.0",
-  "file:///absolute/path/to/plugin-d",
-]
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/plugin-b@main"}'
 ```
 
 Supported forms are:
@@ -65,7 +62,7 @@ not supported. Local entries do not support `@branch-or-tag` selectors, and
 uncommitted changes are ignored. Omit a trailing `.git` suffix for GitHub
 entries. Make sure the API and worker containers can reach each repository with
 `git`. For Docker Compose, local repositories must be reachable inside every
-API and worker container at the same absolute path used in `lyra.toml`.
+API and worker container at the same absolute path used in the repo source.
 
 ## Preflight Checks
 
@@ -123,12 +120,11 @@ worker process.
 After pushing the plugin, configure the repository and run at least one worker
 whose queue matches the metric's server assignment:
 
-```toml
-[plugins]
-repos = ["owner/example-lyra-plugin@main"]
-
-[plugins.metric_queues]
-example_metric = "interactive"
+```bash
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/example-lyra-plugin@main"}'
 ```
 
 ```bash
@@ -138,9 +134,12 @@ uv run python -m lyra_app.worker_launcher interactive
 Refresh the API catalog and restart workers:
 
 ```bash
-curl -X POST 'http://localhost:5219/update-plugins?timeout=30' \
+curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
   -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
 ```
+
+If the metric needs a non-default queue, set it through
+`/admin/plugin-routing/{metric_name}` and restart the matching worker pool.
 
 Confirm the metric is listed:
 

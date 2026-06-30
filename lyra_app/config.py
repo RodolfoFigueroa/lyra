@@ -27,6 +27,13 @@ DEFAULT_JOB_STORE_TTL_SECONDS = 600
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_WORKER_CONCURRENCY = 1
 DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
+DEFAULT_DATABASE_PASSWORD_FILE = LYRA_DATA_DIR / "secrets" / "postgres_password"
+DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE = (
+    LYRA_DATA_DIR / "secrets" / "service-account.json"
+)
+DEFAULT_ADMIN_API_KEY_FILE = LYRA_DATA_DIR / "secrets" / "admin_api_key"
+DEFAULT_PLUGIN_CATALOG_DIR = LYRA_DATA_DIR / "plugins" / "catalog"
+DEFAULT_PLUGIN_RUNNER_BASE_DIR = LYRA_DATA_DIR / "plugins" / "runners"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
@@ -157,7 +164,7 @@ class DatabaseConfig(StrictConfigModel):
     port: int = Field(ge=1, le=65535)
     name: str = Field(min_length=1)
     user: str = Field(min_length=1)
-    password_file: Path
+    password_file: Path = DEFAULT_DATABASE_PASSWORD_FILE
 
     @field_validator("host", "name", "user", mode="before")
     @classmethod
@@ -187,7 +194,7 @@ class DatabaseConfig(StrictConfigModel):
 
 class EarthEngineConfig(StrictConfigModel):
     project: str = Field(min_length=1)
-    service_account_file: Path
+    service_account_file: Path = DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
 
     @field_validator("project", mode="before")
     @classmethod
@@ -210,7 +217,7 @@ class EarthEngineConfig(StrictConfigModel):
 
 
 class AdminConfig(StrictConfigModel):
-    api_key_file: Path
+    api_key_file: Path = DEFAULT_ADMIN_API_KEY_FILE
 
     @field_validator("api_key_file", mode="before")
     @classmethod
@@ -269,8 +276,8 @@ class JobStoreConfig(StrictConfigModel):
 
 class PluginsConfig(StrictConfigModel):
     repos: list[str]
-    catalog_dir: Path
-    runner_base_dir: Path
+    catalog_dir: Path = DEFAULT_PLUGIN_CATALOG_DIR
+    runner_base_dir: Path = DEFAULT_PLUGIN_RUNNER_BASE_DIR
     default_queue: str = Field(min_length=1)
     allowed_queues: list[str] = Field(min_length=1)
     metric_queues: dict[str, str] = Field(default_factory=dict)
@@ -551,63 +558,93 @@ def _append_key(
     lines.append(f"{key} = {rendered}")
 
 
-def render_config_toml(config: LyraConfig) -> str:
-    lines: list[str] = ["schema_version = 1", ""]
-
+def _append_api_section(lines: list[str], api: ApiConfig) -> None:
     lines.append("[api]")
-    _append_key(lines, "host", config.api.host)
-    _append_key(lines, "port", config.api.port)
+    _append_key(lines, "host", api.host)
+    _append_key(lines, "port", api.port)
     lines.append("")
 
+
+def _append_redis_section(lines: list[str], redis: RedisConfig) -> None:
     lines.append("[redis]")
-    _append_key(lines, "url", config.redis.url)
+    _append_key(lines, "url", redis.url)
     lines.append("")
 
+
+def _append_database_section(lines: list[str], database: DatabaseConfig) -> None:
     lines.append("[database]")
-    _append_key(lines, "host", config.database.host)
-    _append_key(lines, "port", config.database.port)
-    _append_key(lines, "name", config.database.name)
-    _append_key(lines, "user", config.database.user)
-    _append_key(lines, "password_file", config.database.password_file)
+    _append_key(lines, "host", database.host)
+    _append_key(lines, "port", database.port)
+    _append_key(lines, "name", database.name)
+    _append_key(lines, "user", database.user)
+    if database.password_file != DEFAULT_DATABASE_PASSWORD_FILE:
+        _append_key(lines, "password_file", database.password_file)
     lines.append("")
 
+
+def _append_earth_engine_section(
+    lines: list[str],
+    earth_engine: EarthEngineConfig,
+) -> None:
     lines.append("[earth_engine]")
-    _append_key(lines, "project", config.earth_engine.project)
-    _append_key(
-        lines,
-        "service_account_file",
-        config.earth_engine.service_account_file,
-    )
+    _append_key(lines, "project", earth_engine.project)
+    if earth_engine.service_account_file != DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE:
+        _append_key(
+            lines,
+            "service_account_file",
+            earth_engine.service_account_file,
+        )
     lines.append("")
 
+
+def _append_admin_section(lines: list[str], admin: AdminConfig) -> None:
     lines.append("[admin]")
-    _append_key(lines, "api_key_file", config.admin.api_key_file)
+    if admin.api_key_file != DEFAULT_ADMIN_API_KEY_FILE:
+        _append_key(lines, "api_key_file", admin.api_key_file)
     lines.append("")
 
+
+def _append_logging_section(lines: list[str], logging_config: LoggingConfig) -> None:
     lines.append("[logging]")
-    _append_key(lines, "level", config.logging.level)
-    if config.logging.file is not None:
-        _append_key(lines, "file", config.logging.file)
+    _append_key(lines, "level", logging_config.level)
+    if logging_config.file is not None:
+        _append_key(lines, "file", logging_config.file)
     lines.append("")
 
+
+def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> None:
     lines.append("[job_store]")
-    _append_key(lines, "ttl_seconds", config.job_store.ttl_seconds)
+    _append_key(lines, "ttl_seconds", job_store.ttl_seconds)
     lines.append("")
 
+
+def _append_plugins_section(lines: list[str], plugins: PluginsConfig) -> None:
     lines.append("[plugins]")
-    _append_key(lines, "repos", config.plugins.repos)
-    _append_key(lines, "catalog_dir", config.plugins.catalog_dir)
-    _append_key(lines, "runner_base_dir", config.plugins.runner_base_dir)
-    _append_key(lines, "default_queue", config.plugins.default_queue)
-    _append_key(lines, "allowed_queues", config.plugins.allowed_queues)
+    _append_key(lines, "repos", plugins.repos)
+    _append_key(lines, "default_queue", plugins.default_queue)
+    _append_key(lines, "allowed_queues", plugins.allowed_queues)
+    if plugins.catalog_dir != DEFAULT_PLUGIN_CATALOG_DIR:
+        _append_key(lines, "catalog_dir", plugins.catalog_dir)
+    if plugins.runner_base_dir != DEFAULT_PLUGIN_RUNNER_BASE_DIR:
+        _append_key(lines, "runner_base_dir", plugins.runner_base_dir)
     lines.append("")
 
+
+def _append_metric_queues_section(
+    lines: list[str],
+    metric_queues: dict[str, str],
+) -> None:
     lines.append("[plugins.metric_queues]")
-    for metric_name, queue_name in sorted(config.plugins.metric_queues.items()):
+    for metric_name, queue_name in sorted(metric_queues.items()):
         _append_key(lines, _toml_key(metric_name), queue_name)
     lines.append("")
 
-    for worker_name, worker in sorted(config.workers.items()):
+
+def _append_workers_section(
+    lines: list[str],
+    workers: dict[str, WorkerConfig],
+) -> None:
+    for worker_name, worker in sorted(workers.items()):
         lines.append(f"[workers.{_toml_key(worker_name)}]")
         _append_key(lines, "queues", worker.queues)
         _append_key(lines, "concurrency", worker.concurrency)
@@ -617,6 +654,19 @@ def render_config_toml(config: LyraConfig) -> str:
             _append_key(lines, "temp_dir", worker.temp_dir)
         lines.append("")
 
+
+def render_config_toml(config: LyraConfig) -> str:
+    lines: list[str] = ["schema_version = 1", ""]
+    _append_api_section(lines, config.api)
+    _append_redis_section(lines, config.redis)
+    _append_database_section(lines, config.database)
+    _append_earth_engine_section(lines, config.earth_engine)
+    _append_admin_section(lines, config.admin)
+    _append_logging_section(lines, config.logging)
+    _append_job_store_section(lines, config.job_store)
+    _append_plugins_section(lines, config.plugins)
+    _append_metric_queues_section(lines, config.plugins.metric_queues)
+    _append_workers_section(lines, config.workers)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -646,12 +696,17 @@ def save_config(config: LyraConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> N
 
 
 __all__ = [
+    "DEFAULT_ADMIN_API_KEY_FILE",
     "DEFAULT_API_HOST",
     "DEFAULT_API_PORT",
     "DEFAULT_CONFIG_PATH",
+    "DEFAULT_DATABASE_PASSWORD_FILE",
+    "DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE",
     "DEFAULT_JOB_STORE_TTL_SECONDS",
     "DEFAULT_LOG_DIR",
     "DEFAULT_LOG_LEVEL",
+    "DEFAULT_PLUGIN_CATALOG_DIR",
+    "DEFAULT_PLUGIN_RUNNER_BASE_DIR",
     "DEFAULT_WORKER_CONCURRENCY",
     "LYRA_DATA_DIR",
     "AdminConfig",

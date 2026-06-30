@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
-from lyra_app.config import LyraConfig, clear_config_cache, get_config, save_config
+from lyra_app.config import (
+    LYRA_ADMIN_API_KEY_ENV,
+    LYRA_POSTGRES_DB_ENV,
+    LYRA_POSTGRES_HOST_ENV,
+    LYRA_POSTGRES_PASSWORD_ENV,
+    LYRA_POSTGRES_PORT_ENV,
+    LYRA_POSTGRES_USER_ENV,
+    LyraConfig,
+    clear_config_cache,
+    get_config,
+    save_config,
+)
 from lyra_app.plugin_state import (
     PluginState,
     PluginStateStore,
@@ -18,17 +30,26 @@ def _write_secret_files(base: Path) -> dict[str, Path]:
     secrets_dir = base / "secrets"
     secrets_dir.mkdir(parents=True, exist_ok=True)
     paths = {
-        "postgres_password": secrets_dir / "postgres_password",
-        "admin_api_key": secrets_dir / "admin_api_key",
         "service_account": secrets_dir / "service-account.json",
     }
-    paths["postgres_password"].write_text("postgres-secret\n", encoding="utf-8")
-    paths["admin_api_key"].write_text("admin-secret\n", encoding="utf-8")
     paths["service_account"].write_text(
         '{"client_email":"test@example.com"}',
         encoding="utf-8",
     )
     return paths
+
+
+def _set_config_env() -> None:
+    os.environ.update(
+        {
+            LYRA_POSTGRES_HOST_ENV: "postgres",
+            LYRA_POSTGRES_PORT_ENV: "5432",
+            LYRA_POSTGRES_DB_ENV: "lyra",
+            LYRA_POSTGRES_USER_ENV: "lyra",
+            LYRA_POSTGRES_PASSWORD_ENV: "postgres-secret",
+            LYRA_ADMIN_API_KEY_ENV: "admin-secret",
+        }
+    )
 
 
 def plugin_state_path(base: Path) -> Path:
@@ -49,6 +70,7 @@ def load_test_config(
     repos: list[str] | None = None,
 ) -> LyraConfig:
     secrets = _write_secret_files(base)
+    _set_config_env()
     assigned_queues = set((metric_queues or {}).values())
     allowed_queues = sorted(
         {"batch", "heavy", "interactive", "lightweight", "priority-lane"}
@@ -58,18 +80,10 @@ def load_test_config(
         "schema_version": 1,
         "api": {},
         "redis": {"url": "redis://redis:6379/0"},
-        "database": {
-            "host": "postgres",
-            "port": 5432,
-            "name": "lyra",
-            "user": "lyra",
-            "password_file": str(secrets["postgres_password"]),
-        },
         "earth_engine": {
             "project": "earth-engine-project",
             "service_account_file": str(secrets["service_account"]),
         },
-        "admin": {"api_key_file": str(secrets["admin_api_key"])},
         "logging": {},
         "job_store": {},
         "plugins": {

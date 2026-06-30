@@ -27,21 +27,26 @@ DEFAULT_JOB_STORE_TTL_SECONDS = 600
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_WORKER_CONCURRENCY = 1
 DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
-DEFAULT_DATABASE_PASSWORD_FILE = LYRA_DATA_DIR / "secrets" / "postgres_password"
 DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE = (
     LYRA_DATA_DIR / "secrets" / "service-account.json"
 )
-DEFAULT_ADMIN_API_KEY_FILE = LYRA_DATA_DIR / "secrets" / "admin_api_key"
 DEFAULT_PLUGIN_CATALOG_DIR = LYRA_DATA_DIR / "plugins" / "catalog"
 DEFAULT_PLUGIN_RUNNER_BASE_DIR = LYRA_DATA_DIR / "plugins" / "runners"
+LYRA_POSTGRES_HOST_ENV = "LYRA_POSTGRES_HOST"
+LYRA_POSTGRES_PORT_ENV = "LYRA_POSTGRES_PORT"
+LYRA_POSTGRES_DB_ENV = "LYRA_POSTGRES_DB"
+LYRA_POSTGRES_USER_ENV = "LYRA_POSTGRES_USER"
+LYRA_POSTGRES_PASSWORD_ENV = "LYRA_POSTGRES_PASSWORD"  # noqa: S105
+LYRA_ADMIN_API_KEY_ENV = "LYRA_ADMIN_API_KEY"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "database"})
 
 
 class ConfigSecretError(RuntimeError):
-    """Raised when a secret reference cannot be resolved to a usable value."""
+    """Raised when a runtime secret cannot be resolved to a usable value."""
 
 
 class ConfigLoadError(RuntimeError):
@@ -49,7 +54,7 @@ class ConfigLoadError(RuntimeError):
 
 
 class StrictConfigModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_default=True)
 
 
 _CONFIG_CACHE: LyraConfig | None = None
@@ -106,6 +111,28 @@ def _strip_string_mapping(value: Any, *, value_label: str) -> Any:
     return stripped_items
 
 
+def read_scalar_env_var(env_var: str, *, field_name: str) -> str:
+    raw_value = os.environ.get(env_var)
+    if raw_value is None:
+        msg = f"{field_name} environment variable is not set: {env_var}"
+        raise ConfigSecretError(msg)
+
+    value = raw_value.strip()
+    if not value:
+        msg = f"{field_name} environment variable is empty: {env_var}"
+        raise ConfigSecretError(msg)
+    return value
+
+
+def read_int_env_var(env_var: str, *, field_name: str) -> int:
+    raw_value = read_scalar_env_var(env_var, field_name=field_name)
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        msg = f"{field_name} environment variable must be an integer: {env_var}"
+        raise ConfigSecretError(msg) from exc
+
+
 def read_scalar_secret_file(path: Path, *, field_name: str) -> str:
     try:
         value = path.read_text(encoding="utf-8").strip()
@@ -160,36 +187,51 @@ class RedisConfig(StrictConfigModel):
 
 
 class DatabaseConfig(StrictConfigModel):
-    host: str = Field(min_length=1)
-    port: int = Field(ge=1, le=65535)
-    name: str = Field(min_length=1)
-    user: str = Field(min_length=1)
-    password_file: Path = DEFAULT_DATABASE_PASSWORD_FILE
+    host: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_POSTGRES_HOST_ENV,
+            field_name="database.host",
+        ),
+        min_length=1,
+    )
+    port: int = Field(
+        default_factory=lambda: read_int_env_var(
+            LYRA_POSTGRES_PORT_ENV,
+            field_name="database.port",
+        ),
+        ge=1,
+        le=65535,
+    )
+    name: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_POSTGRES_DB_ENV,
+            field_name="database.name",
+        ),
+        min_length=1,
+    )
+    user: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_POSTGRES_USER_ENV,
+            field_name="database.user",
+        ),
+        min_length=1,
+    )
+    password: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_POSTGRES_PASSWORD_ENV,
+            field_name="database.password",
+        ),
+        min_length=1,
+        repr=False,
+    )
 
-    @field_validator("host", "name", "user", mode="before")
+    @field_validator("host", "name", "user", "password", mode="before")
     @classmethod
     def validate_required_strings(cls, value: Any) -> Any:
         return _strip_required_string(value)
 
-    @field_validator("password_file", mode="before")
-    @classmethod
-    def normalize_password_file(cls, value: Any) -> Any:
-        return _strip_optional_path(value)
-
-    @field_validator("password_file")
-    @classmethod
-    def validate_password_file(cls, value: Path) -> Path:
-        path = _validate_absolute_path(value)
-        if path is None:
-            msg = "database.password_file is required"
-            raise ValueError(msg)
-        return path
-
     def read_password(self) -> str:
-        return read_scalar_secret_file(
-            self.password_file,
-            field_name="database.password_file",
-        )
+        return self.password
 
 
 class EarthEngineConfig(StrictConfigModel):
@@ -217,27 +259,22 @@ class EarthEngineConfig(StrictConfigModel):
 
 
 class AdminConfig(StrictConfigModel):
-    api_key_file: Path = DEFAULT_ADMIN_API_KEY_FILE
+    api_key: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_ADMIN_API_KEY_ENV,
+            field_name="admin.api_key",
+        ),
+        min_length=1,
+        repr=False,
+    )
 
-    @field_validator("api_key_file", mode="before")
+    @field_validator("api_key", mode="before")
     @classmethod
-    def normalize_api_key_file(cls, value: Any) -> Any:
-        return _strip_optional_path(value)
-
-    @field_validator("api_key_file")
-    @classmethod
-    def validate_api_key_file(cls, value: Path) -> Path:
-        path = _validate_absolute_path(value)
-        if path is None:
-            msg = "admin.api_key_file is required"
-            raise ValueError(msg)
-        return path
+    def normalize_api_key(cls, value: Any) -> Any:
+        return _strip_required_string(value)
 
     def read_api_key(self) -> str:
-        return read_scalar_secret_file(
-            self.api_key_file,
-            field_name="admin.api_key_file",
-        )
+        return self.api_key
 
 
 class LoggingConfig(StrictConfigModel):
@@ -340,13 +377,29 @@ class LyraConfig(StrictConfigModel):
     schema_version: Literal[1]
     api: ApiConfig
     redis: RedisConfig
-    database: DatabaseConfig
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     earth_engine: EarthEngineConfig
-    admin: AdminConfig
+    admin: AdminConfig = Field(default_factory=AdminConfig)
     logging: LoggingConfig
     job_store: JobStoreConfig
     plugins: PluginsConfig
     workers: dict[str, WorkerConfig] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_env_backed_sections(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            configured_sections = sorted(
+                set(value.keys()) & _ENV_BACKED_CONFIG_SECTIONS
+            )
+            if configured_sections:
+                sections = ", ".join(f"[{section}]" for section in configured_sections)
+                msg = (
+                    f"{sections} settings are configured through environment "
+                    "variables, not lyra.toml"
+                )
+                raise ValueError(msg)
+        return value
 
     @field_validator("workers", mode="before")
     @classmethod
@@ -449,7 +502,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
         msg = f"Lyra config file failed validation: {config_path}: {exc}"
         raise ConfigLoadError(msg) from exc
     except ConfigSecretError as exc:
-        msg = f"Lyra config file references invalid secret files: {config_path}: {exc}"
+        msg = f"Lyra config file failed runtime secret validation: {config_path}: {exc}"
         raise ConfigLoadError(msg) from exc
 
     return config
@@ -532,17 +585,6 @@ def _append_redis_section(lines: list[str], redis: RedisConfig) -> None:
     lines.append("")
 
 
-def _append_database_section(lines: list[str], database: DatabaseConfig) -> None:
-    lines.append("[database]")
-    _append_key(lines, "host", database.host)
-    _append_key(lines, "port", database.port)
-    _append_key(lines, "name", database.name)
-    _append_key(lines, "user", database.user)
-    if database.password_file != DEFAULT_DATABASE_PASSWORD_FILE:
-        _append_key(lines, "password_file", database.password_file)
-    lines.append("")
-
-
 def _append_earth_engine_section(
     lines: list[str],
     earth_engine: EarthEngineConfig,
@@ -555,13 +597,6 @@ def _append_earth_engine_section(
             "service_account_file",
             earth_engine.service_account_file,
         )
-    lines.append("")
-
-
-def _append_admin_section(lines: list[str], admin: AdminConfig) -> None:
-    lines.append("[admin]")
-    if admin.api_key_file != DEFAULT_ADMIN_API_KEY_FILE:
-        _append_key(lines, "api_key_file", admin.api_key_file)
     lines.append("")
 
 
@@ -609,9 +644,7 @@ def render_config_toml(config: LyraConfig) -> str:
     lines: list[str] = ["schema_version = 1", ""]
     _append_api_section(lines, config.api)
     _append_redis_section(lines, config.redis)
-    _append_database_section(lines, config.database)
     _append_earth_engine_section(lines, config.earth_engine)
-    _append_admin_section(lines, config.admin)
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
     _append_plugins_section(lines, config.plugins)
@@ -645,11 +678,9 @@ def save_config(config: LyraConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> N
 
 
 __all__ = [
-    "DEFAULT_ADMIN_API_KEY_FILE",
     "DEFAULT_API_HOST",
     "DEFAULT_API_PORT",
     "DEFAULT_CONFIG_PATH",
-    "DEFAULT_DATABASE_PASSWORD_FILE",
     "DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE",
     "DEFAULT_JOB_STORE_TTL_SECONDS",
     "DEFAULT_LOG_DIR",
@@ -657,7 +688,13 @@ __all__ = [
     "DEFAULT_PLUGIN_CATALOG_DIR",
     "DEFAULT_PLUGIN_RUNNER_BASE_DIR",
     "DEFAULT_WORKER_CONCURRENCY",
+    "LYRA_ADMIN_API_KEY_ENV",
     "LYRA_DATA_DIR",
+    "LYRA_POSTGRES_DB_ENV",
+    "LYRA_POSTGRES_HOST_ENV",
+    "LYRA_POSTGRES_PASSWORD_ENV",
+    "LYRA_POSTGRES_PORT_ENV",
+    "LYRA_POSTGRES_USER_ENV",
     "AdminConfig",
     "ApiConfig",
     "ConfigLoadError",
@@ -675,6 +712,7 @@ __all__ = [
     "get_config",
     "get_config_path",
     "load_config",
+    "read_scalar_env_var",
     "read_scalar_secret_file",
     "reload_config",
     "render_config_toml",

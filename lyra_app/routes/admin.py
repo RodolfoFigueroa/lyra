@@ -30,7 +30,7 @@ def require_admin_key(
 ) -> None:
     """FastAPI dependency that enforces admin API-key authentication.
 
-    Reads the expected key from the TOML-configured secret file.
+    Reads the expected key from the runtime configuration environment.
 
     Args:
         credentials (HTTPAuthorizationCredentials): Bearer token extracted by

@@ -1,6 +1,6 @@
 # Copy this file to /lyra_data/config/lyra.toml and adjust values for your
-# deployment. Secret values are referenced by file path and should not be
-# stored inline in this TOML file.
+# deployment. PostgreSQL connection settings and the admin API key are supplied
+# through environment variables, not this TOML file.
 
 schema_version = 1
 
@@ -14,19 +14,9 @@ port = 5219
 # For direct local processes, use redis://localhost:6379/0.
 url = "redis://lyra-redis-dev:6379/0"
 
-[database]
-host = "postgres"
-port = 5432
-name = "lyra"
-user = "lyra"
-# password_file = "/lyra_data/secrets/postgres_password"
-
 [earth_engine]
 project = "your-gee-project-id"
 # service_account_file = "/lyra_data/secrets/service-account.json"
-
-[admin]
-# api_key_file = "/lyra_data/secrets/admin_api_key"
 
 [logging]
 level = "INFO"

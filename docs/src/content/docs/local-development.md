@@ -32,8 +32,9 @@ Lyra runtime state belongs under `/lyra_data`:
 ```
 
 The app creates non-secret runtime directories when it starts. Create secret
-files yourself under `/lyra_data/secrets`, then reference those absolute paths
-from `lyra.toml`.
+files yourself under `/lyra_data/secrets`. Lyra uses the standard filenames in
+that directory by default; override the TOML path fields only when your
+container paths differ.
 
 A repo-local `lyra_data/` directory is ignored by git and can be used as a
 staging tree when copying files into the Docker volume.

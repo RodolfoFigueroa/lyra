@@ -34,9 +34,19 @@ Create the server config and secret files under `/lyra_data`:
 /lyra_data/secrets/service-account.json
 ```
 
+Start from the checked-in example:
+
+```bash
+mkdir -p /lyra_data/config /lyra_data/secrets
+cp lyra.toml.example /lyra_data/config/lyra.toml
+```
+
 The config file owns Redis, database, Earth Engine, plugin repositories, metric
 queue assignments, worker pools, logging, job TTL, and API host/port settings.
 Secrets are referenced by file path from the TOML file instead of stored inline.
+By default, Lyra reads secret files from `/lyra_data/secrets`, so Docker users
+can mount or copy local secret files to those container paths without editing
+the commented path settings.
 
 Run the development Compose stack:
 

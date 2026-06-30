@@ -77,7 +77,10 @@ Use this tree inside the volume:
 ```
 
 Secret files are deployment-owned. Lyra references them by path and does not
-generate placeholder secrets.
+generate placeholder secrets. By default, it reads
+`/lyra_data/secrets/postgres_password`, `/lyra_data/secrets/admin_api_key`, and
+`/lyra_data/secrets/service-account.json`; mount or copy deployment secrets to
+those paths, or override the secret path fields in TOML.
 
 ## Plugin Updates
 

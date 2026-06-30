@@ -28,6 +28,8 @@ Create these files:
 /lyra_data/secrets/service-account.json
 ```
 
+The repository includes a copyable starting file at `lyra.toml.example`.
+
 Use this as a starting point for `/lyra_data/config/lyra.toml`:
 
 ```toml
@@ -45,28 +47,28 @@ host = "postgres"
 port = 5432
 name = "lyra"
 user = "lyra"
-password_file = "/lyra_data/secrets/postgres_password"
+# password_file = "/lyra_data/secrets/postgres_password"
 
 [earth_engine]
 project = "your-gee-project-id"
-service_account_file = "/lyra_data/secrets/service-account.json"
+# service_account_file = "/lyra_data/secrets/service-account.json"
 
 [admin]
-api_key_file = "/lyra_data/secrets/admin_api_key"
+# api_key_file = "/lyra_data/secrets/admin_api_key"
 
 [logging]
 level = "INFO"
-file = "/lyra_data/logs/lyra.log"
+# file = "/lyra_data/logs/lyra.log"
 
 [job_store]
 ttl_seconds = 600
 
 [plugins]
 repos = ["owner/plugin-repo@main"]
-catalog_dir = "/lyra_data/plugins/catalog"
-runner_base_dir = "/lyra_data/plugins/runners"
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
+# catalog_dir = "/lyra_data/plugins/catalog"
+# runner_base_dir = "/lyra_data/plugins/runners"
 
 [plugins.metric_queues]
 
@@ -85,6 +87,10 @@ Compose Redis hostname. For the production Compose file, use
 
 Secrets are file references only. Do not put API keys, database passwords, or
 service account JSON inline in TOML.
+
+The commented path fields use Docker-oriented defaults under `/lyra_data`.
+Mount local secret files into `/lyra_data/secrets` or uncomment those fields if
+your deployment uses different container paths.
 
 ## Install
 

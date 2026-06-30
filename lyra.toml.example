@@ -1,0 +1,66 @@
+# Copy this file to /lyra_data/config/lyra.toml and adjust values for your
+# deployment. Secret values are referenced by file path and should not be
+# stored inline in this TOML file.
+
+schema_version = 1
+
+[api]
+host = "0.0.0.0"
+port = 5219
+
+[redis]
+# For docker/docker-compose-dev.yml, use lyra-redis-dev.
+# For a production Compose service named redis, use redis://redis:6379/0.
+# For direct local processes, use redis://localhost:6379/0.
+url = "redis://lyra-redis-dev:6379/0"
+
+[database]
+host = "postgres"
+port = 5432
+name = "lyra"
+user = "lyra"
+# password_file = "/lyra_data/secrets/postgres_password"
+
+[earth_engine]
+project = "your-gee-project-id"
+# service_account_file = "/lyra_data/secrets/service-account.json"
+
+[admin]
+# api_key_file = "/lyra_data/secrets/admin_api_key"
+
+[logging]
+level = "INFO"
+# Docker users usually leave file logging disabled and read container logs.
+# file = "/lyra_data/logs/lyra.log"
+
+[job_store]
+ttl_seconds = 600
+
+[plugins]
+repos = [
+  "owner/plugin-repo@main",
+  # "https://github.com/owner/another-plugin@v0.1.0",
+  # "file:///lyra_data/plugins/local/example-plugin",
+]
+default_queue = "interactive"
+allowed_queues = ["interactive", "batch"]
+# catalog_dir = "/lyra_data/plugins/catalog"
+# runner_base_dir = "/lyra_data/plugins/runners"
+
+[plugins.metric_queues]
+# The API adds missing metrics here during catalog refresh, using
+# plugins.default_queue. You can also preassign metrics manually:
+# walkability_score = "interactive"
+# regional_accessibility = "batch"
+
+[workers.interactive]
+queues = ["interactive"]
+concurrency = 4
+# install_dir defaults to /lyra_data/plugins/runners/interactive.
+# temp_dir defaults to /lyra_data/cache/jobs/interactive.
+
+[workers.batch]
+queues = ["batch"]
+concurrency = 2
+# install_dir defaults to /lyra_data/plugins/runners/batch.
+# temp_dir defaults to /lyra_data/cache/jobs/batch.

@@ -7,10 +7,15 @@ import pytest
 from pydantic import ValidationError
 
 from lyra_app.config import (
+    DEFAULT_ADMIN_API_KEY_FILE,
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
+    DEFAULT_DATABASE_PASSWORD_FILE,
+    DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
     DEFAULT_JOB_STORE_TTL_SECONDS,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_PLUGIN_CATALOG_DIR,
+    DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     LYRA_DATA_DIR,
     ConfigSecretError,
     LyraConfig,
@@ -125,20 +130,32 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
 def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
     raw["api"] = {}
+    del raw["database"]["password_file"]
+    del raw["earth_engine"]["service_account_file"]
+    raw["admin"] = {}
     raw["logging"] = {}
     raw["job_store"] = {}
+    del raw["plugins"]["catalog_dir"]
+    del raw["plugins"]["runner_base_dir"]
     raw["workers"]["interactive"] = {"queues": ["interactive"]}
 
     config = LyraConfig.model_validate(raw)
 
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == DEFAULT_API_PORT
+    assert config.database.password_file == DEFAULT_DATABASE_PASSWORD_FILE
+    assert config.earth_engine.service_account_file == (
+        DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
+    )
+    assert config.admin.api_key_file == DEFAULT_ADMIN_API_KEY_FILE
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
     assert config.job_store.ttl_seconds == DEFAULT_JOB_STORE_TTL_SECONDS
+    assert config.plugins.catalog_dir == DEFAULT_PLUGIN_CATALOG_DIR
+    assert config.plugins.runner_base_dir == DEFAULT_PLUGIN_RUNNER_BASE_DIR
     assert config.get_worker("interactive").concurrency == 1
     assert config.worker_install_dir("interactive") == (
-        tmp_path / "plugins" / "runners" / "interactive"
+        DEFAULT_PLUGIN_RUNNER_BASE_DIR / "interactive"
     )
     assert config.worker_temp_dir("interactive") == (
         LYRA_DATA_DIR / "cache" / "jobs" / "interactive"

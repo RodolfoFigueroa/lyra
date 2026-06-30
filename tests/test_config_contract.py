@@ -7,16 +7,20 @@ import pytest
 from pydantic import ValidationError
 
 from lyra_app.config import (
-    DEFAULT_ADMIN_API_KEY_FILE,
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
-    DEFAULT_DATABASE_PASSWORD_FILE,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
     DEFAULT_JOB_STORE_TTL_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_PLUGIN_CATALOG_DIR,
     DEFAULT_PLUGIN_RUNNER_BASE_DIR,
+    LYRA_ADMIN_API_KEY_ENV,
     LYRA_DATA_DIR,
+    LYRA_POSTGRES_DB_ENV,
+    LYRA_POSTGRES_HOST_ENV,
+    LYRA_POSTGRES_PASSWORD_ENV,
+    LYRA_POSTGRES_PORT_ENV,
+    LYRA_POSTGRES_USER_ENV,
     ConfigSecretError,
     LyraConfig,
 )
@@ -29,12 +33,8 @@ def _write_secrets(base: Path) -> dict[str, Path]:
     secrets_dir = base / "secrets"
     secrets_dir.mkdir()
     paths = {
-        "postgres_password": secrets_dir / "postgres_password",
-        "admin_api_key": secrets_dir / "admin_api_key",
         "service_account": secrets_dir / "service-account.json",
     }
-    paths["postgres_password"].write_text("  postgres-secret\n", encoding="utf-8")
-    paths["admin_api_key"].write_text("\nadmin-secret  ", encoding="utf-8")
     paths["service_account"].write_text("{}", encoding="utf-8")
     return paths
 
@@ -50,19 +50,9 @@ def _valid_config(base: Path) -> dict[str, Any]:
         "redis": {
             "url": "redis://redis:6379/0",
         },
-        "database": {
-            "host": "postgres",
-            "port": 5432,
-            "name": "lyra",
-            "user": "lyra",
-            "password_file": str(secret_paths["postgres_password"]),
-        },
         "earth_engine": {
             "project": "earth-engine-project",
             "service_account_file": str(secret_paths["service_account"]),
-        },
-        "admin": {
-            "api_key_file": str(secret_paths["admin_api_key"]),
         },
         "logging": {
             "level": "INFO",
@@ -99,6 +89,16 @@ def _assert_invalid(raw: dict[str, Any], match: str) -> None:
         LyraConfig.model_validate(raw)
 
 
+@pytest.fixture(autouse=True)
+def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(LYRA_POSTGRES_HOST_ENV, " postgres ")
+    monkeypatch.setenv(LYRA_POSTGRES_PORT_ENV, "5432")
+    monkeypatch.setenv(LYRA_POSTGRES_DB_ENV, " lyra ")
+    monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, " lyra ")
+    monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "  postgres-secret\n")
+    monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "\nadmin-secret  ")
+
+
 def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     config = LyraConfig.model_validate(_valid_config(tmp_path))
 
@@ -106,11 +106,15 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.api.host == "0.0.0.0"
     assert config.api.port == 5219
     assert config.redis.url == "redis://redis:6379/0"
-    assert config.database.password_file == tmp_path / "secrets" / "postgres_password"
+    assert config.database.host == "postgres"
+    assert config.database.port == 5432
+    assert config.database.name == "lyra"
+    assert config.database.user == "lyra"
+    assert config.database.read_password() == "postgres-secret"
     assert config.earth_engine.service_account_file == (
         tmp_path / "secrets" / "service-account.json"
     )
-    assert config.admin.api_key_file == tmp_path / "secrets" / "admin_api_key"
+    assert config.admin.read_api_key() == "admin-secret"
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
     assert config.job_store.ttl_seconds == 600
@@ -121,9 +125,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
 def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
     raw["api"] = {}
-    del raw["database"]["password_file"]
     del raw["earth_engine"]["service_account_file"]
-    raw["admin"] = {}
     raw["logging"] = {}
     raw["job_store"] = {}
     del raw["plugins"]["catalog_dir"]
@@ -134,11 +136,15 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
 
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == DEFAULT_API_PORT
-    assert config.database.password_file == DEFAULT_DATABASE_PASSWORD_FILE
+    assert config.database.host == "postgres"
+    assert config.database.port == 5432
+    assert config.database.name == "lyra"
+    assert config.database.user == "lyra"
+    assert config.database.read_password() == "postgres-secret"
     assert config.earth_engine.service_account_file == (
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
     )
-    assert config.admin.api_key_file == DEFAULT_ADMIN_API_KEY_FILE
+    assert config.admin.read_api_key() == "admin-secret"
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
     assert config.job_store.ttl_seconds == DEFAULT_JOB_STORE_TTL_SECONDS
@@ -179,7 +185,6 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
     [
         ("api", "port", 0, "greater than or equal to 1"),
         ("redis", "url", "postgres://db:5432/lyra", "redis.url"),
-        ("database", "port", 70000, "less than or equal to 65535"),
         ("logging", "level", "NOPE", "logging.level"),
         ("job_store", "ttl_seconds", 0, "greater than 0"),
     ],
@@ -200,9 +205,7 @@ def test_config_contract_rejects_invalid_values(
 @pytest.mark.parametrize(
     ("section", "field"),
     [
-        ("database", "password_file"),
         ("earth_engine", "service_account_file"),
-        ("admin", "api_key_file"),
         ("logging", "file"),
         ("plugins", "catalog_dir"),
         ("plugins", "runner_base_dir"),
@@ -239,6 +242,17 @@ def test_config_contract_rejects_plugin_repos_field(tmp_path: Path) -> None:
     _assert_invalid(raw, "Extra inputs are not permitted")
 
 
+@pytest.mark.parametrize("section", ["admin", "database"])
+def test_config_contract_rejects_env_backed_toml_sections(
+    tmp_path: Path,
+    section: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw[section] = {}
+
+    _assert_invalid(raw, "environment variables")
+
+
 def test_config_contract_rejects_default_queue_outside_allowed_queues(
     tmp_path: Path,
 ) -> None:
@@ -271,25 +285,36 @@ def test_config_contract_reads_scalar_secret_references(tmp_path: Path) -> None:
     assert config.admin.read_api_key() == "admin-secret"
 
 
-def test_config_contract_reports_missing_scalar_secret_file(tmp_path: Path) -> None:
+def test_config_contract_reports_missing_admin_api_key_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     raw = _valid_config(tmp_path)
-    missing_file = tmp_path / "secrets" / "missing"
-    raw["admin"]["api_key_file"] = str(missing_file)
-    config = LyraConfig.model_validate(raw)
+    monkeypatch.delenv(LYRA_ADMIN_API_KEY_ENV)
 
-    with pytest.raises(ConfigSecretError, match=r"admin\.api_key_file"):
-        config.admin.read_api_key()
+    with pytest.raises(ConfigSecretError, match=LYRA_ADMIN_API_KEY_ENV):
+        LyraConfig.model_validate(raw)
 
 
-def test_config_contract_reports_empty_scalar_secret_file(tmp_path: Path) -> None:
+def test_config_contract_reports_empty_postgres_password_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     raw = _valid_config(tmp_path)
-    empty_file = tmp_path / "secrets" / "empty"
-    empty_file.write_text(" \n", encoding="utf-8")
-    raw["database"]["password_file"] = str(empty_file)
-    config = LyraConfig.model_validate(raw)
+    monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, " \n")
 
-    with pytest.raises(ConfigSecretError, match="secret file is empty"):
-        config.database.read_password()
+    with pytest.raises(ConfigSecretError, match=LYRA_POSTGRES_PASSWORD_ENV):
+        LyraConfig.model_validate(raw)
+
+
+def test_config_contract_reports_invalid_postgres_port_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _valid_config(tmp_path)
+    monkeypatch.setenv(LYRA_POSTGRES_PORT_ENV, "70000")
+
+    _assert_invalid(raw, "less than or equal to 65535")
 
 
 def test_config_contract_rejects_empty_required_sections(tmp_path: Path) -> None:

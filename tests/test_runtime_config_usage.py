@@ -55,7 +55,7 @@ def test_redis_url_uses_loaded_config(
     assert get_redis_url() == configured_url
 
 
-def test_database_url_uses_configured_secret_file(tmp_path: Path) -> None:
+def test_database_url_uses_env_backed_config(tmp_path: Path) -> None:
     config = load_test_config(tmp_path)
 
     from lyra_app.db.connection import database_url  # noqa: PLC0415
@@ -64,7 +64,7 @@ def test_database_url_uses_configured_secret_file(tmp_path: Path) -> None:
 
     assert url.drivername == "postgresql+psycopg2"
     assert url.username == "lyra"
-    assert url.password == config.database.read_password()
+    assert url.password == config.database.password
     assert url.host == "postgres"
     assert url.port == 5432
     assert url.database == "lyra"

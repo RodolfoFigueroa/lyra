@@ -7,6 +7,12 @@ import pytest
 
 from lyra_app import config as config_module
 from lyra_app.config import (
+    LYRA_ADMIN_API_KEY_ENV,
+    LYRA_POSTGRES_DB_ENV,
+    LYRA_POSTGRES_HOST_ENV,
+    LYRA_POSTGRES_PASSWORD_ENV,
+    LYRA_POSTGRES_PORT_ENV,
+    LYRA_POSTGRES_USER_ENV,
     ConfigLoadError,
     LyraConfig,
     clear_config_cache,
@@ -31,12 +37,8 @@ def _write_secret_files(base: Path) -> dict[str, Path]:
     secrets_dir = base / "secrets"
     secrets_dir.mkdir(exist_ok=True)
     paths = {
-        "postgres_password": secrets_dir / "postgres_password",
-        "admin_api_key": secrets_dir / "admin_api_key",
         "service_account": secrets_dir / "service-account.json",
     }
-    paths["postgres_password"].write_text("postgres-secret\n", encoding="utf-8")
-    paths["admin_api_key"].write_text("admin-secret\n", encoding="utf-8")
     paths["service_account"].write_text(
         '{"client_email":"test@example.com"}', encoding="utf-8"
     )
@@ -61,19 +63,9 @@ port = {api_port}
 [redis]
 url = "redis://redis:6379/0"
 
-[database]
-host = "postgres"
-port = 5432
-name = "lyra"
-user = "lyra"
-password_file = {_q(secrets["postgres_password"])}
-
 [earth_engine]
 project = "earth-engine-project"
 service_account_file = {_q(secrets["service_account"])}
-
-[admin]
-api_key_file = {_q(secrets["admin_api_key"])}
 
 [logging]
 level = "INFO"
@@ -104,7 +96,13 @@ def _write_config(path: Path, contents: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clear_cached_config() -> Iterator[None]:
+def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv(LYRA_POSTGRES_HOST_ENV, "postgres")
+    monkeypatch.setenv(LYRA_POSTGRES_PORT_ENV, "5432")
+    monkeypatch.setenv(LYRA_POSTGRES_DB_ENV, "lyra")
+    monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, "lyra")
+    monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "postgres-secret")
+    monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "admin-secret")
     clear_config_cache()
     yield
     clear_config_cache()
@@ -160,25 +158,39 @@ def test_load_config_fails_for_schema_validation_error(tmp_path: Path) -> None:
         load_config(config_path)
 
 
-def test_load_config_fails_for_missing_scalar_secret_file(tmp_path: Path) -> None:
+def test_load_config_rejects_env_backed_toml_sections(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
     contents = _valid_toml(tmp_path).replace(
-        _q(tmp_path / "secrets" / "admin_api_key"),
-        _q(tmp_path / "secrets" / "missing_admin_api_key"),
+        "[earth_engine]",
+        '[database]\nhost = "postgres"\n\n[earth_engine]',
     )
     _write_config(config_path, contents)
 
-    with pytest.raises(ConfigLoadError, match=r"admin\.api_key_file"):
+    with pytest.raises(ConfigLoadError, match=r"\[database\]"):
         load_config(config_path)
 
 
-def test_load_config_fails_for_empty_scalar_secret_file(tmp_path: Path) -> None:
+def test_load_config_fails_for_missing_admin_api_key_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
-    contents = _valid_toml(tmp_path)
-    (tmp_path / "secrets" / "postgres_password").write_text("\n", encoding="utf-8")
-    _write_config(config_path, contents)
+    _write_config(config_path, _valid_toml(tmp_path))
+    monkeypatch.delenv(LYRA_ADMIN_API_KEY_ENV)
 
-    with pytest.raises(ConfigLoadError, match="secret file is empty"):
+    with pytest.raises(ConfigLoadError, match=LYRA_ADMIN_API_KEY_ENV):
+        load_config(config_path)
+
+
+def test_load_config_fails_for_empty_postgres_password_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config" / "lyra.toml"
+    _write_config(config_path, _valid_toml(tmp_path))
+    monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "\n")
+
+    with pytest.raises(ConfigLoadError, match=LYRA_POSTGRES_PASSWORD_ENV):
         load_config(config_path)
 
 

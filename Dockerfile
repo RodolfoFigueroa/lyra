@@ -47,8 +47,8 @@ COPY pyproject.toml uv.lock .python-version ./
 COPY packages ./packages
 COPY lyra_app ./lyra_app
 
-# Durable Lyra app files live under /lyra_data. Secret files are provided by the
-# deployment and are intentionally not generated in the image.
+# Durable Lyra app files live under /lyra_data. The Earth Engine service account
+# file is provided by the deployment and intentionally not generated here.
 RUN mkdir -p \
         /lyra_data/config \
         /lyra_data/secrets \

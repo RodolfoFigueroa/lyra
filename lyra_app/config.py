@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
+import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any, Literal, Self
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 LYRA_DATA_DIR = Path("/lyra_data")
 DEFAULT_CONFIG_PATH = LYRA_DATA_DIR / "config" / "lyra.toml"
@@ -17,14 +29,23 @@ DEFAULT_WORKER_CONCURRENCY = 1
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
+_BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ConfigSecretError(RuntimeError):
     """Raised when a secret reference cannot be resolved to a usable value."""
 
 
+class ConfigLoadError(RuntimeError):
+    """Raised when the TOML config file cannot be loaded or validated."""
+
+
 class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+_CONFIG_CACHE: LyraConfig | None = None
+_CONFIG_CACHE_PATH: Path | None = None
 
 
 def _strip_required_string(value: Any) -> Any:
@@ -88,6 +109,18 @@ def read_scalar_secret_file(path: Path, *, field_name: str) -> str:
         msg = f"{field_name} secret file is empty: {path}"
         raise ConfigSecretError(msg)
     return value
+
+
+def require_nonempty_file(path: Path, *, field_name: str) -> None:
+    try:
+        value = path.read_bytes()
+    except OSError as exc:
+        msg = f"{field_name} does not point to a readable file: {path}"
+        raise ConfigSecretError(msg) from exc
+
+    if not value.strip():
+        msg = f"{field_name} file is empty: {path}"
+        raise ConfigSecretError(msg)
 
 
 class ApiConfig(StrictConfigModel):
@@ -402,6 +435,195 @@ class LyraConfig(StrictConfigModel):
         return worker.temp_dir or LYRA_DATA_DIR / "cache" / "jobs" / worker_name
 
 
+def validate_config_secret_references(config: LyraConfig) -> None:
+    config.database.read_password()
+    config.admin.read_api_key()
+    require_nonempty_file(
+        config.earth_engine.service_account_file,
+        field_name="earth_engine.service_account_file",
+    )
+
+
+def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
+    config_path = Path(path)
+    try:
+        with config_path.open("rb") as config_file:
+            raw_config = tomllib.load(config_file)
+    except FileNotFoundError as exc:
+        msg = f"Lyra config file does not exist: {config_path}"
+        raise ConfigLoadError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Lyra config file is not valid TOML: {config_path}: {exc}"
+        raise ConfigLoadError(msg) from exc
+    except OSError as exc:
+        msg = f"Lyra config file could not be read: {config_path}"
+        raise ConfigLoadError(msg) from exc
+
+    try:
+        config = LyraConfig.model_validate(raw_config)
+        validate_config_secret_references(config)
+    except ValidationError as exc:
+        msg = f"Lyra config file failed validation: {config_path}: {exc}"
+        raise ConfigLoadError(msg) from exc
+    except ConfigSecretError as exc:
+        msg = f"Lyra config file references invalid secret files: {config_path}: {exc}"
+        raise ConfigLoadError(msg) from exc
+
+    return config
+
+
+def get_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
+    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
+
+    config_path = Path(path)
+    if _CONFIG_CACHE is None or config_path != _CONFIG_CACHE_PATH:
+        _CONFIG_CACHE = load_config(config_path)
+        _CONFIG_CACHE_PATH = config_path
+    return _CONFIG_CACHE
+
+
+def reload_config(path: str | Path | None = None) -> LyraConfig:
+    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
+
+    config_path = Path(path) if path is not None else _CONFIG_CACHE_PATH
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    _CONFIG_CACHE = load_config(config_path)
+    _CONFIG_CACHE_PATH = config_path
+    return _CONFIG_CACHE
+
+
+def clear_config_cache() -> None:
+    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
+
+    _CONFIG_CACHE = None
+    _CONFIG_CACHE_PATH = None
+
+
+def _toml_string(value: str | Path) -> str:
+    return json.dumps(str(value))
+
+
+def _toml_key(value: str) -> str:
+    return value if _BARE_TOML_KEY_PATTERN.fullmatch(value) else _toml_string(value)
+
+
+def _toml_string_array(values: list[str]) -> str:
+    if not values:
+        return "[]"
+    rendered_values = "\n".join(f"  {_toml_string(value)}," for value in values)
+    return f"[\n{rendered_values}\n]"
+
+
+def _append_key(
+    lines: list[str],
+    key: str,
+    value: str | Path | int | list[str],
+) -> None:
+    if isinstance(value, int):
+        rendered = str(value)
+    elif isinstance(value, list):
+        rendered = _toml_string_array(value)
+    else:
+        rendered = _toml_string(value)
+    lines.append(f"{key} = {rendered}")
+
+
+def render_config_toml(config: LyraConfig) -> str:
+    lines: list[str] = ["schema_version = 1", ""]
+
+    lines.append("[api]")
+    _append_key(lines, "host", config.api.host)
+    _append_key(lines, "port", config.api.port)
+    lines.append("")
+
+    lines.append("[redis]")
+    _append_key(lines, "url", config.redis.url)
+    lines.append("")
+
+    lines.append("[database]")
+    _append_key(lines, "host", config.database.host)
+    _append_key(lines, "port", config.database.port)
+    _append_key(lines, "name", config.database.name)
+    _append_key(lines, "user", config.database.user)
+    _append_key(lines, "password_file", config.database.password_file)
+    lines.append("")
+
+    lines.append("[earth_engine]")
+    _append_key(lines, "project", config.earth_engine.project)
+    _append_key(
+        lines,
+        "service_account_file",
+        config.earth_engine.service_account_file,
+    )
+    lines.append("")
+
+    lines.append("[admin]")
+    _append_key(lines, "api_key_file", config.admin.api_key_file)
+    lines.append("")
+
+    lines.append("[logging]")
+    _append_key(lines, "level", config.logging.level)
+    if config.logging.file is not None:
+        _append_key(lines, "file", config.logging.file)
+    lines.append("")
+
+    lines.append("[job_store]")
+    _append_key(lines, "ttl_seconds", config.job_store.ttl_seconds)
+    lines.append("")
+
+    lines.append("[plugins]")
+    _append_key(lines, "repos", config.plugins.repos)
+    _append_key(lines, "catalog_dir", config.plugins.catalog_dir)
+    _append_key(lines, "runner_base_dir", config.plugins.runner_base_dir)
+    _append_key(lines, "default_queue", config.plugins.default_queue)
+    _append_key(lines, "allowed_queues", config.plugins.allowed_queues)
+    lines.append("")
+
+    lines.append("[plugins.metric_queues]")
+    for metric_name, queue_name in sorted(config.plugins.metric_queues.items()):
+        _append_key(lines, _toml_key(metric_name), queue_name)
+    lines.append("")
+
+    for worker_name, worker in sorted(config.workers.items()):
+        lines.append(f"[workers.{_toml_key(worker_name)}]")
+        _append_key(lines, "queues", worker.queues)
+        _append_key(lines, "concurrency", worker.concurrency)
+        if worker.install_dir is not None:
+            _append_key(lines, "install_dir", worker.install_dir)
+        if worker.temp_dir is not None:
+            _append_key(lines, "temp_dir", worker.temp_dir)
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def save_config(config: LyraConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> None:
+    config_path = Path(path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = render_config_toml(config)
+    temp_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=config_path.parent,
+            prefix=f".{config_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            temp_file.write(payload)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        temp_path.replace(config_path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
 __all__ = [
     "DEFAULT_API_HOST",
     "DEFAULT_API_PORT",
@@ -412,6 +634,7 @@ __all__ = [
     "LYRA_DATA_DIR",
     "AdminConfig",
     "ApiConfig",
+    "ConfigLoadError",
     "ConfigSecretError",
     "DatabaseConfig",
     "EarthEngineConfig",
@@ -421,5 +644,13 @@ __all__ = [
     "PluginsConfig",
     "RedisConfig",
     "WorkerConfig",
+    "clear_config_cache",
+    "get_config",
+    "load_config",
     "read_scalar_secret_file",
+    "reload_config",
+    "render_config_toml",
+    "require_nonempty_file",
+    "save_config",
+    "validate_config_secret_references",
 ]

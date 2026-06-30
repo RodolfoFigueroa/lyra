@@ -18,7 +18,7 @@ from lyra_app.plugin_state import (
     PluginStateValidationError,
     repo_record_to_source,
 )
-from lyra_app.plugins import format_update_message, sync_plugin_repo
+from lyra_app.plugins import PluginSyncError, format_update_message, sync_plugin_repo
 from lyra_app.registry import CatalogRefreshResult, refresh_catalog_from_state
 from lyra_app.worker_control import graceful_worker_restart
 
@@ -177,7 +177,10 @@ def _not_found_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=404, detail=str(exc))
 
 
-def _git_error_detail(exc: subprocess.CalledProcessError) -> str:
+def _sync_error_detail(exc: PluginSyncError | subprocess.CalledProcessError) -> str:
+    if isinstance(exc, PluginSyncError):
+        return str(exc)
+
     detail = exc.stderr or exc.stdout or str(exc)
     if isinstance(detail, bytes):
         detail = detail.decode(errors="replace")
@@ -279,8 +282,8 @@ def pull_plugin_repo(repo_id: str) -> PullPluginRepoResponse:
         synced = sync_plugin_repo(
             config.plugins.catalog_dir, repo_record_to_source(repo)
         )
-    except subprocess.CalledProcessError as exc:
-        raise HTTPException(status_code=502, detail=_git_error_detail(exc)) from exc
+    except (PluginSyncError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=502, detail=_sync_error_detail(exc)) from exc
 
     return PullPluginRepoResponse(
         repo_id=repo.id,
@@ -297,8 +300,8 @@ def refresh_plugin_catalog(
     store = _state_store(config)
     try:
         result = refresh_catalog_from_state(store)
-    except subprocess.CalledProcessError as exc:
-        raise HTTPException(status_code=502, detail=_git_error_detail(exc)) from exc
+    except (PluginSyncError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=502, detail=_sync_error_detail(exc)) from exc
     except (PluginStateLoadError, PluginStateValidationError) as exc:
         raise HTTPException(
             status_code=500,

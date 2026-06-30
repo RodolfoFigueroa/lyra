@@ -10,6 +10,7 @@ from lyra_app.config import (
     ConfigLoadError,
     LyraConfig,
     clear_config_cache,
+    ensure_runtime_directories,
     get_config,
     load_config,
     reload_config,
@@ -245,3 +246,24 @@ def test_save_config_writes_loadable_toml_without_temp_file_leaks(
     assert load_config(target_path) == config
     assert "[plugins.metric_queues]" in target_path.read_text(encoding="utf-8")
     assert not list(target_path.parent.glob(".lyra.toml.*.tmp"))
+
+
+def test_ensure_runtime_directories_creates_non_secret_layout(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config" / "lyra.toml"
+    _write_config(config_path, _valid_toml(tmp_path))
+    config = load_config(config_path)
+
+    ensure_runtime_directories(config)
+
+    expected_dirs = [
+        tmp_path / "config",
+        tmp_path / "cache" / "jobs" / "interactive",
+        tmp_path / "plugins" / "catalog",
+        tmp_path / "plugins" / "runners",
+        tmp_path / "plugins" / "runners" / "interactive",
+        tmp_path / "logs",
+    ]
+    assert all(path.is_dir() for path in expected_dirs)
+    assert not (tmp_path / "secrets" / "generated_secret").exists()

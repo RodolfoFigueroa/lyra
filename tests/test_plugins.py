@@ -127,26 +127,20 @@ def test_parse_repo_entry_rejects_malformed_local_entries(raw: str) -> None:
         parse_repo_entry(raw)
 
 
-def test_iter_plugin_entries_skips_malformed_local_entries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LYRA_PLUGIN_REPOS", "file:relative-plugin,owner/repo")
-
-    entries = list(iter_plugin_entries())
+def test_iter_plugin_entries_skips_malformed_local_entries() -> None:
+    entries = list(iter_plugin_entries(["file:relative-plugin", "owner/repo"]))
 
     assert [entry.display_name for entry in entries] == ["owner/repo"]
 
 
 def test_sync_plugin_repos_clones_local_repo(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source"
     _init_local_plugin_repo(source)
     target_dir = tmp_path / "targets"
-    monkeypatch.setenv("LYRA_PLUGIN_REPOS", source.as_uri())
 
-    synced = sync_plugin_repos(target_dir)
+    synced = sync_plugin_repos(target_dir, [source.as_uri()])
 
     assert len(synced) == 1
     repo = synced[0]
@@ -159,17 +153,15 @@ def test_sync_plugin_repos_clones_local_repo(
 
 def test_sync_plugin_repos_updates_local_repo_after_commit(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source"
     _init_local_plugin_repo(source)
     target_dir = tmp_path / "targets"
-    monkeypatch.setenv("LYRA_PLUGIN_REPOS", source.as_uri())
-    sync_plugin_repos(target_dir)
+    sync_plugin_repos(target_dir, [source.as_uri()])
 
     _write_manifest(source, "committed")
     _commit_all(source, "Update manifest")
-    synced = sync_plugin_repos(target_dir)
+    synced = sync_plugin_repos(target_dir, [source.as_uri()])
 
     assert len(synced) == 1
     repo = synced[0]
@@ -181,16 +173,14 @@ def test_sync_plugin_repos_updates_local_repo_after_commit(
 
 def test_sync_plugin_repos_ignores_uncommitted_local_repo_changes(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source"
     _init_local_plugin_repo(source)
     target_dir = tmp_path / "targets"
-    monkeypatch.setenv("LYRA_PLUGIN_REPOS", source.as_uri())
-    sync_plugin_repos(target_dir)
+    sync_plugin_repos(target_dir, [source.as_uri()])
 
     _write_manifest(source, "uncommitted")
-    synced = sync_plugin_repos(target_dir)
+    synced = sync_plugin_repos(target_dir, [source.as_uri()])
 
     assert len(synced) == 1
     repo = synced[0]

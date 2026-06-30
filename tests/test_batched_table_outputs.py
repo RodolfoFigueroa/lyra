@@ -152,8 +152,7 @@ def reset_catalog(tmp_path: Path) -> Iterator[None]:
 
 
 @pytest.fixture
-def worker_module(monkeypatch: pytest.MonkeyPatch) -> Any:
-    monkeypatch.delenv("LYRA_PLUGIN_REPOS", raising=False)
+def worker_module() -> Any:
     worker = importlib.import_module("lyra_app.worker")
     worker.RUNNER_REGISTRY.clear()
     yield worker

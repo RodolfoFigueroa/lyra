@@ -147,8 +147,7 @@ class FakeRedisSync:
 
 
 @pytest.fixture
-def worker_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
-    monkeypatch.delenv("LYRA_PLUGIN_REPOS", raising=False)
+def worker_module(tmp_path: Path) -> Any:
     load_test_config(
         tmp_path,
         metric_queues={
@@ -158,8 +157,10 @@ def worker_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     )
     worker = importlib.import_module("lyra_app.worker")
     worker.RUNNER_REGISTRY.clear()
+    worker.set_runner_temp_base(None)
     yield worker
     worker.RUNNER_REGISTRY.clear()
+    worker.set_runner_temp_base(None)
     clear_config_cache()
 
 
@@ -241,6 +242,58 @@ def test_runner_loads_only_configured_queue(
     assert entries["heavy_metric"].entrypoint == "heavy_plugin:run"
 
 
+def test_runner_uses_configured_worker_temp_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    config = load_test_config(
+        tmp_path,
+        metric_queues={
+            "heavy_metric": "heavy",
+            "light_metric": "lightweight",
+        },
+    )
+    heavy_worker = config.get_worker("heavy").model_copy(
+        update={"temp_dir": tmp_path / "worker-temp"},
+    )
+    config = config.model_copy(
+        update={"workers": {**config.workers, "heavy": heavy_worker}},
+    )
+    repo = tmp_path / "repo"
+    _write_manifest(
+        repo,
+        _manifest(
+            [
+                _metric(
+                    name="heavy_metric",
+                    entrypoint="heavy_plugin:run",
+                )
+            ]
+        ),
+    )
+    _write_module(
+        tmp_path,
+        "heavy_plugin",
+        "def run(job, context):\n"
+        "    raise AssertionError('entrypoint should only be imported')\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _configure_runner_repos(worker_module, monkeypatch, repo)
+
+    worker_module.refresh_runner_registry("heavy", config=config)
+    context = worker_module.build_run_context(
+        JobEnvelope(
+            job_id="job-temp",
+            metric="heavy_metric",
+            input={"location": _feature_collection()},
+        ),
+    )
+
+    assert context.temp_dir == tmp_path / "worker-temp" / "job-temp"
+    assert context.temp_dir.is_dir()
+
+
 def test_runner_fails_when_metric_queue_assignment_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -306,9 +359,9 @@ def test_generic_task_executes_entrypoint_and_persists_result(
         "    )\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
     _configure_runner_repos(worker_module, monkeypatch, repo)
     worker_module.refresh_runner_registry("heavy")
+    worker_module.set_runner_temp_base(tmp_path / "tmp")
 
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
@@ -579,7 +632,7 @@ def test_file_result_persists_through_generic_result_path(
             media_type="image/tiff",
         )
 
-    monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
+    worker_module.set_runner_temp_base(tmp_path / "tmp")
     worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntry(
         metric_name="file_metric",
         queue="heavy",
@@ -599,7 +652,7 @@ def test_file_result_persists_through_generic_result_path(
         "kind": "file",
         "job_id": "job-file",
         "status": "succeeded",
-        "file_path": str(tmp_path / "tmp" / "jobs" / "job-file" / "result.tif"),
+        "file_path": str(tmp_path / "tmp" / "job-file" / "result.tif"),
         "media_type": "image/tiff",
     }
     assert _decode_stored_result(worker_module, fake_redis, "job-file") == result
@@ -628,7 +681,7 @@ def test_invalid_file_result_persists_failed_result(
             media_type=media_type,
         )
 
-    monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
+    worker_module.set_runner_temp_base(tmp_path / "tmp")
     worker_module.RUNNER_REGISTRY["invalid_file_metric"] = (
         worker_module.RunnerMetricEntry(
             metric_name="invalid_file_metric",

@@ -162,7 +162,14 @@ during catalog refresh. Use `/admin/plugin-routing` to inspect or change them.
 Refresh the catalog after changing plugin code or manifests:
 
 ```bash
-curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+```
+
+Restart workers when the refresh response recommends it:
+
+```bash
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 

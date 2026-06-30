@@ -77,7 +77,10 @@ curl -X POST http://localhost:5219/admin/plugin-repos \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/plugin-repo@main"}'
 
-curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 

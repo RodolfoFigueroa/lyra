@@ -115,15 +115,19 @@ Metric queues live in `/lyra_data/state/plugins.toml` and are managed through
 `/admin/plugin-routing`. Each worker pool imports and consumes the queues listed
 in its `[workers.<name>]` table.
 
-Refresh the catalog and restart worker pools:
+Refresh the catalog, then restart worker pools when the response recommends it:
 
 ```bash
-curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 Workers do not hot-reload plugin code in process. The refresh route reloads the
-API catalog and asks worker pools to restart so they reinstall plugin code.
+API catalog and reports whether a restart is recommended; the restart route asks
+worker pools to restart so they reinstall plugin code.
 
 ## Docs Site
 

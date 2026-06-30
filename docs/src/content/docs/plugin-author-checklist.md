@@ -151,10 +151,13 @@ curl -X POST http://localhost:5219/admin/plugin-repos \
 uv run python -m lyra_app.worker_launcher interactive
 ```
 
-Refresh the API catalog and restart workers:
+Refresh the API catalog, then restart workers when the response recommends it:
 
 ```bash
-curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 

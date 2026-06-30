@@ -110,7 +110,10 @@ npm run preview --prefix docs
 | `PATCH` | `/admin/plugin-repos/{repo_id}` | Update a plugin repository. |
 | `DELETE` | `/admin/plugin-repos/{repo_id}` | Remove a plugin repository from state. |
 | `POST` | `/admin/plugin-repos/{repo_id}/sync` | Sync one enabled plugin source. |
-| `POST` | `/admin/plugin-catalog/refresh` | Refresh plugin catalog repos and restart worker pools. |
+| `POST` | `/admin/plugin-catalog/refresh` | Refresh plugin catalog repos and report whether workers need restart. |
+| `POST` | `/admin/workers/restart` | Restart worker pools explicitly. |
+| `GET` | `/admin/jobs` | List recent jobs by optional status or metric filters. |
+| `POST` | `/admin/jobs/{job_id}/cancel` | Request cancellation for an active job. |
 | `GET` | `/admin/plugin-routing` | List metric queue assignments. |
 | `PUT` | `/admin/plugin-routing/{metric_name}` | Set a metric queue assignment. |
 | `DELETE` | `/admin/plugin-routing/{metric_name}` | Delete a metric queue assignment. |
@@ -128,4 +131,4 @@ npm run preview --prefix docs
 
 Raw filesystem paths are not supported. `file://` and `dir://` sources do not
 support branch or tag refs. `dir://` is intended for development and testing;
-refresh the catalog so workers restart and reinstall copied snapshots.
+refresh the catalog, then restart workers so they reinstall copied snapshots.

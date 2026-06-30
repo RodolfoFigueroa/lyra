@@ -85,6 +85,8 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 | `iter_job_events(job_id, last_event_id=None)` | Iterator or async iterator of `JobEvent` | Stream progress and terminal events. |
 | `get_job_result(job_id)` | `TerminalJobResult` | Fetch terminal JSON result metadata for table, file, failed, or cancelled jobs. |
 | `download_job_result_to_file(job_id, path)` | `None` | Download a terminal file result. |
+| `list_admin_jobs(limit=50, status=None, metric=None)` | `JobListResponse` | List recent jobs through the admin API. |
+| `cancel_admin_job(job_id)` | `JobCancelResponse` | Request cancellation through the admin API. |
 
 `iter_job_events()` accepts `last_event_id` and sends it as the
 `Last-Event-ID` header so a caller can resume an event stream after reconnecting.
@@ -92,6 +94,9 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 `get_job_result()` expects a JSON response. If the job produced a file, it
 returns `FileJobResult` metadata. Call `download_job_result_to_file()` to fetch
 the file bytes from `/jobs/{job_id}/result/download`.
+
+Admin job methods call `/admin/jobs` routes and require the client to include an
+admin Bearer token in `headers`.
 
 ## Convenience Methods
 

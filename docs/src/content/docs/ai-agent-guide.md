@@ -23,6 +23,9 @@ Supporting routes:
 - `GET /lookups/met-zones`
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`
+- `POST /admin/workers/restart`
+- `GET /admin/jobs`
+- `POST /admin/jobs/{job_id}/cancel`
 - `GET /admin/plugin-routing`
 
 ## Source Map

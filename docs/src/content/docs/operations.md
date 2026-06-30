@@ -49,7 +49,16 @@ Cancellation storage is represented by the job status. A runner that calls
 `context.check_cancelled()` will stop if the status is `cancelled`; the worker
 persists a terminal cancelled result.
 
-There is no public cancellation endpoint in the current API.
+Operators can request cancellation with
+`POST /admin/jobs/{job_id}/cancel`. The route requires admin Bearer auth, marks
+active `queued`, `started`, or `progress` jobs as `cancelled`, emits a
+cancellation event, and asks Celery to revoke the task by job ID.
+
+Cancellation is cooperative once plugin code is running. A job that already
+persisted a terminal `succeeded`, `failed`, or `cancelled` status is not
+overwritten; the admin route returns `409` instead. If a job finishes while a
+cancellation request is racing with it, the terminal result remains the source
+of truth.
 
 ## Interrupted Workers
 

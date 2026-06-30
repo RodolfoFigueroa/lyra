@@ -132,7 +132,7 @@ Plugin updates are explicit:
    `POST /admin/plugin-catalog/refresh`.
 3. Review or adjust metric routing with `/admin/plugin-routing`.
 4. Restart warm worker pools so they reinstall plugin code and rebuild their
-   runner registries.
+   runner registries with `POST /admin/workers/restart`.
 
 Workers do not hot-reload plugin code in-process.
 

@@ -278,6 +278,8 @@ these models are also available for tests, clients, and manifest tooling:
 | `JobCreateRequest` | Public `/jobs` request body. |
 | `JobCreateResponse` | Public `/jobs` submission response. |
 | `JobStatusInfo` | Public `/jobs/{job_id}` status response. |
+| `JobListResponse` | Admin `/admin/jobs` response. |
+| `JobCancelResponse` | Admin `/admin/jobs/{job_id}/cancel` response. |
 | `JobEvent` | Durable event payload streamed from `/jobs/{job_id}/events`. |
 | `TableJobResult` | Successful terminal result for value metrics. |
 | `FileJobResult` | Successful terminal result for file metrics. |

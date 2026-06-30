@@ -155,10 +155,13 @@ Supported sources include GitHub entries, explicit `file://` local git
 repositories, and development `dir://` directory snapshots. Use `dir://` for a
 local mock plugin when you want refreshes to include uncommitted edits.
 
-Refresh the catalog and restart workers:
+Refresh the catalog, then restart workers when the response recommends it:
 
 ```bash
-curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
@@ -166,7 +169,7 @@ Missing metric routes are added to `/lyra_data/state/plugins.toml` with
 `plugins.default_queue`. Review or change routes through `/admin/plugin-routing`.
 
 If a worker starts before a new metric has an assignment, refresh the API
-catalog first and restart the worker.
+catalog first and then restart the worker.
 
 ## Smoke Test
 

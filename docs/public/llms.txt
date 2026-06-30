@@ -33,7 +33,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 ## Current Contracts
 
 - Plugin manifests: `PluginManifestV3` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v3.py`
-- Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `TableJobResult`, `FileJobResult`, `FailedJobResult`, `CancelledJobResult`, `TerminalJobResult`, `JobStatusInfo` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
+- Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `TableJobResult`, `FileJobResult`, `FailedJobResult`, `CancelledJobResult`, `TerminalJobResult`, `JobStatusInfo`, `JobListResponse`, `JobCancelResponse` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
 - Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
 - Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
 - Explicit spatial inputs: `ExplicitLocationAPI` and `ExplicitBoundsAPI` in `packages/lyra_sdk/src/lyra/sdk/types.py`
@@ -60,6 +60,9 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 - `GET /lookups/met-zones`
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`
+- `POST /admin/workers/restart`
+- `GET /admin/jobs`
+- `POST /admin/jobs/{job_id}/cancel`
 - `GET /admin/plugin-routing`
 
 ## Agent Notes

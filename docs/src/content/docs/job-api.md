@@ -145,20 +145,52 @@ Downloading a file does not delete the stored result metadata. Repeated
 downloads work while the file still exists. If the terminal file metadata exists
 but the file is missing from disk, the download route returns `404`.
 
+## Admin Job Operations
+
+Admin job operations require Bearer authentication.
+
+`GET /admin/jobs` returns recent job status snapshots from Lyra's Redis-backed
+job index, newest-first. It supports `limit`, `status`, and `metric` query
+parameters:
+
+```bash
+curl 'http://localhost:5219/admin/jobs?limit=25&status=started' \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+```
+
+Expired jobs are pruned from normal responses.
+
+`POST /admin/jobs/{job_id}/cancel` requests cancellation for active `queued`,
+`started`, or `progress` jobs:
+
+```bash
+curl -X POST http://localhost:5219/admin/jobs/job-id/cancel \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+```
+
+Cancellation marks the job status as `cancelled`, emits a cancellation event,
+and asks Celery to revoke the task. Terminal jobs are not overwritten; cancelling
+an already terminal job returns `409`, and unknown or expired jobs return `404`.
+
 ## Refresh Plugins
 
 `POST /admin/plugin-catalog/refresh` syncs enabled plugin sources from
 Lyra-owned state, refreshes the API manifest catalog, auto-assigns missing
-metric routes with `plugins.default_queue`, and asks workers to restart.
+metric routes with `plugins.default_queue`, and reports whether workers should
+be restarted.
 
-The route requires Bearer authentication:
+Admin routes require Bearer authentication:
 
 ```bash
-curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
   -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
-`timeout` is the number of seconds to wait for in-flight tasks before forcing worker shutdown.
+`timeout` on `/admin/workers/restart` is the number of seconds to wait for
+in-flight tasks before forcing worker shutdown.
 
 ## Python Clients
 

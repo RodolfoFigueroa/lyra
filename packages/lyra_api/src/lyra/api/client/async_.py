@@ -192,7 +192,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err) from exc
 
     async def get_data_types(self) -> DataTypesResponse:
-        data_types_url = self._http_url("data_types")
+        data_types_url = self._http_url("data-types")
         data_types: Any = None
         status: int = 0
 

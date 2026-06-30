@@ -14,7 +14,7 @@ class MetZoneCodeResponse(StrictBaseModel):
     nom_met: str
 
 
-@router.get("/met_zone_code")
+@router.get("/lookups/met-zones")
 async def get_met_zone_code(name: str) -> MetZoneCodeResponse:
     with engine.connect() as conn:
         result = await asyncio.to_thread(get_met_zone_code_from_name, name, conn=conn)

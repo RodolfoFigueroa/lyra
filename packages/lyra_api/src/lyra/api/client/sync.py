@@ -179,7 +179,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err) from exc
 
     def get_data_types(self) -> DataTypesResponse:
-        data_types_url = self._http_url("data_types")
+        data_types_url = self._http_url("data-types")
 
         try:
             response = requests.get(

@@ -52,7 +52,7 @@ def build_data_type_info(
     )
 
 
-@router.get("/data_types")
+@router.get("/data-types")
 async def list_data_types() -> DataTypesResponse:
     return DataTypesResponse(
         location=[

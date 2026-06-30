@@ -18,7 +18,13 @@ from lyra_app.plugin_state import (
     PluginStateValidationError,
     repo_record_to_source,
 )
-from lyra_app.plugins import PluginSyncError, format_update_message, sync_plugin_repo
+from lyra_app.plugins import (
+    PluginSyncError,
+    format_update_message,
+)
+from lyra_app.plugins import (
+    sync_plugin_repo as sync_plugin_source,
+)
 from lyra_app.registry import CatalogRefreshResult, refresh_catalog_from_state
 from lyra_app.worker_control import graceful_worker_restart
 
@@ -85,7 +91,7 @@ class DeletePluginRepoResponse(BaseModel):
     repo_id: str
 
 
-class PullPluginRepoResponse(BaseModel):
+class SyncPluginRepoResponse(BaseModel):
     repo_id: str
     changed: bool
     display_name: str
@@ -259,8 +265,8 @@ def delete_plugin_repo(repo_id: str) -> DeletePluginRepoResponse:
     return DeletePluginRepoResponse(deleted=True, repo_id=repo_id)
 
 
-@router.post("/plugin-repos/{repo_id}/pull")
-def pull_plugin_repo(repo_id: str) -> PullPluginRepoResponse:
+@router.post("/plugin-repos/{repo_id}/sync")
+def sync_plugin_repo(repo_id: str) -> SyncPluginRepoResponse:
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
@@ -279,13 +285,13 @@ def pull_plugin_repo(repo_id: str) -> PullPluginRepoResponse:
         )
 
     try:
-        synced = sync_plugin_repo(
+        synced = sync_plugin_source(
             config.plugins.catalog_dir, repo_record_to_source(repo)
         )
     except (PluginSyncError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=502, detail=_sync_error_detail(exc)) from exc
 
-    return PullPluginRepoResponse(
+    return SyncPluginRepoResponse(
         repo_id=repo.id,
         changed=synced.changed,
         display_name=synced.entry.display_name,

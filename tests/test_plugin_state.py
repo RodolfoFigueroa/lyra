@@ -18,6 +18,7 @@ from lyra_app.plugin_state import (
     make_repo_record,
     normalize_repo_source,
     render_plugin_state_toml,
+    repo_record_to_source,
     save_plugin_state,
 )
 
@@ -121,6 +122,18 @@ def test_normalize_repo_source_accepts_local_file_uri(tmp_path: Path) -> None:
     assert normalized.source_kind == "local"
 
 
+def test_normalize_repo_source_accepts_directory_uri(tmp_path: Path) -> None:
+    source = tmp_path / "mock-plugin"
+
+    normalized = normalize_repo_source(f"dir://localhost{source}")
+
+    assert normalized.source == f"dir://{source.resolve().as_posix()}"
+    assert normalized.ref is None
+    assert normalized.source_kind == "directory"
+    assert normalized.generated_id.startswith("dir__mock-plugin__")
+    assert normalized.generated_id != generate_repo_id(source.as_uri())
+
+
 def test_make_repo_record_normalizes_source_and_generates_id() -> None:
     record = make_repo_record("https://github.com/owner/example-plugin@main")
 
@@ -128,6 +141,20 @@ def test_make_repo_record_normalizes_source_and_generates_id() -> None:
     assert record.source == "owner/example-plugin"
     assert record.ref == "main"
     assert record.enabled is True
+
+
+def test_make_repo_record_normalizes_directory_source_and_serializes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mock-plugin"
+
+    record = make_repo_record(f"dir://localhost{source}")
+
+    assert record.id == generate_repo_id(record.source)
+    assert record.source == f"dir://{source.resolve().as_posix()}"
+    assert record.ref is None
+    assert record.enabled is True
+    assert repo_record_to_source(record) == record.source
 
 
 @pytest.mark.parametrize(
@@ -191,6 +218,18 @@ def test_make_repo_record_normalizes_source_and_generates_id() -> None:
                 ]
             },
             "local plugin repo sources cannot include refs",
+        ),
+        (
+            {
+                "repos": [
+                    {
+                        "id": "directory-plugin",
+                        "source": "dir:///tmp/mock-plugin",
+                        "ref": "main",
+                    }
+                ]
+            },
+            "directory plugin sources cannot include refs",
         ),
         (
             {"metric_queues": {" ": "interactive"}},

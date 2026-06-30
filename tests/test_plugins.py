@@ -6,8 +6,10 @@ import pytest
 
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
+    PluginSyncError,
     iter_plugin_entries,
     parse_repo_entry,
+    sync_plugin_repo,
     sync_plugin_repos,
 )
 
@@ -111,6 +113,43 @@ def test_parse_repo_entry_accepts_localhost_file_uri(tmp_path: Path) -> None:
     assert entry.source_path == source.resolve()
 
 
+def test_parse_repo_entry_accepts_dir_uri_for_directory(tmp_path: Path) -> None:
+    source = tmp_path / "mock-plugin"
+    entry = parse_repo_entry(f"dir://{source}")
+
+    assert entry.source_kind == "directory"
+    assert entry.clone_url == f"dir://{source.resolve().as_posix()}"
+    assert entry.owner == "dir"
+    assert entry.repo == "mock-plugin"
+    assert entry.ref is None
+    assert entry.source_path == source.resolve()
+    assert entry.display_name == f"dir:{source.resolve()}"
+    assert entry.target_name.startswith("dir__mock-plugin__")
+    assert len(entry.target_name.removeprefix("dir__mock-plugin__")) == 12
+
+
+def test_parse_repo_entry_accepts_localhost_dir_uri(tmp_path: Path) -> None:
+    source = tmp_path / "mock-plugin"
+    entry = parse_repo_entry(f"dir://localhost{source}")
+
+    assert entry.source_kind == "directory"
+    assert entry.clone_url == f"dir://{source.resolve().as_posix()}"
+    assert entry.source_path == source.resolve()
+
+
+def test_parse_repo_entry_directory_target_does_not_collide_with_local_repo(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mock-plugin"
+
+    local_entry = parse_repo_entry(source.as_uri())
+    directory_entry = parse_repo_entry(f"dir://{source}")
+
+    assert local_entry.target_name.startswith("local__mock-plugin__")
+    assert directory_entry.target_name.startswith("dir__mock-plugin__")
+    assert directory_entry.target_name != local_entry.target_name
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -125,6 +164,26 @@ def test_parse_repo_entry_accepts_localhost_file_uri(tmp_path: Path) -> None:
 def test_parse_repo_entry_rejects_malformed_local_entries(raw: str) -> None:
     with pytest.raises(ValueError, match="plugin repo"):
         parse_repo_entry(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "dir:mock-plugin",
+        "dir://example.com/plugin",
+        "dir:///tmp/mock-plugin?ignored=1",
+        "dir:///tmp/mock-plugin#fragment",
+        "dir:///tmp/mock-plugin@main",
+    ],
+)
+def test_parse_repo_entry_rejects_malformed_directory_entries(raw: str) -> None:
+    with pytest.raises(ValueError, match="plugin"):
+        parse_repo_entry(raw)
+
+
+def test_parse_repo_entry_rejects_raw_directory_path(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="plugin repo"):
+        parse_repo_entry(str(tmp_path / "mock-plugin"))
 
 
 def test_iter_plugin_entries_skips_malformed_local_entries() -> None:
@@ -188,3 +247,119 @@ def test_sync_plugin_repos_ignores_uncommitted_local_repo_changes(
     assert json.loads((repo.path / MANIFEST_FILENAME).read_text(encoding="utf-8")) == {
         "marker": "initial",
     }
+
+
+def test_sync_plugin_repos_copies_directory_source(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    target_dir = tmp_path / "targets"
+
+    synced = sync_plugin_repos(target_dir, [f"dir://{source}"])
+
+    assert len(synced) == 1
+    repo = synced[0]
+    assert repo.changed is True
+    assert repo.path == target_dir / repo.entry.target_name
+    assert json.loads((repo.path / MANIFEST_FILENAME).read_text(encoding="utf-8")) == {
+        "marker": "initial",
+    }
+    assert (target_dir / f".{repo.entry.target_name}.fingerprint").exists()
+    assert not (repo.path / f".{repo.entry.target_name}.fingerprint").exists()
+
+
+def test_sync_plugin_repos_reports_unchanged_directory_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    target_dir = tmp_path / "targets"
+    sync_plugin_repos(target_dir, [f"dir://{source}"])
+
+    synced = sync_plugin_repos(target_dir, [f"dir://{source}"])
+
+    assert len(synced) == 1
+    assert synced[0].changed is False
+
+
+def test_sync_plugin_repo_reflects_directory_edits_adds_and_deletes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    target_dir = tmp_path / "targets"
+    initial = sync_plugin_repo(target_dir, f"dir://{source}")
+    runner = source / "runner.py"
+
+    _write_manifest(source, "edited")
+    runner.write_text("VALUE = 1\n", encoding="utf-8")
+    edited = sync_plugin_repo(target_dir, f"dir://{source}")
+    edited_manifest = json.loads(
+        (edited.path / MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    edited_runner = (edited.path / "runner.py").read_text(encoding="utf-8")
+
+    runner.unlink()
+    deleted = sync_plugin_repo(target_dir, f"dir://{source}")
+
+    assert initial.changed is True
+    assert edited.changed is True
+    assert edited_manifest == {"marker": "edited"}
+    assert edited_runner == "VALUE = 1\n"
+    assert deleted.changed is True
+    assert not (deleted.path / "runner.py").exists()
+
+
+def test_sync_plugin_repos_ignores_directory_source_artifacts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    (source / ".git").mkdir()
+    (source / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "runner.cpython-311.pyc").write_bytes(b"cache")
+    (source / "mock_plugin.egg-info").mkdir()
+    (source / "mock_plugin.egg-info" / "PKG-INFO").write_text(
+        "Name: mock-plugin\n",
+        encoding="utf-8",
+    )
+    (source / "runner.pyc").write_bytes(b"cache")
+    target_dir = tmp_path / "targets"
+
+    repo = sync_plugin_repo(target_dir, f"dir://{source}")
+
+    assert repo.changed is True
+    assert not (repo.path / ".git").exists()
+    assert not (repo.path / "__pycache__").exists()
+    assert not (repo.path / "mock_plugin.egg-info").exists()
+    assert not (repo.path / "runner.pyc").exists()
+
+
+def test_sync_plugin_repos_skips_missing_directory_source_by_default(
+    tmp_path: Path,
+) -> None:
+    synced = sync_plugin_repos(tmp_path / "targets", [f"dir://{tmp_path / 'missing'}"])
+
+    assert synced == []
+
+
+def test_sync_plugin_repos_raises_for_missing_directory_source(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(PluginSyncError, match="does not exist"):
+        sync_plugin_repos(
+            tmp_path / "targets",
+            [f"dir://{tmp_path / 'missing'}"],
+            raise_on_error=True,
+        )
+
+
+def test_sync_plugin_repo_raises_for_missing_directory_source(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(PluginSyncError, match="does not exist"):
+        sync_plugin_repo(tmp_path / "targets", f"dir://{tmp_path / 'missing'}")

@@ -130,9 +130,17 @@ def test_metrics_route_returns_batched_column_metadata(
     payload = response.model_dump()
     assert payload["output"]["kind"] == "table"
     assert payload["output"]["columns"] == []
-    assert payload["output"]["batched_columns"][0]["source"] == "sector_filters"
-    assert payload["output"]["batched_columns"][0]["name"] == "job_accessibility_{key}"
-    assert "name_template" not in payload["output"]["batched_columns"][0]
+    batched_column = payload["output"]["batched_columns"][0]
+    assert set(batched_column) == {
+        "source",
+        "name",
+        "type",
+        "unit",
+        "description",
+        "nullable",
+    }
+    assert batched_column["source"] == "sector_filters"
+    assert batched_column["name"] == "job_accessibility_{key}"
     assert "oneOf" in payload["request_schema"]["properties"]["location"]
     assert payload["request_schema"]["properties"]["sector_filters"]["maxItems"] == 20
 

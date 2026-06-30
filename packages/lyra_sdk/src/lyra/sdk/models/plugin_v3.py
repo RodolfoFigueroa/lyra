@@ -368,7 +368,7 @@ class BatchedTableOutputColumnV3(StrictBaseModel):
 
     @field_validator("name")
     @classmethod
-    def validate_name_template(cls, template: str) -> str:
+    def validate_name(cls, template: str) -> str:
         fields = _template_fields(template)
         invalid_fields = sorted(fields - {"key"})
         if invalid_fields:
@@ -382,7 +382,7 @@ class BatchedTableOutputColumnV3(StrictBaseModel):
 
     @field_validator("description")
     @classmethod
-    def validate_description_template(cls, template: str) -> str:
+    def validate_description(cls, template: str) -> str:
         fields = _template_fields(template)
         invalid_fields = sorted(fields - {"key", "label"})
         if invalid_fields:

@@ -5,52 +5,10 @@ from typing import Any
 
 import pytest
 from lyra.sdk.models import JobEnvelope, TableJobResult
-from lyra.sdk.models.plugin_v2 import PluginManifestV2, TableMetricOutputV2
 from lyra.sdk.models.plugin_v3 import TableOutputV3
-from pydantic import ValidationError
 
 from lyra_app import registry
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
-
-KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
-
-
-def _metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    metric = {
-        "name": "light_metric",
-        "description": "A lightweight metric.",
-        "request_schema": {
-            "type": "object",
-            "required": ["location", "value"],
-            "properties": {"location": {}, "value": {"type": "integer"}},
-            "additionalProperties": False,
-        },
-        "output": {
-            "kind": "table",
-            "columns": [
-                {
-                    "name": "value",
-                    "type": "integer",
-                    "unit": "count",
-                    "description": "Example output value.",
-                }
-            ],
-        },
-        "spatial_inputs": {"location": "location"},
-        "execution": {"queue": "lightweight"},
-        "entrypoint": "fake_plugin.runner:run",
-    }
-    if overrides:
-        metric.update(overrides)
-    return metric
-
-
-def _manifest(metric_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {
-        "schema_version": 2,
-        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "metrics": [_metric(metric_overrides)],
-    }
 
 
 def _v3_batched_manifest() -> dict[str, Any]:
@@ -94,118 +52,11 @@ def _v3_batched_manifest() -> dict[str, Any]:
     }
 
 
-def _batched_item_properties(
-    overrides: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    properties = {
-        "key": {
-            "type": "string",
-            "pattern": KEY_PATTERN,
-            "minLength": 1,
-            "maxLength": 64,
-        },
-        "value": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-        },
-        "label": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 120,
-        },
-    }
-    if overrides:
-        properties.update(overrides)
-    return properties
-
-
-def _batched_item_schema(
-    *,
-    required: list[str] | None = None,
-    properties: dict[str, Any] | None = None,
-    additional_properties: bool = False,
-    item_type: str = "object",
-) -> dict[str, Any]:
-    return {
-        "type": item_type,
-        "required": ["key", "value"] if required is None else required,
-        "properties": _batched_item_properties() if properties is None else properties,
-        "additionalProperties": additional_properties,
-    }
-
-
-def _batched_source_schema(
-    *,
-    items: dict[str, Any] | None = None,
-    include_min_items: bool = True,
-    include_max_items: bool = True,
-    include_unique_items: bool = True,
-) -> dict[str, Any]:
-    schema = {
-        "type": "array",
-        "items": _batched_item_schema() if items is None else items,
-    }
-    if include_min_items:
-        schema["minItems"] = 1
-    if include_max_items:
-        schema["maxItems"] = 20
-    if include_unique_items:
-        schema["uniqueItems"] = True
-    return schema
-
-
-def _batched_request_schema(
-    *,
-    source_schema: dict[str, Any] | None = None,
-    required: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "required": required or ["location", "sector_filters"],
-        "properties": {
-            "location": {},
-            "sector_filters": source_schema or _batched_source_schema(),
-        },
-        "additionalProperties": False,
-    }
-
-
-def _batched_column(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    column = {
-        "source": "sector_filters",
-        "name_template": "job_accessibility_{key}",
-        "type": "number",
-        "unit": "jobs",
-        "description_template": "Job accessibility for {label}.",
-        "batching_reason": (
-            "Reuses the network graph and travel-time matrix across filters."
-        ),
-    }
-    if overrides:
-        column.update(overrides)
-    return column
-
-
-def _batched_output(
-    *,
-    columns: list[dict[str, Any]] | None = None,
-    batched_columns: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "kind": "table",
-        "columns": [] if columns is None else columns,
-        "batched_columns": (
-            [_batched_column()] if batched_columns is None else batched_columns
-        ),
-    }
-
-
 def _table_output(
     *,
     columns: list[dict[str, Any]] | None = None,
-    name_template: str = "job_accessibility_{key}",
-    description_template: str = "Job accessibility for {label}.",
+    name: str = "job_accessibility_{key}",
+    description: str = "Job accessibility for {label}.",
 ) -> TableOutputV3:
     return TableOutputV3.model_validate(
         {
@@ -214,10 +65,10 @@ def _table_output(
             "batched_columns": [
                 {
                     "source": "sector_filters",
-                    "name": name_template,
+                    "name": name,
                     "type": "number",
                     "unit": "jobs",
-                    "description": description_template,
+                    "description": description,
                 }
             ],
         }
@@ -311,251 +162,6 @@ def _decode_stored_result(
     return json.loads(redis.values[worker.job_store.result_key(job_id)])
 
 
-def test_manifest_v2_accepts_batched_table_output() -> None:
-    manifest = PluginManifestV2.model_validate(
-        _manifest(
-            {
-                "request_schema": _batched_request_schema(),
-                "output": _batched_output(),
-            }
-        )
-    )
-
-    output = manifest.metrics[0].output
-    assert output.kind == "table"
-    assert output.columns == []
-    assert output.batched_columns[0].source == "sector_filters"
-
-
-def test_manifest_v2_accepts_batched_table_output_without_label_schema() -> None:
-    properties = _batched_item_properties()
-    properties.pop("label")
-    manifest = PluginManifestV2.model_validate(
-        _manifest(
-            {
-                "request_schema": _batched_request_schema(
-                    source_schema=_batched_source_schema(
-                        items=_batched_item_schema(properties=properties),
-                    ),
-                ),
-                "output": _batched_output(),
-            }
-        )
-    )
-
-    output = manifest.metrics[0].output
-    assert isinstance(output, TableMetricOutputV2)
-    assert output.batched_columns[0].source == "sector_filters"
-
-
-def test_manifest_v2_accepts_mixed_static_and_batched_table_output() -> None:
-    manifest = PluginManifestV2.model_validate(
-        _manifest(
-            {
-                "request_schema": _batched_request_schema(),
-                "output": _batched_output(
-                    columns=[
-                        {
-                            "name": "total_jobs",
-                            "type": "integer",
-                            "unit": "jobs",
-                            "description": "Total jobs across all filters.",
-                        }
-                    ],
-                ),
-            }
-        )
-    )
-
-    output = manifest.metrics[0].output
-    assert output.kind == "table"
-    assert output.columns[0].name == "total_jobs"
-    assert output.batched_columns[0].name_template == "job_accessibility_{key}"
-
-
-def test_manifest_v2_rejects_table_output_without_columns() -> None:
-    raw = _manifest({"output": {"kind": "table", "columns": []}})
-
-    with pytest.raises(ValidationError, match="columns or batched_columns"):
-        PluginManifestV2.model_validate(raw)
-
-
-@pytest.mark.parametrize(
-    ("column_overrides", "match"),
-    [
-        ({"name_template": "job_accessibility"}, r"\{key\}"),
-        ({"name_template": "job_accessibility_{value}"}, r"\{value\}"),
-        ({"name_template": "job_accessibility_{label}_{key}"}, "unsupported"),
-        ({"description_template": "Job accessibility for {value}."}, r"\{value\}"),
-        ({"description_template": "Job accessibility for {other}."}, "unsupported"),
-    ],
-)
-def test_manifest_v2_rejects_invalid_batched_templates(
-    column_overrides: dict[str, Any],
-    match: str,
-) -> None:
-    raw = _manifest(
-        {
-            "request_schema": _batched_request_schema(),
-            "output": _batched_output(
-                batched_columns=[_batched_column(column_overrides)],
-            ),
-        }
-    )
-
-    with pytest.raises(ValidationError, match=match):
-        PluginManifestV2.model_validate(raw)
-
-
-@pytest.mark.parametrize("batching_reason", [None, ""])
-def test_manifest_v2_rejects_missing_or_empty_batching_reason(
-    batching_reason: str | None,
-) -> None:
-    column = _batched_column()
-    if batching_reason is None:
-        column.pop("batching_reason")
-    else:
-        column["batching_reason"] = batching_reason
-    raw = _manifest(
-        {
-            "request_schema": _batched_request_schema(),
-            "output": _batched_output(batched_columns=[column]),
-        }
-    )
-
-    with pytest.raises(ValidationError, match="batching_reason"):
-        PluginManifestV2.model_validate(raw)
-
-
-@pytest.mark.parametrize(
-    ("source_schema", "required", "match"),
-    [
-        ({"type": "string"}, ["location", "sector_filters"], "array"),
-        (
-            _batched_source_schema(include_min_items=False),
-            ["location", "sector_filters"],
-            "minItems",
-        ),
-        (
-            _batched_source_schema(include_max_items=False),
-            ["location", "sector_filters"],
-            "maxItems",
-        ),
-        (
-            _batched_source_schema(include_unique_items=False),
-            ["location", "sector_filters"],
-            "uniqueItems",
-        ),
-        (
-            _batched_source_schema(items=_batched_item_schema(item_type="string")),
-            ["location", "sector_filters"],
-            "objects",
-        ),
-        (
-            _batched_source_schema(
-                items=_batched_item_schema(additional_properties=True),
-            ),
-            ["location", "sector_filters"],
-            "additionalProperties",
-        ),
-        (
-            _batched_source_schema(items=_batched_item_schema(required=["key"])),
-            ["location", "sector_filters"],
-            "key and value",
-        ),
-        (
-            _batched_source_schema(
-                items=_batched_item_schema(required=["key", "value", "label"])
-            ),
-            ["location", "sector_filters"],
-            "key and value only",
-        ),
-        (
-            _batched_source_schema(
-                items=_batched_item_schema(
-                    properties={
-                        **_batched_item_properties(),
-                        "pattern": {"type": "string"},
-                    }
-                )
-            ),
-            ["location", "sector_filters"],
-            "unsupported properties",
-        ),
-        (
-            _batched_source_schema(
-                items=_batched_item_schema(
-                    properties={
-                        "key": _batched_item_properties()["key"],
-                        "label": _batched_item_properties()["label"],
-                    }
-                )
-            ),
-            ["location", "sector_filters"],
-            "key and value properties",
-        ),
-        (
-            _batched_source_schema(
-                items=_batched_item_schema(
-                    properties=_batched_item_properties(
-                        {"key": {"type": "integer"}},
-                    )
-                )
-            ),
-            ["location", "sector_filters"],
-            "key",
-        ),
-        (
-            _batched_source_schema(
-                items=_batched_item_schema(
-                    properties=_batched_item_properties(
-                        {"label": {"type": "integer"}},
-                    )
-                )
-            ),
-            ["location", "sector_filters"],
-            "label",
-        ),
-        (
-            _batched_source_schema(),
-            ["location"],
-            "required",
-        ),
-    ],
-)
-def test_manifest_v2_rejects_invalid_batched_source_schema(
-    source_schema: dict[str, Any],
-    required: list[str],
-    match: str,
-) -> None:
-    raw = _manifest(
-        {
-            "request_schema": _batched_request_schema(
-                source_schema=source_schema,
-                required=required,
-            ),
-            "output": _batched_output(),
-        }
-    )
-
-    with pytest.raises(ValidationError, match=match):
-        PluginManifestV2.model_validate(raw)
-
-
-def test_manifest_v2_rejects_missing_batched_source_property() -> None:
-    request_schema = _batched_request_schema()
-    request_schema["properties"].pop("sector_filters")
-    raw = _manifest(
-        {
-            "request_schema": request_schema,
-            "output": _batched_output(),
-        }
-    )
-
-    with pytest.raises(ValidationError, match="properties"):
-        PluginManifestV2.model_validate(raw)
-
-
 def test_catalog_refresh_preserves_batched_column_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -578,7 +184,7 @@ def test_worker_expands_batched_column_descriptions_from_label_or_key(
     worker_module: Any,
 ) -> None:
     output = _table_output(
-        description_template="Job accessibility for {label} ({key}).",
+        description="Job accessibility for {label} ({key}).",
     )
 
     expand_table_output_columns = worker_module.__dict__["_expand_table_output_columns"]

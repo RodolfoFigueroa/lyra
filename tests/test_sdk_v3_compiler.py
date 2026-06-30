@@ -256,9 +256,50 @@ def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
             }
         ],
     }
-    assert "name_template" not in json.dumps(metric["output"])
-    assert "batching_reason" not in json.dumps(metric["output"])
     _assert_valid_json_schema(metric["request_schema"])
+
+
+def test_compile_v3_mixed_static_and_dynamic_table_output() -> None:
+    metric = _dynamic_metric()
+    metric["output"]["columns"] = [
+        {
+            "name": "total_destinations",
+            "type": "integer",
+            "unit": "destinations",
+            "description": "Total destinations across all categories.",
+        }
+    ]
+    compiled = _compile(
+        {
+            "schema_version": 3,
+            "plugin": {"name": "accessibility-metrics", "version": "0.1.0"},
+            "metrics": [metric],
+        }
+    )
+    output = compiled["metrics"][0]["output"]
+
+    assert output == {
+        "kind": "table",
+        "columns": [
+            {
+                "name": "total_destinations",
+                "type": "integer",
+                "unit": "destinations",
+                "description": "Total destinations across all categories.",
+                "nullable": False,
+            }
+        ],
+        "batched_columns": [
+            {
+                "source": "destination_categories",
+                "name": "accessibility_{key}",
+                "type": "number",
+                "unit": "destinations",
+                "description": "Accessible destinations for {label}.",
+                "nullable": False,
+            }
+        ],
+    }
 
 
 def test_compile_v3_file_metric_with_bounds_spatial_schema() -> None:

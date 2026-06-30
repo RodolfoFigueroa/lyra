@@ -254,8 +254,16 @@ def test_sync_client_returns_v3_metric_catalog(
     assert len(metrics) == 1
     assert metrics[0].name == "accessibility_by_destination"
     output = metrics[0].output.model_dump(mode="json")
-    assert output["batched_columns"][0]["name"] == "job_accessibility_{key}"
-    assert "name_template" not in output["batched_columns"][0]
+    batched_column = output["batched_columns"][0]
+    assert set(batched_column) == {
+        "source",
+        "name",
+        "type",
+        "unit",
+        "description",
+        "nullable",
+    }
+    assert batched_column["name"] == "job_accessibility_{key}"
 
 
 def test_sync_client_rejects_invalid_data_type_response(
@@ -447,10 +455,16 @@ def test_async_client_returns_v3_metric_catalog(
 
     assert metric.name == "accessibility_by_destination"
     output = metric.output.model_dump(mode="json")
-    assert output["batched_columns"][0]["description"] == (
-        "Job accessibility for {label}."
-    )
-    assert "description_template" not in output["batched_columns"][0]
+    batched_column = output["batched_columns"][0]
+    assert set(batched_column) == {
+        "source",
+        "name",
+        "type",
+        "unit",
+        "description",
+        "nullable",
+    }
+    assert batched_column["description"] == "Job accessibility for {label}."
 
 
 def test_async_client_rejects_invalid_data_type_response(

@@ -1,5 +1,6 @@
 import importlib
 import json
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -9,8 +10,19 @@ import pytest
 from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugin_state import PluginState, make_repo_record
-from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from lyra_app.plugins import (
+    MANIFEST_FILENAME,
+    PluginRepoEntry,
+    PluginSyncError,
+    SyncedPluginRepo,
+)
 from tests.config_helpers import load_test_config, plugin_state_store
+from tests.smoke_plugin_helpers import (
+    SMOKE_METRIC_QUEUES,
+    SMOKE_PLUGIN_DIR,
+    directory_uri,
+    smoke_plugin_uri,
+)
 
 
 def _metric(
@@ -200,6 +212,92 @@ def test_catalog_refresh_reads_directory_source_without_importing_plugin_code(
     assert entry is not None
     assert entry.queue == "lightweight"
     assert entry.entrypoint == "fake_plugin.runner:run"
+
+
+def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
+    load_test_config(
+        tmp_path,
+        metric_queues=SMOKE_METRIC_QUEUES,
+        repos=[smoke_plugin_uri()],
+    )
+
+    result = registry.refresh_catalog()
+    metric_names = sorted(info.name for info in registry.get_metrics_info())
+    table_entry = registry.get_metric_entry("smoke_table_metric")
+    file_entry = registry.get_metric_entry("smoke_file_metric")
+
+    assert result.updated_plugins == [f"dir:{SMOKE_PLUGIN_DIR.resolve()}"]
+    assert metric_names == [
+        "smoke_cancel_metric",
+        "smoke_file_metric",
+        "smoke_table_metric",
+    ]
+    assert table_entry is not None
+    assert table_entry.queue == "interactive"
+    assert "GeoJSONLocationWrapperV3" in table_entry.request_schema["$defs"]
+    assert file_entry is not None
+    assert file_entry.metric.output.kind == "file"
+
+
+def test_catalog_refresh_detects_smoke_directory_manifest_edits(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "editable-smoke-plugin"
+    shutil.copytree(SMOKE_PLUGIN_DIR, source)
+    load_test_config(
+        tmp_path,
+        metric_queues=SMOKE_METRIC_QUEUES,
+        repos=[directory_uri(source)],
+    )
+    first = registry.refresh_catalog()
+    manifest_path = source / MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    edited_description = "Edited smoke table metric description."
+    for metric in manifest["metrics"]:
+        if metric["name"] == "smoke_table_metric":
+            metric["description"] = edited_description
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    second = registry.refresh_catalog()
+    info = registry.get_metric_info("smoke_table_metric")
+
+    assert first.catalog_changed is True
+    assert second.updated_plugins == [f"dir:{source.resolve()}"]
+    assert second.previous_catalog_fingerprint == first.catalog_fingerprint
+    assert second.catalog_changed is True
+    assert info is not None
+    assert info.description == edited_description
+
+
+def test_catalog_refresh_reports_unchanged_smoke_directory_source(
+    tmp_path: Path,
+) -> None:
+    load_test_config(
+        tmp_path,
+        metric_queues=SMOKE_METRIC_QUEUES,
+        repos=[smoke_plugin_uri()],
+    )
+    first = registry.refresh_catalog()
+
+    second = registry.refresh_catalog()
+
+    assert first.updated_plugins == [f"dir:{SMOKE_PLUGIN_DIR.resolve()}"]
+    assert second.updated_plugins == []
+    assert second.previous_catalog_fingerprint == first.catalog_fingerprint
+    assert second.catalog_fingerprint == first.catalog_fingerprint
+    assert second.catalog_changed is False
+
+
+def test_catalog_refresh_rejects_missing_directory_source(tmp_path: Path) -> None:
+    missing_source = tmp_path / "missing-smoke-plugin"
+    load_test_config(
+        tmp_path,
+        metric_queues=SMOKE_METRIC_QUEUES,
+        repos=[directory_uri(missing_source)],
+    )
+
+    with pytest.raises(PluginSyncError, match="does not exist"):
+        registry.refresh_catalog()
 
 
 def test_catalog_refresh_syncs_enabled_repos_from_plugin_state(

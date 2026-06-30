@@ -1,5 +1,6 @@
 import importlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,12 @@ from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugin_state import PluginState, make_repo_record
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from tests.config_helpers import load_test_config, plugin_state_store
+from tests.smoke_plugin_helpers import (
+    SMOKE_METRIC_QUEUES,
+    SMOKE_PLUGIN_DIR,
+    feature_collection,
+    smoke_plugin_uri,
+)
 
 
 def _metric(
@@ -190,6 +197,31 @@ def _configure_runner_repos(
         lambda *_args, **_kwargs: [_synced_repo(repo)],
     )
     monkeypatch.setattr(worker, "install_runner_plugins", list)
+
+
+def _load_smoke_runner_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker: Any,
+) -> tuple[dict[str, Any], list[SyncedPluginRepo]]:
+    load_test_config(
+        tmp_path,
+        metric_queues=SMOKE_METRIC_QUEUES,
+        repos=[smoke_plugin_uri()],
+    )
+    installed: list[SyncedPluginRepo] = []
+
+    def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+        sys.modules.pop("smoke_plugin.runner", None)
+        sys.modules.pop("smoke_plugin", None)
+        for repo in repos:
+            monkeypatch.syspath_prepend(str(repo.path))
+        installed.extend(repos)
+        return repos
+
+    monkeypatch.setattr(worker, "install_runner_plugins", install_plugins)
+    entries = worker.refresh_runner_registry("interactive")
+    return entries, installed
 
 
 def _decode_stored_result(
@@ -388,6 +420,33 @@ def test_runner_loads_directory_source_from_copied_snapshot(
     assert entries["heavy_metric"].queue == "heavy"
 
 
+def test_runner_loads_smoke_directory_fixture_from_copied_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    entries, installed = _load_smoke_runner_registry(
+        tmp_path,
+        monkeypatch,
+        worker_module,
+    )
+
+    assert len(installed) == 1
+    synced = installed[0]
+    assert synced.path != SMOKE_PLUGIN_DIR
+    assert synced.path.parent == tmp_path / "plugins" / "runners" / "interactive"
+    assert sorted(entries) == [
+        "smoke_cancel_metric",
+        "smoke_file_metric",
+        "smoke_table_metric",
+    ]
+    runner_file = sys.modules["smoke_plugin.runner"].__file__
+    assert runner_file is not None
+    runner_path = Path(runner_file).resolve()
+    assert runner_path.is_relative_to(synced.path.resolve())
+    assert not runner_path.is_relative_to(SMOKE_PLUGIN_DIR.resolve())
+
+
 def test_runner_uses_configured_worker_temp_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -539,6 +598,51 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     ]
     assert events[1].event.data == {"percent": 50}
     assert events[-1].event.data == payload
+
+
+def test_smoke_table_metric_executes_from_directory_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
+    worker_module.set_runner_temp_base(tmp_path / "tmp")
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    payload = worker_module.execute_job(
+        {
+            "job_id": "job-smoke-table",
+            "metric": "smoke_table_metric",
+            "input": {
+                "location": feature_collection(("area-1", "area-2")),
+                "value": 7,
+            },
+        },
+        task_id="task-id",
+    )
+
+    assert payload == {
+        "kind": "table",
+        "job_id": "job-smoke-table",
+        "status": "succeeded",
+        "index": ["area-1", "area-2"],
+        "columns": ["value"],
+        "data": [[7], [7]],
+    }
+    assert (
+        _decode_stored_result(worker_module, fake_redis, "job-smoke-table") == payload
+    )
+    events = worker_module.job_store.read_job_events(
+        "job-smoke-table",
+        client=fake_redis,
+    )
+    assert [event.event.event for event in events] == [
+        "started",
+        "progress",
+        "succeeded",
+    ]
+    assert events[1].event.data == {"stage": "table"}
 
 
 def test_unknown_metric_persists_failed_result(
@@ -804,6 +908,39 @@ def test_file_result_persists_through_generic_result_path(
     assert _decode_stored_result(worker_module, fake_redis, "job-file") == result
 
 
+def test_smoke_file_metric_executes_from_directory_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
+    worker_module.set_runner_temp_base(tmp_path / "tmp")
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+    expected_path = tmp_path / "tmp" / "job-smoke-file" / "smoke-result.txt"
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-smoke-file",
+            "metric": "smoke_file_metric",
+            "input": {"location": feature_collection(("area-1", "area-2"))},
+        },
+        task_id="task-id",
+    )
+
+    assert result == {
+        "kind": "file",
+        "job_id": "job-smoke-file",
+        "status": "succeeded",
+        "file_path": str(expected_path),
+        "media_type": "text/plain",
+    }
+    assert expected_path.read_text(encoding="utf-8") == (
+        "smoke file result\narea-1\narea-2\n"
+    )
+    assert _decode_stored_result(worker_module, fake_redis, "job-smoke-file") == result
+
+
 @pytest.mark.parametrize(
     ("filename", "media_type"),
     [
@@ -889,6 +1026,43 @@ def test_check_cancelled_persists_cancelled_result(
     assert _decode_stored_result(worker_module, fake_redis, "job-cancel") == result
     assert _decode_status(worker_module, fake_redis, "job-cancel")["status"] == (
         "cancelled"
+    )
+
+
+def test_smoke_cancel_metric_respects_pre_cancelled_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+    worker_module.job_store.set_job_status(
+        "job-smoke-cancel",
+        "cancelled",
+        metric="smoke_cancel_metric",
+    )
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-smoke-cancel",
+            "metric": "smoke_cancel_metric",
+            "input": {"location": feature_collection(), "value": 1},
+        },
+        task_id="task-id",
+    )
+
+    assert result == {
+        "kind": "cancelled",
+        "job_id": "job-smoke-cancel",
+        "status": "cancelled",
+    }
+    assert _decode_stored_result(worker_module, fake_redis, "job-smoke-cancel") == (
+        result
+    )
+    assert (
+        _decode_status(worker_module, fake_redis, "job-smoke-cancel")["status"]
+        == "cancelled"
     )
 
 

@@ -13,6 +13,7 @@ from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRep
 from lyra_app.registry import CatalogRefreshResult
 from lyra_app.routes import admin
 from tests.config_helpers import load_test_config
+from tests.smoke_plugin_helpers import directory_uri
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -124,8 +125,9 @@ def test_plugin_repo_endpoints_manage_directory_source(
 ) -> None:
     source = tmp_path / "mock-plugin"
     source.mkdir()
-    (source / MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
-    normalized_source = f"dir://{source.resolve().as_posix()}"
+    manifest_path = source / MANIFEST_FILENAME
+    manifest_path.write_text("{}", encoding="utf-8")
+    normalized_source = directory_uri(source)
 
     created = admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(
@@ -135,6 +137,9 @@ def test_plugin_repo_endpoints_manage_directory_source(
     )
     listed = admin.list_plugin_repos()
     pulled = admin.pull_plugin_repo("mock")
+    pulled_again = admin.pull_plugin_repo("mock")
+    manifest_path.write_text('{"changed": true}', encoding="utf-8")
+    pulled_edited = admin.pull_plugin_repo("mock")
 
     assert created.model_dump() == {
         "id": "mock",
@@ -148,12 +153,50 @@ def test_plugin_repo_endpoints_manage_directory_source(
         "changed": True,
         "display_name": f"dir:{source.resolve()}",
     }
+    assert pulled_again.model_dump() == {
+        "repo_id": "mock",
+        "changed": False,
+        "display_name": f"dir:{source.resolve()}",
+    }
+    assert pulled_edited.model_dump() == {
+        "repo_id": "mock",
+        "changed": True,
+        "display_name": f"dir:{source.resolve()}",
+    }
     copied_manifests = list(
         (tmp_path / "plugins" / "catalog").glob(
             f"dir__mock-plugin__*/{MANIFEST_FILENAME}"
         )
     )
     assert len(copied_manifests) == 1
+
+
+def test_plugin_repo_update_can_switch_to_directory_source(
+    admin_context: Path,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mock-plugin"
+    source.mkdir()
+    (source / MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
+
+    admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(
+            id="mock",
+            source="owner/example-plugin@main",
+        )
+    )
+
+    updated = admin.update_plugin_repo(
+        "mock",
+        admin.UpdatePluginRepoRequest(source=f"dir://localhost{source}"),
+    )
+
+    assert updated.model_dump() == {
+        "id": "mock",
+        "source": directory_uri(source),
+        "ref": None,
+        "enabled": True,
+    }
 
 
 def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(

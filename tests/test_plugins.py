@@ -12,6 +12,7 @@ from lyra_app.plugins import (
     sync_plugin_repo,
     sync_plugin_repos,
 )
+from tests.smoke_plugin_helpers import directory_uri
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -135,6 +136,16 @@ def test_parse_repo_entry_accepts_localhost_dir_uri(tmp_path: Path) -> None:
     assert entry.source_kind == "directory"
     assert entry.clone_url == f"dir://{source.resolve().as_posix()}"
     assert entry.source_path == source.resolve()
+
+
+def test_parse_repo_entry_percent_encodes_directory_uri(tmp_path: Path) -> None:
+    source = tmp_path / "mock plugin"
+    entry = parse_repo_entry(f"dir://{source}")
+
+    assert entry.source_kind == "directory"
+    assert entry.clone_url == directory_uri(source)
+    assert "%20" in entry.clone_url
+    assert " " not in entry.clone_url
 
 
 def test_parse_repo_entry_directory_target_does_not_collide_with_local_repo(
@@ -339,6 +350,43 @@ def test_sync_plugin_repos_ignores_directory_source_artifacts(
     assert not (repo.path / "runner.pyc").exists()
 
 
+def test_sync_plugin_repos_ignores_artifact_only_directory_changes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    target_dir = tmp_path / "targets"
+    sync_plugin_repo(target_dir, f"dir://{source}")
+
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "runner.cpython-311.pyc").write_bytes(b"one")
+    (source / "mock_plugin.egg-info").mkdir()
+    (source / "mock_plugin.egg-info" / "PKG-INFO").write_text(
+        "Name: mock-plugin\n",
+        encoding="utf-8",
+    )
+    (source / "runner.pyc").write_bytes(b"cache")
+
+    repo = sync_plugin_repo(target_dir, f"dir://{source}")
+
+    assert repo.changed is False
+
+
+def test_sync_plugin_repos_preserves_directory_symlinks(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    (source / "target.txt").write_text("target\n", encoding="utf-8")
+    (source / "link.txt").symlink_to("target.txt")
+
+    repo = sync_plugin_repo(tmp_path / "targets", f"dir://{source}")
+
+    copied_link = repo.path / "link.txt"
+    assert copied_link.is_symlink()
+    assert copied_link.readlink() == Path("target.txt")
+
+
 def test_sync_plugin_repos_skips_missing_directory_source_by_default(
     tmp_path: Path,
 ) -> None:
@@ -363,3 +411,11 @@ def test_sync_plugin_repo_raises_for_missing_directory_source(
 ) -> None:
     with pytest.raises(PluginSyncError, match="does not exist"):
         sync_plugin_repo(tmp_path / "targets", f"dir://{tmp_path / 'missing'}")
+
+
+def test_sync_plugin_repo_raises_for_file_directory_source(tmp_path: Path) -> None:
+    source = tmp_path / "plugin.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+
+    with pytest.raises(PluginSyncError, match="not a directory"):
+        sync_plugin_repo(tmp_path / "targets", f"dir://{source}")

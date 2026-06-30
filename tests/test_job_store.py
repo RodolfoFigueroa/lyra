@@ -1,11 +1,15 @@
 import asyncio
 import json
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 from lyra.sdk.models import FailedJobResult, JobEnvelope
 
 from lyra_app import job_store
+from lyra_app.config import clear_config_cache
+from tests.config_helpers import load_test_config
 
 
 class FakeRedisSync:
@@ -110,6 +114,13 @@ class FakeRedisAsync:
 
 def _load_status(redis: FakeRedisSync, job_id: str) -> dict[str, Any]:
     return json.loads(redis.values[job_store.status_key(job_id)])
+
+
+@pytest.fixture(autouse=True)
+def _load_config(tmp_path: Path) -> Iterator[None]:
+    load_test_config(tmp_path)
+    yield
+    clear_config_cache()
 
 
 def test_create_job_writes_queued_status_and_ttl() -> None:

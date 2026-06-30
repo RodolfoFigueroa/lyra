@@ -84,13 +84,19 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
 
     fake_celery = FakeCelery()
 
+    def configure_celery(config: LyraConfig) -> None:
+        fake_celery.conf.update(
+            broker_url=config.redis.url,
+            result_backend=config.redis.url,
+        )
+
     def refresh_runner_registry(worker_name: str, *, config: LyraConfig) -> None:
         refreshed.append((worker_name, config))
 
     monkeypatch.setitem(
         sys.modules,
         "lyra_app.celery_app",
-        SimpleNamespace(celery_app=fake_celery),
+        SimpleNamespace(celery_app=fake_celery, configure_celery=configure_celery),
     )
     monkeypatch.setitem(
         sys.modules,

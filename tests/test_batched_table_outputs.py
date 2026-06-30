@@ -152,11 +152,13 @@ def reset_catalog(tmp_path: Path) -> Iterator[None]:
 
 
 @pytest.fixture
-def worker_module() -> Any:
+def worker_module(tmp_path: Path) -> Any:
     worker = importlib.import_module("lyra_app.worker")
     worker.RUNNER_REGISTRY.clear()
+    worker.set_runner_temp_base(tmp_path / "runner-temp")
     yield worker
     worker.RUNNER_REGISTRY.clear()
+    worker.set_runner_temp_base(None)
 
 
 def _decode_stored_result(

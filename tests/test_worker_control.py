@@ -1,8 +1,12 @@
 import json
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
 from lyra_app import job_store, worker_control
+from lyra_app.config import clear_config_cache
+from tests.config_helpers import load_test_config
 
 
 class FakeRedisSync:
@@ -23,6 +27,13 @@ class FakeRedisSync:
         stream_id = f"{len(stream) + 1}-0"
         stream.append((stream_id, fields))
         return stream_id
+
+
+@pytest.fixture(autouse=True)
+def _load_config(tmp_path: Path) -> Iterator[None]:
+    load_test_config(tmp_path)
+    yield
+    clear_config_cache()
 
 
 def test_notify_interrupted_tasks_persists_failed_job_results(

@@ -297,6 +297,8 @@ def refresh_plugin_catalog(
     store = _state_store(config)
     try:
         result = refresh_catalog_from_state(store)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=502, detail=_git_error_detail(exc)) from exc
     except (PluginStateLoadError, PluginStateValidationError) as exc:
         raise HTTPException(
             status_code=500,

@@ -31,6 +31,7 @@ from pydantic import ValidationError as PydanticValidationError
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
 from lyra_app.config import ConfigLoadError, LyraConfig, get_config
+from lyra_app.plugin_state import PluginState, PluginStateStore, repo_record_to_source
 from lyra_app.plugins import (
     install_runner_plugins,
     sync_plugin_repos,
@@ -114,15 +115,21 @@ def _entry_from_metric(
     )
 
 
-def _runner_sync_repos(worker_name: str, config: LyraConfig) -> list[Any]:
+def _runner_sync_repos(
+    worker_name: str,
+    config: LyraConfig,
+    state: PluginState,
+) -> list[Any]:
+    raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
     return sync_plugin_repos(
         config.worker_install_dir(worker_name),
-        config.plugins.repos,
+        raw_entries,
+        raise_on_error=True,
     )
 
 
-def _runner_queue_assignments(config: LyraConfig) -> dict[str, str]:
-    return config.plugins.metric_queues
+def _runner_queue_assignments(state: PluginState) -> dict[str, str]:
+    return state.metric_queues
 
 
 def _runner_queues(worker_name: str, config: LyraConfig) -> set[str]:
@@ -147,13 +154,18 @@ def load_runner_metric_entries(
     worker_name: str,
     *,
     config: LyraConfig | None = None,
+    store: PluginStateStore | None = None,
 ) -> dict[str, RunnerMetricEntry]:
     if config is None:
         config = get_config()
 
+    state_store = store or PluginStateStore(
+        allowed_queues=config.plugins.allowed_queues,
+    )
+    state = state_store.load()
     queues = _runner_queues(worker_name, config)
-    metric_queues = _runner_queue_assignments(config)
-    repos = install_runner_plugins(_runner_sync_repos(worker_name, config))
+    metric_queues = _runner_queue_assignments(state)
+    repos = install_runner_plugins(_runner_sync_repos(worker_name, config, state))
     entries: dict[str, RunnerMetricEntry] = {}
 
     for repo in repos:
@@ -174,13 +186,14 @@ def refresh_runner_registry(
     worker_name: str,
     *,
     config: LyraConfig | None = None,
+    store: PluginStateStore | None = None,
 ) -> dict[str, RunnerMetricEntry]:
     global _RUNNER_TEMP_BASE  # noqa: PLW0603
 
     if config is None:
         config = get_config()
 
-    registry = load_runner_metric_entries(worker_name, config=config)
+    registry = load_runner_metric_entries(worker_name, config=config, store=store)
     RUNNER_REGISTRY.clear()
     RUNNER_REGISTRY.update(registry)
     _RUNNER_TEMP_BASE = config.worker_temp_dir(worker_name)

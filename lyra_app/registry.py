@@ -17,13 +17,7 @@ from lyra.sdk.models.plugin_v3 import (
 )
 from pydantic import ValidationError as PydanticValidationError
 
-from lyra_app.config import (
-    LyraConfig,
-    get_config,
-    get_config_path,
-    reload_config,
-    save_config,
-)
+from lyra_app.config import LyraConfig, get_config
 from lyra_app.plugin_state import PluginState, PluginStateStore, repo_record_to_source
 from lyra_app.plugins import MANIFEST_FILENAME, sync_plugin_repos
 
@@ -143,33 +137,16 @@ def _build_registry(
     return registry
 
 
-def sync_catalog_repos(config: LyraConfig) -> list[Any]:
-    return sync_plugin_repos(config.plugins.catalog_dir, config.plugins.repos)
-
-
 def sync_catalog_state_repos(config: LyraConfig, state: PluginState) -> list[Any]:
     raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
-    return sync_plugin_repos(config.plugins.catalog_dir, raw_entries)
+    return sync_plugin_repos(
+        config.plugins.catalog_dir,
+        raw_entries,
+        raise_on_error=True,
+    )
 
 
-def _assign_missing_metric_queues(
-    config: LyraConfig,
-    metric_names: set[str],
-) -> tuple[LyraConfig, list[str]]:
-    existing = config.plugins.metric_queues
-    missing = sorted(metric_names - set(existing))
-    if not missing:
-        return config, []
-
-    metric_queues = dict(existing)
-    for metric_name in missing:
-        metric_queues[metric_name] = config.plugins.default_queue
-
-    plugins = config.plugins.model_copy(update={"metric_queues": metric_queues})
-    return config.model_copy(update={"plugins": plugins}), missing
-
-
-def refresh_catalog_from_state(
+def refresh_catalog(
     store: PluginStateStore | None = None,
 ) -> CatalogRefreshResult:
     global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
@@ -219,47 +196,10 @@ def refresh_catalog_from_state(
     )
 
 
-def refresh_catalog() -> CatalogRefreshResult:
-    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
-
-    previous_fingerprint = _CATALOG_FINGERPRINT
-    config = get_config()
-    config_path = get_config_path()
-    synced = sync_catalog_repos(config)
-    manifests = [(load_plugin_manifest(repo.path), repo.path) for repo in synced]
-    metric_names = {
-        metric.name for manifest, _path in manifests for metric in manifest.metrics
-    }
-    config, assigned_metric_names = _assign_missing_metric_queues(config, metric_names)
-    if assigned_metric_names:
-        save_config(config, config_path)
-        config = reload_config(config_path)
-
-    registry = _build_registry(manifests, config.plugins.metric_queues)
-
-    fingerprint = _fingerprint_payload(
-        _normalised_manifest_payload(manifests, config.plugins.metric_queues)
-    )
-    TASK_REGISTRY.clear()
-    TASK_REGISTRY.update(registry)
-    _CATALOG_FINGERPRINT = fingerprint
-    _CATALOG_LOADED = True
-
-    updated = [repo.entry.display_name for repo in synced if repo.changed]
-    catalog_changed = previous_fingerprint != fingerprint
-    logger.info(
-        "Loaded %d metric manifest(s); catalog fingerprint=%s; changed=%s",
-        len(TASK_REGISTRY),
-        fingerprint,
-        catalog_changed,
-    )
-    return CatalogRefreshResult(
-        updated_plugins=updated,
-        previous_catalog_fingerprint=previous_fingerprint,
-        catalog_fingerprint=fingerprint,
-        catalog_changed=catalog_changed,
-        assigned_metric_queues=assigned_metric_names,
-    )
+def refresh_catalog_from_state(
+    store: PluginStateStore | None = None,
+) -> CatalogRefreshResult:
+    return refresh_catalog(store)
 
 
 def ensure_catalog_loaded() -> None:

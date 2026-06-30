@@ -180,6 +180,8 @@ def _sync_repo(target: Path, entry: PluginRepoEntry) -> bool:
 def sync_plugin_repos(
     target_dir: Path,
     raw_entries: Iterable[str] | None = None,
+    *,
+    raise_on_error: bool = False,
 ) -> list[SyncedPluginRepo]:
     entries = list(iter_plugin_entries(raw_entries))
     if not entries:
@@ -203,6 +205,8 @@ def sync_plugin_repos(
         try:
             changed = _sync_repo(target, entry)
         except subprocess.CalledProcessError:
+            if raise_on_error:
+                raise
             logger.warning(
                 "Failed to sync plugin repo %r from %s",
                 entry.display_name,

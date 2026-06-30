@@ -275,14 +275,12 @@ class JobStoreConfig(StrictConfigModel):
 
 
 class PluginsConfig(StrictConfigModel):
-    repos: list[str]
     catalog_dir: Path = DEFAULT_PLUGIN_CATALOG_DIR
     runner_base_dir: Path = DEFAULT_PLUGIN_RUNNER_BASE_DIR
     default_queue: str = Field(min_length=1)
     allowed_queues: list[str] = Field(min_length=1)
-    metric_queues: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("repos", "allowed_queues", mode="before")
+    @field_validator("allowed_queues", mode="before")
     @classmethod
     def normalize_string_lists(cls, value: Any) -> Any:
         return _strip_string_list(value)
@@ -306,29 +304,6 @@ class PluginsConfig(StrictConfigModel):
     def normalize_default_queue(cls, value: Any) -> Any:
         return _strip_required_string(value)
 
-    @field_validator("metric_queues", mode="before")
-    @classmethod
-    def normalize_metric_queues(cls, value: Any) -> Any:
-        return _strip_string_mapping(value, value_label="metric queue")
-
-    @field_validator("repos")
-    @classmethod
-    def validate_unique_repos(cls, value: list[str]) -> list[str]:
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for repo in value:
-            if repo in seen:
-                duplicates.add(repo)
-            seen.add(repo)
-        if duplicates:
-            names = ", ".join(sorted(duplicates))
-            msg = (
-                "duplicate plugin repository entries after trimming whitespace: "
-                f"{names}"
-            )
-            raise ValueError(msg)
-        return value
-
     @model_validator(mode="after")
     def validate_queues(self) -> Self:
         allowed_queues = set(self.allowed_queues)
@@ -336,20 +311,6 @@ class PluginsConfig(StrictConfigModel):
             msg = "plugins.default_queue must appear in plugins.allowed_queues"
             raise ValueError(msg)
 
-        invalid_assignments = sorted(
-            {
-                queue
-                for queue in self.metric_queues.values()
-                if queue not in allowed_queues
-            }
-        )
-        if invalid_assignments:
-            names = ", ".join(invalid_assignments)
-            msg = (
-                "plugins.metric_queues values must appear in "
-                f"plugins.allowed_queues: {names}"
-            )
-            raise ValueError(msg)
         return self
 
 
@@ -620,23 +581,12 @@ def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> No
 
 def _append_plugins_section(lines: list[str], plugins: PluginsConfig) -> None:
     lines.append("[plugins]")
-    _append_key(lines, "repos", plugins.repos)
     _append_key(lines, "default_queue", plugins.default_queue)
     _append_key(lines, "allowed_queues", plugins.allowed_queues)
     if plugins.catalog_dir != DEFAULT_PLUGIN_CATALOG_DIR:
         _append_key(lines, "catalog_dir", plugins.catalog_dir)
     if plugins.runner_base_dir != DEFAULT_PLUGIN_RUNNER_BASE_DIR:
         _append_key(lines, "runner_base_dir", plugins.runner_base_dir)
-    lines.append("")
-
-
-def _append_metric_queues_section(
-    lines: list[str],
-    metric_queues: dict[str, str],
-) -> None:
-    lines.append("[plugins.metric_queues]")
-    for metric_name, queue_name in sorted(metric_queues.items()):
-        _append_key(lines, _toml_key(metric_name), queue_name)
     lines.append("")
 
 
@@ -665,7 +615,6 @@ def render_config_toml(config: LyraConfig) -> str:
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
     _append_plugins_section(lines, config.plugins)
-    _append_metric_queues_section(lines, config.plugins.metric_queues)
     _append_workers_section(lines, config.workers)
     return "\n".join(lines).rstrip() + "\n"
 

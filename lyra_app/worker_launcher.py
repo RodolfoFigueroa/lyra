@@ -25,6 +25,7 @@ def build_celery_worker_args(config: LyraConfig, worker_name: str) -> list[str]:
 
 def launch_worker(worker_name: str, *, config: LyraConfig | None = None) -> None:
     config = get_config() if config is None else config
+    config.get_worker(worker_name)
     ensure_runtime_directories(config)
     configure_logging(config)
 
@@ -45,7 +46,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("worker_name", help="Name from the [workers.<name>] table.")
     args = parser.parse_args(argv)
-    launch_worker(args.worker_name)
+    try:
+        launch_worker(args.worker_name)
+    except KeyError as exc:
+        message = str(exc.args[0]) if exc.args else str(exc)
+        parser.error(message)
 
 
 if __name__ == "__main__":

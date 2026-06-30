@@ -147,7 +147,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                     err = f"Failed to fetch job result. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 if "application/json" not in response.headers.get("content-type", ""):
-                    err = "Job result is a file; use download_job_result_to_file()."
+                    err = "Job result response was not JSON."
                     raise DownloadError(err)
                 return parse_job_result(await response.json())
         except aiohttp.ClientError as exc:
@@ -165,7 +165,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
-                    self._http_url(f"jobs/{job_id}/result"),
+                    self._http_url(f"jobs/{job_id}/result/download"),
                     headers=self.headers,
                 ) as response,
             ):

@@ -140,7 +140,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             )
             raise DownloadError(err)
         if "application/json" not in response.headers.get("content-type", ""):
-            err = "Job result is a file; use download_job_result_to_file()."
+            err = "Job result response was not JSON."
             raise DownloadError(err)
         return parse_job_result(response.json())
 
@@ -152,7 +152,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
         output_path = Path(path)
         try:
             with requests.get(
-                self._http_url(f"jobs/{job_id}/result"),
+                self._http_url(f"jobs/{job_id}/result/download"),
                 timeout=self.timeout,
                 headers=self.headers,
                 stream=True,

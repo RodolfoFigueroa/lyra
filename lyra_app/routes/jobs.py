@@ -1,12 +1,11 @@
 import asyncio
-import contextlib
 import json
 from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import uuid4
 
 from anyio import Path
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models import (
     FileJobResult,
@@ -191,10 +190,18 @@ async def get_job_events(
 
 
 @router.get("/jobs/{job_id}/result", response_model=None)
-async def get_job_result(
-    job_id: str,
-    background_tasks: BackgroundTasks,
-) -> FileResponse | JSONResponse:
+async def get_job_result(job_id: str) -> JSONResponse:
+    await _ensure_redis_available()
+    payload = await job_store.get_job_result_async(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Result expired or not found")
+
+    result = parse_job_result(payload)
+    return JSONResponse(content=result.model_dump(mode="json", exclude_none=True))
+
+
+@router.get("/jobs/{job_id}/result/download", response_model=None)
+async def download_job_result(job_id: str) -> FileResponse:
     await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:
@@ -206,16 +213,9 @@ async def get_job_result(
         if not await file_path.exists():
             raise HTTPException(status_code=404, detail="Result file not found")
 
-        async def cleanup() -> None:
-            with contextlib.suppress(OSError):
-                await file_path.unlink()
-            await job_store.delete_job_result_async(job_id)
-
-        background_tasks.add_task(cleanup)
         return FileResponse(
             file_path,
             media_type=result.media_type,
             filename=file_path.name,
         )
-
-    return JSONResponse(content=payload)
+    raise HTTPException(status_code=409, detail="Job result is not a file")

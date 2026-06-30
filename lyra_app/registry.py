@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ from lyra_app.config import (
     reload_config,
     save_config,
 )
+from lyra_app.plugin_state import PluginState, PluginStateStore, repo_record_to_source
 from lyra_app.plugins import MANIFEST_FILENAME, sync_plugin_repos
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class CatalogRefreshResult:
     previous_catalog_fingerprint: str | None
     catalog_fingerprint: str
     catalog_changed: bool
+    assigned_metric_queues: list[str] = field(default_factory=list)
 
 
 class MetricPayloadValidationError(Exception):
@@ -145,6 +147,11 @@ def sync_catalog_repos(config: LyraConfig) -> list[Any]:
     return sync_plugin_repos(config.plugins.catalog_dir, config.plugins.repos)
 
 
+def sync_catalog_state_repos(config: LyraConfig, state: PluginState) -> list[Any]:
+    raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
+    return sync_plugin_repos(config.plugins.catalog_dir, raw_entries)
+
+
 def _assign_missing_metric_queues(
     config: LyraConfig,
     metric_names: set[str],
@@ -160,6 +167,56 @@ def _assign_missing_metric_queues(
 
     plugins = config.plugins.model_copy(update={"metric_queues": metric_queues})
     return config.model_copy(update={"plugins": plugins}), missing
+
+
+def refresh_catalog_from_state(
+    store: PluginStateStore | None = None,
+) -> CatalogRefreshResult:
+    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
+
+    previous_fingerprint = _CATALOG_FINGERPRINT
+    config = get_config()
+    state_store = store or PluginStateStore(
+        allowed_queues=config.plugins.allowed_queues,
+    )
+    state = state_store.load()
+    synced = sync_catalog_state_repos(config, state)
+    manifests = [(load_plugin_manifest(repo.path), repo.path) for repo in synced]
+    metric_names = {
+        metric.name for manifest, _path in manifests for metric in manifest.metrics
+    }
+    assigned_metric_names = state_store.assign_missing_metric_queues(
+        metric_names,
+        default_queue=config.plugins.default_queue,
+    )
+    if assigned_metric_names:
+        state = state_store.reload()
+
+    registry = _build_registry(manifests, state.metric_queues)
+
+    fingerprint = _fingerprint_payload(
+        _normalised_manifest_payload(manifests, state.metric_queues)
+    )
+    TASK_REGISTRY.clear()
+    TASK_REGISTRY.update(registry)
+    _CATALOG_FINGERPRINT = fingerprint
+    _CATALOG_LOADED = True
+
+    updated = [repo.entry.display_name for repo in synced if repo.changed]
+    catalog_changed = previous_fingerprint != fingerprint
+    logger.info(
+        "Loaded %d state-backed metric manifest(s); catalog fingerprint=%s; changed=%s",
+        len(TASK_REGISTRY),
+        fingerprint,
+        catalog_changed,
+    )
+    return CatalogRefreshResult(
+        updated_plugins=updated,
+        previous_catalog_fingerprint=previous_fingerprint,
+        catalog_fingerprint=fingerprint,
+        catalog_changed=catalog_changed,
+        assigned_metric_queues=assigned_metric_names,
+    )
 
 
 def refresh_catalog() -> CatalogRefreshResult:
@@ -201,6 +258,7 @@ def refresh_catalog() -> CatalogRefreshResult:
         previous_catalog_fingerprint=previous_fingerprint,
         catalog_fingerprint=fingerprint,
         catalog_changed=catalog_changed,
+        assigned_metric_queues=assigned_metric_names,
     )
 
 

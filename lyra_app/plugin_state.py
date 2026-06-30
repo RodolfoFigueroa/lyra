@@ -133,6 +133,12 @@ def generate_repo_id(source: str) -> str:
     return normalize_repo_source(source).generated_id
 
 
+def repo_record_to_source(repo: PluginRepoRecord) -> str:
+    if repo.ref is None:
+        return repo.source
+    return f"{repo.source}@{repo.ref}"
+
+
 class PluginRepoRecord(StrictPluginStateModel):
     id: str = Field(min_length=1)
     source: str = Field(min_length=1)
@@ -539,6 +545,7 @@ __all__ = [
     "make_repo_record",
     "normalize_repo_source",
     "render_plugin_state_toml",
+    "repo_record_to_source",
     "save_plugin_state",
     "validate_plugin_state",
 ]

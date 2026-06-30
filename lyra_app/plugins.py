@@ -221,6 +221,14 @@ def sync_plugin_repos(
     return synced
 
 
+def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
+    entry = parse_repo_entry(raw_entry)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / entry.target_name
+    changed = _sync_repo(target, entry)
+    return SyncedPluginRepo(entry=entry, path=target, changed=changed)
+
+
 def _check_compatible(plugin_dir: Path) -> bool:
     cmd = [
         "uv",

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -14,8 +15,10 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, registry
+from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import jobs
+from tests.config_helpers import load_test_config
 
 
 def _manifest() -> dict[str, Any]:
@@ -41,7 +44,6 @@ def _manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "queue": "priority-lane",
                 "entrypoint": "fake_plugin.runner:run",
             }
         ],
@@ -76,7 +78,6 @@ def _batched_manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "queue": "priority-lane",
                 "entrypoint": "fake_plugin.runner:run",
             }
         ],
@@ -271,12 +272,25 @@ class FakeAsyncPath:
 
 
 @pytest.fixture(autouse=True)
-def reset_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+def reset_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Iterator[None]:
     async def run_inline(func: Any, /, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)
 
     monkeypatch.setattr(jobs.asyncio, "to_thread", run_inline)
     registry.reset_catalog()
+    load_test_config(
+        tmp_path,
+        metric_queues={
+            "batched_metric": "priority-lane",
+            "heavy_metric": "priority-lane",
+        },
+    )
+    yield
+    registry.reset_catalog()
+    clear_config_cache()
 
 
 def _use_repo(
@@ -291,7 +305,9 @@ def _use_repo(
         json.dumps(manifest or _manifest()),
         encoding="utf-8",
     )
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
     registry.refresh_catalog()
 
 
@@ -308,7 +324,7 @@ async def _body(response: StreamingResponse) -> str:
     return "".join(chunks)
 
 
-def test_create_job_dispatches_generic_task_to_manifest_queue(
+def test_create_job_dispatches_generic_task_to_toml_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

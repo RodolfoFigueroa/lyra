@@ -11,7 +11,6 @@ def _static_metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     metric: dict[str, Any] = {
         "name": "urbanized_area",
         "description": "Compute urbanized area statistics.",
-        "queue": "interactive",
         "entrypoint": "urban_metrics.runner:run",
         "inputs": {
             "location": {"kind": "location"},
@@ -106,7 +105,7 @@ def test_compile_v3_static_table_metric_request_schema() -> None:
     metric = compiled["metrics"][0]
     schema = metric["request_schema"]
 
-    assert metric["queue"] == "interactive"
+    assert "queue" not in metric
     assert metric["spatial_inputs"] == {"location": "location"}
     assert metric["batch_inputs"] == []
     assert schema["type"] == "object"

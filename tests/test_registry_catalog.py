@@ -1,12 +1,15 @@
 import importlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from lyra_app import registry
+from lyra_app.config import clear_config_cache, get_config_path, load_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from tests.config_helpers import load_test_config
 
 
 def _metric(
@@ -15,7 +18,6 @@ def _metric(
     description: str = "A metric.",
     inputs: dict[str, Any] | None = None,
     output: dict[str, Any] | None = None,
-    queue: str = "lightweight",
     entrypoint: str = "fake_plugin.runner:run",
 ) -> dict[str, Any]:
     return {
@@ -38,7 +40,6 @@ def _metric(
                 }
             ],
         },
-        "queue": queue,
         "entrypoint": entrypoint,
     }
 
@@ -72,8 +73,18 @@ def _synced_repo(repo: Path, *, changed: bool = False) -> SyncedPluginRepo:
 
 
 @pytest.fixture(autouse=True)
-def reset_catalog() -> None:
+def reset_catalog(tmp_path: Path) -> Iterator[None]:
     registry.reset_catalog()
+    load_test_config(
+        tmp_path,
+        metric_queues={
+            "light_metric": "lightweight",
+            "raster_metric": "heavy",
+        },
+    )
+    yield
+    registry.reset_catalog()
+    clear_config_cache()
 
 
 def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
@@ -82,7 +93,9 @@ def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
     def fail_import(name: str, package: str | None = None) -> object:  # noqa: ARG001
         msg = "API catalog loading must not import plugin code"
@@ -121,7 +134,7 @@ def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
     monkeypatch.setattr(
         registry,
         "sync_catalog_repos",
-        lambda: [_synced_repo(first_repo), _synced_repo(second_repo)],
+        lambda _config: [_synced_repo(first_repo), _synced_repo(second_repo)],
     )
 
     with pytest.raises(RuntimeError, match="Duplicate metric name"):
@@ -145,11 +158,12 @@ def test_catalog_refresh_reads_v3_file_metric(
             "media_type": "image/tiff",
             "extensions": [".tif", ".tiff"],
         },
-        queue="heavy",
         entrypoint="fake_plugin.runner:run_raster",
     )
     _write_manifest(repo, _manifest(metric=metric))
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
     registry.refresh_catalog()
     info = registry.get_metric_info("raster_metric")
@@ -167,6 +181,63 @@ def test_catalog_refresh_reads_v3_file_metric(
     assert entry.queue == "heavy"
 
 
+def test_catalog_refresh_auto_assigns_new_metric_queue_to_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest(metric=_metric(name="new_metric")))
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_repos",
+        lambda _config: [_synced_repo(repo)],
+    )
+    config_path = get_config_path()
+
+    registry.refresh_catalog()
+
+    persisted = load_config(config_path)
+    entry = registry.get_metric_entry("new_metric")
+    assert persisted.plugins.metric_queues["new_metric"] == "interactive"
+    assert entry is not None
+    assert entry.queue == "interactive"
+
+
+def test_catalog_refresh_keeps_previous_registry_when_assignment_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_repo = tmp_path / "repo-1"
+    second_repo = tmp_path / "repo-2"
+    _write_manifest(first_repo, _manifest())
+    _write_manifest(second_repo, _manifest(metric=_metric(name="new_metric")))
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_repos",
+        lambda _config: [_synced_repo(first_repo)],
+    )
+    registry.refresh_catalog()
+    original_entry = registry.get_metric_entry("light_metric")
+
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_repos",
+        lambda _config: [_synced_repo(second_repo)],
+    )
+
+    def fail_save(*_args: Any, **_kwargs: Any) -> None:
+        msg = "disk full"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(registry, "save_config", fail_save)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        registry.refresh_catalog()
+
+    assert registry.get_metric_entry("light_metric") == original_entry
+    assert registry.get_metric_entry("new_metric") is None
+
+
 def test_catalog_refresh_rejects_invalid_request_json_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -182,7 +253,9 @@ def test_catalog_refresh_rejects_invalid_request_json_schema(
         }
     )
     _write_manifest(repo, _manifest(metric=metric))
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
     with pytest.raises(RuntimeError, match=r"Plugin manifest .* is invalid"):
         registry.refresh_catalog()
@@ -194,7 +267,9 @@ def test_catalog_fingerprint_changes_only_when_manifest_content_changes(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
     first = registry.refresh_catalog()
     second = registry.refresh_catalog()
@@ -216,7 +291,9 @@ def test_validate_metric_payload_uses_manifest_json_schema(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
     registry.refresh_catalog()
 
     payload = {
@@ -255,7 +332,9 @@ def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
         }
     )
     _write_manifest(repo, _manifest(metric=metric))
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
     registry.refresh_catalog()
 
     valid_payload = {
@@ -307,7 +386,9 @@ def test_validate_metric_payload_rejects_duplicate_batch_keys(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
     registry.refresh_catalog()
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
@@ -372,7 +453,9 @@ def test_validate_metric_payload_reports_duplicate_keys_per_batch_field(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
     registry.refresh_catalog()
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
@@ -441,7 +524,9 @@ def test_catalog_refresh_rejects_legacy_v2_manifest(
             "metrics": [legacy_metric],
         },
     )
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
     with pytest.raises(RuntimeError, match=r"Plugin manifest .* is invalid"):
         registry.refresh_catalog()
@@ -460,7 +545,9 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
     registry.refresh_catalog()
 
     payload = {

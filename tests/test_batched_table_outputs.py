@@ -1,5 +1,6 @@
 import importlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,9 @@ from lyra.sdk.models import JobEnvelope, TableJobResult
 from lyra.sdk.models.plugin_v3 import TableOutputV3
 
 from lyra_app import registry
+from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from tests.config_helpers import load_test_config
 
 
 def _v3_batched_manifest() -> dict[str, Any]:
@@ -19,7 +22,6 @@ def _v3_batched_manifest() -> dict[str, Any]:
             {
                 "name": "light_metric",
                 "description": "A lightweight metric.",
-                "queue": "lightweight",
                 "entrypoint": "fake_plugin.runner:run",
                 "inputs": {
                     "location": {"kind": "location"},
@@ -141,8 +143,12 @@ class FakeRedisSync:
 
 
 @pytest.fixture(autouse=True)
-def reset_catalog() -> None:
+def reset_catalog(tmp_path: Path) -> Iterator[None]:
     registry.reset_catalog()
+    load_test_config(tmp_path, metric_queues={"light_metric": "lightweight"})
+    yield
+    registry.reset_catalog()
+    clear_config_cache()
 
 
 @pytest.fixture
@@ -168,7 +174,9 @@ def test_catalog_refresh_preserves_batched_column_metadata(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _v3_batched_manifest())
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
     registry.refresh_catalog()
     info = registry.get_metric_info("light_metric")

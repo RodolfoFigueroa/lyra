@@ -14,7 +14,6 @@ def _static_metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     metric: dict[str, Any] = {
         "name": "urbanized_area",
         "description": "Compute urbanized area statistics.",
-        "queue": "interactive",
         "entrypoint": "urban_metrics.runner:run",
         "inputs": {
             "location": {"kind": "location"},
@@ -107,9 +106,15 @@ def test_manifest_v3_accepts_minimal_static_table_metric() -> None:
     metric = manifest.metrics[0]
 
     assert manifest.schema_version == 3
-    assert metric.queue == "interactive"
+    assert "queue" not in metric.model_dump()
     assert isinstance(metric.output, TableOutputV3)
     assert metric.output.columns[0].nullable is False
+
+
+def test_manifest_v3_rejects_metric_queue_field() -> None:
+    raw = _manifest({"queue": "interactive"})
+
+    _assert_invalid(raw, "Extra inputs")
 
 
 def test_manifest_v3_accepts_dynamic_table_metric() -> None:

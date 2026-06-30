@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -7,8 +8,10 @@ import pytest
 from fastapi import HTTPException
 
 from lyra_app import registry
+from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import metrics
+from tests.config_helpers import load_test_config
 
 
 def _manifest() -> dict[str, Any]:
@@ -34,7 +37,6 @@ def _manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "queue": "lightweight",
                 "entrypoint": "fake_plugin.runner:run",
             }
         ],
@@ -81,12 +83,18 @@ def _synced_repo(repo: Path) -> SyncedPluginRepo:
 
 
 @pytest.fixture(autouse=True)
-def reset_catalog() -> None:
+def reset_catalog(tmp_path: Path) -> Iterator[None]:
     registry.reset_catalog()
+    load_test_config(tmp_path, metric_queues={"light_metric": "lightweight"})
+    yield
+    registry.reset_catalog()
+    clear_config_cache()
 
 
 def _use_repo(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(registry, "sync_catalog_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+    )
 
 
 def test_metrics_route_returns_schema_metadata_only(

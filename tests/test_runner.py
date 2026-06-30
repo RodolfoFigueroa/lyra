@@ -7,13 +7,14 @@ import pytest
 from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
 from lyra.sdk.models.plugin_v3 import FileOutputV3, TableOutputV3
 
+from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from tests.config_helpers import load_test_config
 
 
 def _metric(
     *,
     name: str,
-    queue: str,
     entrypoint: str,
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -36,7 +37,6 @@ def _metric(
                 }
             ],
         },
-        "queue": queue,
         "entrypoint": entrypoint,
     }
 
@@ -147,12 +147,20 @@ class FakeRedisSync:
 
 
 @pytest.fixture
-def worker_module(monkeypatch: pytest.MonkeyPatch) -> Any:
+def worker_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     monkeypatch.delenv("LYRA_PLUGIN_REPOS", raising=False)
+    load_test_config(
+        tmp_path,
+        metric_queues={
+            "heavy_metric": "heavy",
+            "light_metric": "lightweight",
+        },
+    )
     worker = importlib.import_module("lyra_app.worker")
     worker.RUNNER_REGISTRY.clear()
     yield worker
     worker.RUNNER_REGISTRY.clear()
+    clear_config_cache()
 
 
 def _write_module(tmp_path: Path, module_name: str, source: str) -> None:
@@ -170,6 +178,11 @@ def _configure_runner_repos(
     repo: Path,
 ) -> None:
     monkeypatch.setattr(worker, "sync_runner_repos", lambda: [_synced_repo(repo)])
+    monkeypatch.setattr(
+        worker,
+        "sync_plugin_repos",
+        lambda *_args, **_kwargs: [_synced_repo(repo)],
+    )
     monkeypatch.setattr(worker, "install_runner_plugins", list)
 
 
@@ -203,12 +216,10 @@ def test_runner_loads_only_configured_queue(
             [
                 _metric(
                     name="light_metric",
-                    queue="lightweight",
                     entrypoint="missing_light_plugin:run",
                 ),
                 _metric(
                     name="heavy_metric",
-                    queue="heavy",
                     entrypoint="heavy_plugin:run",
                 ),
             ]
@@ -221,14 +232,44 @@ def test_runner_loads_only_configured_queue(
         "    raise AssertionError('entrypoint should only be imported')\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setenv("LYRA_RUNNER_QUEUES", "heavy")
     _configure_runner_repos(worker_module, monkeypatch, repo)
 
-    entries = worker_module.refresh_runner_registry()
+    entries = worker_module.refresh_runner_registry("heavy")
 
     assert list(entries) == ["heavy_metric"]
     assert entries["heavy_metric"].queue == "heavy"
     assert entries["heavy_metric"].entrypoint == "heavy_plugin:run"
+
+
+def test_runner_fails_when_metric_queue_assignment_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    load_test_config(tmp_path, metric_queues={})
+    repo = tmp_path / "repo"
+    _write_manifest(
+        repo,
+        _manifest(
+            [
+                _metric(
+                    name="heavy_metric",
+                    entrypoint="heavy_plugin:run",
+                )
+            ]
+        ),
+    )
+    _write_module(
+        tmp_path,
+        "heavy_plugin",
+        "def run(job, context):\n"
+        "    raise AssertionError('entrypoint should only be imported')\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _configure_runner_repos(worker_module, monkeypatch, repo)
+
+    with pytest.raises(RuntimeError, match="no queue assignment"):
+        worker_module.refresh_runner_registry("heavy")
 
 
 def test_generic_task_executes_entrypoint_and_persists_result(
@@ -243,7 +284,6 @@ def test_generic_task_executes_entrypoint_and_persists_result(
             [
                 _metric(
                     name="heavy_metric",
-                    queue="heavy",
                     entrypoint="success_plugin:run",
                 )
             ]
@@ -266,10 +306,9 @@ def test_generic_task_executes_entrypoint_and_persists_result(
         "    )\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setenv("LYRA_RUNNER_QUEUES", "heavy")
     monkeypatch.setenv("LYRA_RUNNER_TEMP_DIR", str(tmp_path / "tmp"))
     _configure_runner_repos(worker_module, monkeypatch, repo)
-    worker_module.refresh_runner_registry()
+    worker_module.refresh_runner_registry("heavy")
 
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)

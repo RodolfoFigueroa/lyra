@@ -1,11 +1,12 @@
 ---
 title: Getting Started
-description: Configure Lyra with TOML, start Redis, run workers, and launch the API server.
+description: Configure Lyra with TOML and env vars, start Redis, run workers, and launch the API server.
 ---
 
 Lyra reads server settings from `/lyra_data/config/lyra.toml`. Docker Compose
-mounts that config and each secret as read-only files, while the shared
-`lyra_data` volume stores Lyra-owned runtime state such as plugin checkouts,
+mounts that config and the Earth Engine service account as read-only files,
+passes Postgres/admin settings as environment variables, and uses the shared
+`lyra_data` volume for Lyra-owned runtime state such as plugin checkouts,
 `/lyra_data/state/plugins.toml`, job cache files, and optional logs.
 
 ## Prerequisites
@@ -15,7 +16,8 @@ You will need:
 - Python managed by `uv`.
 - Redis for the Celery broker, result backend, and job/event store.
 - A Google Earth Engine service account key saved as JSON.
-- Local secret files that Compose can mount into `/lyra_data/secrets`.
+- Postgres connection details and an admin API key available as environment
+  variables.
 
 ## Configure
 
@@ -23,13 +25,12 @@ Create these files:
 
 ```text
 lyra_data/config/lyra.toml
-secrets/admin_api_key
-secrets/postgres_password
 secrets/service-account.json
 ```
 
 The repository includes a copyable starting file at `lyra.toml.example`.
-Copy `.env.example` to `.env` so Compose knows where those host files live:
+Copy `.env.example` to `.env` so Compose knows where those host files live and
+which runtime env vars to pass into Lyra:
 
 ```bash
 mkdir -p lyra_data/config secrets
@@ -49,19 +50,9 @@ port = 5219
 [redis]
 url = "redis://lyra-redis-dev:6379/0"
 
-[database]
-host = "postgres"
-port = 5432
-name = "lyra"
-user = "lyra"
-# password_file = "/lyra_data/secrets/postgres_password"
-
 [earth_engine]
 project = "your-gee-project-id"
 # service_account_file = "/lyra_data/secrets/service-account.json"
-
-[admin]
-# api_key_file = "/lyra_data/secrets/admin_api_key"
 
 [logging]
 level = "INFO"
@@ -89,12 +80,20 @@ For direct local processes, use `redis://localhost:6379/0` instead of the
 Compose Redis hostname. For the production Compose file, use
 `redis://redis:6379/0`.
 
-Secrets are file references only. Do not put API keys, database passwords, or
-service account JSON inline in TOML.
+Set these environment variables before starting Lyra:
 
-The commented path fields use Docker-oriented defaults under `/lyra_data`.
-Compose mounts local secret files into `/lyra_data/secrets`; uncomment those
-fields only if your deployment uses different container paths.
+```bash
+export LYRA_POSTGRES_HOST=postgres
+export LYRA_POSTGRES_PORT=5432
+export LYRA_POSTGRES_DB=lyra
+export LYRA_POSTGRES_USER=lyra
+export LYRA_POSTGRES_PASSWORD=change-me
+export LYRA_ADMIN_API_KEY=change-me
+```
+
+Do not put API keys or database passwords in TOML. The Earth Engine service
+account remains a file reference; the commented path field uses the
+Docker-oriented default under `/lyra_data`.
 
 ## Install
 
@@ -113,9 +112,10 @@ docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
 All Lyra app containers mount `lyra_data:/lyra_data` plus read-only file mounts
-for `lyra.toml` and each secret. The worker commands pass `interactive` or
-`batch`; queues, concurrency, install directories, and temp directories come
-from `[workers.<name>]`.
+for `lyra.toml` and the service-account JSON. Compose also passes the
+`LYRA_POSTGRES_*` and `LYRA_ADMIN_API_KEY` variables from `.env`. The worker
+commands pass `interactive` or `batch`; queues, concurrency, install
+directories, and temp directories come from `[workers.<name>]`.
 
 ## Direct Processes
 
@@ -146,7 +146,7 @@ by editing `lyra.toml`. Add a plugin repo after the API is running:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer $(cat secrets/admin_api_key)" \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/plugin-repo@main"}'
 ```
@@ -155,7 +155,7 @@ Refresh the catalog and restart workers:
 
 ```bash
 curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
-  -H "Authorization: Bearer $(cat secrets/admin_api_key)"
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 Missing metric routes are added to `/lyra_data/state/plugins.toml` with

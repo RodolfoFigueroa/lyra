@@ -137,7 +137,7 @@ The route requires Bearer authentication:
 
 ```bash
 curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 `timeout` is the number of seconds to wait for in-flight tasks before forcing worker shutdown.

@@ -12,18 +12,26 @@ runtime settings:
 | --- | --- |
 | `[api]` | API host and port. |
 | `[redis]` | Redis URL used by Celery and the Redis clients. |
-| `[database]` | PostgreSQL host, port, database, user, and password file reference. |
 | `[earth_engine]` | Earth Engine project and service account file reference. |
-| `[admin]` | Admin API-key file reference. |
 | `[logging]` | Application log level and optional log file. |
 | `[job_store]` | Job status, result, and event TTL. |
 | `[plugins]` | Plugin runtime paths, default queue, and allowed queues. |
 | `[workers.<name>]` | Worker queues, concurrency, install directory, and temp directory. |
 
-Secret values are not stored inline. Use `password_file`, `api_key_file`, and
-`service_account_file` paths under `/lyra_data/secrets`. By default, Lyra reads
-`/lyra_data/secrets/postgres_password`, `/lyra_data/secrets/admin_api_key`, and
-`/lyra_data/secrets/service-account.json`.
+PostgreSQL settings and the admin API key are environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `LYRA_POSTGRES_HOST` | PostgreSQL host. |
+| `LYRA_POSTGRES_PORT` | PostgreSQL port. |
+| `LYRA_POSTGRES_DB` | PostgreSQL database name. |
+| `LYRA_POSTGRES_USER` | PostgreSQL user. |
+| `LYRA_POSTGRES_PASSWORD` | PostgreSQL password. |
+| `LYRA_ADMIN_API_KEY` | Bearer token required by `/admin/*` routes. |
+
+Do not put API keys or database passwords in TOML. The Earth Engine service
+account remains a file reference through `service_account_file`; by default
+Lyra reads `/lyra_data/secrets/service-account.json`.
 
 Docker-oriented runtime paths also default under `/lyra_data`: plugin catalog
 repos use `/lyra_data/plugins/catalog`, runner installs use

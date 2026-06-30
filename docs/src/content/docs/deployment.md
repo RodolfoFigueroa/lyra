@@ -5,8 +5,9 @@ description: Run the API and workers from one server-owned TOML config and data 
 
 Lyra separates deployment config from plugin operational state. API and worker
 containers read `/lyra_data/config/lyra.toml` from a read-only file mount, read
-secret files from read-only file mounts, and share one writable `lyra_data`
-volume for Lyra-owned state and runtime files.
+the Earth Engine service account from a read-only file mount, receive
+Postgres/admin settings from environment variables, and share one writable
+`lyra_data` volume for Lyra-owned state and runtime files.
 
 ## API Containers
 
@@ -56,25 +57,39 @@ volumes:
 ```
 
 Every Lyra app container mounts it at `/lyra_data`. Each app container also
-mounts the config file and each secret file as read-only bind mounts:
+mounts the config file and Earth Engine service account as read-only bind
+mounts:
 
 ```yaml
 volumes:
   - lyra_data:/lyra_data
   - ${LYRA_CONFIG_FILE}:/lyra_data/config/lyra.toml:ro
-  - ${LYRA_POSTGRES_PASSWORD_FILE}:/lyra_data/secrets/postgres_password:ro
-  - ${LYRA_ADMIN_API_KEY_FILE}:/lyra_data/secrets/admin_api_key:ro
   - ${LYRA_SERVICE_ACCOUNT_FILE}:/lyra_data/secrets/service-account.json:ro
 ```
 
-Use `.env` only for those host file locations. These variables do not configure
-Lyra inside the container:
+Compose also passes Postgres/admin settings from `.env` to each app container:
+
+```yaml
+environment:
+  LYRA_POSTGRES_HOST: ${LYRA_POSTGRES_HOST}
+  LYRA_POSTGRES_PORT: ${LYRA_POSTGRES_PORT}
+  LYRA_POSTGRES_DB: ${LYRA_POSTGRES_DB}
+  LYRA_POSTGRES_USER: ${LYRA_POSTGRES_USER}
+  LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}
+  LYRA_ADMIN_API_KEY: ${LYRA_ADMIN_API_KEY}
+```
+
+Use `.env` for the host file locations and runtime env values:
 
 ```env
 LYRA_CONFIG_FILE=./lyra_data/config/lyra.toml
-LYRA_POSTGRES_PASSWORD_FILE=./secrets/postgres_password
-LYRA_ADMIN_API_KEY_FILE=./secrets/admin_api_key
 LYRA_SERVICE_ACCOUNT_FILE=./secrets/service-account.json
+LYRA_POSTGRES_HOST=postgres
+LYRA_POSTGRES_PORT=5432
+LYRA_POSTGRES_DB=lyra
+LYRA_POSTGRES_USER=lyra
+LYRA_POSTGRES_PASSWORD=change-me
+LYRA_ADMIN_API_KEY=change-me
 ```
 
 `/lyra_data/state/plugins.toml` is not mounted from the host. Lyra creates and
@@ -95,8 +110,6 @@ Use this tree inside the volume:
 ```text
 /lyra_data/
   config/lyra.toml              # read-only file mount
-  secrets/postgres_password     # read-only file mount
-  secrets/admin_api_key         # read-only file mount
   secrets/service-account.json  # read-only file mount
   state/plugins.toml            # Lyra-owned writable state
   cache/jobs/                   # Lyra-created job temp data
@@ -105,11 +118,10 @@ Use this tree inside the volume:
   logs/                         # optional Lyra-created logs
 ```
 
-Secret files are deployment-owned. Lyra references them by path and does not
-generate placeholder secrets. The default paths are
-`/lyra_data/secrets/postgres_password`, `/lyra_data/secrets/admin_api_key`, and
-`/lyra_data/secrets/service-account.json`; mount deployment secrets to those
-paths, or override the secret path fields in TOML.
+The service-account file is deployment-owned. Lyra references it by path and
+does not generate placeholder secrets. The default path is
+`/lyra_data/secrets/service-account.json`; mount the deployment secret there,
+or override `earth_engine.service_account_file` in TOML.
 
 ## Plugin Updates
 

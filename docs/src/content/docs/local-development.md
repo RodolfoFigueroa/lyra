@@ -28,14 +28,13 @@ Lyra runtime state belongs under `/lyra_data`:
   cache/jobs/
   plugins/catalog/
   plugins/runners/
-  secrets/
+  secrets/service-account.json
   logs/
 ```
 
-The app creates non-secret runtime directories when it starts. Create secret
-files yourself under `/lyra_data/secrets`. Lyra uses the standard filenames in
-that directory by default; override the TOML path fields only when your
-container paths differ.
+The app creates non-secret runtime directories when it starts. Create the
+Earth Engine service-account file yourself under `/lyra_data/secrets`. Postgres
+settings and the admin API key come from environment variables.
 
 A repo-local `lyra_data/` directory is ignored by git and can be used as a
 staging tree when copying files into the Docker volume.
@@ -44,7 +43,8 @@ staging tree when copying files into the Docker volume.
 
 Use direct processes when you are iterating on application or worker code and
 want fast restarts. Start Redis, make sure `/lyra_data/config/lyra.toml` points
-at `redis://localhost:6379/0`, then start one named worker:
+at `redis://localhost:6379/0`, export the `LYRA_POSTGRES_*` and
+`LYRA_ADMIN_API_KEY` variables, then start one named worker:
 
 ```bash
 uv run python -m lyra_app.worker_launcher interactive
@@ -68,8 +68,9 @@ docker compose -f docker/docker-compose-dev.yml up --build
 
 The development stack starts the API, Redis, and two worker pools for
 `interactive` and `batch`. Every Lyra app container mounts `lyra_data:/lyra_data`
-plus read-only file mounts for `lyra.toml` and each secret. Copy
-`.env.example` to `.env` and point the mount variables at your local files.
+plus read-only file mounts for `lyra.toml` and the service-account JSON. Copy
+`.env.example` to `.env`, point the mount variables at your local files, and
+set the Postgres/admin values.
 
 ## Plugin Catalog During Development
 
@@ -77,7 +78,7 @@ Configure plugin repositories through the admin API:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer $(cat secrets/admin_api_key)" \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/plugin-a@main"}'
 ```
@@ -99,7 +100,7 @@ Refresh the catalog and restart worker pools:
 
 ```bash
 curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
-  -H "Authorization: Bearer $(cat secrets/admin_api_key)"
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 Workers do not hot-reload plugin code in process. The refresh route reloads the

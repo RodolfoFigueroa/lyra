@@ -42,7 +42,7 @@ git repositories:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)" \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/plugin-b@main"}'
 ```
@@ -122,7 +122,7 @@ whose queue matches the metric's server assignment:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)" \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/example-lyra-plugin@main"}'
 ```
@@ -135,7 +135,7 @@ Refresh the API catalog and restart workers:
 
 ```bash
 curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 If the metric needs a non-default queue, set it through

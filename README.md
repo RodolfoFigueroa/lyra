@@ -25,12 +25,10 @@ Install dependencies:
 uv sync
 ```
 
-Create local host files for the server config and secrets:
+Create local host files for the server config and Earth Engine service account:
 
 ```text
 lyra_data/config/lyra.toml
-secrets/admin_api_key
-secrets/postgres_password
 secrets/service-account.json
 ```
 
@@ -42,13 +40,15 @@ cp lyra.toml.example lyra_data/config/lyra.toml
 cp .env.example .env
 ```
 
-The Compose stack mounts `lyra.toml` and each secret as an individual read-only
-file. The `lyra_data` named volume remains writable for Lyra-owned runtime
-state, including `/lyra_data/state/plugins.toml`, plugin checkouts, runner
-installs, cache files, and optional logs.
+The Compose stack mounts `lyra.toml` and the service account as read-only
+files, and passes Postgres/admin settings from `.env`. The `lyra_data` named
+volume remains writable for Lyra-owned runtime state, including
+`/lyra_data/state/plugins.toml`, plugin checkouts, runner installs, cache
+files, and optional logs.
 
-The config file owns Redis, database, Earth Engine, worker pools, plugin queue
-policy, logging, job TTL, and API host/port settings. Plugin repositories and
+The config file owns Redis, Earth Engine, worker pools, plugin queue policy,
+logging, job TTL, and API host/port settings. Postgres connection settings and
+the admin API key come from environment variables. Plugin repositories and
 metric queue assignments are managed through admin API endpoints and persisted
 by Lyra in `/lyra_data/state/plugins.toml`.
 
@@ -73,12 +73,12 @@ After the stack is running, add plugins through the admin API:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer $(cat secrets/admin_api_key)" \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/plugin-repo@main"}'
 
 curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
-  -H "Authorization: Bearer $(cat secrets/admin_api_key)"
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 ## Job API

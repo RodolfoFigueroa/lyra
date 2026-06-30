@@ -144,7 +144,7 @@ Push the plugin to GitHub and add it through the admin API:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)" \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"source":"owner/example-lyra-plugin@main"}'
 ```
@@ -163,7 +163,7 @@ Refresh the catalog after changing plugin code or manifests:
 
 ```bash
 curl -X POST 'http://localhost:5219/admin/plugin-catalog/refresh?timeout=30' \
-  -H "Authorization: Bearer $(cat /lyra_data/secrets/admin_api_key)"
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
 
 Confirm the API exposes the metric and its compiled request schema:

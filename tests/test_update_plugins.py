@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 from lyra_app.config import clear_config_cache
-from lyra_app.plugins import PluginRepoEntry, SyncedPluginRepo
+from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.registry import CatalogRefreshResult
 from lyra_app.routes import admin
 from tests.config_helpers import load_test_config
@@ -118,6 +118,44 @@ def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:
     assert "unknown plugin repo id" in str(missing.detail)
 
 
+def test_plugin_repo_endpoints_manage_directory_source(
+    admin_context: Path,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mock-plugin"
+    source.mkdir()
+    (source / MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
+    normalized_source = f"dir://{source.resolve().as_posix()}"
+
+    created = admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(
+            id="mock",
+            source=f"dir://localhost{source}",
+        )
+    )
+    listed = admin.list_plugin_repos()
+    pulled = admin.pull_plugin_repo("mock")
+
+    assert created.model_dump() == {
+        "id": "mock",
+        "source": normalized_source,
+        "ref": None,
+        "enabled": True,
+    }
+    assert listed.model_dump()["repos"] == [created.model_dump()]
+    assert pulled.model_dump() == {
+        "repo_id": "mock",
+        "changed": True,
+        "display_name": f"dir:{source.resolve()}",
+    }
+    copied_manifests = list(
+        (tmp_path / "plugins" / "catalog").glob(
+            f"dir__mock-plugin__*/{MANIFEST_FILENAME}"
+        )
+    )
+    assert len(copied_manifests) == 1
+
+
 def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(
     admin_context: Path,  # noqa: ARG001
 ) -> None:
@@ -203,6 +241,23 @@ def test_pull_plugin_repo_returns_contract_errors(
     assert failed.detail == "git failed"
 
 
+def test_pull_plugin_repo_reports_directory_sync_failures(
+    admin_context: Path,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    missing_source = tmp_path / "missing-plugin"
+    admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(
+            id="missing-dir",
+            source=f"dir://{missing_source}",
+        )
+    )
+
+    failed = _assert_http_error(502, admin.pull_plugin_repo, "missing-dir")
+
+    assert "Directory plugin source does not exist" in str(failed.detail)
+
+
 def test_refresh_plugin_catalog_uses_state_refresh_and_restarts_workers(
     admin_context: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
@@ -261,6 +316,31 @@ def test_refresh_plugin_catalog_reports_git_failures(
     failed = _assert_http_error(502, admin.refresh_plugin_catalog)
 
     assert failed.detail == "catalog sync failed"
+    assert restarted == []
+
+
+def test_refresh_plugin_catalog_reports_directory_sync_failures(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    restarted: list[float] = []
+    missing_source = tmp_path / "missing-plugin"
+    admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(
+            id="missing-dir",
+            source=f"dir://{missing_source}",
+        )
+    )
+    monkeypatch.setattr(
+        admin,
+        "graceful_worker_restart",
+        lambda *, timeout: restarted.append(timeout),
+    )
+
+    failed = _assert_http_error(502, admin.refresh_plugin_catalog)
+
+    assert "Directory plugin source does not exist" in str(failed.detail)
     assert restarted == []
 
 

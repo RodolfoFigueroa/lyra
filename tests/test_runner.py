@@ -253,9 +253,11 @@ def test_runner_syncs_enabled_state_repos_only(
     worker_module: Any,
 ) -> None:
     config = get_config()
+    directory_source = tmp_path / "directory-plugin"
     state = PluginState(
         repos=[
             make_repo_record("owner/enabled-plugin@main"),
+            make_repo_record(f"dir://{directory_source}", repo_id="directory-plugin"),
             make_repo_record(
                 "owner/disabled-plugin@v1.0.0",
                 repo_id="disabled-plugin",
@@ -282,7 +284,10 @@ def test_runner_syncs_enabled_state_repos_only(
     assert calls == [
         (
             tmp_path / "plugins" / "runners" / "heavy",
-            ["owner/enabled-plugin@main"],
+            [
+                "owner/enabled-plugin@main",
+                f"dir://{directory_source.resolve().as_posix()}",
+            ],
             True,
         )
     ]
@@ -339,6 +344,46 @@ def test_runner_loads_repo_and_routing_from_plugin_state(
             True,
         )
     ]
+    assert list(entries) == ["heavy_metric"]
+    assert entries["heavy_metric"].queue == "heavy"
+
+
+def test_runner_loads_directory_source_from_copied_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    source = tmp_path / "directory-plugin"
+    _write_manifest(
+        source,
+        _manifest(
+            [
+                _metric(
+                    name="heavy_metric",
+                    entrypoint="heavy_plugin:run",
+                )
+            ]
+        ),
+    )
+    plugin_state_store(tmp_path, get_config()).add_repo(
+        f"dir://{source}",
+        repo_id="directory-plugin",
+    )
+    installed: list[SyncedPluginRepo] = []
+
+    def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+        installed.extend(repos)
+        return repos
+
+    monkeypatch.setattr(worker_module, "install_runner_plugins", install_plugins)
+
+    entries = worker_module.refresh_runner_registry("heavy")
+
+    assert len(installed) == 1
+    synced = installed[0]
+    assert synced.path != source
+    assert synced.path.parent == tmp_path / "plugins" / "runners" / "heavy"
+    assert (synced.path / MANIFEST_FILENAME).exists()
     assert list(entries) == ["heavy_metric"]
     assert entries["heavy_metric"].queue == "heavy"
 

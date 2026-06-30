@@ -136,9 +136,11 @@ def test_catalog_sync_uses_enabled_state_repos_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = get_config()
+    directory_source = tmp_path / "directory-plugin"
     state = PluginState(
         repos=[
             make_repo_record("owner/enabled-plugin@main"),
+            make_repo_record(f"dir://{directory_source}", repo_id="directory-plugin"),
             make_repo_record(
                 "owner/disabled-plugin@v1.0.0",
                 repo_id="disabled-plugin",
@@ -163,8 +165,41 @@ def test_catalog_sync_uses_enabled_state_repos_only(
 
     assert synced == []
     assert calls == [
-        (tmp_path / "plugins" / "catalog", ["owner/enabled-plugin@main"], True)
+        (
+            tmp_path / "plugins" / "catalog",
+            [
+                "owner/enabled-plugin@main",
+                f"dir://{directory_source.resolve().as_posix()}",
+            ],
+            True,
+        )
     ]
+
+
+def test_catalog_refresh_reads_directory_source_without_importing_plugin_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "directory-plugin"
+    _write_manifest(source, _manifest())
+    plugin_state_store(tmp_path, get_config()).add_repo(
+        f"dir://{source}",
+        repo_id="directory-plugin",
+    )
+
+    def fail_import(name: str, package: str | None = None) -> object:  # noqa: ARG001
+        msg = "API catalog loading must not import plugin code"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(importlib, "import_module", fail_import)
+
+    result = registry.refresh_catalog()
+    entry = registry.get_metric_entry("light_metric")
+
+    assert result.updated_plugins == [f"dir:{source.resolve()}"]
+    assert entry is not None
+    assert entry.queue == "lightweight"
+    assert entry.entrypoint == "fake_plugin.runner:run"
 
 
 def test_catalog_refresh_syncs_enabled_repos_from_plugin_state(

@@ -20,7 +20,8 @@ Redis is used for Celery transport and for job status, result, and event storage
 
 ## Catalog Flow
 
-1. `LYRA_PLUGIN_REPOS` lists plugin GitHub repositories.
+1. `LYRA_PLUGIN_REPOS` lists plugin repositories, either GitHub entries or
+   explicit `file://` local git repositories.
 2. The API syncs those repositories into `LYRA_PLUGIN_CATALOG_DIR`, defaulting to `/lyra_plugin_catalog`.
 3. Each repository must contain `lyra.plugin.json`.
 4. `lyra_app.registry` parses each manifest as `PluginManifestV3`.

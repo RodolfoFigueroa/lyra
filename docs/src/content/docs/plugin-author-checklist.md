@@ -37,10 +37,11 @@ accounts scoped to what plugin code is allowed to use.
 
 ## Repository Entries
 
-`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub entries:
+`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub entries or explicit
+`file://` local git repositories:
 
 ```text
-LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
+LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0,file:///absolute/path/to/plugin-d
 ```
 
 Supported forms are:
@@ -51,10 +52,14 @@ Supported forms are:
 | `owner/repo@branch-or-tag` | Clone the named branch or tag. |
 | `https://github.com/owner/repo` | Clone the repository's default branch with an explicit GitHub URL prefix. |
 | `https://github.com/owner/repo@branch-or-tag` | Clone the named branch or tag with an explicit GitHub URL prefix. |
+| `file:///absolute/path/to/repo` | Clone a local git repository from its current committed state. |
 
-`LYRA_PLUGIN_REPOS` does not support local filesystem paths. Omit a trailing
-`.git` suffix. Make sure the API and worker containers can reach the repository
-with `git`.
+Local repositories must use explicit `file://` URIs; raw filesystem paths are
+not supported. Local entries do not support `@branch-or-tag` selectors, and
+uncommitted changes are ignored. Omit a trailing `.git` suffix for GitHub
+entries. Make sure the API and worker containers can reach each repository with
+`git`. For Docker Compose, mount local repositories into every API and worker
+container at the same absolute path used in `LYRA_PLUGIN_REPOS`.
 
 ## Preflight Checks
 

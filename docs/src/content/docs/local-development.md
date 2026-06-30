@@ -52,17 +52,19 @@ pool mounts its own `/lyra_plugins` volume.
 
 ## Plugin Catalog During Development
 
-Plugin repositories must be reachable through GitHub-style
-`LYRA_PLUGIN_REPOS` entries:
+Plugin repositories must be reachable through `LYRA_PLUGIN_REPOS` entries.
+Use GitHub-style entries for remote repositories or explicit `file://` URIs for
+local git repositories:
 
 ```text
-owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
+owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0,file:///absolute/path/to/plugin-d
 ```
 
-`LYRA_PLUGIN_REPOS` does not support local filesystem paths. For local plugin
-iteration, push a branch to GitHub, point `LYRA_PLUGIN_REPOS` at that branch,
-and refresh the catalog. For repository entry formats and preflight checks, see
-[Plugin Author Checklist](../plugin-author-checklist/).
+Local `file://` entries are committed-code sync sources, not live-edit mounts:
+commit plugin changes, then refresh the catalog. When using Docker Compose,
+mount the local plugin repository into the API and worker containers at the same
+absolute path used in `LYRA_PLUGIN_REPOS`. For repository entry formats and
+preflight checks, see [Plugin Author Checklist](../plugin-author-checklist/).
 
 The API syncs catalog repositories into `LYRA_PLUGIN_CATALOG_DIR`. Workers sync
 and install runner repositories into `LYRA_PLUGIN_INSTALL_DIR`.

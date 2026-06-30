@@ -49,7 +49,7 @@ COPY lyra_app ./lyra_app
 
 # Plugin manifests are cloned into /lyra_plugin_catalog by the API. Plugin code
 # is cloned and installed into /lyra_plugins by runner workers.
-# Set LYRA_PLUGIN_REPOS to a comma-separated list of GitHub repos to load.
+# Set LYRA_PLUGIN_REPOS to a comma-separated list of plugin repos to load.
 RUN mkdir -p /lyra_plugin_catalog /lyra_plugins
 VOLUME /lyra_plugin_catalog
 VOLUME /lyra_plugins

@@ -61,17 +61,17 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 ## Configure Plugins
 
 Lyra only lists metrics from configured plugin repositories.
-`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub repository entries:
+`LYRA_PLUGIN_REPOS` is a comma-separated list of GitHub repository entries or
+explicit `file://` local git repositories:
 
 ```text
-LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0
+LYRA_PLUGIN_REPOS=owner/plugin-a,owner/plugin-b@main,https://github.com/owner/plugin-c@v0.1.0,file:///absolute/path/to/plugin-d
 ```
 
 Each plugin repository needs `lyra.plugin.json` at its root. If `GET /metrics`
 returns an empty list, configure at least one plugin repo and refresh the
-catalog.
-`LYRA_PLUGIN_REPOS` accepts GitHub-style repository entries, not local
-filesystem paths.
+catalog. Local `file://` entries must point at git repositories and Lyra syncs
+committed changes only.
 
 ## Start A Worker
 

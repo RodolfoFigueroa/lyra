@@ -20,7 +20,7 @@ project = "your-gee-project-id"
 
 [logging]
 level = "INFO"
-# Docker users usually leave file logging disabled and read container logs.
+# Set if you want logs written to a file instead of stdout.
 # file = "/lyra_data/logs/lyra.log"
 
 [job_store]
@@ -35,11 +35,11 @@ allowed_queues = ["interactive", "batch"]
 [workers.interactive]
 queues = ["interactive"]
 concurrency = 4
-# install_dir defaults to /lyra_data/plugins/runners/interactive.
-# temp_dir defaults to /lyra_data/cache/jobs/interactive.
+# install_dir = "/lyra_data/plugins/runners/interactive"
+# temp_dir = "/lyra_data/cache/jobs/interactive"
 
 [workers.batch]
 queues = ["batch"]
 concurrency = 2
-# install_dir defaults to /lyra_data/plugins/runners/batch.
-# temp_dir defaults to /lyra_data/cache/jobs/batch.
+# install_dir = "/lyra_data/plugins/runners/batch"
+# temp_dir = "/lyra_data/cache/jobs/batch"

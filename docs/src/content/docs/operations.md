@@ -55,5 +55,6 @@ There is no public cancellation endpoint in the current API.
 
 Worker interruption handling writes failed terminal result records through the same
 job store. This keeps result consumers on the `/jobs/{job_id}/result` path
-regardless of whether failure came from plugin code, validation, or worker
-shutdown handling.
+for terminal JSON metadata regardless of whether failure came from plugin code,
+validation, or worker shutdown handling. File bytes are served separately from
+`/jobs/{job_id}/result/download`.

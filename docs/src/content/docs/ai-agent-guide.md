@@ -13,6 +13,7 @@ Lyra exposes current execution through:
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
 - `GET /jobs/{job_id}/result`
+- `GET /jobs/{job_id}/result/download`
 
 Supporting routes:
 

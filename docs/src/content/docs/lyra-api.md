@@ -83,14 +83,15 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 | `create_job(metric, payload, idempotency_key=None)` | `JobCreateResponse` | Submit a job and receive a `job_id`. |
 | `get_job(job_id)` | `JobStatusInfo` | Poll the latest status snapshot. |
 | `iter_job_events(job_id, last_event_id=None)` | Iterator or async iterator of `JobEvent` | Stream progress and terminal events. |
-| `get_job_result(job_id)` | `TerminalJobResult` | Fetch a terminal table, failed, or cancelled JSON result. |
+| `get_job_result(job_id)` | `TerminalJobResult` | Fetch terminal JSON result metadata for table, file, failed, or cancelled jobs. |
 | `download_job_result_to_file(job_id, path)` | `None` | Download a terminal file result. |
 
 `iter_job_events()` accepts `last_event_id` and sends it as the
 `Last-Event-ID` header so a caller can resume an event stream after reconnecting.
 
-`get_job_result()` expects a JSON response. If the job produced a file, call
-`download_job_result_to_file()` instead.
+`get_job_result()` expects a JSON response. If the job produced a file, it
+returns `FileJobResult` metadata. Call `download_job_result_to_file()` to fetch
+the file bytes from `/jobs/{job_id}/result/download`.
 
 ## Convenience Methods
 

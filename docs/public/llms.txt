@@ -56,6 +56,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
 - `GET /jobs/{job_id}/result`
+- `GET /jobs/{job_id}/result/download`
 - `GET /lookups/met-zones`
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`

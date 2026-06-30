@@ -1,6 +1,6 @@
 ---
 title: Job API
-description: Submit metric jobs, stream events, and fetch JSON or file results.
+description: Submit metric jobs, stream events, fetch result metadata, and download files.
 ---
 
 Lyra's public execution API is job-first. Clients submit a metric request, receive a `job_id`, stream typed server-sent events, and fetch the terminal result.
@@ -93,7 +93,7 @@ Clients can reconnect with `Last-Event-ID` to resume after a known stream ID. Th
 
 `GET /jobs/{job_id}/result` returns `404` until a terminal result exists.
 
-Table results return the full terminal table payload:
+Table results return the full terminal table payload as JSON:
 
 ```json
 {
@@ -120,12 +120,30 @@ Failed and cancelled jobs also return terminal JSON with `200`:
 }
 ```
 
-File results return a file response for terminal payloads with `kind: "file"`.
-After the file response cleanup runs, only the stored result payload is deleted;
-status and events remain until the job-store TTL expires.
+File results return stable metadata as JSON:
 
-The server response uses the produced filename and the `media_type` declared by
-the plugin's file result.
+```json
+{
+  "kind": "file",
+  "job_id": "job-id",
+  "status": "succeeded",
+  "file_path": "/lyra_data/cache/jobs/default/job-id/result.tif",
+  "media_type": "image/tiff"
+}
+```
+
+Repeated `GET /jobs/{job_id}/result` calls return the same stored terminal
+payload until the job-store TTL expires.
+
+## Download File Result
+
+`GET /jobs/{job_id}/result/download` streams the produced file bytes for
+terminal payloads with `kind: "file"`. The response uses the produced filename
+and the `media_type` declared by the plugin's file result.
+
+Downloading a file does not delete the stored result metadata. Repeated
+downloads work while the file still exists. If the terminal file metadata exists
+but the file is missing from disk, the download route returns `404`.
 
 ## Refresh Plugins
 

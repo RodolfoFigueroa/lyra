@@ -102,7 +102,8 @@ npm run preview --prefix docs
 | `POST` | `/jobs` | Submit a metric job. |
 | `GET` | `/jobs/{job_id}` | Fetch current job status. |
 | `GET` | `/jobs/{job_id}/events` | Stream typed SSE job events. |
-| `GET` | `/jobs/{job_id}/result` | Fetch a terminal JSON result or file. |
+| `GET` | `/jobs/{job_id}/result` | Fetch terminal JSON result metadata. |
+| `GET` | `/jobs/{job_id}/result/download` | Download terminal file result bytes. |
 | `GET` | `/lookups/met-zones` | Look up a metropolitan zone code by name. |
 | `GET` | `/admin/plugin-repos` | List configured plugin repositories. |
 | `POST` | `/admin/plugin-repos` | Add a plugin repository to Lyra-owned state. |

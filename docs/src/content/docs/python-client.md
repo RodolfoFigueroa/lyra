@@ -52,7 +52,8 @@ else:
 ```
 
 Failed and cancelled jobs return terminal JSON with `kind: "failed"` or
-`kind: "cancelled"`.
+`kind: "cancelled"`. File-producing jobs return `FileJobResult` metadata from
+the same method.
 
 ## Download File Results
 
@@ -60,7 +61,9 @@ Failed and cancelled jobs return terminal JSON with `kind: "failed"` or
 client.download_job_result_to_file(job.job_id, "result.tif")
 ```
 
-If a job returns table JSON instead of a file, the client raises a client error for file download calls.
+`download_job_result_to_file()` calls `/jobs/{job_id}/result/download`. If a job
+returns a table, failed, or cancelled result instead of a file, the client raises
+a client error for file download calls.
 
 ## Convenience Methods
 

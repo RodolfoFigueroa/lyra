@@ -48,7 +48,6 @@ def _valid_toml(
     *,
     api_port: int = 5219,
     worker_name: str = "interactive",
-    metric_name: str = "walkability_score",
 ) -> str:
     secrets = _write_secret_files(base)
     return (
@@ -84,18 +83,10 @@ file = {_q(base / "logs" / "lyra.log")}
 ttl_seconds = 600
 
 [plugins]
-repos = [
-  "owner/plugin-a@main",
-  "https://github.com/owner/plugin-b@v0.1.0",
-  {_q((base / "local-plugin").as_uri())},
-]
 catalog_dir = {_q(base / "plugins" / "catalog")}
 runner_base_dir = {_q(base / "plugins" / "runners")}
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
-
-[plugins.metric_queues]
-{_q(metric_name)} = "interactive"
 
 [workers.{_q(worker_name)}]
 queues = ["interactive"]
@@ -131,7 +122,7 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
     assert config.earth_engine.service_account_file.exists()
-    assert config.plugins.metric_queues == {"walkability_score": "interactive"}
+    assert config.plugins.allowed_queues == ["interactive", "batch"]
 
 
 def test_load_config_fails_for_missing_file(tmp_path: Path) -> None:
@@ -212,24 +203,20 @@ def test_reload_config_without_path_reuses_cached_path(tmp_path: Path) -> None:
     assert reload_config().api.port == 6000
 
 
-def test_render_config_toml_preserves_dynamic_quoted_keys(tmp_path: Path) -> None:
+def test_render_config_toml_preserves_dynamic_quoted_worker_keys(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
     _write_config(
         config_path,
-        _valid_toml(
-            tmp_path,
-            worker_name="interactive.worker",
-            metric_name="walkability.score",
-        ),
+        _valid_toml(tmp_path, worker_name="interactive.worker"),
     )
     config = load_config(config_path)
 
     rendered = render_config_toml(config)
     reparsed = LyraConfig.model_validate(config_module.tomllib.loads(rendered))
 
-    assert '"walkability.score" = "interactive"' in rendered
     assert '[workers."interactive.worker"]' in rendered
-    assert reparsed.plugins.metric_queues == {"walkability.score": "interactive"}
     assert sorted(reparsed.workers) == ["interactive.worker"]
 
 
@@ -244,7 +231,7 @@ def test_save_config_writes_loadable_toml_without_temp_file_leaks(
     save_config(config, target_path)
 
     assert load_config(target_path) == config
-    assert "[plugins.metric_queues]" in target_path.read_text(encoding="utf-8")
+    assert "[plugins.metric_queues]" not in target_path.read_text(encoding="utf-8")
     assert not list(target_path.parent.glob(".lyra.toml.*.tmp"))
 
 

@@ -7,9 +7,10 @@ import pytest
 from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
 from lyra.sdk.models.plugin_v3 import FileOutputV3, TableOutputV3
 
-from lyra_app.config import clear_config_cache
+from lyra_app.config import clear_config_cache, get_config
+from lyra_app.plugin_state import PluginState, make_repo_record
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
-from tests.config_helpers import load_test_config
+from tests.config_helpers import load_test_config, plugin_state_store
 
 
 def _metric(
@@ -147,7 +148,7 @@ class FakeRedisSync:
 
 
 @pytest.fixture
-def worker_module(tmp_path: Path) -> Any:
+def worker_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     load_test_config(
         tmp_path,
         metric_queues={
@@ -156,6 +157,11 @@ def worker_module(tmp_path: Path) -> Any:
         },
     )
     worker = importlib.import_module("lyra_app.worker")
+    monkeypatch.setattr(
+        worker,
+        "PluginStateStore",
+        lambda *_args, **_kwargs: plugin_state_store(tmp_path, get_config()),
+    )
     worker.RUNNER_REGISTRY.clear()
     worker.set_runner_temp_base(tmp_path / "runner-temp")
     yield worker
@@ -239,6 +245,47 @@ def test_runner_loads_only_configured_queue(
     assert list(entries) == ["heavy_metric"]
     assert entries["heavy_metric"].queue == "heavy"
     assert entries["heavy_metric"].entrypoint == "heavy_plugin:run"
+
+
+def test_runner_syncs_enabled_state_repos_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    config = get_config()
+    state = PluginState(
+        repos=[
+            make_repo_record("owner/enabled-plugin@main"),
+            make_repo_record(
+                "owner/disabled-plugin@v1.0.0",
+                repo_id="disabled-plugin",
+                enabled=False,
+            ),
+        ],
+    )
+    calls: list[tuple[Path, list[str], bool]] = []
+
+    def sync_repos(
+        target_dir: Path,
+        raw_entries: list[str],
+        *,
+        raise_on_error: bool,
+    ) -> list[SyncedPluginRepo]:
+        calls.append((target_dir, raw_entries, raise_on_error))
+        return []
+
+    monkeypatch.setattr(worker_module, "sync_plugin_repos", sync_repos)
+
+    synced = worker_module._runner_sync_repos("heavy", config, state)  # noqa: SLF001
+
+    assert synced == []
+    assert calls == [
+        (
+            tmp_path / "plugins" / "runners" / "heavy",
+            ["owner/enabled-plugin@main"],
+            True,
+        )
+    ]
 
 
 def test_runner_uses_configured_worker_temp_dir(

@@ -15,10 +15,10 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, registry
-from lyra_app.config import clear_config_cache
+from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import jobs
-from tests.config_helpers import load_test_config
+from tests.config_helpers import load_test_config, plugin_state_store
 
 
 def _manifest() -> dict[str, Any]:
@@ -288,6 +288,11 @@ def reset_catalog(
             "heavy_metric": "priority-lane",
         },
     )
+    monkeypatch.setattr(
+        registry,
+        "PluginStateStore",
+        lambda *_args, **_kwargs: plugin_state_store(tmp_path, get_config()),
+    )
     yield
     registry.reset_catalog()
     clear_config_cache()
@@ -306,7 +311,9 @@ def _use_repo(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
     )
     registry.refresh_catalog()
 
@@ -324,7 +331,7 @@ async def _body(response: StreamingResponse) -> str:
     return "".join(chunks)
 
 
-def test_create_job_dispatches_generic_task_to_toml_queue(
+def test_create_job_dispatches_generic_task_to_state_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from lyra_app.config import LyraConfig, clear_config_cache, get_config, save_config
+from lyra_app.plugin_state import (
+    PluginState,
+    PluginStateStore,
+    make_repo_record,
+    save_plugin_state,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,6 +29,17 @@ def _write_secret_files(base: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
     return paths
+
+
+def plugin_state_path(base: Path) -> Path:
+    return base / "state" / "plugins.toml"
+
+
+def plugin_state_store(base: Path, config: LyraConfig) -> PluginStateStore:
+    return PluginStateStore(
+        plugin_state_path(base),
+        allowed_queues=config.plugins.allowed_queues,
+    )
 
 
 def load_test_config(
@@ -56,12 +73,10 @@ def load_test_config(
         "logging": {},
         "job_store": {},
         "plugins": {
-            "repos": [] if repos is None else repos,
             "catalog_dir": str(base / "plugins" / "catalog"),
             "runner_base_dir": str(base / "plugins" / "runners"),
             "default_queue": "interactive",
             "allowed_queues": allowed_queues,
-            "metric_queues": {} if metric_queues is None else metric_queues,
         },
         "workers": {
             "batch": {"queues": ["batch"]},
@@ -74,5 +89,13 @@ def load_test_config(
     config = LyraConfig.model_validate(raw_config)
     config_path = base / "config" / "lyra.toml"
     save_config(config, config_path)
+    save_plugin_state(
+        PluginState(
+            repos=[make_repo_record(repo) for repo in (repos or [])],
+            metric_queues={} if metric_queues is None else metric_queues,
+        ),
+        plugin_state_path(base),
+        allowed_queues=allowed_queues,
+    )
     clear_config_cache()
     return get_config(config_path)

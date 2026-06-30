@@ -237,6 +237,32 @@ def test_refresh_plugin_catalog_uses_state_refresh_and_restarts_workers(
     assert restarted == [12.5]
 
 
+def test_refresh_plugin_catalog_reports_git_failures(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    restarted: list[float] = []
+
+    def fail_refresh(_store: object) -> CatalogRefreshResult:
+        raise subprocess.CalledProcessError(
+            1,
+            ["git", "fetch"],
+            stderr="catalog sync failed",
+        )
+
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", fail_refresh)
+    monkeypatch.setattr(
+        admin,
+        "graceful_worker_restart",
+        lambda *, timeout: restarted.append(timeout),
+    )
+
+    failed = _assert_http_error(502, admin.refresh_plugin_catalog)
+
+    assert failed.detail == "catalog sync failed"
+    assert restarted == []
+
+
 def test_plugin_routing_endpoints_manage_state(
     admin_context: Path,  # noqa: ARG001
 ) -> None:

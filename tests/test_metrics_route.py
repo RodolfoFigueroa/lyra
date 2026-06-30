@@ -8,10 +8,10 @@ import pytest
 from fastapi import HTTPException
 
 from lyra_app import registry
-from lyra_app.config import clear_config_cache
+from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import metrics
-from tests.config_helpers import load_test_config
+from tests.config_helpers import load_test_config, plugin_state_store
 
 
 def _manifest() -> dict[str, Any]:
@@ -83,9 +83,14 @@ def _synced_repo(repo: Path) -> SyncedPluginRepo:
 
 
 @pytest.fixture(autouse=True)
-def reset_catalog(tmp_path: Path) -> Iterator[None]:
+def reset_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     registry.reset_catalog()
     load_test_config(tmp_path, metric_queues={"light_metric": "lightweight"})
+    monkeypatch.setattr(
+        registry,
+        "PluginStateStore",
+        lambda *_args, **_kwargs: plugin_state_store(tmp_path, get_config()),
+    )
     yield
     registry.reset_catalog()
     clear_config_cache()
@@ -93,7 +98,9 @@ def reset_catalog(tmp_path: Path) -> Iterator[None]:
 
 def _use_repo(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        registry, "sync_catalog_repos", lambda _config: [_synced_repo(repo)]
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
     )
 
 

@@ -72,19 +72,10 @@ def _valid_config(base: Path) -> dict[str, Any]:
             "ttl_seconds": 600,
         },
         "plugins": {
-            "repos": [
-                "owner/plugin-a@main",
-                "https://github.com/owner/plugin-b@v0.1.0",
-                f"file://{base}/local-plugin",
-            ],
             "catalog_dir": str(base / "plugins" / "catalog"),
             "runner_base_dir": str(base / "plugins" / "runners"),
             "default_queue": "interactive",
             "allowed_queues": ["interactive", "batch"],
-            "metric_queues": {
-                "walkability_score": "interactive",
-                "regional_accessibility": "batch",
-            },
         },
         "workers": {
             "interactive": {
@@ -123,7 +114,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
     assert config.job_store.ttl_seconds == 600
-    assert config.plugins.metric_queues["regional_accessibility"] == "batch"
+    assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.get_worker("interactive").concurrency == 32
 
 
@@ -228,30 +219,24 @@ def test_config_contract_requires_absolute_paths(
     _assert_invalid(raw, "path must be absolute")
 
 
-def test_config_contract_trims_repos_and_queues(tmp_path: Path) -> None:
+def test_config_contract_trims_queues(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
-    raw["plugins"]["repos"] = [" owner/plugin-a@main "]
     raw["plugins"]["allowed_queues"] = [" interactive ", " batch "]
     raw["plugins"]["default_queue"] = " interactive "
-    raw["plugins"]["metric_queues"] = {" walkability_score ": " batch "}
     raw["workers"] = {" interactive ": {"queues": [" interactive "]}}
 
     config = LyraConfig.model_validate(raw)
 
-    assert config.plugins.repos == ["owner/plugin-a@main"]
     assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.plugins.default_queue == "interactive"
-    assert config.plugins.metric_queues == {"walkability_score": "batch"}
     assert sorted(config.workers) == ["interactive"]
 
 
-def test_config_contract_rejects_duplicate_repos_after_trimming(
-    tmp_path: Path,
-) -> None:
+def test_config_contract_rejects_plugin_repos_field(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
-    raw["plugins"]["repos"] = ["owner/plugin-a", " owner/plugin-a "]
+    raw["plugins"]["repos"] = ["owner/plugin-a"]
 
-    _assert_invalid(raw, "duplicate plugin repository entries")
+    _assert_invalid(raw, "Extra inputs are not permitted")
 
 
 def test_config_contract_rejects_default_queue_outside_allowed_queues(
@@ -263,13 +248,11 @@ def test_config_contract_rejects_default_queue_outside_allowed_queues(
     _assert_invalid(raw, "plugins.default_queue")
 
 
-def test_config_contract_rejects_metric_assignment_outside_allowed_queues(
-    tmp_path: Path,
-) -> None:
+def test_config_contract_rejects_plugin_metric_queues_field(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
-    raw["plugins"]["metric_queues"]["walkability_score"] = "priority"
+    raw["plugins"]["metric_queues"] = {"walkability_score": "interactive"}
 
-    _assert_invalid(raw, "plugins.metric_queues values")
+    _assert_invalid(raw, "Extra inputs are not permitted")
 
 
 def test_config_contract_rejects_worker_queue_outside_allowed_queues(
@@ -279,18 +262,6 @@ def test_config_contract_rejects_worker_queue_outside_allowed_queues(
     raw["workers"]["interactive"]["queues"] = ["priority"]
 
     _assert_invalid(raw, "workers.<name>.queues values")
-
-
-def test_config_contract_rejects_duplicate_metric_keys_after_trimming(
-    tmp_path: Path,
-) -> None:
-    raw = _valid_config(tmp_path)
-    raw["plugins"]["metric_queues"] = {
-        "walkability_score": "interactive",
-        " walkability_score ": "batch",
-    }
-
-    _assert_invalid(raw, "duplicate metric queue key")
 
 
 def test_config_contract_reads_scalar_secret_references(tmp_path: Path) -> None:

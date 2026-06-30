@@ -18,6 +18,8 @@ def test_example_config_matches_config_contract() -> None:
 
     config = LyraConfig.model_validate(raw_config)
 
+    assert "repos" not in raw_config["plugins"]
+    assert "metric_queues" not in raw_config["plugins"]
     assert config.plugins.default_queue in config.plugins.allowed_queues
     assert config.database.password_file == DEFAULT_DATABASE_PASSWORD_FILE
     assert config.earth_engine.service_account_file == (
@@ -36,3 +38,5 @@ def test_example_config_matches_config_contract() -> None:
     assert "api_key_file" not in rendered
     assert "catalog_dir" not in rendered
     assert "runner_base_dir" not in rendered
+    assert "repos" not in rendered
+    assert "metric_queues" not in rendered

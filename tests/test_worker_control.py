@@ -14,6 +14,7 @@ class FakeRedisSync:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int) -> None:
         self.values[key] = value
@@ -27,6 +28,29 @@ class FakeRedisSync:
         stream_id = f"{len(stream) + 1}-0"
         stream.append((stream_id, fields))
         return stream_id
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> None:
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+        lower = float("-inf") if min == "-inf" else float(min)
+        sorted_set = self.sorted_sets.setdefault(key, {})
+        for member, score in list(sorted_set.items()):
+            if lower <= score <= max:
+                sorted_set.pop(member, None)
+
+
+class FakeCeleryControl:
+    def __init__(self) -> None:
+        self.revoked: list[str] = []
+
+    def revoke(self, job_id: str) -> None:
+        self.revoked.append(job_id)
+
+
+class FakeCeleryApp:
+    def __init__(self) -> None:
+        self.control = FakeCeleryControl()
 
 
 @pytest.fixture(autouse=True)
@@ -60,3 +84,14 @@ def test_notify_interrupted_tasks_persists_failed_job_results(
     }
     assert status["status"] == "failed"
     assert len(events) == 1
+
+
+def test_revoke_job_requests_celery_revocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    celery = FakeCeleryApp()
+    monkeypatch.setattr(worker_control, "celery_app", celery)
+
+    worker_control.revoke_job("job-1")
+
+    assert celery.control.revoked == ["job-1"]

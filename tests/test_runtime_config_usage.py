@@ -16,6 +16,7 @@ class FakeRedisSync:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int) -> None:
         self.values[key] = value
@@ -29,6 +30,16 @@ class FakeRedisSync:
         stream_id = f"{len(stream) + 1}-0"
         stream.append((stream_id, fields))
         return stream_id
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> None:
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+        lower = float("-inf") if min == "-inf" else float(min)
+        sorted_set = self.sorted_sets.setdefault(key, {})
+        for member, score in list(sorted_set.items()):
+            if lower <= score <= max:
+                sorted_set.pop(member, None)
 
 
 def _reload_test_config(config: Any, config_path: Path) -> None:

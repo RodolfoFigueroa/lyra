@@ -17,6 +17,7 @@ class FakeRedisSync:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int) -> None:
         self.values[key] = value
@@ -33,6 +34,29 @@ class FakeRedisSync:
         stream_id = f"{len(stream) + 1}-0"
         stream.append((stream_id, fields))
         return stream_id
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> None:
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    def zrevrange(self, key: str, start: int, stop: int) -> list[str]:
+        members = sorted(
+            self.sorted_sets.get(key, {}),
+            key=lambda member: self.sorted_sets[key][member],
+            reverse=True,
+        )
+        return members[start : stop + 1]
+
+    def zrem(self, key: str, *members: str) -> None:
+        sorted_set = self.sorted_sets.setdefault(key, {})
+        for member in members:
+            sorted_set.pop(member, None)
+
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+        lower = float("-inf") if min == "-inf" else float(min)
+        sorted_set = self.sorted_sets.setdefault(key, {})
+        for member, score in list(sorted_set.items()):
+            if lower <= score <= max:
+                sorted_set.pop(member, None)
 
     def xrange(
         self,
@@ -56,6 +80,7 @@ class FakeRedisAsync:
         self.expirations: list[tuple[str, int]] = []
         self.deleted: list[str] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
         if payload is not None:
             self.values[job_store.result_key("job-1")] = payload
 
@@ -78,6 +103,21 @@ class FakeRedisAsync:
         stream_id = f"{len(stream) + 1}-0"
         stream.append((stream_id, fields))
         return stream_id
+
+    async def zadd(self, key: str, mapping: dict[str, float]) -> None:
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    async def zremrangebyscore(
+        self,
+        key: str,
+        min: str | float,  # noqa: A002
+        max: float,  # noqa: A002
+    ) -> None:
+        lower = float("-inf") if min == "-inf" else float(min)
+        sorted_set = self.sorted_sets.setdefault(key, {})
+        for member, score in list(sorted_set.items()):
+            if lower <= score <= max:
+                sorted_set.pop(member, None)
 
     async def xrange(
         self,
@@ -176,6 +216,95 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
     events = job_store.read_job_events("job-1", client=redis)
     assert [event.event.event for event in events] == ["started", "failed"]
     assert events[-1].event.data == payload
+
+
+def test_job_status_index_lists_recent_jobs_newest_first() -> None:
+    redis = FakeRedisSync()
+
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-2", "queued", metric="light_metric", client=redis)
+    job_store.set_job_status("job-1", "progress", metric="heavy_metric", client=redis)
+
+    jobs = job_store.list_job_statuses(client=redis)
+
+    assert [job.job_id for job in jobs] == ["job-1", "job-2"]
+    assert jobs[0].status == "progress"
+
+
+def test_job_status_index_filters_by_status_and_metric() -> None:
+    redis = FakeRedisSync()
+
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-2", "started", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-3", "started", metric="light_metric", client=redis)
+
+    started_heavy = job_store.list_job_statuses(
+        status="started",
+        metric="heavy_metric",
+        client=redis,
+    )
+
+    assert [job.job_id for job in started_heavy] == ["job-2"]
+
+
+def test_job_status_index_prunes_expired_members() -> None:
+    redis = FakeRedisSync()
+    redis.sorted_sets[job_store.job_index_key()] = {"expired": 0.0}
+
+    jobs = job_store.list_job_statuses(client=redis)
+
+    assert jobs == []
+    assert redis.sorted_sets[job_store.job_index_key()] == {}
+
+
+def test_job_status_index_prunes_old_members_on_status_update() -> None:
+    redis = FakeRedisSync()
+    redis.sorted_sets[job_store.job_index_key()] = {"old-job": 0.0}
+
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+
+    assert "old-job" not in redis.sorted_sets[job_store.job_index_key()]
+    assert "job-1" in redis.sorted_sets[job_store.job_index_key()]
+
+
+def test_cancel_job_marks_active_job_cancelled() -> None:
+    redis = FakeRedisSync()
+    job_store.set_job_status("job-1", "started", metric="heavy_metric", client=redis)
+
+    snapshot, cancelled = job_store.cancel_job("job-1", client=redis)
+
+    assert cancelled is True
+    assert snapshot is not None
+    assert snapshot.status == "cancelled"
+    assert snapshot.metric == "heavy_metric"
+    stored_snapshot = job_store.get_job_status("job-1", client=redis)
+    assert stored_snapshot is not None
+    assert stored_snapshot.status == "cancelled"
+    events = job_store.read_job_events("job-1", client=redis)
+    assert [event.event.event for event in events] == ["started", "cancelled"]
+
+
+def test_cancel_job_does_not_overwrite_terminal_result() -> None:
+    redis = FakeRedisSync()
+    result = FailedJobResult(
+        job_id="job-1",
+        error={"type": "worker", "message": "boom"},
+    )
+    payload = job_store.save_job_result(result, metric="heavy_metric", client=redis)
+
+    snapshot, cancelled = job_store.cancel_job("job-1", client=redis)
+
+    assert cancelled is False
+    assert snapshot is not None
+    assert snapshot.status == "failed"
+    assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
+
+
+def test_cancel_job_returns_missing_for_unknown_job() -> None:
+    snapshot, cancelled = job_store.cancel_job("missing", client=FakeRedisSync())
+
+    assert snapshot is None
+    assert cancelled is False
 
 
 def test_progress_events_append_in_order_and_resume_after_stream_id() -> None:

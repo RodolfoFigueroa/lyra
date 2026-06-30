@@ -175,6 +175,7 @@ class FakeRedisAsync:
         self.expirations: list[tuple[str, int]] = []
         self.deleted: list[str] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
 
     async def ping(self) -> bool:
         return self.available
@@ -198,6 +199,21 @@ class FakeRedisAsync:
         stream_id = f"{len(stream) + 1}-0"
         stream.append((stream_id, fields))
         return stream_id
+
+    async def zadd(self, key: str, mapping: dict[str, float]) -> None:
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    async def zremrangebyscore(
+        self,
+        key: str,
+        min: str | float,  # noqa: A002
+        max: float,  # noqa: A002
+    ) -> None:
+        lower = float("-inf") if min == "-inf" else float(min)
+        sorted_set = self.sorted_sets.setdefault(key, {})
+        for member, score in list(sorted_set.items()):
+            if lower <= score <= max:
+                sorted_set.pop(member, None)
 
     async def xrange(
         self,

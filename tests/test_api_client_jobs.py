@@ -68,6 +68,28 @@ def _status_response() -> dict[str, Any]:
     }
 
 
+def _job_list_response() -> dict[str, Any]:
+    return {
+        "jobs": [
+            {
+                "job_id": "job-1",
+                "metric": "heavy_metric",
+                "status": "started",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    }
+
+
+def _job_cancel_response() -> dict[str, Any]:
+    return {
+        "job_id": "job-1",
+        "status": "cancelled",
+        "cancellation_requested": True,
+        "revoke_requested": True,
+    }
+
+
 def _terminal_event_lines() -> list[str]:
     event = {
         "job_id": "job-1",
@@ -226,6 +248,66 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert result.kind == "table"
     assert result.data == [[6]]
     assert processed.data == [[6]]
+
+
+def test_sync_client_uses_admin_job_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests_seen: list[dict[str, Any]] = []
+
+    def get(
+        url: str,
+        *,
+        params: dict[str, int | str],
+        timeout: float,
+        headers: dict[str, str],
+    ) -> FakeSyncResponse:
+        requests_seen.append(
+            {"url": url, "params": params, "timeout": timeout, "headers": headers}
+        )
+        return FakeSyncResponse(payload=_job_list_response())
+
+    def post(
+        url: str,
+        *,
+        timeout: float,
+        headers: dict[str, str],
+    ) -> FakeSyncResponse:
+        requests_seen.append({"url": url, "timeout": timeout, "headers": headers})
+        return FakeSyncResponse(payload=_job_cancel_response())
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
+    client = LyraAPIClient(
+        "example.test",
+        secure=False,
+        timeout=12.0,
+        headers={"Authorization": "Bearer admin-secret"},
+    )
+
+    jobs = client.list_admin_jobs(limit=10, status="started", metric="heavy_metric")
+    cancelled = client.cancel_admin_job("job-1")
+
+    assert requests_seen == [
+        {
+            "url": "http://example.test/admin/jobs",
+            "params": {
+                "limit": 10,
+                "status": "started",
+                "metric": "heavy_metric",
+            },
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "url": "http://example.test/admin/jobs/job-1/cancel",
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+    ]
+    assert [job.job_id for job in jobs.jobs] == ["job-1"]
+    assert cancelled.job_id == "job-1"
+    assert cancelled.status == "cancelled"
 
 
 def test_sync_client_returns_grouped_data_type_schemas(
@@ -454,6 +536,66 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert result.kind == "table"
     assert result.data == [[6]]
+
+
+def test_async_client_uses_admin_job_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        requests_seen: ClassVar[list[dict[str, Any]]] = []
+
+        def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            self.requests_seen.append({"method": "GET", "args": args, "kwargs": kwargs})
+            return super().get(*args, **kwargs)
+
+        def post(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            self.requests_seen.append(
+                {"method": "POST", "args": args, "kwargs": kwargs}
+            )
+            return super().post(*args, **kwargs)
+
+    RecordingSession.responses = [
+        FakeAsyncResponse(payload=_job_list_response()),
+        FakeAsyncResponse(payload=_job_cancel_response()),
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+    client = AsyncLyraAPIClient(
+        "example.test",
+        secure=False,
+        timeout=12.0,
+        headers={"Authorization": "Bearer admin-secret"},
+    )
+
+    jobs = asyncio.run(
+        client.list_admin_jobs(limit=10, status="started", metric="heavy_metric")
+    )
+    cancelled = asyncio.run(client.cancel_admin_job("job-1"))
+
+    assert RecordingSession.requests_seen == [
+        {
+            "method": "GET",
+            "args": ("http://example.test/admin/jobs",),
+            "kwargs": {
+                "params": {
+                    "limit": 10,
+                    "status": "started",
+                    "metric": "heavy_metric",
+                },
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "method": "POST",
+            "args": ("http://example.test/admin/jobs/job-1/cancel",),
+            "kwargs": {"headers": {"Authorization": "Bearer admin-secret"}},
+        },
+    ]
+    assert [job.job_id for job in jobs.jobs] == ["job-1"]
+    assert cancelled.job_id == "job-1"
+    assert cancelled.status == "cancelled"
 
 
 def test_async_client_returns_grouped_data_type_schemas(

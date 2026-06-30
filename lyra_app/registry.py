@@ -17,7 +17,14 @@ from lyra.sdk.models.plugin_v3 import (
 )
 from pydantic import ValidationError as PydanticValidationError
 
-from lyra_app.plugins import MANIFEST_FILENAME, sync_catalog_repos
+from lyra_app.config import (
+    LyraConfig,
+    get_config,
+    get_config_path,
+    reload_config,
+    save_config,
+)
+from lyra_app.plugins import MANIFEST_FILENAME, sync_plugin_repos
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +70,13 @@ def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
 
 def _normalised_manifest_payload(
     manifests: list[tuple[CompiledPluginManifestV3, Path]],
+    metric_queues: dict[str, str],
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     for manifest, _path in manifests:
         data = manifest.model_dump(mode="json")
+        for metric in data["metrics"]:
+            metric["queue"] = metric_queues[metric["name"]]
         data["metrics"] = sorted(data["metrics"], key=lambda item: item["name"])
         payload.append(data)
     return sorted(
@@ -105,6 +115,7 @@ def _build_request_validator(metric_name: str, schema: dict[str, Any]) -> Any:
 
 def _build_registry(
     manifests: list[tuple[CompiledPluginManifestV3, Path]],
+    metric_queues: dict[str, str],
 ) -> dict[str, MetricRegistryEntry]:
     registry: dict[str, MetricRegistryEntry] = {}
     for manifest, _path in manifests:
@@ -112,6 +123,11 @@ def _build_registry(
             if metric.name in registry:
                 msg = f"Duplicate metric name in plugin manifests: {metric.name!r}"
                 raise RuntimeError(msg)
+            try:
+                queue = metric_queues[metric.name]
+            except KeyError as exc:
+                msg = f"Metric {metric.name!r} does not have a queue assignment."
+                raise RuntimeError(msg) from exc
             request_schema = metric.request_schema
             registry[metric.name] = MetricRegistryEntry(
                 metric=metric,
@@ -119,21 +135,54 @@ def _build_registry(
                 plugin_version=manifest.plugin.version,
                 request_schema=request_schema,
                 request_validator=_build_request_validator(metric.name, request_schema),
-                queue=metric.queue,
+                queue=queue,
                 entrypoint=metric.entrypoint,
             )
     return registry
+
+
+def sync_catalog_repos(config: LyraConfig) -> list[Any]:
+    return sync_plugin_repos(config.plugins.catalog_dir, config.plugins.repos)
+
+
+def _assign_missing_metric_queues(
+    config: LyraConfig,
+    metric_names: set[str],
+) -> tuple[LyraConfig, list[str]]:
+    existing = config.plugins.metric_queues
+    missing = sorted(metric_names - set(existing))
+    if not missing:
+        return config, []
+
+    metric_queues = dict(existing)
+    for metric_name in missing:
+        metric_queues[metric_name] = config.plugins.default_queue
+
+    plugins = config.plugins.model_copy(update={"metric_queues": metric_queues})
+    return config.model_copy(update={"plugins": plugins}), missing
 
 
 def refresh_catalog() -> CatalogRefreshResult:
     global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
 
     previous_fingerprint = _CATALOG_FINGERPRINT
-    synced = sync_catalog_repos()
+    config = get_config()
+    config_path = get_config_path()
+    synced = sync_catalog_repos(config)
     manifests = [(load_plugin_manifest(repo.path), repo.path) for repo in synced]
-    registry = _build_registry(manifests)
+    metric_names = {
+        metric.name for manifest, _path in manifests for metric in manifest.metrics
+    }
+    config, assigned_metric_names = _assign_missing_metric_queues(config, metric_names)
+    if assigned_metric_names:
+        save_config(config, config_path)
+        config = reload_config(config_path)
 
-    fingerprint = _fingerprint_payload(_normalised_manifest_payload(manifests))
+    registry = _build_registry(manifests, config.plugins.metric_queues)
+
+    fingerprint = _fingerprint_payload(
+        _normalised_manifest_payload(manifests, config.plugins.metric_queues)
+    )
     TASK_REGISTRY.clear()
     TASK_REGISTRY.update(registry)
     _CATALOG_FINGERPRINT = fingerprint

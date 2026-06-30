@@ -147,13 +147,21 @@ def parse_repo_entry(entry: str) -> PluginRepoEntry:
     )
 
 
-def iter_plugin_entries() -> Iterable[PluginRepoEntry]:
-    raw = os.environ.get("LYRA_PLUGIN_REPOS", "").strip()
-    if not raw:
+def iter_plugin_entries(
+    raw_entries: Iterable[str] | None = None,
+) -> Iterable[PluginRepoEntry]:
+    if raw_entries is None:
+        raw = os.environ.get("LYRA_PLUGIN_REPOS", "").strip()
+        if not raw:
+            return []
+        raw_entries = raw.split(",")
+
+    entries_to_parse = [value.strip() for value in raw_entries if value.strip()]
+    if not entries_to_parse:
         return []
 
     entries: list[PluginRepoEntry] = []
-    for entry in (value.strip() for value in raw.split(",") if value.strip()):
+    for entry in entries_to_parse:
         try:
             entries.append(parse_repo_entry(entry))
         except ValueError:
@@ -185,8 +193,11 @@ def _sync_repo(target: Path, entry: PluginRepoEntry) -> bool:
     return True
 
 
-def sync_plugin_repos(target_dir: Path) -> list[SyncedPluginRepo]:
-    entries = list(iter_plugin_entries())
+def sync_plugin_repos(
+    target_dir: Path,
+    raw_entries: Iterable[str] | None = None,
+) -> list[SyncedPluginRepo]:
+    entries = list(iter_plugin_entries(raw_entries))
     if not entries:
         return []
 
@@ -230,8 +241,8 @@ def sync_catalog_repos() -> list[SyncedPluginRepo]:
     return sync_plugin_repos(get_catalog_dir())
 
 
-def sync_runner_repos() -> list[SyncedPluginRepo]:
-    return sync_plugin_repos(get_install_dir())
+def sync_runner_repos(target_dir: Path | None = None) -> list[SyncedPluginRepo]:
+    return sync_plugin_repos(target_dir or get_install_dir())
 
 
 def _check_compatible(plugin_dir: Path) -> bool:

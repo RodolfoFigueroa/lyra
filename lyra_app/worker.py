@@ -32,7 +32,12 @@ from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
-from lyra_app.plugins import install_runner_plugins, sync_runner_repos
+from lyra_app.config import ConfigLoadError, LyraConfig, get_config
+from lyra_app.plugins import (
+    install_runner_plugins,
+    sync_plugin_repos,
+    sync_runner_repos,
+)
 from lyra_app.registry import load_plugin_manifest
 
 logger = logging.getLogger(__name__)
@@ -98,36 +103,86 @@ def _load_entrypoint(spec: str) -> MetricRunCallable:
     return value
 
 
-def _entry_from_metric(metric: CompiledMetricManifestV3) -> RunnerMetricEntry:
+def _entry_from_metric(
+    metric: CompiledMetricManifestV3,
+    *,
+    queue: str,
+) -> RunnerMetricEntry:
     return RunnerMetricEntry(
         metric_name=metric.name,
-        queue=metric.queue,
+        queue=queue,
         entrypoint=metric.entrypoint,
         output=metric.output,
         run=_load_entrypoint(metric.entrypoint),
     )
 
 
-def load_runner_metric_entries() -> dict[str, RunnerMetricEntry]:
-    queues = _configured_runner_queues()
-    repos = install_runner_plugins(sync_runner_repos())
+def _runner_sync_repos(worker_name: str | None, config: LyraConfig | None) -> list[Any]:
+    if worker_name is None or config is None:
+        return sync_runner_repos()
+    return sync_plugin_repos(
+        config.worker_install_dir(worker_name),
+        config.plugins.repos,
+    )
+
+
+def _runner_queue_assignments(config: LyraConfig | None) -> dict[str, str]:
+    return {} if config is None else config.plugins.metric_queues
+
+
+def _runner_queues(worker_name: str | None, config: LyraConfig | None) -> set[str]:
+    if worker_name is None or config is None:
+        return _configured_runner_queues()
+    return set(config.get_worker(worker_name).queues)
+
+
+def _resolve_metric_queue(
+    metric: CompiledMetricManifestV3,
+    metric_queues: dict[str, str],
+) -> str:
+    try:
+        return metric_queues[metric.name]
+    except KeyError as exc:
+        msg = (
+            f"Metric {metric.name!r} has no queue assignment. Run API catalog "
+            "refresh before starting workers."
+        )
+        raise RuntimeError(msg) from exc
+
+
+def load_runner_metric_entries(
+    worker_name: str | None = None,
+    *,
+    config: LyraConfig | None = None,
+) -> dict[str, RunnerMetricEntry]:
+    if worker_name is not None and config is None:
+        config = get_config()
+
+    queues = _runner_queues(worker_name, config)
+    metric_queues = _runner_queue_assignments(config)
+    repos = install_runner_plugins(_runner_sync_repos(worker_name, config))
     entries: dict[str, RunnerMetricEntry] = {}
 
     for repo in repos:
         manifest = load_plugin_manifest(repo.path)
         for metric in manifest.metrics:
-            if queues and metric.queue not in queues:
+            queue = _resolve_metric_queue(metric, metric_queues)
+            if queues and queue not in queues:
                 continue
             if metric.name in entries:
                 msg = f"Duplicate metric name in runner manifests: {metric.name!r}"
                 raise RuntimeError(msg)
-            entries[metric.name] = _entry_from_metric(metric)
+            entries[metric.name] = _entry_from_metric(metric, queue=queue)
 
     return entries
 
 
-def refresh_runner_registry() -> dict[str, RunnerMetricEntry]:
-    registry = load_runner_metric_entries()
+def refresh_runner_registry(
+    worker_name: str | None = None,
+    *,
+    config: LyraConfig | None = None,
+) -> dict[str, RunnerMetricEntry]:
+    registry = load_runner_metric_entries(worker_name, config=config)
     RUNNER_REGISTRY.clear()
     RUNNER_REGISTRY.update(registry)
     logger.info(
@@ -528,7 +583,10 @@ def run_metric_task(self: Task, envelope_payload: dict[str, Any]) -> dict[str, A
     return execute_job(envelope_payload, task_id=task_id)
 
 
-refresh_runner_registry()
+try:
+    refresh_runner_registry()
+except ConfigLoadError:
+    logger.info("Skipping runner registry preload because Lyra config is unavailable.")
 
 
 __all__ = [

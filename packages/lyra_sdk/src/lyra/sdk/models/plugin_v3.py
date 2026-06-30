@@ -471,7 +471,6 @@ class MetricManifestV3(StrictBaseModel):
         min_length=1,
         description="Short description shown to API clients.",
     )
-    queue: str = Field(min_length=1, description="Celery queue used by this metric.")
     entrypoint: str = Field(description="Python module:function runner reference.")
     inputs: dict[str, InputSpecV3] = Field(
         min_length=1,
@@ -583,7 +582,6 @@ class CompiledMetricManifestV3(StrictBaseModel):
 
     name: str = Field(min_length=1, description="Public metric name.")
     description: str = Field(description="Human-readable metric description.")
-    queue: str = Field(min_length=1, description="Worker dispatch queue.")
     entrypoint: str = Field(description="Python module:function runner reference.")
     spatial_inputs: dict[str, SpatialInputKindV3] = Field(
         min_length=1,
@@ -868,7 +866,6 @@ def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifes
             CompiledMetricManifestV3(
                 name=metric.name,
                 description=metric.description,
-                queue=metric.queue,
                 entrypoint=metric.entrypoint,
                 spatial_inputs=spatial_inputs,
                 batch_inputs=batch_inputs,

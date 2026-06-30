@@ -472,14 +472,20 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
     return config
 
 
-def get_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
+def get_config(path: str | Path | None = None) -> LyraConfig:
     global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
 
-    config_path = Path(path)
+    config_path = Path(path) if path is not None else _CONFIG_CACHE_PATH
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
     if _CONFIG_CACHE is None or config_path != _CONFIG_CACHE_PATH:
         _CONFIG_CACHE = load_config(config_path)
         _CONFIG_CACHE_PATH = config_path
     return _CONFIG_CACHE
+
+
+def get_config_path() -> Path:
+    return _CONFIG_CACHE_PATH or DEFAULT_CONFIG_PATH
 
 
 def reload_config(path: str | Path | None = None) -> LyraConfig:
@@ -646,6 +652,7 @@ __all__ = [
     "WorkerConfig",
     "clear_config_cache",
     "get_config",
+    "get_config_path",
     "load_config",
     "read_scalar_secret_file",
     "reload_config",

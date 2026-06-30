@@ -1,15 +1,21 @@
 import asyncio
 import json
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException, Request
+from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from lyra.sdk.models import FailedJobResult, FileJobResult, JobCreateRequest
+from lyra.sdk.models import (
+    CancelledJobResult,
+    FailedJobResult,
+    FileJobResult,
+    JobCreateRequest,
+    TableJobResult,
+)
 from lyra.sdk.models.geometry import GeoJSON
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
@@ -329,6 +335,29 @@ async def _body(response: StreamingResponse) -> str:
         async for chunk in response.body_iterator
     ]
     return "".join(chunks)
+
+
+async def _file_response_body(response: FileResponse) -> bytes:
+    chunks: list[bytes] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        if message["type"] == "http.response.body":
+            chunks.append(message.get("body", b""))
+
+    await response(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/jobs/job-1/result/download",
+            "headers": [],
+        },
+        receive,
+        send,
+    )
+    return b"".join(chunks)
 
 
 def test_create_job_dispatches_generic_task_to_state_queue(
@@ -702,37 +731,70 @@ def test_job_result_returns_404_before_completion(
     _patch_redis(monkeypatch, FakeRedisAsync())
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(jobs.get_job_result("job-1", BackgroundTasks()))
+        asyncio.run(jobs.get_job_result("job-1"))
 
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (
+            TableJobResult(
+                job_id="job-1",
+                index=["area-1"],
+                columns=["value"],
+                data=[[6]],
+            ),
+            {
+                "kind": "table",
+                "job_id": "job-1",
+                "status": "succeeded",
+                "index": ["area-1"],
+                "columns": ["value"],
+                "data": [[6]],
+            },
+        ),
+        (
+            FailedJobResult(
+                job_id="job-1",
+                error={"type": "worker"},
+            ),
+            {
+                "kind": "failed",
+                "job_id": "job-1",
+                "status": "failed",
+                "error": {"type": "worker"},
+            },
+        ),
+        (
+            CancelledJobResult(job_id="job-1"),
+            {
+                "kind": "cancelled",
+                "job_id": "job-1",
+                "status": "cancelled",
+            },
+        ),
+    ],
+)
 def test_job_result_returns_json_terminal_result(
     monkeypatch: pytest.MonkeyPatch,
+    result: TableJobResult | FailedJobResult | CancelledJobResult,
+    expected: dict[str, Any],
 ) -> None:
     redis = FakeRedisAsync()
     _patch_redis(monkeypatch, redis)
     redis.values[job_store.result_key("job-1")] = json.dumps(
-        FailedJobResult(
-            job_id="job-1",
-            error={"type": "worker"},
-        ).model_dump(
-            mode="json",
-        )
+        result.model_dump(mode="json", exclude_none=True)
     )
 
-    response = asyncio.run(jobs.get_job_result("job-1", BackgroundTasks()))
+    response = asyncio.run(jobs.get_job_result("job-1"))
 
     assert isinstance(response, JSONResponse)
-    assert json.loads(bytes(response.body)) == {
-        "kind": "failed",
-        "job_id": "job-1",
-        "status": "failed",
-        "error": {"type": "worker"},
-    }
+    assert json.loads(bytes(response.body)) == expected
 
 
-def test_job_result_returns_file_and_cleans_result(
+def test_job_result_returns_file_metadata_without_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -747,12 +809,70 @@ def test_job_result_returns_file_and_cleans_result(
             media_type="image/tiff",
         ).model_dump(mode="json", exclude_none=True)
     )
-    background_tasks = BackgroundTasks()
+
+    first_response = asyncio.run(jobs.get_job_result("job-1"))
+    second_response = asyncio.run(jobs.get_job_result("job-1"))
+
+    expected = {
+        "kind": "file",
+        "job_id": "job-1",
+        "status": "succeeded",
+        "file_path": str(output),
+        "media_type": "image/tiff",
+    }
+    assert isinstance(first_response, JSONResponse)
+    assert isinstance(second_response, JSONResponse)
+    assert json.loads(bytes(first_response.body)) == expected
+    assert json.loads(bytes(second_response.body)) == expected
+    assert output.exists()
+    assert redis.deleted == []
+
+
+def test_job_result_download_returns_file_bytes_repeatedly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    output = tmp_path / "result.tif"
+    output.write_bytes(b"data")
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        FileJobResult(
+            job_id="job-1",
+            file_path=str(output),
+            media_type="image/tiff",
+        ).model_dump(mode="json", exclude_none=True)
+    )
     monkeypatch.setattr(jobs, "Path", FakeAsyncPath)
 
-    response = asyncio.run(jobs.get_job_result("job-1", background_tasks))
-    asyncio.run(background_tasks())
+    first_response = asyncio.run(jobs.download_job_result("job-1"))
+    second_response = asyncio.run(jobs.download_job_result("job-1"))
 
-    assert isinstance(response, FileResponse)
-    assert not output.exists()
-    assert redis.deleted == [job_store.result_key("job-1")]
+    assert isinstance(first_response, FileResponse)
+    assert first_response.media_type == "image/tiff"
+    assert asyncio.run(_file_response_body(first_response)) == b"data"
+    assert asyncio.run(_file_response_body(second_response)) == b"data"
+    assert output.exists()
+    assert redis.deleted == []
+
+
+def test_job_result_download_returns_404_when_file_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    output = tmp_path / "missing.tif"
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        FileJobResult(
+            job_id="job-1",
+            file_path=str(output),
+            media_type="image/tiff",
+        ).model_dump(mode="json", exclude_none=True)
+    )
+    monkeypatch.setattr(jobs, "Path", FakeAsyncPath)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(jobs.download_job_result("job-1"))
+
+    assert exc_info.value.status_code == 404

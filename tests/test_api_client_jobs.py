@@ -8,6 +8,7 @@ import pytest
 from lyra.api.client.async_ import AsyncLyraAPIClient
 from lyra.api.client.sync import LyraAPIClient
 from lyra.api.exceptions import DownloadError
+from lyra.sdk.models import FileJobResult
 
 
 class FakeSyncResponse:
@@ -97,6 +98,16 @@ def _result_response() -> dict[str, Any]:
         "index": ["area-1"],
         "columns": ["value"],
         "data": [[6]],
+    }
+
+
+def _file_result_response() -> dict[str, Any]:
+    return {
+        "kind": "file",
+        "job_id": "job-1",
+        "status": "succeeded",
+        "file_path": "/lyra_data/cache/jobs/job-1/result.tif",
+        "media_type": "image/tiff",
     }
 
 
@@ -288,12 +299,13 @@ def test_sync_client_downloads_file_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
-        url: str,  # noqa: ARG001
+        url: str,
         *,
         timeout: float,  # noqa: ARG001
         headers: dict[str, str],  # noqa: ARG001
         stream: bool,
     ) -> FakeSyncResponse:
+        assert url == "http://example.test/jobs/job-1/result/download"
         assert stream is True
         return FakeSyncResponse(
             headers={"content-type": "image/tiff"},
@@ -309,6 +321,27 @@ def test_sync_client_downloads_file_result(
     )
 
     assert output.read_bytes() == b"abcdef"
+
+
+def test_sync_client_fetches_file_result_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        assert url == "http://example.test/jobs/job-1/result"
+        return FakeSyncResponse(payload=_file_result_response())
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+
+    result = LyraAPIClient("example.test", secure=False).get_job_result("job-1")
+
+    assert isinstance(result, FileJobResult)
+    assert result.file_path == "/lyra_data/cache/jobs/job-1/result.tif"
+    assert result.media_type == "image/tiff"
 
 
 class FakeContent:
@@ -483,14 +516,25 @@ def test_async_client_downloads_file_job_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class RecordingSession(FakeSession):
+        urls: ClassVar[list[str]] = []
+
+        def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            url = str(args[0])
+            self.urls.append(url)
+            return super().get(*args, **kwargs)
+
     def fake_aiofiles_open(path: Path, mode: str) -> FakeAsyncFile:
         assert mode == "wb"
         return FakeAsyncFile(path)
 
-    FakeSession.responses = [
+    RecordingSession.responses = [
         FakeAsyncResponse(headers={"content-type": "image/tiff"}, chunks=[b"abc"]),
     ]
-    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
     monkeypatch.setattr("lyra.api.client.async_.aiofiles.open", fake_aiofiles_open)
     output = tmp_path / "result.tif"
 
@@ -501,4 +545,24 @@ def test_async_client_downloads_file_job_result(
         )
     )
 
+    assert RecordingSession.urls == [
+        "http://example.test/jobs/job-1/result/download",
+    ]
     assert output.read_bytes() == b"abc"
+
+
+def test_async_client_fetches_file_result_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSession.responses = [
+        FakeAsyncResponse(payload=_file_result_response()),
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+
+    result = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).get_job_result("job-1")
+    )
+
+    assert isinstance(result, FileJobResult)
+    assert result.file_path == "/lyra_data/cache/jobs/job-1/result.tif"
+    assert result.media_type == "image/tiff"

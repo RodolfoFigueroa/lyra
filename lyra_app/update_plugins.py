@@ -1,6 +1,9 @@
 import argparse
 import logging
 
+from lyra_app.celery_app import configure_celery
+from lyra_app.config import get_config
+from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 from lyra_app.plugins import format_update_message
 from lyra_app.registry import refresh_catalog
@@ -30,7 +33,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    configure_logging()
+    config = get_config()
+    configure_logging(config)
+    configure_redis(config)
+    configure_celery(config)
 
     result = refresh_catalog()
     graceful_worker_restart(timeout=args.timeout)

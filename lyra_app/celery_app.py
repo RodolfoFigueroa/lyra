@@ -1,7 +1,17 @@
 from celery import Celery
 
-from lyra_app.db.redis import redis_url
+from lyra_app.config import LyraConfig
+from lyra_app.db.redis import get_redis_url
 
-celery_app = Celery("lyra", broker=redis_url, backend=redis_url)
+celery_app = Celery("lyra")
 
-__all__ = ["celery_app"]
+
+def configure_celery(config: LyraConfig | None = None) -> None:
+    redis_url = get_redis_url(config)
+    celery_app.conf.update(
+        broker_url=redis_url,
+        result_backend=redis_url,
+    )
+
+
+__all__ = ["celery_app", "configure_celery"]

@@ -8,7 +8,6 @@ from pydantic import Field
 
 from lyra_app.config import (
     DEFAULT_JOB_STORE_TTL_SECONDS,
-    ConfigLoadError,
     LyraConfig,
     get_config,
 )
@@ -83,10 +82,7 @@ def _loads_json(payload: Any) -> Any:
 def _job_store_ttl_seconds(config: LyraConfig | None = None) -> int:
     if config is not None:
         return config.job_store.ttl_seconds
-    try:
-        return get_config().job_store.ttl_seconds
-    except ConfigLoadError:
-        return JOB_STORE_TTL_SECONDS
+    return get_config().job_store.ttl_seconds
 
 
 def _apply_ttl_sync(client: Any, job_id: str) -> None:

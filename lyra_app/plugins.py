@@ -14,8 +14,6 @@ from urllib.parse import unquote, urlparse
 logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "lyra.plugin.json"
-DEFAULT_CATALOG_DIR = Path("/lyra_data/plugins/catalog")
-DEFAULT_INSTALL_DIR = Path("/lyra_data/plugins/runners/default")
 RepoSourceKind = Literal["github", "local"]
 
 
@@ -98,14 +96,6 @@ def _parse_local_repo_entry(raw: str) -> PluginRepoEntry:
         source_kind="local",
         source_path=source_path,
     )
-
-
-def get_catalog_dir() -> Path:
-    return DEFAULT_CATALOG_DIR
-
-
-def get_install_dir() -> Path:
-    return DEFAULT_INSTALL_DIR
 
 
 def _run_git(*args: str, cwd: Path | None = None) -> str:
@@ -229,14 +219,6 @@ def sync_plugin_repos(
         synced.append(SyncedPluginRepo(entry=entry, path=target, changed=changed))
 
     return synced
-
-
-def sync_catalog_repos() -> list[SyncedPluginRepo]:
-    return sync_plugin_repos(get_catalog_dir())
-
-
-def sync_runner_repos(target_dir: Path | None = None) -> list[SyncedPluginRepo]:
-    return sync_plugin_repos(target_dir or get_install_dir())
 
 
 def _check_compatible(plugin_dir: Path) -> bool:

@@ -2,7 +2,6 @@ import importlib
 import logging
 import math
 import re
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +34,6 @@ from lyra_app.config import ConfigLoadError, LyraConfig, get_config
 from lyra_app.plugins import (
     install_runner_plugins,
     sync_plugin_repos,
-    sync_runner_repos,
 )
 from lyra_app.registry import load_plugin_manifest
 
@@ -89,10 +87,6 @@ def set_runner_temp_base(path: Path | None) -> None:
     _RUNNER_TEMP_BASE = path
 
 
-def _configured_runner_queues() -> set[str]:
-    return set()
-
-
 def _load_entrypoint(spec: str) -> MetricRunCallable:
     module_name, sep, function_name = spec.partition(":")
     if not sep or not module_name or not function_name:
@@ -120,22 +114,18 @@ def _entry_from_metric(
     )
 
 
-def _runner_sync_repos(worker_name: str | None, config: LyraConfig | None) -> list[Any]:
-    if worker_name is None or config is None:
-        return sync_runner_repos()
+def _runner_sync_repos(worker_name: str, config: LyraConfig) -> list[Any]:
     return sync_plugin_repos(
         config.worker_install_dir(worker_name),
         config.plugins.repos,
     )
 
 
-def _runner_queue_assignments(config: LyraConfig | None) -> dict[str, str]:
-    return {} if config is None else config.plugins.metric_queues
+def _runner_queue_assignments(config: LyraConfig) -> dict[str, str]:
+    return config.plugins.metric_queues
 
 
-def _runner_queues(worker_name: str | None, config: LyraConfig | None) -> set[str]:
-    if worker_name is None or config is None:
-        return _configured_runner_queues()
+def _runner_queues(worker_name: str, config: LyraConfig) -> set[str]:
     return set(config.get_worker(worker_name).queues)
 
 
@@ -154,11 +144,11 @@ def _resolve_metric_queue(
 
 
 def load_runner_metric_entries(
-    worker_name: str | None = None,
+    worker_name: str,
     *,
     config: LyraConfig | None = None,
 ) -> dict[str, RunnerMetricEntry]:
-    if worker_name is not None and config is None:
+    if config is None:
         config = get_config()
 
     queues = _runner_queues(worker_name, config)
@@ -181,23 +171,19 @@ def load_runner_metric_entries(
 
 
 def refresh_runner_registry(
-    worker_name: str | None = None,
+    worker_name: str,
     *,
     config: LyraConfig | None = None,
 ) -> dict[str, RunnerMetricEntry]:
     global _RUNNER_TEMP_BASE  # noqa: PLW0603
 
-    if worker_name is not None and config is None:
+    if config is None:
         config = get_config()
 
     registry = load_runner_metric_entries(worker_name, config=config)
     RUNNER_REGISTRY.clear()
     RUNNER_REGISTRY.update(registry)
-    _RUNNER_TEMP_BASE = (
-        config.worker_temp_dir(worker_name)
-        if worker_name is not None and config is not None
-        else None
-    )
+    _RUNNER_TEMP_BASE = config.worker_temp_dir(worker_name)
     logger.info(
         "Loaded %d v3 runner metric(s) for generic task %s.",
         len(RUNNER_REGISTRY),
@@ -210,11 +196,8 @@ def _runner_temp_base() -> Path:
     if _RUNNER_TEMP_BASE is not None:
         return _RUNNER_TEMP_BASE
 
-    cache_dir = Path("/lyra_data/cache")
-    if cache_dir.exists():
-        return cache_dir / "jobs"
-
-    return Path(tempfile.gettempdir()) / "lyra" / "jobs"
+    msg = "Runner temp base is not configured. Start workers with worker_launcher."
+    raise RuntimeError(msg)
 
 
 def _safe_path_segment(value: str) -> str:
@@ -591,12 +574,6 @@ def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
 def run_metric_task(self: Task, envelope_payload: dict[str, Any]) -> dict[str, Any]:
     task_id = str(getattr(self.request, "id", "") or "unknown-job")
     return execute_job(envelope_payload, task_id=task_id)
-
-
-try:
-    refresh_runner_registry()
-except ConfigLoadError:
-    logger.info("Skipping runner registry preload because Lyra config is unavailable.")
 
 
 __all__ = [

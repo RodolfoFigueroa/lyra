@@ -4,6 +4,7 @@ import argparse
 from typing import TYPE_CHECKING
 
 from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
+from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 
 if TYPE_CHECKING:
@@ -28,14 +29,12 @@ def launch_worker(worker_name: str, *, config: LyraConfig | None = None) -> None
     config.get_worker(worker_name)
     ensure_runtime_directories(config)
     configure_logging(config)
+    configure_redis(config)
 
-    from lyra_app.celery_app import celery_app  # noqa: PLC0415
+    from lyra_app.celery_app import celery_app, configure_celery  # noqa: PLC0415
     from lyra_app.worker import refresh_runner_registry  # noqa: PLC0415
 
-    celery_app.conf.update(
-        broker_url=config.redis.url,
-        result_backend=config.redis.url,
-    )
+    configure_celery(config)
     refresh_runner_registry(worker_name, config=config)
     celery_app.worker_main(build_celery_worker_args(config, worker_name))
 

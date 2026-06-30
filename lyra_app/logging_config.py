@@ -1,8 +1,8 @@
 import logging
 from pathlib import Path
 
-from lyra_app.config import ConfigLoadError, LyraConfig, get_config
-from lyra_app.constants import DEFAULT_LOG_FORMAT, DEFAULT_LOG_LEVEL
+from lyra_app.config import LyraConfig, get_config
+from lyra_app.constants import DEFAULT_LOG_FORMAT
 
 
 def _build_log_handler(log_file: Path | None) -> logging.Handler:
@@ -16,10 +16,7 @@ def _build_log_handler(log_file: Path | None) -> logging.Handler:
 
 def _logging_config(config: LyraConfig | None) -> tuple[str, Path | None]:
     if config is None:
-        try:
-            config = get_config()
-        except ConfigLoadError:
-            return DEFAULT_LOG_LEVEL, None
+        config = get_config()
     return config.logging.level, config.logging.file
 
 

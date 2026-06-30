@@ -6,7 +6,9 @@ import uvicorn
 from fastapi import FastAPI
 
 from lyra_app.auth import initialize_earth_engine
+from lyra_app.celery_app import configure_celery
 from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
+from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,8 @@ def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:
     config = get_config() if config is None else config
     ensure_runtime_directories(config)
     configure_logging(config)
+    configure_redis(config)
+    configure_celery(config)
     initialize_earth_engine(config)
     return config
 

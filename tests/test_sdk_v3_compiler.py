@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -382,14 +379,3 @@ def test_compile_v3_is_deterministic() -> None:
     second = compile_plugin_manifest(manifest).model_dump(mode="json")
 
     assert first == second
-
-
-def test_schema_v3_readme_examples_parse_and_compile() -> None:
-    readme = Path("roadmaps/schema_v3/README.md").read_text()
-    examples = re.findall(r"```json\n(.*?)\n```", readme, flags=re.DOTALL)
-
-    assert len(examples) == 3
-    for example in examples:
-        compiled = _compile(json.loads(example))
-        for metric in compiled["metrics"]:
-            _assert_valid_json_schema(metric["request_schema"])

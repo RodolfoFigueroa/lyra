@@ -228,3 +228,4 @@ docs/dist/
 *.tif
 service-account.json
 cache/
+lyra_data/

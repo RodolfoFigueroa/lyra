@@ -25,7 +25,7 @@ from lyra.tui.widgets import (
 )
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Header, TabbedContent, TabPane
+from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane, Tabs
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -36,6 +36,12 @@ if TYPE_CHECKING:
     from lyra.tui.config import TuiConfig
     from lyra.tui.state import SnapshotPhase
     from textual.worker import Worker
+
+
+CATALOG_TAB_ID = "catalog"
+CATALOG_TAB_REQUIRED_MESSAGE = (
+    "Catalog actions are only available from the Catalog tab."
+)
 
 
 class LyraTuiApp(App[None]):
@@ -64,6 +70,10 @@ class LyraTuiApp(App[None]):
         height: 1fr;
     }
 
+    .dialog-screen {
+        align: center middle;
+    }
+
     .panel-summary {
         height: auto;
         padding: 0 1;
@@ -72,6 +82,14 @@ class LyraTuiApp(App[None]):
     .panel-message {
         height: auto;
         padding: 0 1;
+    }
+
+    .catalog-action-bar {
+        height: auto;
+        padding: 0 1;
+        background: $surface-lighten-1;
+        color: $text;
+        text-style: bold;
     }
 
     .dialog {
@@ -105,19 +123,28 @@ class LyraTuiApp(App[None]):
         height: auto;
         align-horizontal: right;
     }
+
+    .dialog-buttons Button {
+        min-width: 8;
+        margin-left: 1;
+    }
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("r", "refresh", "Refresh"),
         Binding("c", "cancel_job", "Cancel Job"),
         Binding("w", "restart_workers", "Restart Workers"),
-        Binding("p", "refresh_catalog", "Refresh Catalog"),
-        Binding("a", "add_plugin_repo", "Add Repo"),
-        Binding("e", "toggle_plugin_repo", "Enable/Disable Repo"),
-        Binding("d", "delete_plugin_repo", "Delete Repo"),
-        Binding("s", "sync_plugin_repo", "Sync Repo"),
-        Binding("m", "assign_route", "Assign Route"),
-        Binding("x", "delete_route", "Delete Route"),
+        Binding("p", "refresh_catalog", "Refresh Catalog", show=False),
+        Binding("a", "add_plugin_repo", "Add Repo", show=False),
+        Binding("e", "toggle_plugin_repo", "Enable/Disable Repo", show=False),
+        Binding("d", "delete_plugin_repo", "Delete Repo", show=False),
+        Binding("s", "sync_plugin_repo", "Sync Repo", show=False),
+        Binding("m", "assign_route", "Assign Route", show=False),
+        Binding("x", "delete_route", "Delete Route", show=False),
+        Binding("enter", "focus_active_tab_content", "Enter Section"),
+        Binding("escape", "focus_tab_strip", "Exit Section"),
+        Binding("tab", "focus_next_table", "Next Table", show=False),
+        Binding("shift+tab", "focus_previous_table", "Previous Table", show=False),
         Binding("q", "quit_app", "Quit", priority=True),
     ]
 
@@ -172,31 +199,53 @@ class LyraTuiApp(App[None]):
         self.workers.cancel_group(self, "refresh")
         self.workers.cancel_group(self, "action")
 
+    def on_tabbed_content_tab_activated(
+        self,
+        _event: TabbedContent.TabActivated,
+    ) -> None:
+        self.call_after_refresh(self.screen.refresh_bindings)
+
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         del parameters
         result: bool | None = None
         try:
             if action == "quit_app":
                 result = True
+            elif action == "focus_active_tab_content":
+                result = (
+                    self._tab_strip_is_focused()
+                    and self._active_tab_focus_target() is not None
+                )
+            elif action == "focus_tab_strip":
+                result = self._table_is_focused()
+            elif action in {"focus_next_table", "focus_previous_table"}:
+                result = self._table_is_focused() and len(self._active_tab_tables()) > 1
             elif action == "cancel_job":
                 job = self._selected_job()
                 result = job is not None and is_active_job_status(job.status)
             elif action in {
-                "restart_workers",
                 "refresh_catalog",
                 "add_plugin_repo",
                 "assign_route",
             }:
+                result = self.config.has_admin_key and self._catalog_tab_is_active()
+            elif action == "restart_workers":
                 result = self.config.has_admin_key
             elif action in {
                 "toggle_plugin_repo",
                 "delete_plugin_repo",
                 "sync_plugin_repo",
             }:
-                result = self.config.has_admin_key and self._selected_repo() is not None
+                result = (
+                    self.config.has_admin_key
+                    and self._catalog_tab_is_active()
+                    and self._selected_repo() is not None
+                )
             elif action == "delete_route":
                 result = (
-                    self.config.has_admin_key and self._selected_route() is not None
+                    self.config.has_admin_key
+                    and self._catalog_tab_is_active()
+                    and self._selected_route() is not None
                 )
         except Exception:  # noqa: BLE001
             result = None
@@ -218,6 +267,23 @@ class LyraTuiApp(App[None]):
 
     def action_quit_app(self) -> None:
         self.exit()
+
+    def action_focus_active_tab_content(self) -> None:
+        if not self._tab_strip_is_focused():
+            return
+        focus_target = self._active_tab_focus_target()
+        if focus_target is not None:
+            focus_target.focus()
+
+    def action_focus_tab_strip(self) -> None:
+        if self._table_is_focused():
+            self.query_one(Tabs).focus()
+
+    def action_focus_next_table(self) -> None:
+        self._focus_relative_table(1)
+
+    def action_focus_previous_table(self) -> None:
+        self._focus_relative_table(-1)
 
     def action_cancel_job(self) -> None:
         job = self._selected_job()
@@ -246,6 +312,8 @@ class LyraTuiApp(App[None]):
         )
 
     def action_refresh_catalog(self) -> None:
+        if not self._require_catalog_tab():
+            return
         self.push_screen(
             ConfirmDialog(
                 "Refresh catalog",
@@ -258,12 +326,16 @@ class LyraTuiApp(App[None]):
         )
 
     def action_add_plugin_repo(self) -> None:
+        if not self._require_catalog_tab():
+            return
         self.push_screen(
             PluginRepoDialog(),
             callback=self._add_plugin_repo_after_dialog,
         )
 
     def action_toggle_plugin_repo(self) -> None:
+        if not self._require_catalog_tab():
+            return
         repo = self._selected_repo()
         if repo is None:
             self.show_action_message("No plugin repo selected.")
@@ -282,6 +354,8 @@ class LyraTuiApp(App[None]):
         )
 
     def action_delete_plugin_repo(self) -> None:
+        if not self._require_catalog_tab():
+            return
         repo = self._selected_repo()
         if repo is None:
             self.show_action_message("No plugin repo selected.")
@@ -299,6 +373,8 @@ class LyraTuiApp(App[None]):
         )
 
     def action_sync_plugin_repo(self) -> None:
+        if not self._require_catalog_tab():
+            return
         repo = self._selected_repo()
         if repo is None:
             self.show_action_message("No plugin repo selected.")
@@ -316,6 +392,8 @@ class LyraTuiApp(App[None]):
         )
 
     def action_assign_route(self) -> None:
+        if not self._require_catalog_tab():
+            return
         allowed_queues = self._allowed_queues()
         if not allowed_queues:
             self.show_action_message("No allowed queues are available.")
@@ -331,6 +409,8 @@ class LyraTuiApp(App[None]):
         )
 
     def action_delete_route(self) -> None:
+        if not self._require_catalog_tab():
+            return
         route = self._selected_route()
         if route is None:
             self.show_action_message("No route selected.")
@@ -480,6 +560,40 @@ class LyraTuiApp(App[None]):
         if self.state.snapshot.admin_status is not None:
             return self.state.snapshot.admin_status.allowed_queues
         return []
+
+    def _catalog_tab_is_active(self) -> bool:
+        return self.query_one(TabbedContent).active == CATALOG_TAB_ID
+
+    def _require_catalog_tab(self) -> bool:
+        if self._catalog_tab_is_active():
+            return True
+        self.show_action_message(CATALOG_TAB_REQUIRED_MESSAGE)
+        return False
+
+    def _tab_strip_is_focused(self) -> bool:
+        return isinstance(self.screen.focused, Tabs)
+
+    def _table_is_focused(self) -> bool:
+        return isinstance(self.screen.focused, DataTable)
+
+    def _active_tab_focus_target(self) -> DataTable[object] | None:
+        for table in self._active_tab_tables():
+            return table
+        return None
+
+    def _active_tab_tables(self) -> list[DataTable[object]]:
+        pane = self.query_one(TabbedContent).active_pane
+        if pane is None:
+            return []
+        return list(pane.query(DataTable))
+
+    def _focus_relative_table(self, direction: int) -> None:
+        tables = self._active_tab_tables()
+        focused = self.screen.focused
+        for index, table in enumerate(tables):
+            if table is focused:
+                tables[(index + direction) % len(tables)].focus()
+                return
 
 
 def _loading_snapshot(snapshot: TuiSnapshot) -> TuiSnapshot:

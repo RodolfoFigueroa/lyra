@@ -23,8 +23,10 @@ class PluginsView(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("", id="plugins-summary", classes="panel-summary")
         yield Static("Plugin repos", classes="panel-message")
+        yield Static("", id="plugins-actions", classes="catalog-action-bar")
         yield DataTable(id="plugins-table")
         yield Static("Metric routing", classes="panel-message")
+        yield Static("", id="routing-actions", classes="catalog-action-bar")
         yield DataTable(id="routing-table")
 
     def on_mount(self) -> None:
@@ -48,6 +50,10 @@ class PluginsView(Vertical):
         metric_count = snapshot.catalog.metric_count if snapshot.catalog else "unknown"
         self.query_one("#plugins-summary", Static).update(
             f"{metric_count} loaded metrics | {repo_count} repos | {route_count} routes"
+        )
+        self.query_one("#plugins-actions", Static).update(repo_actions_text(repo_count))
+        self.query_one("#routing-actions", Static).update(
+            routing_actions_text(route_count)
         )
 
         repos = self.query_one("#plugins-table", DataTable)
@@ -96,3 +102,32 @@ def plugin_repo_row(repo: PluginRepoResponse) -> tuple[str, str, str, str]:
 
 def routing_row(metric_name: str, queue: str) -> tuple[str, str]:
     return (truncate(metric_name), queue)
+
+
+def repo_actions_text(repo_count: int) -> str:
+    actions = [
+        "[reverse] a [/reverse] Add repo",
+        "[reverse] p [/reverse] Refresh catalog",
+    ]
+    if repo_count:
+        actions.extend(
+            [
+                "[reverse] e [/reverse] Enable/Disable",
+                "[reverse] s [/reverse] Sync",
+                "[reverse] d [/reverse] Delete",
+            ]
+        )
+    actions.append(
+        "[reverse] tab [/reverse] [reverse] shift+tab [/reverse] Switch table"
+    )
+    return "[b]Repo commands[/b]  " + "  ".join(actions)
+
+
+def routing_actions_text(route_count: int) -> str:
+    actions = ["[reverse] m [/reverse] Assign route"]
+    if route_count:
+        actions.append("[reverse] x [/reverse] Delete route")
+    actions.append(
+        "[reverse] tab [/reverse] [reverse] shift+tab [/reverse] Switch table"
+    )
+    return "[b]Routing commands[/b]  " + "  ".join(actions)

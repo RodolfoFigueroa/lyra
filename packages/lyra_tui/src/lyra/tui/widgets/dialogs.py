@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from textual import on
 from textual.binding import Binding
@@ -10,7 +10,10 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Select, Static
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from textual.app import ComposeResult
+    from textual.widget import Widget
     from textual.widgets._select import NoSelection
 
 
@@ -26,10 +29,83 @@ class RoutingForm:
     queue: str
 
 
-class ConfirmDialog(ModalScreen[bool]):
+ResultT = TypeVar("ResultT")
+
+
+class KeyboardModalScreen(ModalScreen[ResultT]):
     BINDINGS: ClassVar[list[Binding]] = [
+        Binding("tab", "focus_next", "Focus next", show=False, priority=True),
+        Binding(
+            "shift+tab",
+            "focus_previous",
+            "Focus previous",
+            show=False,
+            priority=True,
+        ),
+        Binding("up", "focus_up", "Focus up", show=False),
+        Binding("down", "focus_down", "Focus down", show=False),
+        Binding("left", "focus_previous_button", "Focus previous button", show=False),
+        Binding("right", "focus_next_button", "Focus next button", show=False),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_class("dialog-screen")
+
+    def action_focus_next(self) -> None:
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        self.focus_previous()
+
+    def action_focus_up(self) -> None:
+        inputs = list(self.query(Input))
+        buttons = list(self.query(Button))
+        focused = self.focused
+        if focused in buttons and inputs:
+            inputs[-1].focus()
+            return
+        focused_index = self._focused_index(inputs)
+        if focused_index is None:
+            return
+        if focused_index > 0:
+            inputs[focused_index - 1].focus()
+
+    def action_focus_down(self) -> None:
+        inputs = list(self.query(Input))
+        buttons = list(self.query(Button))
+        focused_index = self._focused_index(inputs)
+        if focused_index is None:
+            return
+        if focused_index < len(inputs) - 1:
+            inputs[focused_index + 1].focus()
+        elif buttons:
+            buttons[0].focus()
+
+    def action_focus_previous_button(self) -> None:
+        self._focus_relative(list(self.query(Button)), -1)
+
+    def action_focus_next_button(self) -> None:
+        self._focus_relative(list(self.query(Button)), 1)
+
+    def _focus_relative(self, widgets: Sequence[Widget], direction: int) -> None:
+        focused_index = self._focused_index(widgets)
+        if focused_index is None:
+            return
+        widgets[(focused_index + direction) % len(widgets)].focus()
+
+    def _focused_index(self, widgets: Sequence[Widget]) -> int | None:
+        focused = self.focused
+        for index, widget in enumerate(widgets):
+            if widget is focused:
+                return index
+        return None
+
+
+class ConfirmDialog(KeyboardModalScreen[bool]):
+    BINDINGS: ClassVar[list[Binding]] = [
+        *KeyboardModalScreen.BINDINGS,
         Binding("escape", "cancel", "Cancel"),
-        Binding("enter", "confirm", "Confirm"),
     ]
 
     def __init__(
@@ -52,6 +128,9 @@ class ConfirmDialog(ModalScreen[bool]):
                 yield Button("Cancel", id="cancel")
                 yield Button(self.confirm_label, variant="primary", id="confirm")
 
+    def on_mount(self) -> None:
+        self.query_one("#cancel", Button).focus()
+
     def action_cancel(self) -> None:
         result = False
         self.dismiss(result)
@@ -69,10 +148,10 @@ class ConfirmDialog(ModalScreen[bool]):
         self.action_confirm()
 
 
-class RestartWorkersDialog(ModalScreen[float | None]):
+class RestartWorkersDialog(KeyboardModalScreen[float | None]):
     BINDINGS: ClassVar[list[Binding]] = [
+        *KeyboardModalScreen.BINDINGS,
         Binding("escape", "cancel", "Cancel"),
-        Binding("enter", "submit", "Restart"),
     ]
 
     def __init__(self, *, timeout: float = 30.0) -> None:
@@ -94,6 +173,9 @@ class RestartWorkersDialog(ModalScreen[float | None]):
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="cancel")
                 yield Button("Restart", variant="primary", id="submit")
+
+    def on_mount(self) -> None:
+        self.query_one("#timeout", Input).focus()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -120,11 +202,15 @@ class RestartWorkersDialog(ModalScreen[float | None]):
     def submit_button(self) -> None:
         self.action_submit()
 
+    @on(Input.Submitted)
+    def submit_input(self) -> None:
+        self.action_submit()
 
-class PluginRepoDialog(ModalScreen[PluginRepoForm | None]):
+
+class PluginRepoDialog(KeyboardModalScreen[PluginRepoForm | None]):
     BINDINGS: ClassVar[list[Binding]] = [
+        *KeyboardModalScreen.BINDINGS,
         Binding("escape", "cancel", "Cancel"),
-        Binding("enter", "submit", "Add"),
     ]
 
     def __init__(self) -> None:
@@ -141,6 +227,9 @@ class PluginRepoDialog(ModalScreen[PluginRepoForm | None]):
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="cancel")
                 yield Button("Add", variant="primary", id="submit")
+
+    def on_mount(self) -> None:
+        self.query_one("#source", Input).focus()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -162,11 +251,15 @@ class PluginRepoDialog(ModalScreen[PluginRepoForm | None]):
     def submit_button(self) -> None:
         self.action_submit()
 
+    @on(Input.Submitted)
+    def submit_input(self) -> None:
+        self.action_submit()
 
-class RoutingDialog(ModalScreen[RoutingForm | None]):
+
+class RoutingDialog(KeyboardModalScreen[RoutingForm | None]):
     BINDINGS: ClassVar[list[Binding]] = [
+        *KeyboardModalScreen.BINDINGS,
         Binding("escape", "cancel", "Cancel"),
-        Binding("enter", "submit", "Assign"),
     ]
 
     def __init__(
@@ -198,6 +291,9 @@ class RoutingDialog(ModalScreen[RoutingForm | None]):
                 yield Button("Cancel", id="cancel")
                 yield Button("Assign", variant="primary", id="submit")
 
+    def on_mount(self) -> None:
+        self.query_one("#metric-name", Input).focus()
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -218,6 +314,10 @@ class RoutingDialog(ModalScreen[RoutingForm | None]):
 
     @on(Button.Pressed, "#submit")
     def submit_button(self) -> None:
+        self.action_submit()
+
+    @on(Input.Submitted)
+    def submit_input(self) -> None:
         self.action_submit()
 
 

@@ -154,6 +154,12 @@ def _catalog_summary_response() -> dict[str, Any]:
 def _workers_response() -> dict[str, Any]:
     return {
         "inspect_available": True,
+        "inspect_metadata": {
+            "observed_at": "2026-01-01T00:00:00Z",
+            "age_seconds": 0.25,
+            "stale": False,
+            "last_error": None,
+        },
         "workers": [
             {
                 "name": "interactive",
@@ -175,6 +181,7 @@ def _worker_detail_response() -> dict[str, Any]:
         "reserved_tasks": [],
         "scheduled_tasks": [],
         "stats": {"hostname": "interactive"},
+        "inspect_metadata": _workers_response()["inspect_metadata"],
     }
 
 
@@ -182,6 +189,12 @@ def _queues_response() -> dict[str, Any]:
     return {
         "allowed_queues": ["interactive"],
         "default_queue": "interactive",
+        "inspect_metadata": {
+            "observed_at": "2026-01-01T00:00:00Z",
+            "age_seconds": 0.25,
+            "stale": False,
+            "last_error": None,
+        },
         "queues": [
             {
                 "name": "interactive",
@@ -534,8 +547,11 @@ def test_sync_client_uses_observability_routes(
     assert config.workers[0].name == "interactive"
     assert catalog.plugin_sources[0].source_kind == "directory"
     assert workers.workers[0].status == "online"
+    assert workers.inspect_metadata.stale is False
     assert worker.active_tasks[0].id == "job-1"
+    assert worker.inspect_metadata.age_seconds == 0.25
     assert queues.queues[0].pending_depth_unknown is True
+    assert queues.inspect_metadata.observed_at is not None
 
 
 def test_sync_client_uses_lookup_plugin_and_routing_routes(
@@ -1075,8 +1091,11 @@ def test_async_client_uses_observability_routes(
     assert config.workers[0].name == "interactive"
     assert catalog.plugin_sources[0].source_kind == "directory"
     assert workers.workers[0].status == "online"
+    assert workers.inspect_metadata.stale is False
     assert worker.active_tasks[0].id == "job-1"
+    assert worker.inspect_metadata.age_seconds == 0.25
     assert queues.queues[0].pending_depth_unknown is True
+    assert queues.inspect_metadata.observed_at is not None
 
 
 def test_async_client_uses_lookup_plugin_and_routing_routes(

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -114,8 +115,10 @@ def _worker_snapshot(worker_name: str) -> worker_control.WorkerInspectSnapshot:
 @pytest.fixture(autouse=True)
 def _load_config(tmp_path: Path) -> Iterator[None]:
     worker_control.clear_worker_inspect_snapshot_cache()
+    worker_control.reset_worker_inspect_collector_state()
     load_test_config(tmp_path)
     yield
+    worker_control.reset_worker_inspect_collector_state()
     worker_control.clear_worker_inspect_snapshot_cache()
     clear_config_cache()
 
@@ -345,3 +348,111 @@ def test_get_worker_inspect_snapshot_caches_unknown_state_briefly(
     assert first is unknown
     assert second is unknown
     assert calls == 1
+
+
+def test_get_worker_inspect_state_returns_unknown_before_background_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
+        message = "unexpected live inspect"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
+
+    state = worker_control.get_worker_inspect_state()
+
+    assert state.snapshot.inspect_available is False
+    assert state.snapshot.observed_worker_names == set()
+    assert state.observed_at is None
+    assert state.age_seconds is None
+    assert state.stale is True
+
+
+def test_refresh_worker_inspect_snapshot_updates_background_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = _worker_snapshot("worker-1")
+
+    monkeypatch.setattr(worker_control, "inspect_workers", lambda: expected)
+
+    state = asyncio.run(worker_control.refresh_worker_inspect_snapshot())
+
+    assert state.snapshot is expected
+    assert state.observed_at is not None
+    assert state.age_seconds is not None
+    assert state.stale is False
+    assert state.last_error is None
+
+
+def test_worker_inspect_state_marks_old_snapshot_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = FakeClock()
+    expected = _worker_snapshot("worker-1")
+
+    monkeypatch.setattr(worker_control.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(worker_control, "inspect_workers", lambda: expected)
+
+    fresh = asyncio.run(worker_control.refresh_worker_inspect_snapshot())
+    clock.now += worker_control.WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS + 0.01
+    stale = worker_control.get_worker_inspect_state()
+
+    assert fresh.stale is False
+    assert stale.snapshot is expected
+    assert stale.stale is True
+    assert stale.age_seconds is not None
+    assert (
+        stale.age_seconds > worker_control.WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS
+    )
+
+
+def test_refresh_worker_inspect_snapshot_records_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
+        message = "inspect failed"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
+
+    state = asyncio.run(worker_control.refresh_worker_inspect_snapshot())
+
+    assert state.snapshot.inspect_available is False
+    assert state.observed_at is None
+    assert state.stale is True
+    assert state.last_error == "inspect failed"
+
+
+def test_worker_inspect_collector_starts_updates_and_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = _worker_snapshot("worker-1")
+    calls = 0
+
+    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
+        nonlocal calls
+        calls += 1
+        return expected
+
+    async def run_collector() -> None:
+        await worker_control.start_worker_inspect_collector()
+        for _ in range(50):
+            state = worker_control.get_worker_inspect_state()
+            if state.snapshot is expected:
+                break
+            await asyncio.sleep(0.01)
+        await worker_control.stop_worker_inspect_collector()
+
+    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
+    monkeypatch.setattr(
+        worker_control,
+        "WORKER_INSPECT_SNAPSHOT_REFRESH_INTERVAL_SECONDS",
+        60.0,
+    )
+
+    asyncio.run(run_collector())
+
+    state = worker_control.get_worker_inspect_state()
+    assert calls == 1
+    assert state.snapshot is expected
+    assert worker_control.worker_inspect_collector_running() is False

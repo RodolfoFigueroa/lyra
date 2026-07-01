@@ -80,8 +80,11 @@ observability routes require Bearer auth:
 - `GET /admin/workers/{worker_name}`
 - `GET /admin/queues`
 
-Worker and queue routes are defensive around Celery inspect. If workers are
-offline or Celery does not answer, worker state may be `unknown` and queue
-`pending_depth` is returned as `null` with `pending_depth_unknown: true` instead
-of guessing. Config summaries intentionally omit secrets and raw environment
-variables.
+Worker and queue routes are served from an API-local background Celery inspect
+snapshot so normal admin polling does not block on live worker inspection. If no
+snapshot has been collected yet, workers may be `unknown`. Each worker and queue
+response includes `inspect_metadata` with `observed_at`, `age_seconds`, `stale`,
+and `last_error` fields so operators can tell whether the response is fresh,
+stale, or unavailable. Queue `pending_depth` is returned as `null` with
+`pending_depth_unknown: true` instead of guessing. Config summaries
+intentionally omit secrets and raw environment variables.

@@ -45,6 +45,8 @@ def test_build_celery_worker_args_uses_toml_worker_settings(tmp_path: Path) -> N
 
     assert worker_launcher.build_celery_worker_args(config, "interactive") == [
         "worker",
+        "--hostname",
+        "interactive@%h",
         "--loglevel",
         "INFO",
         "--concurrency",

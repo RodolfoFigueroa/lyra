@@ -188,6 +188,62 @@ def test_workers_route_reports_inspect_data(
     assert "args" not in detail.active_tasks[0].model_dump()
 
 
+def test_workers_route_matches_named_celery_worker_to_configured_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_admin(tmp_path, monkeypatch)
+    snapshot = WorkerInspectSnapshot(
+        inspect_available=True,
+        active={
+            "interactive@worker-host": [
+                {"id": "job-1", "name": "lyra.run_metric", "args": ["hidden"]}
+            ]
+        },
+        reserved={"interactive@worker-host": []},
+        scheduled={"interactive@worker-host": []},
+        stats={"interactive@worker-host": {"hostname": "interactive@worker-host"}},
+        active_queues={"interactive@worker-host": ["interactive"]},
+    )
+    monkeypatch.setattr(admin, "get_worker_inspect_snapshot", lambda: snapshot)
+
+    response = admin.list_workers()
+    detail = admin.get_worker("interactive")
+
+    workers = {worker.name: worker for worker in response.workers}
+    assert "interactive@worker-host" not in workers
+    assert workers["interactive"].configured is True
+    assert workers["interactive"].observed is True
+    assert workers["interactive"].status == "online"
+    assert workers["interactive"].active_count == 1
+    assert detail.active_tasks[0].worker == "interactive"
+    assert detail.active_tasks[0].id == "job-1"
+    assert detail.stats == {"hostname": "interactive@worker-host"}
+
+
+def test_workers_route_keeps_default_celery_worker_names_visible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_admin(tmp_path, monkeypatch)
+    snapshot = WorkerInspectSnapshot(
+        inspect_available=True,
+        active={},
+        reserved={},
+        scheduled={},
+        stats={"celery@worker-host": {"hostname": "celery@worker-host"}},
+        active_queues={"celery@worker-host": ["interactive"]},
+    )
+    monkeypatch.setattr(admin, "get_worker_inspect_snapshot", lambda: snapshot)
+
+    response = admin.list_workers()
+
+    workers = {worker.name: worker for worker in response.workers}
+    assert workers["celery@worker-host"].configured is False
+    assert workers["celery@worker-host"].observed is True
+    assert workers["celery@worker-host"].status == "online"
+
+
 def test_workers_route_handles_unknown_inspect_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -265,3 +321,35 @@ def test_queues_route_reports_assignments_and_consumers(
     assert queues["interactive"].pending_depth is None
     assert queues["interactive"].pending_depth_unknown is True
     assert queues["batch"].assigned_metric_count == 1
+
+
+def test_queues_route_matches_named_celery_consumers_to_configured_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_admin(
+        tmp_path,
+        monkeypatch,
+        metric_queues={
+            "smoke_table_metric": "interactive",
+            "batch_metric": "batch",
+        },
+    )
+    snapshot = WorkerInspectSnapshot(
+        inspect_available=True,
+        active={},
+        reserved={},
+        scheduled={},
+        stats={},
+        active_queues={
+            "interactive@worker-host": ["interactive"],
+            "celery@legacy-host": ["batch"],
+        },
+    )
+    monkeypatch.setattr(admin, "get_worker_inspect_snapshot", lambda: snapshot)
+
+    response = admin.list_queues()
+
+    queues = {queue.name: queue for queue in response.queues}
+    assert queues["interactive"].observed_workers == ["interactive"]
+    assert queues["batch"].observed_workers == ["celery@legacy-host"]

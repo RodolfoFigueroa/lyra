@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, overload
+from typing import Any, TypeVar, overload
 
 import requests
 from lyra.api.client.base import _BaseLyraAPIClient
@@ -11,7 +11,10 @@ from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
+    CreatePluginRepoRequest,
     DataTypesResponse,
+    DeleteMetricQueueResponse,
+    DeletePluginRepoResponse,
     FileJobResult,
     HealthResponse,
     JobCancelResponse,
@@ -20,16 +23,28 @@ from lyra.sdk.models import (
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    MetricQueueAssignmentResponse,
+    MetZoneCodeResponse,
+    PluginCatalogRefreshResponse,
+    PluginRepoListResponse,
+    PluginRepoResponse,
+    PluginRoutingResponse,
     QueuesResponse,
+    SetMetricQueueRequest,
+    SyncPluginRepoResponse,
     TableJobResult,
     TerminalJobResult,
+    UpdatePluginRepoRequest,
     WorkerDetail,
+    WorkerRestartResponse,
     WorkersResponse,
     parse_job_result,
 )
 from lyra.sdk.models.metric import MetricInfoV3
+from pydantic import BaseModel
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def _iter_sse_job_events(lines: Iterable[str | bytes]) -> Iterator[JobEvent]:
@@ -58,6 +73,38 @@ def _iter_sse_job_events(lines: Iterable[str | bytes]) -> Iterator[JobEvent]:
 class LyraAPIClient(_BaseLyraAPIClient):
     """Synchronous client for the Lyra HTTP job API."""
 
+    def _request_model(
+        self,
+        method: str,
+        path: str,
+        response_model: type[_ModelT],
+        *,
+        error_context: str,
+        expected_status: int = 200,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> _ModelT:
+        try:
+            response = requests.request(
+                method,
+                self._http_url(path),
+                params=params,
+                json=json_body,
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"{error_context} request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != expected_status:
+            err = (
+                f"Failed to {error_context}. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return response_model.model_validate(response.json())
+
     def get_health(self) -> HealthResponse:
         try:
             response = requests.get(
@@ -75,6 +122,15 @@ class LyraAPIClient(_BaseLyraAPIClient):
             )
             raise DownloadError(err)
         return HealthResponse.model_validate(response.json())
+
+    def get_met_zone_code(self, name: str) -> MetZoneCodeResponse:
+        return self._request_model(
+            "GET",
+            "lookups/met-zones",
+            MetZoneCodeResponse,
+            error_context="fetch met-zone lookup",
+            params={"name": name},
+        )
 
     def create_job(
         self,
@@ -168,6 +224,113 @@ class LyraAPIClient(_BaseLyraAPIClient):
             )
             raise DownloadError(err)
         return JobCancelResponse.model_validate(response.json())
+
+    def list_plugin_repos(self) -> PluginRepoListResponse:
+        return self._request_model(
+            "GET",
+            "admin/plugin-repos",
+            PluginRepoListResponse,
+            error_context="list plugin repos",
+        )
+
+    def create_plugin_repo(
+        self,
+        source: str,
+        *,
+        repo_id: str | None = None,
+        enabled: bool = True,
+    ) -> PluginRepoResponse:
+        request = CreatePluginRepoRequest(
+            source=source,
+            id=repo_id,
+            enabled=enabled,
+        )
+        return self._request_model(
+            "POST",
+            "admin/plugin-repos",
+            PluginRepoResponse,
+            error_context="create plugin repo",
+            json_body=request.model_dump(mode="json", exclude_none=True),
+        )
+
+    def update_plugin_repo(
+        self,
+        repo_id: str,
+        *,
+        source: str | None = None,
+        enabled: bool | None = None,
+    ) -> PluginRepoResponse:
+        request = UpdatePluginRepoRequest(source=source, enabled=enabled)
+        return self._request_model(
+            "PATCH",
+            f"admin/plugin-repos/{repo_id}",
+            PluginRepoResponse,
+            error_context="update plugin repo",
+            json_body=request.model_dump(mode="json", exclude_none=True),
+        )
+
+    def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
+        return self._request_model(
+            "DELETE",
+            f"admin/plugin-repos/{repo_id}",
+            DeletePluginRepoResponse,
+            error_context="delete plugin repo",
+        )
+
+    def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
+        return self._request_model(
+            "POST",
+            f"admin/plugin-repos/{repo_id}/sync",
+            SyncPluginRepoResponse,
+            error_context="sync plugin repo",
+        )
+
+    def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse:
+        return self._request_model(
+            "POST",
+            "admin/plugin-catalog/refresh",
+            PluginCatalogRefreshResponse,
+            error_context="refresh plugin catalog",
+        )
+
+    def restart_workers(self, *, timeout: float = 30.0) -> WorkerRestartResponse:
+        return self._request_model(
+            "POST",
+            "admin/workers/restart",
+            WorkerRestartResponse,
+            error_context="restart workers",
+            params={"timeout": timeout},
+        )
+
+    def list_plugin_routing(self) -> PluginRoutingResponse:
+        return self._request_model(
+            "GET",
+            "admin/plugin-routing",
+            PluginRoutingResponse,
+            error_context="list plugin routing",
+        )
+
+    def set_plugin_routing(
+        self,
+        metric_name: str,
+        queue: str,
+    ) -> MetricQueueAssignmentResponse:
+        request = SetMetricQueueRequest(queue=queue)
+        return self._request_model(
+            "PUT",
+            f"admin/plugin-routing/{metric_name}",
+            MetricQueueAssignmentResponse,
+            error_context="set plugin routing",
+            json_body=request.model_dump(mode="json"),
+        )
+
+    def delete_plugin_routing(self, metric_name: str) -> DeleteMetricQueueResponse:
+        return self._request_model(
+            "DELETE",
+            f"admin/plugin-routing/{metric_name}",
+            DeleteMetricQueueResponse,
+            error_context="delete plugin routing",
+        )
 
     def get_admin_status(self) -> AdminStatusResponse:
         try:

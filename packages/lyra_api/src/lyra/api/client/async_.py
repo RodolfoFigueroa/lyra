@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, overload
+from typing import Any, TypeVar, overload
 
 import aiofiles
 import aiohttp
@@ -12,7 +12,10 @@ from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
+    CreatePluginRepoRequest,
     DataTypesResponse,
+    DeleteMetricQueueResponse,
+    DeletePluginRepoResponse,
     FileJobResult,
     HealthResponse,
     JobCancelResponse,
@@ -21,16 +24,28 @@ from lyra.sdk.models import (
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    MetricQueueAssignmentResponse,
+    MetZoneCodeResponse,
+    PluginCatalogRefreshResponse,
+    PluginRepoListResponse,
+    PluginRepoResponse,
+    PluginRoutingResponse,
     QueuesResponse,
+    SetMetricQueueRequest,
+    SyncPluginRepoResponse,
     TableJobResult,
     TerminalJobResult,
+    UpdatePluginRepoRequest,
     WorkerDetail,
+    WorkerRestartResponse,
     WorkersResponse,
     parse_job_result,
 )
 from lyra.sdk.models.metric import MetricInfoV3
+from pydantic import BaseModel
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 async def _aiter_sse_job_events(lines: AsyncIterator[str]) -> AsyncIterator[JobEvent]:
@@ -63,6 +78,38 @@ async def _response_lines(response: aiohttp.ClientResponse) -> AsyncIterator[str
 class AsyncLyraAPIClient(_BaseLyraAPIClient):
     """Asynchronous client for the Lyra HTTP job API."""
 
+    async def _request_model(
+        self,
+        method: str,
+        path: str,
+        response_model: type[_ModelT],
+        *,
+        error_context: str,
+        expected_status: int = 200,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> _ModelT:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.request(
+                    method,
+                    self._http_url(path),
+                    params=params,
+                    json=json_body,
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != expected_status:
+                    text = await response.text()
+                    err = f"Failed to {error_context}. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return response_model.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"{error_context} request error: {exc}"
+            raise DownloadError(err) from exc
+
     async def get_health(self) -> HealthResponse:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -81,6 +128,15 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         except aiohttp.ClientError as exc:
             err = f"Health request error: {exc}"
             raise DownloadError(err) from exc
+
+    async def get_met_zone_code(self, name: str) -> MetZoneCodeResponse:
+        return await self._request_model(
+            "GET",
+            "lookups/met-zones",
+            MetZoneCodeResponse,
+            error_context="fetch met-zone lookup",
+            params={"name": name},
+        )
 
     async def create_job(
         self,
@@ -180,6 +236,120 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         except aiohttp.ClientError as exc:
             err = f"Admin job cancellation error: {exc}"
             raise DownloadError(err) from exc
+
+    async def list_plugin_repos(self) -> PluginRepoListResponse:
+        return await self._request_model(
+            "GET",
+            "admin/plugin-repos",
+            PluginRepoListResponse,
+            error_context="list plugin repos",
+        )
+
+    async def create_plugin_repo(
+        self,
+        source: str,
+        *,
+        repo_id: str | None = None,
+        enabled: bool = True,
+    ) -> PluginRepoResponse:
+        request = CreatePluginRepoRequest(
+            source=source,
+            id=repo_id,
+            enabled=enabled,
+        )
+        return await self._request_model(
+            "POST",
+            "admin/plugin-repos",
+            PluginRepoResponse,
+            error_context="create plugin repo",
+            json_body=request.model_dump(mode="json", exclude_none=True),
+        )
+
+    async def update_plugin_repo(
+        self,
+        repo_id: str,
+        *,
+        source: str | None = None,
+        enabled: bool | None = None,
+    ) -> PluginRepoResponse:
+        request = UpdatePluginRepoRequest(source=source, enabled=enabled)
+        return await self._request_model(
+            "PATCH",
+            f"admin/plugin-repos/{repo_id}",
+            PluginRepoResponse,
+            error_context="update plugin repo",
+            json_body=request.model_dump(mode="json", exclude_none=True),
+        )
+
+    async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
+        return await self._request_model(
+            "DELETE",
+            f"admin/plugin-repos/{repo_id}",
+            DeletePluginRepoResponse,
+            error_context="delete plugin repo",
+        )
+
+    async def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
+        return await self._request_model(
+            "POST",
+            f"admin/plugin-repos/{repo_id}/sync",
+            SyncPluginRepoResponse,
+            error_context="sync plugin repo",
+        )
+
+    async def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse:
+        return await self._request_model(
+            "POST",
+            "admin/plugin-catalog/refresh",
+            PluginCatalogRefreshResponse,
+            error_context="refresh plugin catalog",
+        )
+
+    async def restart_workers(
+        self,
+        *,
+        timeout: float = 30.0,  # noqa: ASYNC109
+    ) -> WorkerRestartResponse:
+        return await self._request_model(
+            "POST",
+            "admin/workers/restart",
+            WorkerRestartResponse,
+            error_context="restart workers",
+            params={"timeout": timeout},
+        )
+
+    async def list_plugin_routing(self) -> PluginRoutingResponse:
+        return await self._request_model(
+            "GET",
+            "admin/plugin-routing",
+            PluginRoutingResponse,
+            error_context="list plugin routing",
+        )
+
+    async def set_plugin_routing(
+        self,
+        metric_name: str,
+        queue: str,
+    ) -> MetricQueueAssignmentResponse:
+        request = SetMetricQueueRequest(queue=queue)
+        return await self._request_model(
+            "PUT",
+            f"admin/plugin-routing/{metric_name}",
+            MetricQueueAssignmentResponse,
+            error_context="set plugin routing",
+            json_body=request.model_dump(mode="json"),
+        )
+
+    async def delete_plugin_routing(
+        self,
+        metric_name: str,
+    ) -> DeleteMetricQueueResponse:
+        return await self._request_model(
+            "DELETE",
+            f"admin/plugin-routing/{metric_name}",
+            DeleteMetricQueueResponse,
+            error_context="delete plugin routing",
+        )
 
     async def get_admin_status(self) -> AdminStatusResponse:
         try:

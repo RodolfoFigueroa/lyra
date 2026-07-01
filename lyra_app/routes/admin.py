@@ -9,21 +9,32 @@ from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
+    CreatePluginRepoRequest,
+    DeleteMetricQueueResponse,
+    DeletePluginRepoResponse,
     JobCancelResponse,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    MetricQueueAssignmentResponse,
+    PluginCatalogRefreshResponse,
+    PluginRepoListResponse,
+    PluginRepoResponse,
+    PluginRoutingResponse,
     PluginSourceSummary,
     QueuesResponse,
     QueueSummary,
     RedisHealth,
+    SetMetricQueueRequest,
+    SyncPluginRepoResponse,
+    UpdatePluginRepoRequest,
     WorkerConfigSummary,
     WorkerDetail,
+    WorkerRestartResponse,
     WorkersResponse,
     WorkerSummary,
     WorkerTaskSummary,
 )
-from pydantic import BaseModel, ConfigDict
 from redis.exceptions import RedisError
 
 from lyra_app import job_store
@@ -92,80 +103,6 @@ def require_admin_key(
 
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_key)])
-
-
-class StrictRequestModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class PluginRepoResponse(BaseModel):
-    id: str
-    source: str
-    ref: str | None
-    enabled: bool
-
-
-class PluginRepoListResponse(BaseModel):
-    repos: list[PluginRepoResponse]
-
-
-class CreatePluginRepoRequest(StrictRequestModel):
-    source: str
-    id: str | None = None
-    enabled: bool = True
-
-
-class UpdatePluginRepoRequest(StrictRequestModel):
-    source: str | None = None
-    enabled: bool | None = None
-
-
-class DeletePluginRepoResponse(BaseModel):
-    deleted: bool
-    repo_id: str
-
-
-class SyncPluginRepoResponse(BaseModel):
-    repo_id: str
-    changed: bool
-    display_name: str
-
-
-class PluginCatalogRefreshResponse(BaseModel):
-    updated_plugins: list[str]
-    catalog_changed: bool
-    previous_catalog_fingerprint: str | None
-    catalog_fingerprint: str
-    assigned_metric_queues: list[str]
-    workers_restarted: bool
-    workers_restart_recommended: bool
-    message: str
-
-
-class WorkerRestartResponse(BaseModel):
-    requested: bool
-    timeout: float
-    message: str
-
-
-class PluginRoutingResponse(BaseModel):
-    metric_queues: dict[str, str]
-    allowed_queues: list[str]
-    default_queue: str
-
-
-class SetMetricQueueRequest(StrictRequestModel):
-    queue: str
-
-
-class MetricQueueAssignmentResponse(BaseModel):
-    metric_name: str
-    queue: str
-
-
-class DeleteMetricQueueResponse(BaseModel):
-    deleted: bool
-    metric_name: str
 
 
 _TIMEOUT_QUERY = Query(

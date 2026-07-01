@@ -1,17 +1,12 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException
-from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.models import MetZoneCodeResponse
 
 from lyra_app.db.connection import engine
 from lyra_app.loaders.db import get_met_zone_code_from_name
 
 router = APIRouter()
-
-
-class MetZoneCodeResponse(StrictBaseModel):
-    cve_met: str
-    nom_met: str
 
 
 @router.get("/lookups/met-zones")

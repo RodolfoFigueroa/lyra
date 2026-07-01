@@ -56,6 +56,35 @@ def test_help_exits_before_starting_app(capsys: pytest.CaptureFixture[str]) -> N
     assert "--refresh-interval" in output
     assert "--secure" in output
     assert "--no-secure" in output
+    assert "uv run lyra-tui --host localhost:5219 --no-secure" in output
+    assert "LYRA_ADMIN_API_KEY" in output
+
+
+def test_parser_rejects_url_scheme_in_host() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["--host", "http://localhost:5219"])
+
+    assert exc_info.value.code == 2
+
+
+def test_parser_rejects_non_positive_refresh_interval() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["--refresh-interval", "0"])
+
+    assert exc_info.value.code == 2
+
+
+def test_parser_rejects_non_finite_timeout() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["--timeout", "nan"])
+
+    assert exc_info.value.code == 2
 
 
 def test_app_composes_tabbed_shell() -> None:

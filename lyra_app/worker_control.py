@@ -1,6 +1,10 @@
+import asyncio
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from threading import Lock
 from typing import Any
 
 from lyra.sdk.models import FailedJobResult
@@ -15,6 +19,8 @@ _INTERRUPTED_TASK_MESSAGE = (
 )
 DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS = 0.5
 WORKER_INSPECT_CACHE_TTL_SECONDS = 1.0
+WORKER_INSPECT_SNAPSHOT_REFRESH_INTERVAL_SECONDS = 2.0
+WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -41,13 +47,44 @@ class WorkerInspectSnapshot:
         return names
 
 
+@dataclass(frozen=True)
+class WorkerInspectState:
+    snapshot: WorkerInspectSnapshot
+    observed_at: datetime | None
+    age_seconds: float | None
+    stale: bool
+    last_error: str | None
+
+
 @dataclass
 class _WorkerInspectCache:
     snapshot: WorkerInspectSnapshot | None = None
     observed_at: float | None = None
 
 
+@dataclass
+class _WorkerInspectCollectorState:
+    snapshot: WorkerInspectSnapshot | None = None
+    observed_at: datetime | None = None
+    observed_at_monotonic: float | None = None
+    last_attempt_at: datetime | None = None
+    last_error: str | None = None
+    task: asyncio.Task[None] | None = None
+    stop_event: asyncio.Event | None = None
+
+
 _WORKER_INSPECT_CACHE = _WorkerInspectCache()
+_WORKER_INSPECT_COLLECTOR = _WorkerInspectCollectorState()
+_WORKER_INSPECT_COLLECTOR_LOCK = Lock()
+
+_UNKNOWN_WORKER_INSPECT_SNAPSHOT = WorkerInspectSnapshot(
+    inspect_available=False,
+    active=None,
+    reserved=None,
+    scheduled=None,
+    stats=None,
+    active_queues=None,
+)
 
 
 def _inspect_call(inspector: Any, method_name: str) -> Any | None:
@@ -144,6 +181,111 @@ def get_worker_inspect_snapshot(
     _WORKER_INSPECT_CACHE.snapshot = snapshot
     _WORKER_INSPECT_CACHE.observed_at = time.monotonic()
     return snapshot
+
+
+def reset_worker_inspect_collector_state() -> None:
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        _WORKER_INSPECT_COLLECTOR.snapshot = None
+        _WORKER_INSPECT_COLLECTOR.observed_at = None
+        _WORKER_INSPECT_COLLECTOR.observed_at_monotonic = None
+        _WORKER_INSPECT_COLLECTOR.last_attempt_at = None
+        _WORKER_INSPECT_COLLECTOR.last_error = None
+
+
+def get_worker_inspect_state() -> WorkerInspectState:
+    now = time.monotonic()
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        snapshot = _WORKER_INSPECT_COLLECTOR.snapshot
+        observed_at = _WORKER_INSPECT_COLLECTOR.observed_at
+        observed_at_monotonic = _WORKER_INSPECT_COLLECTOR.observed_at_monotonic
+        last_error = _WORKER_INSPECT_COLLECTOR.last_error
+
+    if snapshot is None or observed_at_monotonic is None:
+        return WorkerInspectState(
+            snapshot=_UNKNOWN_WORKER_INSPECT_SNAPSHOT,
+            observed_at=None,
+            age_seconds=None,
+            stale=True,
+            last_error=last_error,
+        )
+
+    age_seconds = max(0.0, now - observed_at_monotonic)
+    return WorkerInspectState(
+        snapshot=snapshot,
+        observed_at=observed_at,
+        age_seconds=age_seconds,
+        stale=age_seconds > WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS,
+        last_error=last_error,
+    )
+
+
+async def refresh_worker_inspect_snapshot() -> WorkerInspectState:
+    attempt_at = datetime.now(UTC)
+    try:
+        snapshot = await asyncio.to_thread(inspect_workers)
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover - transport setup varies
+        logger.warning("Background worker inspect refresh failed.", exc_info=True)
+        with _WORKER_INSPECT_COLLECTOR_LOCK:
+            _WORKER_INSPECT_COLLECTOR.last_attempt_at = attempt_at
+            _WORKER_INSPECT_COLLECTOR.last_error = str(exc) or type(exc).__name__
+        return get_worker_inspect_state()
+
+    observed_at = datetime.now(UTC)
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        _WORKER_INSPECT_COLLECTOR.snapshot = snapshot
+        _WORKER_INSPECT_COLLECTOR.observed_at = observed_at
+        _WORKER_INSPECT_COLLECTOR.observed_at_monotonic = time.monotonic()
+        _WORKER_INSPECT_COLLECTOR.last_attempt_at = attempt_at
+        _WORKER_INSPECT_COLLECTOR.last_error = None
+    return get_worker_inspect_state()
+
+
+async def _worker_inspect_collector_loop(stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        await refresh_worker_inspect_snapshot()
+        with suppress(TimeoutError):
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=WORKER_INSPECT_SNAPSHOT_REFRESH_INTERVAL_SECONDS,
+            )
+
+
+async def start_worker_inspect_collector() -> None:
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        task = _WORKER_INSPECT_COLLECTOR.task
+        if task is not None and not task.done():
+            return
+        stop_event = asyncio.Event()
+        _WORKER_INSPECT_COLLECTOR.stop_event = stop_event
+        _WORKER_INSPECT_COLLECTOR.task = asyncio.create_task(
+            _worker_inspect_collector_loop(stop_event),
+            name="lyra-worker-inspect-collector",
+        )
+
+
+async def stop_worker_inspect_collector() -> None:
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        task = _WORKER_INSPECT_COLLECTOR.task
+        stop_event = _WORKER_INSPECT_COLLECTOR.stop_event
+
+    if task is None:
+        return
+
+    if stop_event is not None:
+        stop_event.set()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        if _WORKER_INSPECT_COLLECTOR.task is task:
+            _WORKER_INSPECT_COLLECTOR.task = None
+            _WORKER_INSPECT_COLLECTOR.stop_event = None
+
+
+def worker_inspect_collector_running() -> bool:
+    with _WORKER_INSPECT_COLLECTOR_LOCK:
+        task = _WORKER_INSPECT_COLLECTOR.task
+    return task is not None and not task.done()
 
 
 def safe_task_summary(task: dict[str, Any], *, worker_name: str) -> dict[str, Any]:

@@ -11,15 +11,22 @@ from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 from lyra_app.version import APP_VERSION
+from lyra_app.worker_control import (
+    start_worker_inspect_collector,
+    stop_worker_inspect_collector,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGeneratorType:  # noqa: ARG001
-    yield
-
-    logger.info("Shutting down worker.")
+    await start_worker_inspect_collector()
+    try:
+        yield
+    finally:
+        await stop_worker_inspect_collector()
+        logger.info("Shutting down worker inspect collector.")
 
 
 def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:

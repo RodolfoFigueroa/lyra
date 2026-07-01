@@ -30,6 +30,7 @@ from lyra.sdk.models import (
     UpdatePluginRepoRequest,
     WorkerConfigSummary,
     WorkerDetail,
+    WorkerInspectMetadata,
     WorkerRestartResponse,
     WorkersResponse,
     WorkerSummary,
@@ -67,7 +68,8 @@ from lyra_app.registry import (
 from lyra_app.version import APP_VERSION
 from lyra_app.worker_control import (
     WorkerInspectSnapshot,
-    get_worker_inspect_snapshot,
+    WorkerInspectState,
+    get_worker_inspect_state,
     graceful_worker_restart,
     revoke_job,
     safe_task_summary,
@@ -240,6 +242,15 @@ def _plugin_source_summary(repo: PluginRepoRecord) -> PluginSourceSummary:
     )
 
 
+def _inspect_metadata(state: WorkerInspectState) -> WorkerInspectMetadata:
+    return WorkerInspectMetadata(
+        observed_at=state.observed_at,
+        age_seconds=state.age_seconds,
+        stale=state.stale,
+        last_error=state.last_error,
+    )
+
+
 def _task_summaries(
     section: dict[str, list[dict[str, Any]]] | None,
     config: LyraConfig,
@@ -357,6 +368,7 @@ def _worker_detail(
     config: LyraConfig,
     snapshot: WorkerInspectSnapshot,
     worker_name: str,
+    inspect_metadata: WorkerInspectMetadata,
 ) -> WorkerDetail:
     summary = _worker_summary(config, snapshot, worker_name)
     return WorkerDetail(
@@ -365,6 +377,7 @@ def _worker_detail(
         reserved_tasks=_task_summaries(snapshot.reserved, config, worker_name),
         scheduled_tasks=_task_summaries(snapshot.scheduled, config, worker_name),
         stats=_worker_stats(config, snapshot, worker_name),
+        inspect_metadata=inspect_metadata,
     )
 
 
@@ -529,9 +542,11 @@ def get_catalog() -> CatalogSummaryResponse:
 @router.get("/workers")
 def list_workers() -> WorkersResponse:
     config = _load_config()
-    snapshot = get_worker_inspect_snapshot()
+    state = get_worker_inspect_state()
+    snapshot = state.snapshot
     return WorkersResponse(
         inspect_available=snapshot.inspect_available,
+        inspect_metadata=_inspect_metadata(state),
         workers=[
             _worker_summary(config, snapshot, worker_name)
             for worker_name in _all_worker_names(config, snapshot)
@@ -542,13 +557,11 @@ def list_workers() -> WorkersResponse:
 @router.get("/workers/{worker_name}")
 def get_worker(worker_name: str) -> WorkerDetail:
     config = _load_config()
-    snapshot = get_worker_inspect_snapshot()
-    if (
-        worker_name not in config.workers
-        and worker_name not in snapshot.observed_worker_names
-    ):
+    state = get_worker_inspect_state()
+    snapshot = state.snapshot
+    if worker_name not in _all_worker_names(config, snapshot):
         raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_name}")
-    return _worker_detail(config, snapshot, worker_name)
+    return _worker_detail(config, snapshot, worker_name, _inspect_metadata(state))
 
 
 @router.get("/queues")
@@ -556,7 +569,8 @@ def list_queues() -> QueuesResponse:
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
-    snapshot = get_worker_inspect_snapshot()
+    inspect_state = get_worker_inspect_state()
+    snapshot = inspect_state.snapshot
     metric_counts = dict.fromkeys(config.plugins.allowed_queues, 0)
     for queue in state.metric_queues.values():
         metric_counts[queue] = metric_counts.get(queue, 0) + 1
@@ -579,6 +593,7 @@ def list_queues() -> QueuesResponse:
     return QueuesResponse(
         allowed_queues=config.plugins.allowed_queues,
         default_queue=config.plugins.default_queue,
+        inspect_metadata=_inspect_metadata(inspect_state),
         queues=[
             QueueSummary(
                 name=queue,

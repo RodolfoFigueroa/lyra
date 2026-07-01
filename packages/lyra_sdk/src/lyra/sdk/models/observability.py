@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from lyra.sdk.models.strict import StrictBaseModel
@@ -73,15 +74,28 @@ class WorkerSummary(StrictBaseModel):
     scheduled_count: int | None = None
 
 
+class WorkerInspectMetadata(StrictBaseModel):
+    observed_at: datetime | None = None
+    age_seconds: float | None = Field(default=None, ge=0)
+    stale: bool = True
+    last_error: str | None = None
+
+
 class WorkerDetail(WorkerSummary):
     active_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
     reserved_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
     scheduled_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
     stats: dict[str, Any] | None = None
+    inspect_metadata: WorkerInspectMetadata = Field(
+        default_factory=WorkerInspectMetadata
+    )
 
 
 class WorkersResponse(StrictBaseModel):
     inspect_available: bool
+    inspect_metadata: WorkerInspectMetadata = Field(
+        default_factory=WorkerInspectMetadata
+    )
     workers: list[WorkerSummary]
 
 
@@ -98,6 +112,9 @@ class QueueSummary(StrictBaseModel):
 class QueuesResponse(StrictBaseModel):
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
+    inspect_metadata: WorkerInspectMetadata = Field(
+        default_factory=WorkerInspectMetadata
+    )
     queues: list[QueueSummary]
 
 
@@ -125,6 +142,7 @@ __all__ = [
     "RedisHealth",
     "WorkerConfigSummary",
     "WorkerDetail",
+    "WorkerInspectMetadata",
     "WorkerObservedStatus",
     "WorkerSummary",
     "WorkerTaskSummary",

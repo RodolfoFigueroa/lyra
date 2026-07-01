@@ -172,7 +172,7 @@ def test_workers_route_reports_inspect_data(
         stats={"interactive": {"pool": {"max-concurrency": 1}}},
         active_queues={"interactive": ["interactive"]},
     )
-    monkeypatch.setattr(admin, "inspect_workers", lambda: snapshot)
+    monkeypatch.setattr(admin, "get_worker_inspect_snapshot", lambda: snapshot)
 
     response = admin.list_workers()
     detail = admin.get_worker("interactive")
@@ -201,7 +201,7 @@ def test_workers_route_handles_unknown_inspect_state(
         stats=None,
         active_queues=None,
     )
-    monkeypatch.setattr(admin, "inspect_workers", lambda: snapshot)
+    monkeypatch.setattr(admin, "get_worker_inspect_snapshot", lambda: snapshot)
 
     response = admin.list_workers()
 
@@ -216,7 +216,7 @@ def test_worker_detail_returns_404_for_unknown_worker(
     _configure_admin(tmp_path, monkeypatch)
     monkeypatch.setattr(
         admin,
-        "inspect_workers",
+        "get_worker_inspect_snapshot",
         lambda: WorkerInspectSnapshot(
             inspect_available=True,
             active={},
@@ -253,7 +253,7 @@ def test_queues_route_reports_assignments_and_consumers(
         stats={},
         active_queues={"interactive": ["interactive"]},
     )
-    monkeypatch.setattr(admin, "inspect_workers", lambda: snapshot)
+    monkeypatch.setattr(admin, "get_worker_inspect_snapshot", lambda: snapshot)
 
     response = admin.list_queues()
 

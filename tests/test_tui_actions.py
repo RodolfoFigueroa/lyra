@@ -27,6 +27,7 @@ from lyra.sdk.models import (
 )
 from lyra.tui import LyraTuiApp, TuiConfig
 from lyra.tui.actions import ActionResult, ActionService
+from lyra.tui.app import CATALOG_TAB_REQUIRED_MESSAGE
 from lyra.tui.state import LyraTuiState, TuiSnapshot
 from lyra.tui.widgets import (
     ActionMessage,
@@ -34,7 +35,8 @@ from lyra.tui.widgets import (
     PluginRepoDialog,
     RestartWorkersDialog,
 )
-from textual.widgets import Input
+from textual.widgets import Button, DataTable, Input, TabbedContent, Tabs
+from textual.widgets._footer import FooterKey
 
 if TYPE_CHECKING:
     from lyra.tui.client import LyraTuiClient
@@ -256,11 +258,33 @@ def test_restart_confirmation_calls_client_after_acceptance() -> None:
     asyncio.run(run())
 
 
+def test_dialogs_are_centered_on_screen() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.action_restart_workers()
+            await pilot.pause()
+            assert isinstance(app.screen, RestartWorkersDialog)
+
+            dialog = app.screen.query_one(".dialog")
+            dialog_region = dialog.region
+            screen_size = app.screen.size
+            dialog_center_x = dialog_region.x + dialog_region.width / 2
+            dialog_center_y = dialog_region.y + dialog_region.height / 2
+
+            assert abs(dialog_center_x - screen_size.width / 2) <= 2
+            assert abs(dialog_center_y - screen_size.height / 2) <= 2
+
+    asyncio.run(run())
+
+
 def test_plugin_add_form_requires_source() -> None:
     async def run() -> None:
         client = FakeActionClient()
         app = _app_with_client(client)
         async with app.run_test() as pilot:
+            _activate_catalog(app)
             app.action_add_plugin_repo()
             await pilot.pause()
             assert isinstance(app.screen, PluginRepoDialog)
@@ -268,6 +292,253 @@ def test_plugin_add_form_requires_source() -> None:
             await pilot.pause()
             assert app.screen.error_message == "Source is required."
             assert client.created_repos == []
+
+    asyncio.run(run())
+
+
+def test_plugin_add_form_has_keyboard_focus_order() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            _activate_catalog(app)
+            app.action_add_plugin_repo()
+            await pilot.pause()
+            assert isinstance(app.screen, PluginRepoDialog)
+
+            source = app.screen.query_one("#source", Input)
+            repo_id = app.screen.query_one("#repo-id", Input)
+            cancel = app.screen.query_one("#cancel", Button)
+            submit = app.screen.query_one("#submit", Button)
+
+            assert app.screen.focused is source
+            await pilot.press("down")
+            assert app.screen.focused is repo_id
+            await pilot.press("up")
+            assert app.screen.focused is source
+            await pilot.press("down", "down")
+            assert app.screen.focused is cancel
+            await pilot.press("right")
+            assert app.screen.focused is submit
+            await pilot.press("up")
+            assert app.screen.focused is repo_id
+            await pilot.press("tab")
+            assert app.screen.focused is cancel
+            await pilot.press("right")
+            assert app.screen.focused is submit
+            await pilot.press("left")
+            assert app.screen.focused is cancel
+            await pilot.press("tab")
+            assert app.screen.focused is submit
+            await pilot.press("shift+tab")
+            assert app.screen.focused is cancel
+
+    asyncio.run(run())
+
+
+def test_plugin_add_form_left_and_right_edit_input_cursor() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            _activate_catalog(app)
+            app.action_add_plugin_repo()
+            await pilot.pause()
+            assert isinstance(app.screen, PluginRepoDialog)
+
+            source = app.screen.query_one("#source", Input)
+            source.value = "dir:///plugins/new"
+            source.cursor_position = len(source.value)
+
+            await pilot.press("left")
+            assert app.screen.focused is source
+            assert source.cursor_position == len(source.value) - 1
+            await pilot.press("right")
+            assert app.screen.focused is source
+            assert source.cursor_position == len(source.value)
+
+    asyncio.run(run())
+
+
+def test_plugin_add_form_cancel_button_is_keyboard_activated() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            _activate_catalog(app)
+            app.action_add_plugin_repo()
+            await pilot.pause()
+            assert isinstance(app.screen, PluginRepoDialog)
+
+            await pilot.press("tab", "tab")
+            assert app.screen.focused is app.screen.query_one("#cancel", Button)
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert not isinstance(app.screen, PluginRepoDialog)
+            assert client.created_repos == []
+
+    asyncio.run(run())
+
+
+def test_plugin_add_form_submit_button_is_keyboard_activated() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            _activate_catalog(app)
+            app.action_add_plugin_repo()
+            await pilot.pause()
+            assert isinstance(app.screen, PluginRepoDialog)
+
+            app.screen.query_one("#source", Input).value = "dir:///plugins/new"
+            app.screen.query_one("#repo-id", Input).value = "new"
+            await pilot.press("tab", "tab", "tab")
+            assert app.screen.focused is app.screen.query_one("#submit", Button)
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert client.created_repos == [("dir:///plugins/new", "new")]
+
+    asyncio.run(run())
+
+
+def test_catalog_actions_are_disabled_outside_catalog_tab() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            assert app.query_one(TabbedContent).active == "dashboard"
+
+            assert app.check_action("refresh_catalog", ()) is False
+            assert app.check_action("add_plugin_repo", ()) is False
+            assert app.check_action("toggle_plugin_repo", ()) is False
+            assert app.check_action("delete_plugin_repo", ()) is False
+            assert app.check_action("sync_plugin_repo", ()) is False
+            assert app.check_action("assign_route", ()) is False
+            assert app.check_action("delete_route", ()) is False
+
+            await pilot.press("d")
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmDialog)
+
+            app.action_delete_plugin_repo()
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmDialog)
+            assert app.query_one(ActionMessage).message == CATALOG_TAB_REQUIRED_MESSAGE
+            assert client.deleted_repos == []
+
+    asyncio.run(run())
+
+
+def test_catalog_actions_are_enabled_on_catalog_tab() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test():
+            _activate_catalog(app)
+
+            assert app.check_action("refresh_catalog", ()) is True
+            assert app.check_action("add_plugin_repo", ()) is True
+            assert app.check_action("toggle_plugin_repo", ()) is True
+            assert app.check_action("delete_plugin_repo", ()) is True
+            assert app.check_action("sync_plugin_repo", ()) is True
+            assert app.check_action("assign_route", ()) is True
+            assert app.check_action("delete_route", ()) is True
+
+    asyncio.run(run())
+
+
+def test_footer_keeps_catalog_actions_out_of_global_commands() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            tabs = app.query_one(Tabs)
+            tabs.focus()
+            await pilot.pause()
+            assert "add_plugin_repo" not in _footer_actions(app)
+
+            _activate_catalog(app)
+            await pilot.pause()
+            await pilot.pause()
+            assert app.check_action("add_plugin_repo", ()) is True
+            assert app.check_action("delete_plugin_repo", ()) is True
+            assert "add_plugin_repo" not in _footer_actions(app)
+            assert "delete_plugin_repo" not in _footer_actions(app)
+
+            app.query_one(TabbedContent).active = "jobs"
+            await pilot.pause()
+            await pilot.pause()
+            assert "add_plugin_repo" not in _footer_actions(app)
+            assert "delete_plugin_repo" not in _footer_actions(app)
+
+    asyncio.run(run())
+
+
+def test_enter_on_tab_strip_focuses_selected_section() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            tabs = app.query_one(Tabs)
+            tabs.focus()
+            await pilot.pause()
+            assert app.screen.focused is tabs
+            assert app.check_action("focus_active_tab_content", ()) is True
+
+            await pilot.press("right")
+            await pilot.pause()
+            assert app.query_one(TabbedContent).active == "jobs"
+            assert app.screen.focused is tabs
+
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.screen.focused is app.query_one("#jobs-table", DataTable)
+            assert app.check_action("focus_active_tab_content", ()) is False
+            assert app.check_action("focus_tab_strip", ()) is True
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert app.screen.focused is tabs
+            assert app.query_one(TabbedContent).active == "jobs"
+            assert app.check_action("focus_tab_strip", ()) is False
+
+    asyncio.run(run())
+
+
+def test_tab_switches_between_tables_in_multitable_section() -> None:
+    async def run() -> None:
+        client = FakeActionClient()
+        app = _app_with_client(client)
+        async with app.run_test() as pilot:
+            _activate_catalog(app)
+            await pilot.pause()
+
+            repos = app.query_one("#plugins-table", DataTable)
+            routing = app.query_one("#routing-table", DataTable)
+            repos.focus()
+            await pilot.pause()
+
+            assert app.screen.focused is repos
+            assert app.check_action("focus_next_table", ()) is True
+            assert app.check_action("focus_previous_table", ()) is True
+
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.screen.focused is routing
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app.screen.focused is repos
+
+            app.query_one(TabbedContent).active = "jobs"
+            app.query_one("#jobs-table", DataTable).focus()
+            await pilot.pause()
+            assert app.check_action("focus_next_table", ()) is False
+            assert app.check_action("focus_previous_table", ()) is False
 
     asyncio.run(run())
 
@@ -318,6 +589,14 @@ def _app_with_client(client: FakeActionClient) -> LyraTuiApp:
         state=state,
         poll_on_mount=False,
     )
+
+
+def _activate_catalog(app: LyraTuiApp) -> None:
+    app.query_one(TabbedContent).active = "catalog"
+
+
+def _footer_actions(app: LyraTuiApp) -> set[str]:
+    return {footer_key.action for footer_key in app.query(FooterKey)}
 
 
 def _snapshot(*, jobs: list[JobStatusInfo]) -> TuiSnapshot:

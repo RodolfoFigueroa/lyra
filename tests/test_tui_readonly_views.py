@@ -29,7 +29,7 @@ from lyra.tui.screens import (
 )
 from lyra.tui.state import LyraTuiState, TuiSnapshot
 from lyra.tui.widgets import EmptyState
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 if TYPE_CHECKING:
     from lyra.tui.client import LyraTuiClient
@@ -148,6 +148,32 @@ def test_queues_view_renders_unknown_depth_distinctly() -> None:
             queues = app.query_one("#queues-table", DataTable)
             row = queues.get_row("interactive")
             assert row[5] == "unknown"
+
+    asyncio.run(run())
+
+
+def test_catalog_view_renders_local_action_bars() -> None:
+    async def run() -> None:
+        app = _app_with_snapshot(_ready_snapshot())
+        async with app.run_test():
+            repo_actions = app.query_one("#plugins-actions", Static)
+            routing_actions = app.query_one("#routing-actions", Static)
+
+            assert repo_actions.content == (
+                "[b]Repo commands[/b]  "
+                "[reverse] a [/reverse] Add repo  "
+                "[reverse] p [/reverse] Refresh catalog  "
+                "[reverse] e [/reverse] Enable/Disable  "
+                "[reverse] s [/reverse] Sync  "
+                "[reverse] d [/reverse] Delete  "
+                "[reverse] tab [/reverse] [reverse] shift+tab [/reverse] Switch table"
+            )
+            assert routing_actions.content == (
+                "[b]Routing commands[/b]  "
+                "[reverse] m [/reverse] Assign route  "
+                "[reverse] x [/reverse] Delete route  "
+                "[reverse] tab [/reverse] [reverse] shift+tab [/reverse] Switch table"
+            )
 
     asyncio.run(run())
 

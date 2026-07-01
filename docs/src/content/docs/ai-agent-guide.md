@@ -23,6 +23,10 @@ Supporting routes:
 - `GET /data-types` for grouped `location` and `bounds` wrapper schemas
 - `GET /lookups/met-zones`
 - `GET /admin/plugin-repos`
+- `POST /admin/plugin-repos`
+- `PATCH /admin/plugin-repos/{repo_id}`
+- `DELETE /admin/plugin-repos/{repo_id}`
+- `POST /admin/plugin-repos/{repo_id}/sync`
 - `POST /admin/plugin-catalog/refresh`
 - `POST /admin/workers/restart`
 - `GET /admin/status`
@@ -34,6 +38,8 @@ Supporting routes:
 - `GET /admin/jobs`
 - `POST /admin/jobs/{job_id}/cancel`
 - `GET /admin/plugin-routing`
+- `PUT /admin/plugin-routing/{metric_name}`
+- `DELETE /admin/plugin-routing/{metric_name}`
 
 ## Source Map
 

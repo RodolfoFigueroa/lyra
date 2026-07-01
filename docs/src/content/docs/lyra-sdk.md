@@ -281,6 +281,14 @@ these models are also available for tests, clients, and manifest tooling:
 | `JobListResponse` | Admin `/admin/jobs` response. |
 | `JobCancelResponse` | Admin `/admin/jobs/{job_id}/cancel` response. |
 | `HealthResponse` | Public `/health` response. |
+| `MetZoneCodeResponse` | Public `/lookups/met-zones` response. |
+| `PluginRepoListResponse` and `PluginRepoResponse` | Admin `/admin/plugin-repos` responses. |
+| `CreatePluginRepoRequest` and `UpdatePluginRepoRequest` | Admin plugin source request bodies. |
+| `DeletePluginRepoResponse` and `SyncPluginRepoResponse` | Admin plugin source operation responses. |
+| `PluginCatalogRefreshResponse` | Admin `/admin/plugin-catalog/refresh` response. |
+| `WorkerRestartResponse` | Admin `/admin/workers/restart` response. |
+| `PluginRoutingResponse` | Admin `/admin/plugin-routing` response. |
+| `SetMetricQueueRequest`, `MetricQueueAssignmentResponse`, and `DeleteMetricQueueResponse` | Admin metric routing contracts. |
 | `AdminStatusResponse` | Admin `/admin/status` response. |
 | `ConfigSummaryResponse` | Admin `/admin/config-summary` response. |
 | `CatalogSummaryResponse` | Admin `/admin/catalog` response. |

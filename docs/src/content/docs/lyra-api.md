@@ -14,8 +14,8 @@ from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient
 ```
 
 Both clients return models from `lyra-sdk`, such as `DataTypesResponse`,
-`MetricInfoV3`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`, and
-terminal result models.
+`MetricInfoV3`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`,
+observability models, plugin operation models, and terminal result models.
 
 ## Client Configuration
 
@@ -24,6 +24,11 @@ for a local HTTP server.
 
 ```python
 client = LyraAPIClient("localhost:5219", secure=False, timeout=30.0)
+admin_client = LyraAPIClient(
+    "localhost:5219",
+    secure=False,
+    admin_api_key="admin-secret",
+)
 ```
 
 Constructor options:
@@ -33,6 +38,7 @@ Constructor options:
 | `host` | Host name plus optional port, such as `localhost:5219`. |
 | `timeout` | Request timeout in seconds. |
 | `headers` | Default HTTP headers, such as authorization headers. |
+| `admin_api_key` | Explicit admin bearer token. The client sends it as `Authorization: Bearer ...`. |
 | `secure` | `True` uses HTTPS; `False` uses HTTP. |
 | `log_level` | Python logging level for client loggers. |
 
@@ -61,13 +67,15 @@ Both clients expose the same method names. Async client methods are awaited,
 and `iter_job_events()` is consumed as an async iterator. For a complete
 submit, wait, and result workflow, see [Python Client](../python-client/).
 
-## Discovery Methods
+## Discovery And Lookup Methods
 
 | Method | Returns | Use when |
 | --- | --- | --- |
+| `get_health()` | `HealthResponse` | You need public API and Redis readiness from `/health`. |
 | `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data-types`. |
 | `get_metrics()` | `list[MetricInfoV3]` | You need all metric names, descriptions, request schemas, and output declarations. |
 | `get_metrics(metric_name)` | `MetricInfoV3` | You need one metric's schema metadata. |
+| `get_met_zone_code(name)` | `MetZoneCodeResponse` | You need the metropolitan zone code matching a display name. |
 
 Fetch metric schemas before submitting jobs. The `input` object passed to
 `create_job()` must match the chosen metric's compiled `request_schema`. Every
@@ -87,13 +95,6 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 | `download_job_result_to_file(job_id, path)` | `None` | Download a terminal file result. |
 | `list_admin_jobs(limit=50, status=None, metric=None)` | `JobListResponse` | List recent jobs through the admin API. |
 | `cancel_admin_job(job_id)` | `JobCancelResponse` | Request cancellation through the admin API. |
-| `get_health()` | `HealthResponse` | Fetch public liveness/readiness state. |
-| `get_admin_status()` | `AdminStatusResponse` | Fetch compact admin instance status. |
-| `get_admin_config_summary()` | `ConfigSummaryResponse` | Fetch secret-free runtime config summary. |
-| `get_admin_catalog()` | `CatalogSummaryResponse` | Fetch loaded catalog summary. |
-| `get_admin_workers()` | `WorkersResponse` | Fetch worker summaries. |
-| `get_admin_worker(worker_name)` | `WorkerDetail` | Fetch one worker detail. |
-| `get_admin_queues()` | `QueuesResponse` | Fetch queue assignments and consumer summary. |
 
 `iter_job_events()` accepts `last_event_id` and sends it as the
 `Last-Event-ID` header so a caller can resume an event stream after reconnecting.
@@ -102,8 +103,30 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 returns `FileJobResult` metadata. Call `download_job_result_to_file()` to fetch
 the file bytes from `/jobs/{job_id}/result/download`.
 
+## Admin And Operator Methods
+
 Admin methods call `/admin/*` routes and require the client to include an admin
-Bearer token in `headers`.
+Bearer token, either with `admin_api_key=...` or an explicit `Authorization`
+header.
+
+| Method | Returns | Use when |
+| --- | --- | --- |
+| `list_plugin_repos()` | `PluginRepoListResponse` | List configured plugin sources. |
+| `create_plugin_repo(source, repo_id=None, enabled=True)` | `PluginRepoResponse` | Add a GitHub, `file://`, or `dir://` plugin source. |
+| `update_plugin_repo(repo_id, source=None, enabled=None)` | `PluginRepoResponse` | Update a plugin source or enabled flag. |
+| `delete_plugin_repo(repo_id)` | `DeletePluginRepoResponse` | Remove a plugin source from Lyra-owned state. |
+| `sync_plugin_repo(repo_id)` | `SyncPluginRepoResponse` | Sync one enabled plugin source. |
+| `refresh_plugin_catalog()` | `PluginCatalogRefreshResponse` | Sync enabled sources, reload API catalog metadata, and learn if workers should restart. |
+| `restart_workers(timeout=30.0)` | `WorkerRestartResponse` | Ask worker pools to restart after draining active work. |
+| `list_plugin_routing()` | `PluginRoutingResponse` | List metric-to-queue assignments. |
+| `set_plugin_routing(metric_name, queue)` | `MetricQueueAssignmentResponse` | Assign a metric to a queue. |
+| `delete_plugin_routing(metric_name)` | `DeleteMetricQueueResponse` | Remove a metric's explicit queue assignment. |
+| `get_admin_status()` | `AdminStatusResponse` | Fetch compact API, Redis, catalog, queue, worker, and job-store status. |
+| `get_admin_config_summary()` | `ConfigSummaryResponse` | Fetch secret-free runtime config summary. |
+| `get_admin_catalog()` | `CatalogSummaryResponse` | Fetch loaded catalog and plugin source metadata. |
+| `get_admin_workers()` | `WorkersResponse` | Fetch configured and observed worker summaries. |
+| `get_admin_worker(worker_name)` | `WorkerDetail` | Fetch one configured or observed worker. |
+| `get_admin_queues()` | `QueuesResponse` | Fetch queue assignments, consumers, and depth unknown markers. |
 
 ## Convenience Methods
 

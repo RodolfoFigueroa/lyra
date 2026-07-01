@@ -81,6 +81,26 @@ client.process_to_file(metric_name, payload, "result.tif")
 
 Both methods create a job, consume events until a terminal event, then fetch the terminal result.
 
+## Operator Methods
+
+Use `admin_api_key` when calling `/admin/*` routes through the client.
+
+```python
+admin = LyraAPIClient(
+    "localhost:5219",
+    secure=False,
+    admin_api_key="admin-secret",
+)
+
+admin.create_plugin_repo("dir:///plugins/mock-plugin", repo_id="mock")
+refresh = admin.refresh_plugin_catalog()
+
+if refresh.workers_restart_recommended:
+    admin.restart_workers(timeout=30)
+```
+
+The same methods are available on `AsyncLyraAPIClient` with `await`.
+
 ## Async Client
 
 ```python

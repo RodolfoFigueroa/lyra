@@ -280,6 +280,12 @@ these models are also available for tests, clients, and manifest tooling:
 | `JobStatusInfo` | Public `/jobs/{job_id}` status response. |
 | `JobListResponse` | Admin `/admin/jobs` response. |
 | `JobCancelResponse` | Admin `/admin/jobs/{job_id}/cancel` response. |
+| `HealthResponse` | Public `/health` response. |
+| `AdminStatusResponse` | Admin `/admin/status` response. |
+| `ConfigSummaryResponse` | Admin `/admin/config-summary` response. |
+| `CatalogSummaryResponse` | Admin `/admin/catalog` response. |
+| `WorkersResponse` and `WorkerDetail` | Admin worker observability responses. |
+| `QueuesResponse` | Admin `/admin/queues` response. |
 | `JobEvent` | Durable event payload streamed from `/jobs/{job_id}/events`. |
 | `TableJobResult` | Successful terminal result for value metrics. |
 | `FileJobResult` | Successful terminal result for file metrics. |

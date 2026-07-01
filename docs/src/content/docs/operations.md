@@ -67,3 +67,21 @@ job store. This keeps result consumers on the `/jobs/{job_id}/result` path
 for terminal JSON metadata regardless of whether failure came from plugin code,
 validation, or worker shutdown handling. File bytes are served separately from
 `/jobs/{job_id}/result/download`.
+
+## Observability
+
+`GET /health` is public and reports API liveness plus Redis readiness. Admin
+observability routes require Bearer auth:
+
+- `GET /admin/status`
+- `GET /admin/config-summary`
+- `GET /admin/catalog`
+- `GET /admin/workers`
+- `GET /admin/workers/{worker_name}`
+- `GET /admin/queues`
+
+Worker and queue routes are defensive around Celery inspect. If workers are
+offline or Celery does not answer, worker state may be `unknown` and queue
+`pending_depth` is returned as `null` with `pending_depth_unknown: true` instead
+of guessing. Config summaries intentionally omit secrets and raw environment
+variables.

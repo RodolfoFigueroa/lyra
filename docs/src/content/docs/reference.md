@@ -96,6 +96,7 @@ npm run preview --prefix docs
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/health` | Return API liveness and Redis readiness. |
 | `GET` | `/data-types` | Return grouped `location` and `bounds` wrapper schemas for explicit spatial inputs. |
 | `GET` | `/metrics` | List metric schema metadata. |
 | `GET` | `/metrics/{metric_name}` | Fetch one metric schema metadata record. |
@@ -112,6 +113,12 @@ npm run preview --prefix docs
 | `POST` | `/admin/plugin-repos/{repo_id}/sync` | Sync one enabled plugin source. |
 | `POST` | `/admin/plugin-catalog/refresh` | Refresh plugin catalog repos and report whether workers need restart. |
 | `POST` | `/admin/workers/restart` | Restart worker pools explicitly. |
+| `GET` | `/admin/status` | Return API, Redis, catalog, queue, worker, and job-store summary. |
+| `GET` | `/admin/config-summary` | Return secret-free runtime configuration summary. |
+| `GET` | `/admin/catalog` | Return loaded catalog metadata and plugin source summary. |
+| `GET` | `/admin/workers` | Return configured and observed worker summaries. |
+| `GET` | `/admin/workers/{worker_name}` | Return one configured or observed worker detail. |
+| `GET` | `/admin/queues` | Return queue assignments, consumers, and unknown depth markers. |
 | `GET` | `/admin/jobs` | List recent jobs by optional status or metric filters. |
 | `POST` | `/admin/jobs/{job_id}/cancel` | Request cancellation for an active job. |
 | `GET` | `/admin/plugin-routing` | List metric queue assignments. |

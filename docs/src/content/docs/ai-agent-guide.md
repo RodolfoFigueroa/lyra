@@ -9,6 +9,7 @@ This page is optimized for agents that need to inspect, edit, or reason about Ly
 
 Lyra exposes current execution through:
 
+- `GET /health`
 - `POST /jobs`
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
@@ -24,6 +25,12 @@ Supporting routes:
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`
 - `POST /admin/workers/restart`
+- `GET /admin/status`
+- `GET /admin/config-summary`
+- `GET /admin/catalog`
+- `GET /admin/workers`
+- `GET /admin/workers/{worker_name}`
+- `GET /admin/queues`
 - `GET /admin/jobs`
 - `POST /admin/jobs/{job_id}/cancel`
 - `GET /admin/plugin-routing`

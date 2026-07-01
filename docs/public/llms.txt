@@ -39,6 +39,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 - Explicit spatial inputs: `ExplicitLocationAPI` and `ExplicitBoundsAPI` in `packages/lyra_sdk/src/lyra/sdk/types.py`
 - Geometry models: `GeoJSON` and `SingleGeoJSON` in `packages/lyra_sdk/src/lyra/sdk/models/geometry.py`
 - Data type schema models: `DataTypeSchemaInfo` and `DataTypesResponse` in `packages/lyra_sdk/src/lyra/sdk/models/data_types.py`
+- Observability models: `HealthResponse`, `AdminStatusResponse`, `ConfigSummaryResponse`, `CatalogSummaryResponse`, `WorkersResponse`, `WorkerDetail`, and `QueuesResponse` in `packages/lyra_sdk/src/lyra/sdk/models/observability.py`
 - Python clients: `LyraAPIClient` and `AsyncLyraAPIClient` in `packages/lyra_api/src/lyra/api/`
 - Plugin helpers: GeoJSON conversion, date ranges, and Earth Engine utilities in `packages/lyra_utils/src/lyra/utils/`
 - Generated Python API reference: `docs/src/content/docs/api-reference/`, created by `npm run generate:api --prefix docs`
@@ -50,6 +51,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 ## Public Routes
 
 - `GET /data-types` returns grouped `location` and `bounds` wrapper schemas
+- `GET /health`
 - `GET /metrics`
 - `GET /metrics/{metric_name}`
 - `POST /jobs`
@@ -61,6 +63,12 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 - `GET /admin/plugin-repos`
 - `POST /admin/plugin-catalog/refresh`
 - `POST /admin/workers/restart`
+- `GET /admin/status`
+- `GET /admin/config-summary`
+- `GET /admin/catalog`
+- `GET /admin/workers`
+- `GET /admin/workers/{worker_name}`
+- `GET /admin/queues`
 - `GET /admin/jobs`
 - `POST /admin/jobs/{job_id}/cancel`
 - `GET /admin/plugin-routing`

@@ -149,6 +149,9 @@ but the file is missing from disk, the download route returns `404`.
 
 Admin job operations require Bearer authentication.
 
+For service liveness and operator overview routes, use `GET /health` and the
+admin observability routes documented in [Operations](../operations/).
+
 `GET /admin/jobs` returns recent job status snapshots from Lyra's Redis-backed
 job index, newest-first. It supports `limit`, `status`, and `metric` query
 parameters:

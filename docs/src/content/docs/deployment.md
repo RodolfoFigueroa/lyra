@@ -136,6 +136,21 @@ Plugin updates are explicit:
 
 Workers do not hot-reload plugin code in-process.
 
+## Observability
+
+Use `GET /health` for load balancers and local liveness checks. Use admin
+observability routes for operator dashboards:
+
+- `GET /admin/status`
+- `GET /admin/config-summary`
+- `GET /admin/catalog`
+- `GET /admin/workers`
+- `GET /admin/queues`
+
+Celery worker inspection can be unavailable during deploys or restarts. In that
+case Lyra returns `unknown` worker state and unknown queue depths instead of
+failing the API.
+
 Production deployments should normally use GitHub or `file://` local git
 sources. Development `dir://` sources are supported for local mock plugins and
 executor testing; they copy uncommitted directory contents on refresh. If a

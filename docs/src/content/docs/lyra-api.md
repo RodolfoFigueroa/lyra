@@ -87,6 +87,13 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 | `download_job_result_to_file(job_id, path)` | `None` | Download a terminal file result. |
 | `list_admin_jobs(limit=50, status=None, metric=None)` | `JobListResponse` | List recent jobs through the admin API. |
 | `cancel_admin_job(job_id)` | `JobCancelResponse` | Request cancellation through the admin API. |
+| `get_health()` | `HealthResponse` | Fetch public liveness/readiness state. |
+| `get_admin_status()` | `AdminStatusResponse` | Fetch compact admin instance status. |
+| `get_admin_config_summary()` | `ConfigSummaryResponse` | Fetch secret-free runtime config summary. |
+| `get_admin_catalog()` | `CatalogSummaryResponse` | Fetch loaded catalog summary. |
+| `get_admin_workers()` | `WorkersResponse` | Fetch worker summaries. |
+| `get_admin_worker(worker_name)` | `WorkerDetail` | Fetch one worker detail. |
+| `get_admin_queues()` | `QueuesResponse` | Fetch queue assignments and consumer summary. |
 
 `iter_job_events()` accepts `last_event_id` and sends it as the
 `Last-Event-ID` header so a caller can resume an event stream after reconnecting.
@@ -95,8 +102,8 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 returns `FileJobResult` metadata. Call `download_job_result_to_file()` to fetch
 the file bytes from `/jobs/{job_id}/result/download`.
 
-Admin job methods call `/admin/jobs` routes and require the client to include an
-admin Bearer token in `headers`.
+Admin methods call `/admin/*` routes and require the client to include an admin
+Bearer token in `headers`.
 
 ## Convenience Methods
 

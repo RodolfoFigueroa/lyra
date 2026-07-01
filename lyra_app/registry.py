@@ -18,7 +18,12 @@ from lyra.sdk.models.plugin_v3 import (
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.config import LyraConfig, get_config
-from lyra_app.plugin_state import PluginState, PluginStateStore, repo_record_to_source
+from lyra_app.plugin_state import (
+    PluginState,
+    PluginStateStore,
+    metric_queue_mapping,
+    repo_record_to_source,
+)
 from lyra_app.plugins import MANIFEST_FILENAME, sync_plugin_repos
 
 logger = logging.getLogger(__name__)
@@ -32,6 +37,7 @@ class MetricRegistryEntry:
     request_schema: dict[str, Any]
     request_validator: Any
     queue: str
+    repo_id: str
     entrypoint: str
 
 
@@ -42,6 +48,7 @@ class CatalogRefreshResult:
     catalog_fingerprint: str
     catalog_changed: bool
     assigned_metric_queues: list[str] = field(default_factory=list)
+    removed_metric_queues: list[str] = field(default_factory=list)
 
 
 class MetricPayloadValidationError(Exception):
@@ -65,12 +72,13 @@ def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
 
 
 def _normalised_manifest_payload(
-    manifests: list[tuple[CompiledPluginManifestV3, Path]],
+    manifests: list[tuple[CompiledPluginManifestV3, Path, str]],
     metric_queues: dict[str, str],
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
-    for manifest, _path in manifests:
+    for manifest, _path, repo_id in manifests:
         data = manifest.model_dump(mode="json")
+        data["repo_id"] = repo_id
         for metric in data["metrics"]:
             metric["queue"] = metric_queues[metric["name"]]
         data["metrics"] = sorted(data["metrics"], key=lambda item: item["name"])
@@ -110,11 +118,11 @@ def _build_request_validator(metric_name: str, schema: dict[str, Any]) -> Any:
 
 
 def _build_registry(
-    manifests: list[tuple[CompiledPluginManifestV3, Path]],
+    manifests: list[tuple[CompiledPluginManifestV3, Path, str]],
     metric_queues: dict[str, str],
 ) -> dict[str, MetricRegistryEntry]:
     registry: dict[str, MetricRegistryEntry] = {}
-    for manifest, _path in manifests:
+    for manifest, _path, repo_id in manifests:
         for metric in manifest.metrics:
             if metric.name in registry:
                 msg = f"Duplicate metric name in plugin manifests: {metric.name!r}"
@@ -132,6 +140,7 @@ def _build_registry(
                 request_schema=request_schema,
                 request_validator=_build_request_validator(metric.name, request_schema),
                 queue=queue,
+                repo_id=repo_id,
                 entrypoint=metric.entrypoint,
             )
     return registry
@@ -146,6 +155,20 @@ def sync_catalog_state_repos(config: LyraConfig, state: PluginState) -> list[Any
     )
 
 
+def _enabled_repo_ids_by_source(state: PluginState) -> dict[str, str]:
+    return {
+        repo_record_to_source(repo): repo.id for repo in state.repos if repo.enabled
+    }
+
+
+def _synced_repo_id(raw_source: str, repo_ids_by_source: dict[str, str]) -> str:
+    try:
+        return repo_ids_by_source[raw_source]
+    except KeyError as exc:
+        msg = f"Synced plugin source {raw_source!r} is not in enabled plugin state."
+        raise RuntimeError(msg) from exc
+
+
 def refresh_catalog(
     store: PluginStateStore | None = None,
 ) -> CatalogRefreshResult:
@@ -158,21 +181,32 @@ def refresh_catalog(
     )
     state = state_store.load()
     synced = sync_catalog_state_repos(config, state)
-    manifests = [(load_plugin_manifest(repo.path), repo.path) for repo in synced]
-    metric_names = {
-        metric.name for manifest, _path in manifests for metric in manifest.metrics
+    repo_ids_by_source = _enabled_repo_ids_by_source(state)
+    manifests = [
+        (
+            load_plugin_manifest(repo.path),
+            repo.path,
+            _synced_repo_id(repo.entry.raw, repo_ids_by_source),
+        )
+        for repo in synced
+    ]
+    metric_repo_ids = {
+        metric.name: repo_id
+        for manifest, _path, repo_id in manifests
+        for metric in manifest.metrics
     }
-    assigned_metric_names = state_store.assign_missing_metric_queues(
-        metric_names,
+    queue_sync = state_store.sync_metric_queues(
+        metric_repo_ids,
         default_queue=config.plugins.default_queue,
     )
-    if assigned_metric_names:
+    if queue_sync.assigned or queue_sync.removed:
         state = state_store.reload()
+    metric_queues = metric_queue_mapping(state)
 
-    registry = _build_registry(manifests, state.metric_queues)
+    registry = _build_registry(manifests, metric_queues)
 
     fingerprint = _fingerprint_payload(
-        _normalised_manifest_payload(manifests, state.metric_queues)
+        _normalised_manifest_payload(manifests, metric_queues)
     )
     TASK_REGISTRY.clear()
     TASK_REGISTRY.update(registry)
@@ -192,7 +226,8 @@ def refresh_catalog(
         previous_catalog_fingerprint=previous_fingerprint,
         catalog_fingerprint=fingerprint,
         catalog_changed=catalog_changed,
-        assigned_metric_queues=assigned_metric_names,
+        assigned_metric_queues=queue_sync.assigned,
+        removed_metric_queues=queue_sync.removed,
     )
 
 

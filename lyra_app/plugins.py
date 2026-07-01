@@ -447,6 +447,14 @@ def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
     return SyncedPluginRepo(entry=entry, path=target, changed=changed)
 
 
+def remove_plugin_snapshot(target_dir: Path, raw_entry: str) -> None:
+    entry = parse_repo_entry(raw_entry)
+    target = target_dir / entry.target_name
+    fingerprint_path = target_dir / f".{target.name}.fingerprint"
+    _remove_managed_path(target)
+    _remove_managed_path(fingerprint_path)
+
+
 def _check_compatible(plugin_dir: Path) -> bool:
     cmd = [
         "uv",

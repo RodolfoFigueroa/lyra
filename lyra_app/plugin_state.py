@@ -22,7 +22,7 @@ from lyra_app.config import LYRA_DATA_DIR
 from lyra_app.plugins import parse_repo_entry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from lyra_app.plugins import RepoSourceKind
 
@@ -61,6 +61,18 @@ class NormalizedRepoSource:
     generated_id: str
 
 
+@dataclass(frozen=True)
+class DeletePluginRepoResult:
+    deleted: bool
+    removed_metric_queues: list[str]
+
+
+@dataclass(frozen=True)
+class MetricQueueSyncResult:
+    assigned: list[str]
+    removed: list[str]
+
+
 def _strip_required_string(value: Any, *, field_name: str) -> Any:
     if not isinstance(value, str):
         return value
@@ -83,7 +95,7 @@ def _strip_optional_string(value: Any, *, field_name: str) -> Any:
     return stripped
 
 
-def _strip_string_mapping(value: Any, *, key_label: str, value_label: str) -> Any:
+def _strip_mapping_keys(value: Any, *, key_label: str) -> Any:
     if not isinstance(value, dict):
         return value
 
@@ -93,10 +105,7 @@ def _strip_string_mapping(value: Any, *, key_label: str, value_label: str) -> An
         if key in stripped_items:
             msg = f"duplicate {key_label} after trimming whitespace: {key!r}"
             raise ValueError(msg)
-        stripped_items[key] = _strip_required_string(
-            raw_value,
-            field_name=value_label,
-        )
+        stripped_items[key] = raw_value
     return stripped_items
 
 
@@ -205,19 +214,30 @@ class PluginRepoRecord(StrictPluginStateModel):
         return self
 
 
+class MetricQueueRecord(StrictPluginStateModel):
+    queue: str = Field(min_length=1)
+    repo_id: str = Field(min_length=1)
+
+    @field_validator("queue", mode="before")
+    @classmethod
+    def normalize_queue(cls, value: Any) -> Any:
+        return _strip_required_string(value, field_name="queue name")
+
+    @field_validator("repo_id", mode="before")
+    @classmethod
+    def normalize_repo_id(cls, value: Any) -> Any:
+        return _strip_required_string(value, field_name="repo_id")
+
+
 class PluginState(StrictPluginStateModel):
     schema_version: Literal[1] = PLUGIN_STATE_SCHEMA_VERSION
     repos: list[PluginRepoRecord] = Field(default_factory=list)
-    metric_queues: dict[str, str] = Field(default_factory=dict)
+    metric_queues: dict[str, MetricQueueRecord] = Field(default_factory=dict)
 
     @field_validator("metric_queues", mode="before")
     @classmethod
     def normalize_metric_queues(cls, value: Any) -> Any:
-        return _strip_string_mapping(
-            value,
-            key_label="metric name",
-            value_label="queue name",
-        )
+        return _strip_mapping_keys(value, key_label="metric name")
 
     @model_validator(mode="after")
     def validate_repos(self) -> Self:
@@ -248,6 +268,18 @@ class PluginState(StrictPluginStateModel):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_metric_queue_repos(self) -> Self:
+        repo_ids = {repo.id for repo in self.repos}
+        unknown_repo_ids = sorted(
+            {record.repo_id for record in self.metric_queues.values()} - repo_ids
+        )
+        if unknown_repo_ids:
+            names = ", ".join(unknown_repo_ids)
+            msg = f"metric queue repo_ids must reference configured repos: {names}"
+            raise ValueError(msg)
+        return self
+
     @classmethod
     def empty(cls) -> PluginState:
         return cls()
@@ -276,7 +308,11 @@ def validate_plugin_state(
 ) -> None:
     allowed = set(allowed_queues)
     invalid_queues = sorted(
-        {queue for queue in state.metric_queues.values() if queue not in allowed}
+        {
+            record.queue
+            for record in state.metric_queues.values()
+            if record.queue not in allowed
+        }
     )
     if invalid_queues:
         names = ", ".join(invalid_queues)
@@ -288,7 +324,10 @@ def _state_payload(state: PluginState) -> dict[str, Any]:
     return {
         "schema_version": state.schema_version,
         "repos": [repo.model_dump(mode="json") for repo in state.repos],
-        "metric_queues": dict(state.metric_queues),
+        "metric_queues": {
+            metric_name: record.model_dump(mode="json")
+            for metric_name, record in state.metric_queues.items()
+        },
     }
 
 
@@ -298,6 +337,13 @@ def _validated_state(payload: dict[str, Any]) -> PluginState:
     except ValidationError as exc:
         msg = f"plugin state failed validation: {exc}"
         raise PluginStateValidationError(msg) from exc
+
+
+def metric_queue_mapping(state: PluginState) -> dict[str, str]:
+    return {
+        metric_name: record.queue
+        for metric_name, record in sorted(state.metric_queues.items())
+    }
 
 
 def render_plugin_state_toml(state: PluginState) -> str:
@@ -313,8 +359,11 @@ def render_plugin_state_toml(state: PluginState) -> str:
         lines.append("")
 
     lines.append("[metric_queues]")
-    for metric_name, queue_name in sorted(state.metric_queues.items()):
-        lines.append(f"{_toml_key(metric_name)} = {_toml_string(queue_name)}")
+    for metric_name, record in sorted(state.metric_queues.items()):
+        lines.append("")
+        lines.append(f"[metric_queues.{_toml_key(metric_name)}]")
+        lines.append(f"queue = {_toml_string(record.queue)}")
+        lines.append(f"repo_id = {_toml_string(record.repo_id)}")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -454,7 +503,7 @@ class PluginStateStore:
         msg = f"unknown plugin repo id: {repo_id}"
         raise PluginStateNotFoundError(msg)
 
-    def delete_repo(self, repo_id: str) -> bool:
+    def delete_repo(self, repo_id: str) -> DeletePluginRepoResult:
         repo_id = _strip_required_string(repo_id, field_name="repo_id")
         if not isinstance(repo_id, str):
             msg = "repo_id must be a string"
@@ -463,22 +512,38 @@ class PluginStateStore:
         state = self.load()
         repos = [repo for repo in state.repos if repo.id != repo_id]
         if len(repos) == len(state.repos):
-            return False
+            return DeletePluginRepoResult(deleted=False, removed_metric_queues=[])
 
-        candidate = _validated_state(_state_payload(state) | {"repos": repos})
+        metric_queues = {
+            metric_name: record
+            for metric_name, record in state.metric_queues.items()
+            if record.repo_id != repo_id
+        }
+        removed_metric_queues = sorted(set(state.metric_queues) - set(metric_queues))
+        candidate = _validated_state(
+            _state_payload(state)
+            | {
+                "repos": repos,
+                "metric_queues": metric_queues,
+            }
+        )
         self.save(candidate)
-        return True
+        return DeletePluginRepoResult(
+            deleted=True,
+            removed_metric_queues=removed_metric_queues,
+        )
 
-    def set_metric_queue(self, metric_name: str, queue: str) -> str:
+    def set_metric_queue(self, metric_name: str, queue: str, *, repo_id: str) -> str:
         metric_name = _strip_required_string(metric_name, field_name="metric name")
         queue = _strip_required_string(queue, field_name="queue name")
-        if not isinstance(metric_name, str) or not isinstance(queue, str):
-            msg = "metric_name and queue must be strings"
+        repo_id = _strip_required_string(repo_id, field_name="repo_id")
+        if not all(isinstance(value, str) for value in (metric_name, queue, repo_id)):
+            msg = "metric_name, queue, and repo_id must be strings"
             raise TypeError(msg)
 
         state = self.load()
         metric_queues = dict(state.metric_queues)
-        metric_queues[metric_name] = queue
+        metric_queues[metric_name] = MetricQueueRecord(queue=queue, repo_id=repo_id)
         candidate = _validated_state(
             _state_payload(state) | {"metric_queues": metric_queues}
         )
@@ -503,12 +568,12 @@ class PluginStateStore:
         self.save(candidate)
         return True
 
-    def assign_missing_metric_queues(
+    def sync_metric_queues(
         self,
-        metric_names: Iterable[str],
+        metric_repo_ids: Mapping[str, str],
         *,
         default_queue: str,
-    ) -> list[str]:
+    ) -> MetricQueueSyncResult:
         default_queue = _strip_required_string(
             default_queue,
             field_name="default queue",
@@ -518,34 +583,57 @@ class PluginStateStore:
             raise TypeError(msg)
 
         state = self.load()
-        normalized_metric_names = {
-            _strip_required_string(metric_name, field_name="metric name")
-            for metric_name in metric_names
+        normalized_metric_repo_ids = {
+            _strip_required_string(metric_name, field_name="metric name"): (
+                _strip_required_string(repo_id, field_name="repo_id")
+            )
+            for metric_name, repo_id in metric_repo_ids.items()
         }
         if not all(
-            isinstance(metric_name, str) for metric_name in normalized_metric_names
+            isinstance(metric_name, str) and isinstance(repo_id, str)
+            for metric_name, repo_id in normalized_metric_repo_ids.items()
         ):
-            msg = "metric names must be strings"
+            msg = "metric names and repo_ids must be strings"
             raise TypeError(msg)
 
-        missing = sorted(normalized_metric_names - set(state.metric_queues))
-        if not missing:
-            return []
+        metric_queues: dict[str, MetricQueueRecord] = {}
+        assigned: list[str] = []
+        removed: list[str] = []
+        for metric_name, repo_id in sorted(normalized_metric_repo_ids.items()):
+            existing = state.metric_queues.get(metric_name)
+            if existing is not None and existing.repo_id == repo_id:
+                metric_queues[metric_name] = existing
+                continue
+            if existing is not None:
+                removed.append(metric_name)
+            assigned.append(metric_name)
+            metric_queues[metric_name] = MetricQueueRecord(
+                queue=default_queue,
+                repo_id=repo_id,
+            )
 
-        metric_queues = dict(state.metric_queues)
-        for metric_name in missing:
-            metric_queues[metric_name] = default_queue
+        removed.extend(
+            sorted(set(state.metric_queues) - set(normalized_metric_repo_ids))
+        )
+        if not assigned and not removed:
+            return MetricQueueSyncResult(assigned=[], removed=[])
 
         candidate = _validated_state(
             _state_payload(state) | {"metric_queues": metric_queues}
         )
         self.save(candidate)
-        return missing
+        return MetricQueueSyncResult(
+            assigned=assigned,
+            removed=sorted(set(removed)),
+        )
 
 
 __all__ = [
     "DEFAULT_PLUGIN_STATE_PATH",
     "PLUGIN_STATE_SCHEMA_VERSION",
+    "DeletePluginRepoResult",
+    "MetricQueueRecord",
+    "MetricQueueSyncResult",
     "NormalizedRepoSource",
     "PluginRepoRecord",
     "PluginState",
@@ -557,6 +645,7 @@ __all__ = [
     "generate_repo_id",
     "load_plugin_state",
     "make_repo_record",
+    "metric_queue_mapping",
     "normalize_repo_source",
     "render_plugin_state_toml",
     "repo_record_to_source",

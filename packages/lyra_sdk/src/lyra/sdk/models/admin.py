@@ -27,6 +27,9 @@ class UpdatePluginRepoRequest(StrictBaseModel):
 class DeletePluginRepoResponse(StrictBaseModel):
     deleted: bool
     repo_id: str = Field(min_length=1)
+    removed_metric_queues: list[str]
+    catalog_refreshed: bool
+    catalog_refresh_error: str | None = None
 
 
 class SyncPluginRepoResponse(StrictBaseModel):
@@ -41,6 +44,7 @@ class PluginCatalogRefreshResponse(StrictBaseModel):
     previous_catalog_fingerprint: str | None
     catalog_fingerprint: str = Field(min_length=1)
     assigned_metric_queues: list[str]
+    removed_metric_queues: list[str]
     workers_restarted: bool
     workers_restart_recommended: bool
     message: str = Field(min_length=1)

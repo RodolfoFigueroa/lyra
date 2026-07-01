@@ -121,10 +121,10 @@ Expected after steps 1-3:
 - Observed workers match configured `interactive` and `batch` pools when the
   dev workers are online.
 
-## Background Snapshot Gate
+## Step 03 Decision Gate: Background Snapshot
 
-Do not implement `04-background-snapshot.md` unless one of these is true after
-steps 1-3:
+This is the same gate referenced by `03-worker-names.md`. Do not implement
+`04-background-snapshot.md` unless one of these is true after steps 1-3:
 
 - `/admin/workers` or `/admin/queues` still regularly takes more than `1s` in
   the dev stack.
@@ -135,7 +135,8 @@ steps 1-3:
   the simpler-fix measurements.
 
 If the gate is not met, record that the background snapshot was intentionally
-deferred.
+deferred and proceed to final validation without implementing
+`04-background-snapshot.md`.
 
 ## Regression Checks
 
@@ -168,4 +169,3 @@ Fail if:
   is online.
 - Route behavior depends on the TUI or any non-API component.
 - Validation services are left running accidentally.
-

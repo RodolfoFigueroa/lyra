@@ -84,7 +84,7 @@ approach is to plan it, but gate implementation until simpler fixes are measured
   uv run ty check --fix
   ```
 
-## Completion Criteria
+## Step Exit Checklist
 
 - This step was implemented only after steps 1-3 were measured and judged
   insufficient.
@@ -92,9 +92,30 @@ approach is to plan it, but gate implementation until simpler fixes are measured
   requests.
 - Responses expose stale/unknown state clearly.
 - Collector lifecycle is covered by tests.
+- Focused tests pass:
 
-## Handoff Notes For The Next Step
+  ```bash
+  uv run pytest tests/test_worker_control.py tests/test_observability_routes.py tests/test_api_client_jobs.py
+  uv run ruff format
+  uv run ruff check --fix
+  uv run ty check --fix
+  ```
 
-Proceed to final validation. Pay special attention to route latency, stale-state
+- If response metadata fields were added, SDK/client models and tests were
+  updated.
+- If services were started for validation, they were stopped or explicitly left
+  running at the user's request.
+
+## Decision Gate Before The Next Step
+
+No additional feature gate is required before final validation. Proceed to
+`99-validation.md` only after the step exit checklist is satisfied.
+
+If this step was intentionally skipped because the step 03 gate was not met,
+record that `04-background-snapshot.md` was deferred and proceed directly to
+`99-validation.md`.
+
+## Next-Step Context
+
+Final validation should pay special attention to route latency, stale-state
 behavior, and service cleanup.
-

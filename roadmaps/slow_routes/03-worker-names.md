@@ -81,16 +81,52 @@ cleanly match observed workers to configured worker pools.
   uv run ty check --fix
   ```
 
-## Completion Criteria
+## Step Exit Checklist
 
 - Worker launcher emits deterministic Celery hostnames.
 - Admin worker responses no longer split configured worker pools and observed
   named workers when names match by pool prefix.
 - Existing default Celery workers still appear as observed unconfigured workers
   rather than disappearing.
+- Focused tests pass:
 
-## Handoff Notes For The Next Step
+  ```bash
+  uv run pytest tests/test_worker_launcher.py tests/test_observability_routes.py tests/test_worker_control.py
+  uv run ruff format
+  uv run ruff check --fix
+  uv run ty check --fix
+  ```
 
-Measure route latency after timeout, cache, and worker-name fixes. Only proceed
-to the background snapshot step if these conservative changes are not enough.
+- Route latency has been measured after the inspect timeout, inspect cache, and
+  worker-name fixes, or the final response clearly states why live measurement
+  could not be run.
+- The measurement result has been compared against the step 03 decision gate
+  thresholds in `99-validation.md`.
 
+## Decision Gate Before The Next Step
+
+Measure route latency after steps 1-3 using the commands in
+`99-validation.md`:
+
+- `/admin/workers`
+- `/admin/queues`
+- paired `/admin/workers` plus `/admin/queues`
+
+Proceed to `04-background-snapshot.md` only if one of the documented background
+snapshot gate conditions is met:
+
+- `/admin/workers` or `/admin/queues` still regularly takes more than `1s` in
+  the dev stack.
+- Paired worker and queue calls still regularly take more than `1.5s`.
+- Live Celery inspect still causes visible API request blocking under normal
+  polling.
+- The user explicitly chooses the background snapshot approach after reviewing
+  the simpler-fix measurements.
+
+If the gate cannot be run, report the blocker, the exact command or service
+state needed, and do not implement `04-background-snapshot.md` automatically.
+
+## Next-Step Context
+
+`04-background-snapshot.md` is intentionally optional. It exists for the case
+where the conservative fixes are measured and judged insufficient.

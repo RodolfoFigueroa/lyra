@@ -92,6 +92,17 @@ class RecoveringClient(FakeClient):
         return _health_response()
 
 
+class BlockingHealthClient(FakeClient):
+    def __init__(self, release: asyncio.Event) -> None:
+        super().__init__()
+        self.release = release
+
+    async def get_health(self) -> HealthResponse:
+        self.calls.append("get_health")
+        await self.release.wait()
+        return _health_response()
+
+
 def test_successful_snapshot_refresh_fetches_admin_data() -> None:
     client = FakeClient()
 
@@ -186,6 +197,36 @@ def test_app_shows_injected_state_in_status_area() -> None:
             status = app.query_one(ConnectionStatus)
             assert "API ok v0.1.0" in status.message
             assert "metrics 1" in status.message
+
+    asyncio.run(run())
+
+
+def test_app_skips_overlapping_refresh_requests() -> None:
+    async def run() -> None:
+        release = asyncio.Event()
+        client = BlockingHealthClient(release)
+        state = LyraTuiState(client, has_admin_key=True)
+        app = LyraTuiApp(
+            TuiConfig(admin_api_key="secret"),
+            state=state,
+            poll_on_mount=False,
+        )
+
+        async with app.run_test() as pilot:
+            app.request_refresh()
+            await pilot.pause()
+            app.request_refresh()
+            await pilot.pause()
+
+            assert client.calls.count("get_health") == 1
+
+            release.set()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            status = app.query_one(ConnectionStatus)
+            assert "API ok v0.1.0" in status.message
+            assert client.calls.count("get_health") == 1
 
     asyncio.run(run())
 

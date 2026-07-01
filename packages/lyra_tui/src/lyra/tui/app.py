@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from lyra.tui.client import LyraTuiClient
     from lyra.tui.config import TuiConfig
     from lyra.tui.state import SnapshotPhase
+    from textual.worker import Worker
 
 
 class LyraTuiApp(App[None]):
@@ -136,6 +137,7 @@ class LyraTuiApp(App[None]):
         self.action_service = ActionService(cast("LyraTuiClient", self.state.client))
         self.poll_on_mount = poll_on_mount
         self._refresh_timer = None
+        self._refresh_worker: Worker[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -201,13 +203,14 @@ class LyraTuiApp(App[None]):
         return result
 
     def request_refresh(self) -> None:
+        if self._refresh_worker is not None and not self._refresh_worker.is_finished:
+            return
         self.show_snapshot(_loading_snapshot(self.state.snapshot))
-        self.run_worker(
+        self._refresh_worker = self.run_worker(
             self.refresh_once(),
             name="refresh",
             group="refresh",
             exit_on_error=False,
-            exclusive=True,
         )
 
     def action_refresh(self) -> None:

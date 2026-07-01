@@ -43,12 +43,14 @@ class FakeRedisSync:
 class FakeCeleryControl:
     def __init__(self, inspector: object | None = None) -> None:
         self.revoked: list[str] = []
+        self.inspect_kwargs: list[dict[str, object]] = []
         self.inspector = inspector
 
     def revoke(self, job_id: str) -> None:
         self.revoked.append(job_id)
 
-    def inspect(self) -> object:
+    def inspect(self, **kwargs: object) -> object:
+        self.inspect_kwargs.append(kwargs)
         assert self.inspector is not None
         return self.inspector
 
@@ -184,3 +186,17 @@ def test_inspect_workers_treats_missing_celery_data_as_unknown(
 
     assert snapshot.inspect_available is False
     assert snapshot.observed_worker_names == set()
+
+
+def test_inspect_workers_uses_explicit_short_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    celery = FakeCeleryApp(FakeInspector())
+    monkeypatch.setattr(worker_control, "celery_app", celery)
+
+    worker_control.inspect_workers()
+
+    assert celery.control.inspect_kwargs == [
+        {"timeout": worker_control.DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS}
+    ]
+    assert 0 < worker_control.DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS < 1.0

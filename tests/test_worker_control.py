@@ -41,16 +41,53 @@ class FakeRedisSync:
 
 
 class FakeCeleryControl:
-    def __init__(self) -> None:
+    def __init__(self, inspector: object | None = None) -> None:
         self.revoked: list[str] = []
+        self.inspector = inspector
 
     def revoke(self, job_id: str) -> None:
         self.revoked.append(job_id)
 
+    def inspect(self) -> object:
+        assert self.inspector is not None
+        return self.inspector
+
 
 class FakeCeleryApp:
-    def __init__(self) -> None:
-        self.control = FakeCeleryControl()
+    def __init__(self, inspector: object | None = None) -> None:
+        self.control = FakeCeleryControl(inspector)
+
+
+class FakeInspector:
+    def __init__(
+        self,
+        *,
+        active: dict[str, list[dict[str, object]]] | None = None,
+        reserved: dict[str, list[dict[str, object]]] | None = None,
+        scheduled: dict[str, list[dict[str, object]]] | None = None,
+        stats: dict[str, dict[str, object]] | None = None,
+        active_queues: dict[str, list[dict[str, object]]] | None = None,
+    ) -> None:
+        self._active = active
+        self._reserved = reserved
+        self._scheduled = scheduled
+        self._stats = stats
+        self._active_queues = active_queues
+
+    def active(self) -> dict[str, list[dict[str, object]]] | None:
+        return self._active
+
+    def reserved(self) -> dict[str, list[dict[str, object]]] | None:
+        return self._reserved
+
+    def scheduled(self) -> dict[str, list[dict[str, object]]] | None:
+        return self._scheduled
+
+    def stats(self) -> dict[str, dict[str, object]] | None:
+        return self._stats
+
+    def active_queues(self) -> dict[str, list[dict[str, object]]] | None:
+        return self._active_queues
 
 
 @pytest.fixture(autouse=True)
@@ -95,3 +132,55 @@ def test_revoke_job_requests_celery_revocation(
     worker_control.revoke_job("job-1")
 
     assert celery.control.revoked == ["job-1"]
+
+
+def test_inspect_workers_normalizes_celery_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    celery = FakeCeleryApp(
+        FakeInspector(
+            active={"worker-1": [{"id": "job-1", "name": "lyra.run_metric"}]},
+            reserved={"worker-1": []},
+            scheduled={
+                "worker-1": [
+                    {
+                        "eta": "2026-01-01T00:00:00Z",
+                        "request": {"id": "job-2", "name": "lyra.run_metric"},
+                    }
+                ]
+            },
+            stats={"worker-1": {"hostname": "worker-1"}},
+            active_queues={"worker-1": [{"name": "interactive"}]},
+        )
+    )
+    monkeypatch.setattr(worker_control, "celery_app", celery)
+
+    snapshot = worker_control.inspect_workers()
+    assert snapshot.scheduled is not None
+    task = worker_control.safe_task_summary(
+        snapshot.scheduled["worker-1"][0],
+        worker_name="worker-1",
+    )
+
+    assert snapshot.inspect_available is True
+    assert snapshot.observed_worker_names == {"worker-1"}
+    assert snapshot.active_queues == {"worker-1": ["interactive"]}
+    assert task == {
+        "id": "job-2",
+        "name": "lyra.run_metric",
+        "worker": "worker-1",
+        "eta": "2026-01-01T00:00:00Z",
+        "time_start": None,
+    }
+
+
+def test_inspect_workers_treats_missing_celery_data_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    celery = FakeCeleryApp(FakeInspector())
+    monkeypatch.setattr(worker_control, "celery_app", celery)
+
+    snapshot = worker_control.inspect_workers()
+
+    assert snapshot.inspect_available is False
+    assert snapshot.observed_worker_names == set()

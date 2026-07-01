@@ -660,6 +660,12 @@ def test_admin_openapi_exposes_new_paths_without_old_update_route() -> None:
     assert "/admin/plugin-repos/{repo_id}/pull" not in paths
     assert "/admin/plugin-catalog/refresh" in paths
     assert "/admin/workers/restart" in paths
+    assert "/admin/status" in paths
+    assert "/admin/config-summary" in paths
+    assert "/admin/catalog" in paths
+    assert "/admin/workers" in paths
+    assert "/admin/workers/{worker_name}" in paths
+    assert "/admin/queues" in paths
     assert "/admin/jobs" in paths
     assert "/admin/jobs/{job_id}/cancel" in paths
     assert "/admin/plugin-routing" in paths

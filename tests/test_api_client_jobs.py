@@ -90,6 +90,112 @@ def _job_cancel_response() -> dict[str, Any]:
     }
 
 
+def _health_response() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "api_version": "0.1.0",
+        "redis": {"status": "ok"},
+    }
+
+
+def _admin_status_response() -> dict[str, Any]:
+    return {
+        "api_version": "0.1.0",
+        "redis": {"status": "ok"},
+        "metric_count": 1,
+        "allowed_queues": ["interactive"],
+        "default_queue": "interactive",
+        "configured_worker_count": 1,
+        "job_store_ttl_seconds": 86400,
+        "catalog_fingerprint": "abc",
+    }
+
+
+def _config_summary_response() -> dict[str, Any]:
+    return {
+        "api_host": "0.0.0.0",
+        "api_port": 5219,
+        "allowed_queues": ["interactive"],
+        "default_queue": "interactive",
+        "workers": [
+            {
+                "name": "interactive",
+                "queues": ["interactive"],
+                "concurrency": 1,
+                "install_dir": "/lyra_data/plugins/runners/interactive",
+                "temp_dir": "/lyra_data/cache/jobs/interactive",
+            }
+        ],
+        "job_store_ttl_seconds": 86400,
+        "plugin_catalog_dir": "/lyra_data/plugins/catalog",
+        "plugin_state_path": "/lyra_data/state/plugins.toml",
+        "plugin_runner_base_dir": "/lyra_data/plugins/runners",
+    }
+
+
+def _catalog_summary_response() -> dict[str, Any]:
+    return {
+        "metric_count": 1,
+        "metric_names": ["smoke_table_metric"],
+        "catalog_fingerprint": "abc",
+        "plugin_sources": [
+            {
+                "id": "smoke",
+                "source": "dir:///plugins/smoke",
+                "source_kind": "directory",
+                "ref": None,
+                "enabled": True,
+            }
+        ],
+        "metric_queues": {"smoke_table_metric": "interactive"},
+    }
+
+
+def _workers_response() -> dict[str, Any]:
+    return {
+        "inspect_available": True,
+        "workers": [
+            {
+                "name": "interactive",
+                "configured": True,
+                "observed": True,
+                "status": "online",
+                "queues": ["interactive"],
+                "active_count": 1,
+                "reserved_count": 0,
+                "scheduled_count": 0,
+            }
+        ],
+    }
+
+
+def _worker_detail_response() -> dict[str, Any]:
+    return _workers_response()["workers"][0] | {
+        "active_tasks": [{"id": "job-1", "name": "lyra.run_metric"}],
+        "reserved_tasks": [],
+        "scheduled_tasks": [],
+        "stats": {"hostname": "interactive"},
+    }
+
+
+def _queues_response() -> dict[str, Any]:
+    return {
+        "allowed_queues": ["interactive"],
+        "default_queue": "interactive",
+        "queues": [
+            {
+                "name": "interactive",
+                "is_default": True,
+                "assigned_metric_count": 1,
+                "configured_workers": ["interactive"],
+                "observed_workers": ["interactive"],
+                "pending_depth": None,
+                "pending_depth_unknown": True,
+            }
+        ],
+    }
+
+
 def _terminal_event_lines() -> list[str]:
     event = {
         "job_id": "job-1",
@@ -308,6 +414,50 @@ def test_sync_client_uses_admin_job_operations(
     assert [job.job_id for job in jobs.jobs] == ["job-1"]
     assert cancelled.job_id == "job-1"
     assert cancelled.status == "cancelled"
+
+
+def test_sync_client_uses_observability_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = {
+        "http://example.test/health": _health_response(),
+        "http://example.test/admin/status": _admin_status_response(),
+        "http://example.test/admin/config-summary": _config_summary_response(),
+        "http://example.test/admin/catalog": _catalog_summary_response(),
+        "http://example.test/admin/workers": _workers_response(),
+        "http://example.test/admin/workers/interactive": _worker_detail_response(),
+        "http://example.test/admin/queues": _queues_response(),
+    }
+    seen: list[str] = []
+
+    def get(
+        url: str,
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        seen.append(url)
+        return FakeSyncResponse(payload=responses[url])
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    client = LyraAPIClient("example.test", secure=False)
+
+    health = client.get_health()
+    status = client.get_admin_status()
+    config = client.get_admin_config_summary()
+    catalog = client.get_admin_catalog()
+    workers = client.get_admin_workers()
+    worker = client.get_admin_worker("interactive")
+    queues = client.get_admin_queues()
+
+    assert seen == list(responses)
+    assert health.status == "ok"
+    assert status.metric_count == 1
+    assert config.workers[0].name == "interactive"
+    assert catalog.plugin_sources[0].source_kind == "directory"
+    assert workers.workers[0].status == "online"
+    assert worker.active_tasks[0].id == "job-1"
+    assert queues.queues[0].pending_depth_unknown is True
 
 
 def test_sync_client_returns_grouped_data_type_schemas(
@@ -596,6 +746,60 @@ def test_async_client_uses_admin_job_operations(
     assert [job.job_id for job in jobs.jobs] == ["job-1"]
     assert cancelled.job_id == "job-1"
     assert cancelled.status == "cancelled"
+
+
+def test_async_client_uses_observability_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        urls: ClassVar[list[str]] = []
+
+        def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            self.urls.append(str(args[0]))
+            return super().get(*args, **kwargs)
+
+    responses = [
+        _health_response(),
+        _admin_status_response(),
+        _config_summary_response(),
+        _catalog_summary_response(),
+        _workers_response(),
+        _worker_detail_response(),
+        _queues_response(),
+    ]
+    RecordingSession.responses = [
+        FakeAsyncResponse(payload=response) for response in responses
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+    client = AsyncLyraAPIClient("example.test", secure=False)
+
+    health = asyncio.run(client.get_health())
+    status = asyncio.run(client.get_admin_status())
+    config = asyncio.run(client.get_admin_config_summary())
+    catalog = asyncio.run(client.get_admin_catalog())
+    workers = asyncio.run(client.get_admin_workers())
+    worker = asyncio.run(client.get_admin_worker("interactive"))
+    queues = asyncio.run(client.get_admin_queues())
+
+    assert RecordingSession.urls == [
+        "http://example.test/health",
+        "http://example.test/admin/status",
+        "http://example.test/admin/config-summary",
+        "http://example.test/admin/catalog",
+        "http://example.test/admin/workers",
+        "http://example.test/admin/workers/interactive",
+        "http://example.test/admin/queues",
+    ]
+    assert health.status == "ok"
+    assert status.metric_count == 1
+    assert config.workers[0].name == "interactive"
+    assert catalog.plugin_sources[0].source_kind == "directory"
+    assert workers.workers[0].status == "online"
+    assert worker.active_tasks[0].id == "job-1"
+    assert queues.queues[0].pending_depth_unknown is True
 
 
 def test_async_client_returns_grouped_data_type_schemas(

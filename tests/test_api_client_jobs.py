@@ -196,6 +196,84 @@ def _queues_response() -> dict[str, Any]:
     }
 
 
+def _met_zone_response() -> dict[str, Any]:
+    return {
+        "cve_met": "0901",
+        "nom_met": "Valle de Mexico",
+    }
+
+
+def _plugin_repo_response() -> dict[str, Any]:
+    return {
+        "id": "smoke",
+        "source": "dir:///plugins/smoke",
+        "ref": None,
+        "enabled": True,
+    }
+
+
+def _plugin_repo_list_response() -> dict[str, Any]:
+    return {"repos": [_plugin_repo_response()]}
+
+
+def _delete_plugin_repo_response() -> dict[str, Any]:
+    return {
+        "deleted": True,
+        "repo_id": "smoke",
+    }
+
+
+def _sync_plugin_repo_response() -> dict[str, Any]:
+    return {
+        "repo_id": "smoke",
+        "changed": True,
+        "display_name": "smoke",
+    }
+
+
+def _plugin_catalog_refresh_response() -> dict[str, Any]:
+    return {
+        "updated_plugins": ["smoke"],
+        "catalog_changed": True,
+        "previous_catalog_fingerprint": "before",
+        "catalog_fingerprint": "after",
+        "assigned_metric_queues": ["smoke_table_metric"],
+        "workers_restarted": False,
+        "workers_restart_recommended": True,
+        "message": "Plugin catalog refreshed.",
+    }
+
+
+def _worker_restart_response() -> dict[str, Any]:
+    return {
+        "requested": True,
+        "timeout": 12.5,
+        "message": "Worker restart requested.",
+    }
+
+
+def _plugin_routing_response() -> dict[str, Any]:
+    return {
+        "metric_queues": {"smoke_table_metric": "interactive"},
+        "allowed_queues": ["interactive", "batch"],
+        "default_queue": "interactive",
+    }
+
+
+def _metric_queue_assignment_response() -> dict[str, Any]:
+    return {
+        "metric_name": "smoke_table_metric",
+        "queue": "batch",
+    }
+
+
+def _delete_metric_queue_response() -> dict[str, Any]:
+    return {
+        "deleted": True,
+        "metric_name": "smoke_table_metric",
+    }
+
+
 def _terminal_event_lines() -> list[str]:
     event = {
         "job_id": "job-1",
@@ -460,6 +538,202 @@ def test_sync_client_uses_observability_routes(
     assert queues.queues[0].pending_depth_unknown is True
 
 
+def test_sync_client_uses_lookup_plugin_and_routing_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        _met_zone_response(),
+        _plugin_repo_list_response(),
+        _plugin_repo_response(),
+        _plugin_repo_response() | {"enabled": False},
+        _delete_plugin_repo_response(),
+        _sync_plugin_repo_response(),
+        _plugin_catalog_refresh_response(),
+        _worker_restart_response(),
+        _plugin_routing_response(),
+        _metric_queue_assignment_response(),
+        _delete_metric_queue_response(),
+    ]
+    requests_seen: list[dict[str, Any]] = []
+
+    def request(
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None,
+        json: dict[str, Any] | None,
+        timeout: float,
+        headers: dict[str, str],
+    ) -> FakeSyncResponse:
+        requests_seen.append(
+            {
+                "method": method,
+                "url": url,
+                "params": params,
+                "json": json,
+                "timeout": timeout,
+                "headers": headers,
+            }
+        )
+        return FakeSyncResponse(payload=responses.pop(0))
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
+    client = LyraAPIClient(
+        "example.test/",
+        secure=False,
+        timeout=12.0,
+        admin_api_key="admin-secret",
+    )
+
+    met_zone = client.get_met_zone_code("Valle de Mexico")
+    repos = client.list_plugin_repos()
+    created = client.create_plugin_repo("dir:///plugins/smoke", repo_id="smoke")
+    updated = client.update_plugin_repo(
+        "smoke",
+        source="dir:///plugins/smoke-updated",
+        enabled=False,
+    )
+    deleted = client.delete_plugin_repo("smoke")
+    synced = client.sync_plugin_repo("smoke")
+    refreshed = client.refresh_plugin_catalog()
+    restarted = client.restart_workers(timeout=12.5)
+    routing = client.list_plugin_routing()
+    assignment = client.set_plugin_routing("smoke_table_metric", "batch")
+    routing_deleted = client.delete_plugin_routing("smoke_table_metric")
+
+    assert requests_seen == [
+        {
+            "method": "GET",
+            "url": "http://example.test/lookups/met-zones",
+            "params": {"name": "Valle de Mexico"},
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "GET",
+            "url": "http://example.test/admin/plugin-repos",
+            "params": None,
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "POST",
+            "url": "http://example.test/admin/plugin-repos",
+            "params": None,
+            "json": {
+                "source": "dir:///plugins/smoke",
+                "id": "smoke",
+                "enabled": True,
+            },
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "PATCH",
+            "url": "http://example.test/admin/plugin-repos/smoke",
+            "params": None,
+            "json": {
+                "source": "dir:///plugins/smoke-updated",
+                "enabled": False,
+            },
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "DELETE",
+            "url": "http://example.test/admin/plugin-repos/smoke",
+            "params": None,
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "POST",
+            "url": "http://example.test/admin/plugin-repos/smoke/sync",
+            "params": None,
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "POST",
+            "url": "http://example.test/admin/plugin-catalog/refresh",
+            "params": None,
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "POST",
+            "url": "http://example.test/admin/workers/restart",
+            "params": {"timeout": 12.5},
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "GET",
+            "url": "http://example.test/admin/plugin-routing",
+            "params": None,
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "PUT",
+            "url": "http://example.test/admin/plugin-routing/smoke_table_metric",
+            "params": None,
+            "json": {"queue": "batch"},
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+        {
+            "method": "DELETE",
+            "url": "http://example.test/admin/plugin-routing/smoke_table_metric",
+            "params": None,
+            "json": None,
+            "timeout": 12.0,
+            "headers": {"Authorization": "Bearer admin-secret"},
+        },
+    ]
+    assert met_zone.cve_met == "0901"
+    assert repos.repos[0].source == "dir:///plugins/smoke"
+    assert created.id == "smoke"
+    assert updated.enabled is False
+    assert deleted.deleted is True
+    assert synced.changed is True
+    assert refreshed.workers_restart_recommended is True
+    assert restarted.timeout == 12.5
+    assert routing.metric_queues == {"smoke_table_metric": "interactive"}
+    assert assignment.queue == "batch"
+    assert routing_deleted.deleted is True
+
+
+def test_sync_client_reports_operator_route_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def request(
+        method: str,  # noqa: ARG001
+        url: str,  # noqa: ARG001
+        *,
+        params: dict[str, Any] | None,  # noqa: ARG001
+        json: dict[str, Any] | None,  # noqa: ARG001
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        return FakeSyncResponse(status_code=409, text="plugin disabled")
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
+
+    with pytest.raises(
+        DownloadError,
+        match=r"Failed to sync plugin repo\. HTTP 409: plugin disabled",
+    ):
+        LyraAPIClient("example.test", secure=False).sync_plugin_repo("smoke")
+
+
 def test_sync_client_returns_grouped_data_type_schemas(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -650,6 +924,9 @@ class FakeSession:
     def get(self, *_: object, **__: object) -> FakeAsyncResponse:
         return self.responses.pop(0)
 
+    def request(self, *_: object, **__: object) -> FakeAsyncResponse:
+        return self.responses.pop(0)
+
 
 class FakeAsyncFile:
     def __init__(self, path: Path) -> None:
@@ -800,6 +1077,212 @@ def test_async_client_uses_observability_routes(
     assert workers.workers[0].status == "online"
     assert worker.active_tasks[0].id == "job-1"
     assert queues.queues[0].pending_depth_unknown is True
+
+
+def test_async_client_uses_lookup_plugin_and_routing_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        requests_seen: ClassVar[list[dict[str, Any]]] = []
+
+        def request(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            self.requests_seen.append({"args": args, "kwargs": kwargs})
+            return super().request(*args, **kwargs)
+
+    RecordingSession.responses = [
+        FakeAsyncResponse(payload=_met_zone_response()),
+        FakeAsyncResponse(payload=_plugin_repo_list_response()),
+        FakeAsyncResponse(payload=_plugin_repo_response()),
+        FakeAsyncResponse(payload=_plugin_repo_response() | {"enabled": False}),
+        FakeAsyncResponse(payload=_delete_plugin_repo_response()),
+        FakeAsyncResponse(payload=_sync_plugin_repo_response()),
+        FakeAsyncResponse(payload=_plugin_catalog_refresh_response()),
+        FakeAsyncResponse(payload=_worker_restart_response()),
+        FakeAsyncResponse(payload=_plugin_routing_response()),
+        FakeAsyncResponse(payload=_metric_queue_assignment_response()),
+        FakeAsyncResponse(payload=_delete_metric_queue_response()),
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+    client = AsyncLyraAPIClient(
+        "example.test/",
+        secure=False,
+        admin_api_key="admin-secret",
+    )
+
+    async def run_requests() -> tuple[Any, ...]:
+        return (
+            await client.get_met_zone_code("Valle de Mexico"),
+            await client.list_plugin_repos(),
+            await client.create_plugin_repo(
+                "dir:///plugins/smoke",
+                repo_id="smoke",
+            ),
+            await client.update_plugin_repo(
+                "smoke",
+                source="dir:///plugins/smoke-updated",
+                enabled=False,
+            ),
+            await client.delete_plugin_repo("smoke"),
+            await client.sync_plugin_repo("smoke"),
+            await client.refresh_plugin_catalog(),
+            await client.restart_workers(timeout=12.5),
+            await client.list_plugin_routing(),
+            await client.set_plugin_routing("smoke_table_metric", "batch"),
+            await client.delete_plugin_routing("smoke_table_metric"),
+        )
+
+    (
+        met_zone,
+        repos,
+        created,
+        updated,
+        deleted,
+        synced,
+        refreshed,
+        restarted,
+        routing,
+        assignment,
+        routing_deleted,
+    ) = asyncio.run(run_requests())
+
+    assert RecordingSession.requests_seen == [
+        {
+            "args": ("GET", "http://example.test/lookups/met-zones"),
+            "kwargs": {
+                "params": {"name": "Valle de Mexico"},
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("GET", "http://example.test/admin/plugin-repos"),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("POST", "http://example.test/admin/plugin-repos"),
+            "kwargs": {
+                "params": None,
+                "json": {
+                    "source": "dir:///plugins/smoke",
+                    "id": "smoke",
+                    "enabled": True,
+                },
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("PATCH", "http://example.test/admin/plugin-repos/smoke"),
+            "kwargs": {
+                "params": None,
+                "json": {
+                    "source": "dir:///plugins/smoke-updated",
+                    "enabled": False,
+                },
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("DELETE", "http://example.test/admin/plugin-repos/smoke"),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("POST", "http://example.test/admin/plugin-repos/smoke/sync"),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("POST", "http://example.test/admin/plugin-catalog/refresh"),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("POST", "http://example.test/admin/workers/restart"),
+            "kwargs": {
+                "params": {"timeout": 12.5},
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": ("GET", "http://example.test/admin/plugin-routing"),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": (
+                "PUT",
+                "http://example.test/admin/plugin-routing/smoke_table_metric",
+            ),
+            "kwargs": {
+                "params": None,
+                "json": {"queue": "batch"},
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+        {
+            "args": (
+                "DELETE",
+                "http://example.test/admin/plugin-routing/smoke_table_metric",
+            ),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer admin-secret"},
+            },
+        },
+    ]
+    assert met_zone.cve_met == "0901"
+    assert repos.repos[0].source == "dir:///plugins/smoke"
+    assert created.id == "smoke"
+    assert updated.enabled is False
+    assert deleted.deleted is True
+    assert synced.changed is True
+    assert refreshed.workers_restart_recommended is True
+    assert restarted.timeout == 12.5
+    assert routing.metric_queues == {"smoke_table_metric": "interactive"}
+    assert assignment.queue == "batch"
+    assert routing_deleted.deleted is True
+
+
+def test_async_client_reports_operator_route_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        def request(self, *args: object, **kwargs: object) -> FakeAsyncResponse:  # noqa: ARG002
+            return FakeAsyncResponse(status=409, text="plugin disabled")
+
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+
+    with pytest.raises(
+        DownloadError,
+        match=r"Failed to sync plugin repo\. HTTP 409: plugin disabled",
+    ):
+        asyncio.run(
+            AsyncLyraAPIClient("example.test", secure=False).sync_plugin_repo("smoke")
+        )
 
 
 def test_async_client_returns_grouped_data_type_schemas(

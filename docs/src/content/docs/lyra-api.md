@@ -112,10 +112,10 @@ header.
 | Method | Returns | Use when |
 | --- | --- | --- |
 | `list_plugin_repos()` | `PluginRepoListResponse` | List configured plugin sources. |
-| `create_plugin_repo(source, repo_id=None, enabled=True)` | `PluginRepoResponse` | Add a GitHub, `file://`, or `dir://` plugin source. |
-| `update_plugin_repo(repo_id, source=None, enabled=None)` | `PluginRepoResponse` | Update a plugin source or enabled flag. |
-| `delete_plugin_repo(repo_id)` | `DeletePluginRepoResponse` | Remove a plugin source and its owned metric queue config from Lyra-owned state. |
-| `sync_plugin_repo(repo_id)` | `SyncPluginRepoResponse` | Sync one enabled plugin source. |
+| `create_plugin_repo(source, repo_id=None, enabled=True)` | `CreatePluginRepoResponse` | Add a GitHub, `file://`, or `dir://` plugin source and refresh the runtime catalog. |
+| `update_plugin_repo(repo_id, source=None, enabled=None)` | `UpdatePluginRepoResponse` | Update a plugin source or enabled flag and refresh the runtime catalog. |
+| `delete_plugin_repo(repo_id)` | `DeletePluginRepoResponse` | Remove a plugin source, remove its owned metric queue config, and refresh the runtime catalog. |
+| `sync_plugin_repo(repo_id)` | `SyncPluginRepoResponse` | Sync one enabled plugin source and refresh the runtime catalog. |
 | `refresh_plugin_catalog()` | `PluginCatalogRefreshResponse` | Sync enabled sources, reload API catalog metadata, prune stale metric routes, and learn if workers should restart. |
 | `restart_workers(timeout=30.0)` | `WorkerRestartResponse` | Ask worker pools to restart after draining active work. |
 | `list_plugin_routing()` | `PluginRoutingResponse` | List metric-to-queue assignments. |

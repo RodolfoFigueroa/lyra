@@ -282,9 +282,10 @@ these models are also available for tests, clients, and manifest tooling:
 | `JobCancelResponse` | Admin `/admin/jobs/{job_id}/cancel` response. |
 | `HealthResponse` | Public `/health` response. |
 | `MetZoneCodeResponse` | Public `/lookups/met-zones` response. |
-| `PluginRepoListResponse` and `PluginRepoResponse` | Admin `/admin/plugin-repos` responses. |
+| `PluginRepoListResponse` and `PluginRepoResponse` | Admin plugin source list and repo records. |
 | `CreatePluginRepoRequest` and `UpdatePluginRepoRequest` | Admin plugin source request bodies. |
-| `DeletePluginRepoResponse` and `SyncPluginRepoResponse` | Admin plugin source operation responses, including removed metric routes for deletes. |
+| `CreatePluginRepoResponse`, `UpdatePluginRepoResponse`, `DeletePluginRepoResponse`, and `SyncPluginRepoResponse` | Admin plugin source operation responses with nested catalog refresh status. |
+| `PluginCatalogRefreshStatus` | Catalog refresh status returned by plugin source mutations. |
 | `PluginCatalogRefreshResponse` | Admin `/admin/plugin-catalog/refresh` response, including assigned and removed metric routes. |
 | `WorkerRestartResponse` | Admin `/admin/workers/restart` response. |
 | `PluginRoutingResponse` | Admin `/admin/plugin-routing` response. |

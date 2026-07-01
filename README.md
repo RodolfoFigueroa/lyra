@@ -1,154 +1,117 @@
 # Lyra API
 
-REST and WebSocket API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery tasks backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
+Lyra is a REST API for computing accessibility and land-use metrics for spatial units in Mexico. Metrics run as async Celery jobs backed by Redis; spatial computation uses Google Earth Engine and OSMnx.
 
-## Prerequisites
+## Documentation
 
-- Google Earth Engine service account key saved as a JSON file.
-- A `.env` file in the project root with at least:
+The written project docs are published with Astro Starlight:
 
-```env
-CELERY_BROKER_URL=redis://localhost:6379/0
-EARTHENGINE_PROJECT=your-gee-project-id
-```
+- Hosted docs: https://rodolfofigueroa.github.io/lyra/
+- Local docs: `npm run dev --prefix docs`
+- Develop Lyra: https://rodolfofigueroa.github.io/lyra/contributor-guide/
+- Build a plugin: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
+- Use the API: https://rodolfofigueroa.github.io/lyra/job-api/
+- Run the operator TUI: https://rodolfofigueroa.github.io/lyra/tui/
 
-Optional logging settings:
+When the API server is running, FastAPI also exposes generated OpenAPI references:
 
-```env
-LYRA_LOG_LEVEL=INFO
-LYRA_LOG_FILE=logs/lyra.log
-```
+- Swagger UI: http://localhost:5219/docs
+- ReDoc: http://localhost:5219/redoc
 
-If `LYRA_LOG_FILE` is set, Lyra writes its internal logs to that file instead of standard output.
+## Quick Start
 
-## Install
+Install dependencies:
 
 ```bash
 uv sync
 ```
 
-## Run
+Create local host files for the server config and Earth Engine service account:
 
-Start Redis (required for the task queue):
-
-```bash
-docker run -d -p 6379:6379 redis:alpine
+```text
+lyra_data/config/lyra.toml
+secrets/service-account.json
 ```
 
-Start the Celery worker (in a separate terminal):
+Start from the checked-in example:
 
 ```bash
-uv run celery -A lyra.worker.celery_app worker --loglevel=info
+mkdir -p lyra_data/config secrets
+cp config.example.toml lyra_data/config/lyra.toml
+cp .env.example .env
 ```
 
-Start the API server:
+The Compose stack mounts `lyra.toml` and the service account as read-only
+files, and passes Postgres/admin settings from `.env`. The `lyra_data` named
+volume remains writable for Lyra-owned runtime state, including
+`/lyra_data/state/plugins.toml`, plugin checkouts, runner installs, cache
+files, and optional logs.
 
-```bash
-uv run lyra
-```
+The config file owns Redis, Earth Engine, worker pools, plugin queue policy,
+logging, job TTL, and API host/port settings. Postgres connection settings and
+the admin API key come from environment variables. Plugin repositories and
+metric queue assignments are managed through admin API endpoints and persisted
+by Lyra in `/lyra_data/state/plugins.toml`.
 
-### Docker (recommended)
+Run the development Compose stack:
 
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-This starts the API (`lyra`), Redis, and the Celery worker together.
-
-## Endpoints
-
-### REST
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/data_types` | List accepted input data types |
-| `GET` | `/metrics` | List available metrics and their parameters |
-| `GET` | `/download_result/{download_id}` | Fetch a completed metric result |
-
-### WebSocket
-
-| Path | Description |
-|------|-------------|
-| `WS /ws/{metric}` | Submit a metric computation request |
-
-Available metrics: `accessibility_jobs`, `accessibility_services`, `tree_coverage`, `urbanized_area`.
-
-## WebSocket Usage
-
-The WebSocket endpoint follows a request/response flow:
-
-1. Connect to `ws://localhost:5219/ws/{metric}`.
-2. Send a JSON payload with a `data` field (GeoJSON or a supported wrapper type).
-3. Receive a `queued` message with a `task_id`.
-4. Receive a `success` message with a `download_id` when computation completes.
-5. Fetch the full result via `GET /download_result/{download_id}`.
-
-Example using the `websockets` library:
-
-```python
-import asyncio, json, websockets
-
-async def run():
-    uri = "ws://localhost:5219/ws/tree_coverage"
-    async with websockets.connect(uri) as ws:
-        payload = {
-            "data": {
-                "data_type": "geojson",
-                "value": {
-                    "type": "FeatureCollection",
-                    "features": [
-                        {
-                            "type": "Feature",
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]]
-                            },
-                            "properties": {"cvegeo": "110010001001"}
-                        }
-                    ]
-                }
-            }
-        }
-        await ws.send(json.dumps(payload))
-
-        queued = json.loads(await ws.recv())   # {"status": "queued", "task_id": "..."}
-        result = json.loads(await ws.recv())   # {"status": "success", "download_id": "..."}
-        print(queued, result)
-
-asyncio.run(run())
-```
-
-Fetch the result:
+After the API is running, open the operator TUI in another terminal:
 
 ```bash
-curl http://localhost:5219/download_result/{download_id}
+LYRA_ADMIN_API_KEY=... uv run lyra-tui --host localhost:5219 --no-secure
 ```
 
-## Documentation
+The TUI connects to the running API; it does not start Redis, the API, or
+workers itself. Without an admin key it can show public health only.
 
-### REST API
-
-Interactive documentation is available while the server is running:
-
-- **Swagger UI**: http://localhost:5219/docs
-- **ReDoc**: http://localhost:5219/redoc
-
-### WebSocket API (AsyncAPI)
-
-The WebSocket endpoint is documented in [`docs/asyncapi.yaml`](docs/asyncapi.yaml).
-
-To generate a standalone interactive HTML document:
+For direct local processes, start Redis, then launch a configured worker and the
+API:
 
 ```bash
-# Install AsyncAPI CLI (requires Node.js)
-npm install -g @asyncapi/cli
-
-# Generate HTML documentation
-asyncapi generate fromTemplate docs/asyncapi.yaml @asyncapi/html-template -o docs/
+docker run -d -p 6379:6379 redis:alpine
+uv run python -m lyra_app.worker_launcher interactive
+uv run python -m lyra_app.main
 ```
 
-To validate the spec:
+Both commands read `/lyra_data/config/lyra.toml`.
+
+After the stack is running, add plugins through the admin API:
 
 ```bash
-asyncapi validate docs/asyncapi.yaml
+curl -X POST http://localhost:5219/admin/plugin-repos \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"owner/plugin-repo@main"}'
+
+curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
+
+curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
+  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
 ```
+
+## Job API
+
+Submit a metric job:
+
+```bash
+curl -X POST http://localhost:5219/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"cvegeo_list","value":["090020001"]}}}'
+```
+
+Choose `METRIC_NAME` from `GET /metrics`, and shape `input` according to that
+metric's `request_schema`. Every metric includes at least one required spatial
+wrapper field. Then use the returned `job_id` to stream events and fetch the
+terminal result:
+
+```bash
+curl -N http://localhost:5219/jobs/{job_id}/events
+curl http://localhost:5219/jobs/{job_id}/result
+```
+
+See the Starlight docs for plugin manifests, runner entrypoints, deployment shape, and operations notes.

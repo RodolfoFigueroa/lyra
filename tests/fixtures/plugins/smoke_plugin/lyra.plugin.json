@@ -1,0 +1,74 @@
+{
+  "schema_version": 3,
+  "plugin": {
+    "name": "lyra-smoke-plugin",
+    "version": "0.1.0"
+  },
+  "metrics": [
+    {
+      "name": "smoke_table_metric",
+      "description": "Return the submitted value for each input feature.",
+      "entrypoint": "smoke_plugin.runner:run_table",
+      "inputs": {
+        "location": {
+          "kind": "location"
+        },
+        "value": {
+          "kind": "integer",
+          "description": "Value copied into each output row."
+        }
+      },
+      "output": {
+        "kind": "table",
+        "columns": [
+          {
+            "name": "value",
+            "type": "integer",
+            "unit": "count",
+            "description": "Submitted value."
+          }
+        ]
+      }
+    },
+    {
+      "name": "smoke_file_metric",
+      "description": "Write a small text artifact for the submitted features.",
+      "entrypoint": "smoke_plugin.runner:run_file",
+      "inputs": {
+        "location": {
+          "kind": "location"
+        }
+      },
+      "output": {
+        "kind": "file",
+        "media_type": "text/plain",
+        "extensions": [".txt"]
+      }
+    },
+    {
+      "name": "smoke_cancel_metric",
+      "description": "Emit progress and observe cancellation before returning.",
+      "entrypoint": "smoke_plugin.runner:run_cancel",
+      "inputs": {
+        "location": {
+          "kind": "location"
+        },
+        "value": {
+          "kind": "integer",
+          "description": "Value copied into each output row."
+        }
+      },
+      "output": {
+        "kind": "table",
+        "columns": [
+          {
+            "name": "value",
+            "type": "integer",
+            "unit": "count",
+            "description": "Submitted value."
+          }
+        ]
+      }
+    }
+  ]
+}

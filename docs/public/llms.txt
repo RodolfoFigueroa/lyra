@@ -1,0 +1,91 @@
+# Lyra Documentation
+
+Site: https://rodolfofigueroa.github.io/lyra/
+Repository: https://github.com/RodolfoFigueroa/lyra
+
+Lyra is a FastAPI service for metric execution through schema v3 plugin manifests, Redis-backed jobs, and warm queue-specific Celery workers.
+
+## Primary Docs
+
+- Overview: https://rodolfofigueroa.github.io/lyra/
+- Getting Started: https://rodolfofigueroa.github.io/lyra/getting-started/
+- Architecture: https://rodolfofigueroa.github.io/lyra/architecture/
+- Contributor Guide: https://rodolfofigueroa.github.io/lyra/contributor-guide/
+- Local Development: https://rodolfofigueroa.github.io/lyra/local-development/
+- Testing And Quality: https://rodolfofigueroa.github.io/lyra/testing-and-quality/
+- Plugin Quickstart: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
+- Plugin Author Checklist: https://rodolfofigueroa.github.io/lyra/plugin-author-checklist/
+- Plugin Manifests: https://rodolfofigueroa.github.io/lyra/plugin-manifests/
+- Spatial Plugin Inputs: https://rodolfofigueroa.github.io/lyra/spatial-plugin-inputs/
+- Runner Plugins: https://rodolfofigueroa.github.io/lyra/runner-plugins/
+- lyra-sdk: https://rodolfofigueroa.github.io/lyra/lyra-sdk/
+- lyra-api: https://rodolfofigueroa.github.io/lyra/lyra-api/
+- lyra-utils: https://rodolfofigueroa.github.io/lyra/lyra-utils/
+- API Reference: https://rodolfofigueroa.github.io/lyra/api-reference/
+- Job API: https://rodolfofigueroa.github.io/lyra/job-api/
+- Metrics Catalog: https://rodolfofigueroa.github.io/lyra/metrics-catalog/
+- Python Client: https://rodolfofigueroa.github.io/lyra/python-client/
+- Deployment: https://rodolfofigueroa.github.io/lyra/deployment/
+- Operations: https://rodolfofigueroa.github.io/lyra/operations/
+- Reference: https://rodolfofigueroa.github.io/lyra/reference/
+- AI Agent Guide: https://rodolfofigueroa.github.io/lyra/ai-agent-guide/
+
+## Current Contracts
+
+- Plugin manifests: `PluginManifestV3` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v3.py`
+- Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `TableJobResult`, `FileJobResult`, `FailedJobResult`, `CancelledJobResult`, `TerminalJobResult`, `JobStatusInfo`, `JobListResponse`, `JobCancelResponse` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
+- Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
+- Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
+- Explicit spatial inputs: `ExplicitLocationAPI` and `ExplicitBoundsAPI` in `packages/lyra_sdk/src/lyra/sdk/types.py`
+- Geometry models: `GeoJSON` and `SingleGeoJSON` in `packages/lyra_sdk/src/lyra/sdk/models/geometry.py`
+- Data type schema models: `DataTypeSchemaInfo` and `DataTypesResponse` in `packages/lyra_sdk/src/lyra/sdk/models/data_types.py`
+- Admin operation models: plugin repo, catalog refresh, worker restart, and plugin routing contracts in `packages/lyra_sdk/src/lyra/sdk/models/admin.py`
+- Lookup models: `MetZoneCodeResponse` in `packages/lyra_sdk/src/lyra/sdk/models/lookups.py`
+- Observability models: `HealthResponse`, `AdminStatusResponse`, `ConfigSummaryResponse`, `CatalogSummaryResponse`, `WorkersResponse`, `WorkerDetail`, and `QueuesResponse` in `packages/lyra_sdk/src/lyra/sdk/models/observability.py`
+- Python clients: `LyraAPIClient` and `AsyncLyraAPIClient` in `packages/lyra_api/src/lyra/api/`
+- Plugin helpers: GeoJSON conversion, date ranges, and Earth Engine utilities in `packages/lyra_utils/src/lyra/utils/`
+- Generated Python API reference: `docs/src/content/docs/api-reference/`, created by `npm run generate:api --prefix docs`
+- Job routes: `lyra_app/routes/jobs.py`
+- Catalog: `lyra_app/registry.py`
+- Worker: `lyra_app/worker.py`
+- Job store: `lyra_app/job_store.py`
+
+## Public Routes
+
+- `GET /data-types` returns grouped `location` and `bounds` wrapper schemas
+- `GET /health`
+- `GET /metrics`
+- `GET /metrics/{metric_name}`
+- `POST /jobs`
+- `GET /jobs/{job_id}`
+- `GET /jobs/{job_id}/events`
+- `GET /jobs/{job_id}/result`
+- `GET /jobs/{job_id}/result/download`
+- `GET /lookups/met-zones`
+- `GET /admin/plugin-repos`
+- `POST /admin/plugin-repos`
+- `PATCH /admin/plugin-repos/{repo_id}`
+- `DELETE /admin/plugin-repos/{repo_id}`
+- `POST /admin/plugin-repos/{repo_id}/sync`
+- `POST /admin/plugin-catalog/refresh`
+- `POST /admin/workers/restart`
+- `GET /admin/status`
+- `GET /admin/config-summary`
+- `GET /admin/catalog`
+- `GET /admin/workers`
+- `GET /admin/workers/{worker_name}`
+- `GET /admin/queues`
+- `GET /admin/jobs`
+- `POST /admin/jobs/{job_id}/cancel`
+- `GET /admin/plugin-routing`
+- `PUT /admin/plugin-routing/{metric_name}`
+- `DELETE /admin/plugin-routing/{metric_name}`
+
+## Agent Notes
+
+- Metrics are not built into the app. They come from plugin sources stored in `/lyra_data/state/plugins.toml` and managed through `/admin/plugin-repos`, including GitHub entries, explicit `file://` local git repositories, and development `dir://` directory snapshots. Metric queue assignments are stored with the repo that exposes each metric and are removed when that repo is deleted.
+- Use `/metrics` to discover metric names and JSON Schemas before submitting jobs.
+- Use the Python Client page for end-to-end `lyra-api` workflows, and the lyra-api page for constructor, method, and exception reference.
+- For spatial plugins, use the Spatial Plugin Inputs page. Every metric declares spatial fields in schema v3 `inputs`; the API validates wrapper payloads and resolves them to GeoJSON dictionaries before workers receive `JobEnvelope.input`.
+- Public metric execution uses the `lyra.run_metric` Celery task internally.
+- API containers read manifests. Worker containers install and import plugin code.

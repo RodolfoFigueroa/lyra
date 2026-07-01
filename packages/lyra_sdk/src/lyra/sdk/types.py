@@ -1,0 +1,16 @@
+from typing import Annotated
+
+from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
+
+REQUIRE_EXPLICIT_TYPE = "REQUIRE_EXPLICIT_TYPE"
+REQUIRE_EXPLICIT_BOUNDS_TYPE = "REQUIRE_EXPLICIT_BOUNDS_TYPE"
+
+ExplicitLocationAPI = Annotated[GeoJSON, REQUIRE_EXPLICIT_TYPE]
+ExplicitBoundsAPI = Annotated[SingleGeoJSON, REQUIRE_EXPLICIT_BOUNDS_TYPE]
+
+__all__ = [
+    "REQUIRE_EXPLICIT_BOUNDS_TYPE",
+    "REQUIRE_EXPLICIT_TYPE",
+    "ExplicitBoundsAPI",
+    "ExplicitLocationAPI",
+]

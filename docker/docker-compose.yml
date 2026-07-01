@@ -1,15 +1,28 @@
+x-lyra-app-volumes: &lyra-app-volumes
+  - lyra_data:/lyra_data
+  - ${LYRA_CONFIG_FILE}:/lyra_data/config/lyra.toml:ro
+  - ${LYRA_SERVICE_ACCOUNT_FILE}:/lyra_data/secrets/service-account.json:ro
+
+x-lyra-app-environment: &lyra-app-environment
+  LYRA_POSTGRES_HOST: ${LYRA_POSTGRES_HOST}
+  LYRA_POSTGRES_PORT: ${LYRA_POSTGRES_PORT}
+  LYRA_POSTGRES_DB: ${LYRA_POSTGRES_DB}
+  LYRA_POSTGRES_USER: ${LYRA_POSTGRES_USER}
+  LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}
+  LYRA_ADMIN_API_KEY: ${LYRA_ADMIN_API_KEY}
+
 services:
   lyra:
     image: rodolfofigueroa/lyra:latest
     restart: unless-stopped
     ports:
       - 5219:5219
-    volumes:
-      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
-      - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
+    volumes: *lyra-app-volumes
+    environment: *lyra-app-environment
     networks:
       - lyra_net
-    env_file: ".env"    
+    depends_on:
+      - redis
 
   redis:
     image: redis:alpine
@@ -17,20 +30,36 @@ services:
     networks:
       - lyra_net
 
-  celery_worker:
+  celery_worker_interactive:
     image: rodolfofigueroa/lyra:latest
-    command: uv run --no-dev --frozen celery -A lyra.worker.celery_app worker --loglevel=info
-    volumes:
-      - ${SERVICE_ACCOUNT_BIND_PATH}:/app/service-account.json:ro
-      - ${LYRA_CACHE_BIND_PATH}:/lyra_cache
+    restart: unless-stopped
+    command: python -m lyra_app.worker_launcher interactive
+    volumes: *lyra-app-volumes
+    environment: *lyra-app-environment
     networks:
       - lyra_net
     depends_on:
       - redis
-    env_file: ".env"
+      - lyra
+
+  celery_worker_batch:
+    image: rodolfofigueroa/lyra:latest
+    restart: unless-stopped
+    command: python -m lyra_app.worker_launcher batch
+    volumes: *lyra-app-volumes
+    environment: *lyra-app-environment
+    networks:
+      - lyra_net
+    depends_on:
+      - redis
+      - lyra
 
 
 networks:
   lyra_net:
     name: lyra_net
     driver: bridge
+
+volumes:
+  lyra_data:
+    name: lyra_data

@@ -233,6 +233,9 @@ def _delete_plugin_repo_response() -> dict[str, Any]:
     return {
         "deleted": True,
         "repo_id": "smoke",
+        "removed_metric_queues": ["smoke_table_metric"],
+        "catalog_refreshed": True,
+        "catalog_refresh_error": None,
     }
 
 
@@ -251,6 +254,7 @@ def _plugin_catalog_refresh_response() -> dict[str, Any]:
         "previous_catalog_fingerprint": "before",
         "catalog_fingerprint": "after",
         "assigned_metric_queues": ["smoke_table_metric"],
+        "removed_metric_queues": [],
         "workers_restarted": False,
         "workers_restart_recommended": True,
         "message": "Plugin catalog refreshed.",

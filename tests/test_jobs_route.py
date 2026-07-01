@@ -434,6 +434,11 @@ def test_create_job_rejects_unknown_metric(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_redis(monkeypatch, FakeRedisAsync())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [],
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(

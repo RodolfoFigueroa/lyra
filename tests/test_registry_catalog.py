@@ -74,13 +74,20 @@ def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
     (repo / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def _synced_repo(repo: Path, *, changed: bool = False) -> SyncedPluginRepo:
+def _synced_repo(
+    repo: Path,
+    *,
+    changed: bool = False,
+    raw: str = "owner/repo",
+    repo_name: str = "repo",
+    ref: str | None = None,
+) -> SyncedPluginRepo:
     entry = PluginRepoEntry(
-        raw="owner/repo",
-        clone_url="https://github.com/owner/repo.git",
+        raw=raw,
+        clone_url=f"https://github.com/owner/{repo_name}.git",
         owner="owner",
-        repo="repo",
-        ref=None,
+        repo=repo_name,
+        ref=ref,
     )
     return SyncedPluginRepo(entry=entry, path=repo, changed=changed)
 
@@ -140,6 +147,7 @@ def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
     assert "GeoJSONLocationWrapperV3" in info_payload["request_schema"]["$defs"]
     assert entry is not None
     assert entry.queue == "lightweight"
+    assert entry.repo_id == "owner__repo"
     assert entry.entrypoint == "fake_plugin.runner:run"
 
 
@@ -194,7 +202,9 @@ def test_catalog_refresh_reads_directory_source_without_importing_plugin_code(
 ) -> None:
     source = tmp_path / "directory-plugin"
     _write_manifest(source, _manifest())
-    plugin_state_store(tmp_path, get_config()).add_repo(
+    store = plugin_state_store(tmp_path, get_config())
+    store.delete_repo("owner__repo")
+    store.add_repo(
         f"dir://{source}",
         repo_id="directory-plugin",
     )
@@ -210,7 +220,8 @@ def test_catalog_refresh_reads_directory_source_without_importing_plugin_code(
 
     assert result.updated_plugins == [f"dir:{source.resolve()}"]
     assert entry is not None
-    assert entry.queue == "lightweight"
+    assert entry.queue == "interactive"
+    assert entry.repo_id == "directory-plugin"
     assert entry.entrypoint == "fake_plugin.runner:run"
 
 
@@ -306,10 +317,13 @@ def test_catalog_refresh_syncs_enabled_repos_from_plugin_state(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    plugin_state_store(tmp_path, get_config()).add_repo(
+    store = plugin_state_store(tmp_path, get_config())
+    store.delete_repo("owner__repo")
+    store.add_repo(
         "owner/example-plugin@main",
         repo_id="example",
     )
+    store.set_metric_queue("light_metric", "lightweight", repo_id="example")
     calls: list[tuple[Path, list[str], bool]] = []
 
     def sync_repos(
@@ -319,7 +333,14 @@ def test_catalog_refresh_syncs_enabled_repos_from_plugin_state(
         raise_on_error: bool,
     ) -> list[SyncedPluginRepo]:
         calls.append((target_dir, raw_entries, raise_on_error))
-        return [_synced_repo(repo)]
+        return [
+            _synced_repo(
+                repo,
+                raw="owner/example-plugin@main",
+                repo_name="example-plugin",
+                ref="main",
+            )
+        ]
 
     monkeypatch.setattr(registry, "sync_plugin_repos", sync_repos)
 
@@ -409,9 +430,11 @@ def test_catalog_refresh_auto_assigns_new_metric_queue_to_state(
 
     persisted = plugin_state_store(tmp_path, get_config()).load()
     entry = registry.get_metric_entry("new_metric")
-    assert persisted.metric_queues["new_metric"] == "interactive"
+    assert persisted.metric_queues["new_metric"].queue == "interactive"
+    assert persisted.metric_queues["new_metric"].repo_id == "owner__repo"
     assert entry is not None
     assert entry.queue == "interactive"
+    assert entry.repo_id == "owner__repo"
 
 
 def test_catalog_refresh_recreates_deleted_metric_route_with_default_queue(
@@ -434,12 +457,13 @@ def test_catalog_refresh_recreates_deleted_metric_route_with_default_queue(
     persisted = store.load()
     entry = registry.get_metric_entry("light_metric")
     assert result.assigned_metric_queues == ["light_metric"]
-    assert persisted.metric_queues["light_metric"] == "interactive"
+    assert persisted.metric_queues["light_metric"].queue == "interactive"
+    assert persisted.metric_queues["light_metric"].repo_id == "owner__repo"
     assert entry is not None
     assert entry.queue == "interactive"
 
 
-def test_catalog_refresh_ignores_stale_metric_queue_assignments(
+def test_catalog_refresh_removes_stale_metric_queue_assignments(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -458,11 +482,12 @@ def test_catalog_refresh_ignores_stale_metric_queue_assignments(
         lambda _config, _state: [_synced_repo(repo)],
     )
 
-    registry.refresh_catalog()
+    result = registry.refresh_catalog()
 
     persisted = plugin_state_store(tmp_path, get_config()).load()
     entry = registry.get_metric_entry("light_metric")
-    assert persisted.metric_queues["removed_metric"] == "heavy"
+    assert result.removed_metric_queues == ["removed_metric"]
+    assert "removed_metric" not in persisted.metric_queues
     assert entry is not None
     assert entry.queue == "lightweight"
     assert registry.get_metric_entry("removed_metric") is None
@@ -491,11 +516,11 @@ def test_catalog_refresh_keeps_previous_registry_when_assignment_write_fails(
     )
     store = plugin_state_store(tmp_path, get_config())
 
-    def fail_assignment(*_args: Any, **_kwargs: Any) -> list[str]:
+    def fail_assignment(*_args: Any, **_kwargs: Any) -> object:
         msg = "disk full"
         raise RuntimeError(msg)
 
-    monkeypatch.setattr(store, "assign_missing_metric_queues", fail_assignment)
+    monkeypatch.setattr(store, "sync_metric_queues", fail_assignment)
     monkeypatch.setattr(registry, "PluginStateStore", lambda *_args, **_kwargs: store)
 
     with pytest.raises(RuntimeError, match="disk full"):

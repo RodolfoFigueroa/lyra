@@ -16,6 +16,7 @@ from lyra_app.config import (
     save_config,
 )
 from lyra_app.plugin_state import (
+    MetricQueueRecord,
     PluginState,
     PluginStateStore,
     make_repo_record,
@@ -63,6 +64,9 @@ def plugin_state_store(base: Path, config: LyraConfig) -> PluginStateStore:
     )
 
 
+DEFAULT_TEST_PLUGIN_REPO = "owner/repo"
+
+
 def load_test_config(
     base: Path,
     *,
@@ -103,10 +107,21 @@ def load_test_config(
     config = LyraConfig.model_validate(raw_config)
     config_path = base / "config" / "lyra.toml"
     save_config(config, config_path)
+    state_repos = list(repos) if repos is not None else []
+    if metric_queues and not state_repos:
+        state_repos = [DEFAULT_TEST_PLUGIN_REPO]
+    repo_records = [make_repo_record(repo) for repo in state_repos]
+    metric_queue_repo_id = repo_records[0].id if repo_records else None
+    scoped_metric_queues = {
+        metric_name: MetricQueueRecord(queue=queue, repo_id=metric_queue_repo_id)
+        for metric_name, queue in (metric_queues or {}).items()
+        if metric_queue_repo_id is not None
+    }
+
     save_plugin_state(
         PluginState(
-            repos=[make_repo_record(repo) for repo in (repos or [])],
-            metric_queues={} if metric_queues is None else metric_queues,
+            repos=repo_records,
+            metric_queues=scoped_metric_queues,
         ),
         plugin_state_path(base),
         allowed_queues=allowed_queues,

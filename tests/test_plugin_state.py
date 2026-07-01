@@ -7,6 +7,7 @@ import pytest
 from lyra_app.plugin_state import (
     DEFAULT_PLUGIN_STATE_PATH,
     PLUGIN_STATE_SCHEMA_VERSION,
+    MetricQueueRecord,
     PluginRepoRecord,
     PluginState,
     PluginStateLoadError,
@@ -16,6 +17,7 @@ from lyra_app.plugin_state import (
     generate_repo_id,
     load_plugin_state,
     make_repo_record,
+    metric_queue_mapping,
     normalize_repo_source,
     render_plugin_state_toml,
     repo_record_to_source,
@@ -64,8 +66,14 @@ def test_plugin_state_round_trips_as_toml(tmp_path: Path) -> None:
             ),
         ],
         metric_queues={
-            "walkability_score": "interactive",
-            "regional.accessibility": "batch",
+            "walkability_score": MetricQueueRecord(
+                queue="interactive",
+                repo_id="owner-example-plugin",
+            ),
+            "regional.accessibility": MetricQueueRecord(
+                queue="batch",
+                repo_id="owner-example-plugin",
+            ),
         },
     )
     path = _state_path(tmp_path)
@@ -77,7 +85,9 @@ def test_plugin_state_round_trips_as_toml(tmp_path: Path) -> None:
     assert loaded == state
     assert "schema_version = 1" in rendered
     assert 'id = "owner-example-plugin"' in rendered
-    assert '"regional.accessibility" = "batch"' in rendered
+    assert '[metric_queues."regional.accessibility"]' in rendered
+    assert 'queue = "batch"' in rendered
+    assert 'repo_id = "owner-example-plugin"' in rendered
     assert not list(path.parent.glob(".plugins.toml.*.tmp"))
 
 
@@ -236,7 +246,7 @@ def test_make_repo_record_normalizes_directory_source_and_serializes(
             "metric name must be a non-empty string",
         ),
         (
-            {"metric_queues": {"metric": " "}},
+            {"metric_queues": {"metric": {"queue": " ", "repo_id": "repo-one"}}},
             "queue name must be a non-empty string",
         ),
     ],
@@ -280,6 +290,19 @@ def test_plugin_state_allows_disabled_duplicate_sources() -> None:
     assert [repo.id for repo in state.repos] == ["plugin-a", "plugin-b"]
 
 
+def test_plugin_state_rejects_metric_queue_for_unknown_repo() -> None:
+    with pytest.raises(ValueError, match="repo_ids must reference configured repos"):
+        PluginState(
+            repos=[PluginRepoRecord(id="plugin-a", source="owner/plugin")],
+            metric_queues={
+                "walkability_score": MetricQueueRecord(
+                    queue="interactive",
+                    repo_id="missing",
+                ),
+            },
+        )
+
+
 def test_load_plugin_state_rejects_invalid_queue_assignments(tmp_path: Path) -> None:
     path = _state_path(tmp_path)
     path.parent.mkdir(parents=True)
@@ -287,8 +310,14 @@ def test_load_plugin_state_rejects_invalid_queue_assignments(tmp_path: Path) -> 
         """
 schema_version = 1
 
-[metric_queues]
-walkability_score = "priority"
+	[[repos]]
+	id = "repo-one"
+	source = "owner/repo"
+	enabled = true
+
+	[metric_queues.walkability_score]
+	queue = "priority"
+	repo_id = "repo-one"
 """.lstrip(),
         encoding="utf-8",
     )
@@ -320,8 +349,9 @@ def test_state_store_repo_crud_persists_to_disk(tmp_path: Path) -> None:
     assert created.source == "owner/example-plugin"
     assert created.ref == "main"
     assert updated.enabled is False
-    assert deleted is True
-    assert store.delete_repo("example") is False
+    assert deleted.deleted is True
+    assert deleted.removed_metric_queues == []
+    assert store.delete_repo("example").deleted is False
     assert store.load().repos == []
     assert path.exists()
 
@@ -358,8 +388,9 @@ def test_state_store_reports_unknown_repo_for_update(tmp_path: Path) -> None:
 
 def test_state_store_metric_routing_crud_persists_to_disk(tmp_path: Path) -> None:
     store = PluginStateStore(_state_path(tmp_path), allowed_queues=ALLOWED_QUEUES)
+    store.add_repo("owner/repo", repo_id="repo-one")
 
-    queue = store.set_metric_queue(" walkability_score ", " batch ")
+    queue = store.set_metric_queue(" walkability_score ", " batch ", repo_id="repo-one")
     deleted = store.delete_metric_queue("walkability_score")
 
     assert queue == "batch"
@@ -372,33 +403,73 @@ def test_state_store_rejects_metric_queue_outside_allowed_queues(
     tmp_path: Path,
 ) -> None:
     store = PluginStateStore(_state_path(tmp_path), allowed_queues=ALLOWED_QUEUES)
+    store.add_repo("owner/repo", repo_id="repo-one")
 
     with pytest.raises(
         PluginStateValidationError,
         match=r"plugins\.allowed_queues",
     ):
-        store.set_metric_queue("walkability_score", "priority")
+        store.set_metric_queue("walkability_score", "priority", repo_id="repo-one")
 
 
-def test_state_store_assigns_missing_metric_queues(tmp_path: Path) -> None:
+def test_state_store_syncs_metric_queues(tmp_path: Path) -> None:
     store = PluginStateStore(_state_path(tmp_path), allowed_queues=ALLOWED_QUEUES)
-    store.set_metric_queue("existing_metric", "batch")
+    store.add_repo("owner/repo", repo_id="repo-one")
+    store.set_metric_queue("existing_metric", "batch", repo_id="repo-one")
 
-    assigned = store.assign_missing_metric_queues(
-        ["existing_metric", " new_metric "],
+    result = store.sync_metric_queues(
+        {
+            "existing_metric": "repo-one",
+            " new_metric ": "repo-one",
+        },
         default_queue="interactive",
     )
 
-    assert assigned == ["new_metric"]
-    assert store.load().metric_queues == {
+    assert result.assigned == ["new_metric"]
+    assert result.removed == []
+    assert metric_queue_mapping(store.load()) == {
         "existing_metric": "batch",
         "new_metric": "interactive",
     }
 
 
+def test_state_store_deletes_repo_metric_queues(tmp_path: Path) -> None:
+    store = PluginStateStore(_state_path(tmp_path), allowed_queues=ALLOWED_QUEUES)
+    store.add_repo("owner/repo", repo_id="repo-one")
+    store.add_repo("owner/other-repo", repo_id="repo-two")
+    store.set_metric_queue("first_metric", "interactive", repo_id="repo-one")
+    store.set_metric_queue("second_metric", "batch", repo_id="repo-two")
+
+    result = store.delete_repo("repo-one")
+
+    assert result.deleted is True
+    assert result.removed_metric_queues == ["first_metric"]
+    assert metric_queue_mapping(store.load()) == {"second_metric": "batch"}
+
+
+def test_state_store_sync_removes_stale_and_moved_metric_queues(tmp_path: Path) -> None:
+    store = PluginStateStore(_state_path(tmp_path), allowed_queues=ALLOWED_QUEUES)
+    store.add_repo("owner/repo", repo_id="repo-one")
+    store.add_repo("owner/other-repo", repo_id="repo-two")
+    store.set_metric_queue("moved_metric", "batch", repo_id="repo-one")
+    store.set_metric_queue("stale_metric", "batch", repo_id="repo-two")
+
+    result = store.sync_metric_queues(
+        {"moved_metric": "repo-two"},
+        default_queue="interactive",
+    )
+
+    assert result.assigned == ["moved_metric"]
+    assert result.removed == ["moved_metric", "stale_metric"]
+    loaded = store.load()
+    assert metric_queue_mapping(loaded) == {"moved_metric": "interactive"}
+    assert loaded.metric_queues["moved_metric"].repo_id == "repo-two"
+
+
 def test_state_file_includes_schema_version(tmp_path: Path) -> None:
     store = PluginStateStore(_state_path(tmp_path), allowed_queues=ALLOWED_QUEUES)
+    store.add_repo("owner/repo", repo_id="repo-one")
 
-    store.set_metric_queue("walkability_score", "interactive")
+    store.set_metric_queue("walkability_score", "interactive", repo_id="repo-one")
 
     assert store.load().schema_version == PLUGIN_STATE_SCHEMA_VERSION

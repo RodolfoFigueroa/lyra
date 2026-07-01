@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -182,8 +183,74 @@ def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:
         "ref": "v1.2.0",
         "enabled": False,
     }
-    assert deleted.model_dump() == {"deleted": True, "repo_id": "example"}
+    assert deleted.model_dump() == {
+        "deleted": True,
+        "repo_id": "example",
+        "removed_metric_queues": [],
+        "catalog_refreshed": True,
+        "catalog_refresh_error": None,
+    }
     assert "unknown plugin repo id" in str(missing.detail)
+
+
+def test_delete_plugin_repo_removes_owned_metric_routes(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = admin._state_store()  # noqa: SLF001
+    store.add_repo("owner/example-plugin", repo_id="example")
+    store.add_repo("owner/other-plugin", repo_id="other")
+    store.set_metric_queue("walkability_score", "batch", repo_id="example")
+    store.set_metric_queue("other_score", "interactive", repo_id="other")
+    result = CatalogRefreshResult(
+        updated_plugins=[],
+        previous_catalog_fingerprint="old",
+        catalog_fingerprint="new",
+        catalog_changed=True,
+        assigned_metric_queues=[],
+        removed_metric_queues=[],
+    )
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", lambda _store: result)
+
+    deleted = admin.delete_plugin_repo("example")
+
+    assert deleted.model_dump() == {
+        "deleted": True,
+        "repo_id": "example",
+        "removed_metric_queues": ["walkability_score"],
+        "catalog_refreshed": True,
+        "catalog_refresh_error": None,
+    }
+    assert admin.list_plugin_routing().metric_queues == {"other_score": "interactive"}
+
+
+def test_delete_plugin_repo_clears_loaded_catalog_when_refresh_fails(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = admin._state_store()  # noqa: SLF001
+    store.add_repo("owner/example-plugin", repo_id="example")
+    store.set_metric_queue("walkability_score", "batch", repo_id="example")
+    reset_calls: list[None] = []
+
+    def fail_refresh(_store: object) -> CatalogRefreshResult:
+        msg = "catalog refresh failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", fail_refresh)
+    monkeypatch.setattr(admin, "reset_catalog", lambda: reset_calls.append(None))
+
+    deleted = admin.delete_plugin_repo("example")
+
+    assert deleted.model_dump() == {
+        "deleted": True,
+        "repo_id": "example",
+        "removed_metric_queues": ["walkability_score"],
+        "catalog_refreshed": False,
+        "catalog_refresh_error": "catalog refresh failed",
+    }
+    assert reset_calls == [None]
+    assert admin.list_plugin_routing().metric_queues == {}
 
 
 def test_plugin_repo_endpoints_manage_directory_source(
@@ -378,6 +445,7 @@ def test_refresh_plugin_catalog_uses_state_refresh_without_restarting_workers(
         catalog_fingerprint="new",
         catalog_changed=True,
         assigned_metric_queues=["walkability_score"],
+        removed_metric_queues=[],
     )
     restarted: list[float] = []
 
@@ -395,6 +463,7 @@ def test_refresh_plugin_catalog_uses_state_refresh_without_restarting_workers(
         "previous_catalog_fingerprint": "old",
         "catalog_fingerprint": "new",
         "assigned_metric_queues": ["walkability_score"],
+        "removed_metric_queues": [],
         "workers_restarted": False,
         "workers_restart_recommended": True,
         "message": (
@@ -415,6 +484,7 @@ def test_refresh_plugin_catalog_does_not_recommend_restart_when_unchanged(
         catalog_fingerprint="same",
         catalog_changed=False,
         assigned_metric_queues=[],
+        removed_metric_queues=[],
     )
     monkeypatch.setattr(admin, "refresh_catalog_from_state", lambda _store: result)
 
@@ -613,7 +683,20 @@ def test_refresh_plugin_catalog_reports_directory_sync_failures(
 
 def test_plugin_routing_endpoints_manage_state(
     admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    store = admin._state_store()  # noqa: SLF001
+    store.add_repo("owner/example-plugin", repo_id="example")
+    monkeypatch.setattr(
+        admin,
+        "get_metric_entry",
+        lambda metric_name: (
+            SimpleNamespace(repo_id="example")
+            if metric_name == "walkability_score"
+            else None
+        ),
+    )
+
     initial = admin.list_plugin_routing()
     created = admin.set_plugin_routing(
         "walkability_score",
@@ -646,6 +729,22 @@ def test_plugin_routing_endpoints_manage_state(
         "deleted": False,
         "metric_name": "walkability_score",
     }
+
+
+def test_plugin_routing_rejects_unknown_metric(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admin, "get_metric_entry", lambda _metric_name: None)
+
+    missing = _assert_http_error(
+        404,
+        admin.set_plugin_routing,
+        "missing_metric",
+        admin.SetMetricQueueRequest(queue="batch"),
+    )
+
+    assert "Metric 'missing_metric' not found" in str(missing.detail)
 
 
 def test_admin_openapi_exposes_new_paths_without_old_update_route() -> None:

@@ -341,10 +341,13 @@ def test_runner_loads_repo_and_routing_from_plugin_state(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: Any,
 ) -> None:
-    plugin_state_store(tmp_path, get_config()).add_repo(
+    store = plugin_state_store(tmp_path, get_config())
+    store.delete_repo("owner__repo")
+    store.add_repo(
         "owner/runner-plugin@main",
         repo_id="runner-plugin",
     )
+    store.set_metric_queue("heavy_metric", "heavy", repo_id="runner-plugin")
     repo = tmp_path / "repo"
     _write_manifest(
         repo,
@@ -408,10 +411,13 @@ def test_runner_loads_directory_source_from_copied_snapshot(
             ]
         ),
     )
-    plugin_state_store(tmp_path, get_config()).add_repo(
+    store = plugin_state_store(tmp_path, get_config())
+    store.delete_repo("owner__repo")
+    store.add_repo(
         f"dir://{source}",
         repo_id="directory-plugin",
     )
+    store.set_metric_queue("heavy_metric", "heavy", repo_id="directory-plugin")
     installed: list[SyncedPluginRepo] = []
 
     def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:

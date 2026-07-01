@@ -155,7 +155,13 @@ class FakeActionClient:
 
     async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
         self.deleted_repos.append(repo_id)
-        return DeletePluginRepoResponse(deleted=True, repo_id=repo_id)
+        return DeletePluginRepoResponse(
+            deleted=True,
+            repo_id=repo_id,
+            removed_metric_queues=["metric_a"],
+            catalog_refreshed=True,
+            catalog_refresh_error=None,
+        )
 
     async def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
         self.synced_repos.append(repo_id)
@@ -173,6 +179,7 @@ class FakeActionClient:
             previous_catalog_fingerprint="old",
             catalog_fingerprint="new",
             assigned_metric_queues=[],
+            removed_metric_queues=[],
             workers_restarted=False,
             workers_restart_recommended=True,
             message="Catalog refreshed.",

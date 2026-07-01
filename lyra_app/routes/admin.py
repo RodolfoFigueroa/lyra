@@ -242,25 +242,74 @@ def _plugin_source_summary(repo: PluginRepoRecord) -> PluginSourceSummary:
 
 def _task_summaries(
     section: dict[str, list[dict[str, Any]]] | None,
+    config: LyraConfig,
     worker_name: str,
 ) -> list[WorkerTaskSummary]:
     if section is None:
         return []
-    return [
-        WorkerTaskSummary.model_validate(
-            safe_task_summary(task, worker_name=worker_name)
+    summaries: list[WorkerTaskSummary] = []
+    for observed_worker_name, tasks in sorted(section.items()):
+        if _response_worker_name(config, observed_worker_name) != worker_name:
+            continue
+        summaries.extend(
+            WorkerTaskSummary.model_validate(
+                safe_task_summary(task, worker_name=worker_name)
+            )
+            for task in tasks
         )
-        for task in section.get(worker_name, [])
-    ]
+    return summaries
 
 
 def _task_count(
     section: dict[str, list[dict[str, Any]]] | None,
+    config: LyraConfig,
     worker_name: str,
 ) -> int | None:
     if section is None:
         return None
-    return len(section.get(worker_name, []))
+    return sum(
+        len(tasks)
+        for observed_worker_name, tasks in section.items()
+        if _response_worker_name(config, observed_worker_name) == worker_name
+    )
+
+
+def _response_worker_name(config: LyraConfig, observed_worker_name: str) -> str:
+    if observed_worker_name in config.workers:
+        return observed_worker_name
+    pool_name, separator, _ = observed_worker_name.partition("@")
+    if separator and pool_name in config.workers:
+        return pool_name
+    return observed_worker_name
+
+
+def _observed_worker_names(
+    config: LyraConfig,
+    snapshot: WorkerInspectSnapshot,
+) -> set[str]:
+    return {
+        _response_worker_name(config, observed_worker_name)
+        for observed_worker_name in snapshot.observed_worker_names
+    }
+
+
+def _worker_stats(
+    config: LyraConfig,
+    snapshot: WorkerInspectSnapshot,
+    worker_name: str,
+) -> dict[str, Any] | None:
+    if snapshot.stats is None:
+        return None
+    matching_stats = {
+        observed_worker_name: stats
+        for observed_worker_name, stats in snapshot.stats.items()
+        if _response_worker_name(config, observed_worker_name) == worker_name
+    }
+    if not matching_stats:
+        return None
+    if len(matching_stats) == 1:
+        return next(iter(matching_stats.values()))
+    return {"nodes": dict(sorted(matching_stats.items()))}
 
 
 def _worker_queues(
@@ -272,7 +321,9 @@ def _worker_queues(
     if worker_name in config.workers:
         queues.update(config.get_worker(worker_name).queues)
     if snapshot.active_queues is not None:
-        queues.update(snapshot.active_queues.get(worker_name, []))
+        for observed_worker_name, worker_queues in snapshot.active_queues.items():
+            if _response_worker_name(config, observed_worker_name) == worker_name:
+                queues.update(worker_queues)
     return sorted(queues)
 
 
@@ -282,7 +333,7 @@ def _worker_summary(
     worker_name: str,
 ) -> WorkerSummary:
     configured = worker_name in config.workers
-    observed = worker_name in snapshot.observed_worker_names
+    observed = worker_name in _observed_worker_names(config, snapshot)
     status = (
         "unknown"
         if not snapshot.inspect_available
@@ -296,9 +347,9 @@ def _worker_summary(
         observed=observed,
         status=status,
         queues=_worker_queues(config, snapshot, worker_name),
-        active_count=_task_count(snapshot.active, worker_name),
-        reserved_count=_task_count(snapshot.reserved, worker_name),
-        scheduled_count=_task_count(snapshot.scheduled, worker_name),
+        active_count=_task_count(snapshot.active, config, worker_name),
+        reserved_count=_task_count(snapshot.reserved, config, worker_name),
+        scheduled_count=_task_count(snapshot.scheduled, config, worker_name),
     )
 
 
@@ -310,15 +361,15 @@ def _worker_detail(
     summary = _worker_summary(config, snapshot, worker_name)
     return WorkerDetail(
         **summary.model_dump(mode="json"),
-        active_tasks=_task_summaries(snapshot.active, worker_name),
-        reserved_tasks=_task_summaries(snapshot.reserved, worker_name),
-        scheduled_tasks=_task_summaries(snapshot.scheduled, worker_name),
-        stats=(snapshot.stats or {}).get(worker_name),
+        active_tasks=_task_summaries(snapshot.active, config, worker_name),
+        reserved_tasks=_task_summaries(snapshot.reserved, config, worker_name),
+        scheduled_tasks=_task_summaries(snapshot.scheduled, config, worker_name),
+        stats=_worker_stats(config, snapshot, worker_name),
     )
 
 
 def _all_worker_names(config: LyraConfig, snapshot: WorkerInspectSnapshot) -> list[str]:
-    return sorted(set(config.workers) | snapshot.observed_worker_names)
+    return sorted(set(config.workers) | _observed_worker_names(config, snapshot))
 
 
 @router.get("/plugin-repos")
@@ -510,19 +561,20 @@ def list_queues() -> QueuesResponse:
     for queue in state.metric_queues.values():
         metric_counts[queue] = metric_counts.get(queue, 0) + 1
 
-    configured_consumers: dict[str, list[str]] = {
-        queue: [] for queue in config.plugins.allowed_queues
+    configured_consumers: dict[str, set[str]] = {
+        queue: set() for queue in config.plugins.allowed_queues
     }
     for worker_name, worker in config.workers.items():
         for queue in worker.queues:
-            configured_consumers.setdefault(queue, []).append(worker_name)
+            configured_consumers.setdefault(queue, set()).add(worker_name)
 
-    observed_consumers: dict[str, list[str]] = {
-        queue: [] for queue in config.plugins.allowed_queues
+    observed_consumers: dict[str, set[str]] = {
+        queue: set() for queue in config.plugins.allowed_queues
     }
-    for worker_name, queues in (snapshot.active_queues or {}).items():
+    for observed_worker_name, queues in (snapshot.active_queues or {}).items():
+        worker_name = _response_worker_name(config, observed_worker_name)
         for queue in queues:
-            observed_consumers.setdefault(queue, []).append(worker_name)
+            observed_consumers.setdefault(queue, set()).add(worker_name)
 
     return QueuesResponse(
         allowed_queues=config.plugins.allowed_queues,

@@ -15,6 +15,8 @@ def build_celery_worker_args(config: LyraConfig, worker_name: str) -> list[str]:
     worker = config.get_worker(worker_name)
     return [
         "worker",
+        "--hostname",
+        f"{worker_name}@%h",
         "--loglevel",
         config.logging.level,
         "--concurrency",

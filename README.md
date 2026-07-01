@@ -11,6 +11,7 @@ The written project docs are published with Astro Starlight:
 - Develop Lyra: https://rodolfofigueroa.github.io/lyra/contributor-guide/
 - Build a plugin: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
 - Use the API: https://rodolfofigueroa.github.io/lyra/job-api/
+- Run the operator TUI: https://rodolfofigueroa.github.io/lyra/tui/
 
 When the API server is running, FastAPI also exposes generated OpenAPI references:
 
@@ -57,6 +58,15 @@ Run the development Compose stack:
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
+
+After the API is running, open the operator TUI in another terminal:
+
+```bash
+LYRA_ADMIN_API_KEY=... uv run lyra-tui --host localhost:5219 --no-secure
+```
+
+The TUI connects to the running API; it does not start Redis, the API, or
+workers itself. Without an admin key it can show public health only.
 
 For direct local processes, start Redis, then launch a configured worker and the
 API:

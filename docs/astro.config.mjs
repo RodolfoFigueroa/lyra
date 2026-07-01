@@ -136,6 +136,7 @@ export default defineConfig({
           items: [
             { label: 'Deployment', slug: 'deployment' },
             { label: 'Operations', slug: 'operations' },
+            { label: 'TUI', slug: 'tui' },
             { label: 'Reference', slug: 'reference' },
             { label: 'Docs Versions', slug: 'docs-versions' },
           ],

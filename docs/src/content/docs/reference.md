@@ -80,6 +80,12 @@ Start the API from TOML:
 uv run python -m lyra_app.main
 ```
 
+Run the terminal operator console against the default local API:
+
+```bash
+uv run lyra-tui --host localhost:5219 --no-secure
+```
+
 Build docs locally:
 
 ```bash

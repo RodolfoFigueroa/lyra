@@ -72,6 +72,19 @@ plus read-only file mounts for `lyra.toml` and the service-account JSON. Copy
 `.env.example` to `.env`, point the mount variables at your local files, and
 set the Postgres/admin values.
 
+## Terminal UI
+
+After the API is running, launch the operator TUI from the workspace:
+
+```bash
+LYRA_ADMIN_API_KEY=... uv run lyra-tui --host localhost:5219 --no-secure
+```
+
+The TUI connects to the running API and does not start Redis, the API, or
+workers. Without `LYRA_ADMIN_API_KEY`, it can show public health only; admin
+views and mutating actions require Bearer auth. See the [TUI guide](../tui/)
+for options and troubleshooting.
+
 ## Plugin Catalog During Development
 
 Configure plugin repositories through the admin API:

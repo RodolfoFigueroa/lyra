@@ -22,6 +22,7 @@ members = ["packages/*"]
 lyra-sdk = { workspace = true }
 lyra-utils = { workspace = true }
 lyra-api = { workspace = true }
+lyra-tui = { workspace = true }
 
 [tool.ruff]
 extend-exclude = ["packages/lyra_sdk/src/lyra/sdk/db.py"]
@@ -37,6 +38,7 @@ dev = [
     "griffe>=2.1.0",
     "ipykernel<7",
     "lyra-api",
+    "lyra-tui",
     "pandas-stubs>=3.0.0.260204",
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",

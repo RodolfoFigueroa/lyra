@@ -212,6 +212,24 @@ def get_catalog_fingerprint() -> str:
     return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
 
 
+def get_loaded_catalog_fingerprint() -> str:
+    return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
+
+
+def is_catalog_loaded() -> bool:
+    return _CATALOG_LOADED
+
+
+def get_loaded_metric_names() -> list[str]:
+    return sorted(TASK_REGISTRY)
+
+
+def get_loaded_metric_queues() -> dict[str, str]:
+    return {
+        metric_name: entry.queue for metric_name, entry in sorted(TASK_REGISTRY.items())
+    }
+
+
 def get_metric_entry(name: str) -> MetricRegistryEntry | None:
     ensure_catalog_loaded()
     return TASK_REGISTRY.get(name)

@@ -1,15 +1,27 @@
 import hmac
 import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lyra.sdk.models import (
+    AdminStatusResponse,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
     JobCancelResponse,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    PluginSourceSummary,
+    QueuesResponse,
+    QueueSummary,
+    RedisHealth,
+    WorkerConfigSummary,
+    WorkerDetail,
+    WorkersResponse,
+    WorkerSummary,
+    WorkerTaskSummary,
 )
 from pydantic import BaseModel, ConfigDict
 from redis.exceptions import RedisError
@@ -24,6 +36,7 @@ from lyra_app.plugin_state import (
     PluginStateNotFoundError,
     PluginStateStore,
     PluginStateValidationError,
+    normalize_repo_source,
     repo_record_to_source,
 )
 from lyra_app.plugins import (
@@ -33,8 +46,21 @@ from lyra_app.plugins import (
 from lyra_app.plugins import (
     sync_plugin_repo as sync_plugin_source,
 )
-from lyra_app.registry import CatalogRefreshResult, refresh_catalog_from_state
-from lyra_app.worker_control import graceful_worker_restart, revoke_job
+from lyra_app.registry import (
+    CatalogRefreshResult,
+    get_loaded_catalog_fingerprint,
+    get_loaded_metric_names,
+    get_loaded_metric_queues,
+    refresh_catalog_from_state,
+)
+from lyra_app.version import APP_VERSION
+from lyra_app.worker_control import (
+    WorkerInspectSnapshot,
+    graceful_worker_restart,
+    inspect_workers,
+    revoke_job,
+    safe_task_summary,
+)
 
 _bearer = HTTPBearer()
 
@@ -212,6 +238,14 @@ def _redis_unavailable_error() -> HTTPException:
     )
 
 
+def _redis_health() -> RedisHealth:
+    try:
+        pong = job_store.redis_client_sync.ping()
+    except RedisError:
+        return RedisHealth(status="unavailable")
+    return RedisHealth(status="ok" if pong else "unavailable")
+
+
 def _sync_error_detail(exc: PluginSyncError | subprocess.CalledProcessError) -> str:
     if isinstance(exc, PluginSyncError):
         return str(exc)
@@ -245,6 +279,109 @@ def _catalog_refresh_response(
             workers_restarting=False,
         ),
     )
+
+
+def _worker_config_summary(config: LyraConfig, worker_name: str) -> WorkerConfigSummary:
+    worker = config.get_worker(worker_name)
+    return WorkerConfigSummary(
+        name=worker_name,
+        queues=worker.queues,
+        concurrency=worker.concurrency,
+        install_dir=str(config.worker_install_dir(worker_name)),
+        temp_dir=str(config.worker_temp_dir(worker_name)),
+    )
+
+
+def _plugin_source_summary(repo: PluginRepoRecord) -> PluginSourceSummary:
+    normalized = normalize_repo_source(repo.source)
+    return PluginSourceSummary(
+        id=repo.id,
+        source=repo.source,
+        source_kind=normalized.source_kind,
+        ref=repo.ref,
+        enabled=repo.enabled,
+    )
+
+
+def _task_summaries(
+    section: dict[str, list[dict[str, Any]]] | None,
+    worker_name: str,
+) -> list[WorkerTaskSummary]:
+    if section is None:
+        return []
+    return [
+        WorkerTaskSummary.model_validate(
+            safe_task_summary(task, worker_name=worker_name)
+        )
+        for task in section.get(worker_name, [])
+    ]
+
+
+def _task_count(
+    section: dict[str, list[dict[str, Any]]] | None,
+    worker_name: str,
+) -> int | None:
+    if section is None:
+        return None
+    return len(section.get(worker_name, []))
+
+
+def _worker_queues(
+    config: LyraConfig,
+    snapshot: WorkerInspectSnapshot,
+    worker_name: str,
+) -> list[str]:
+    queues: set[str] = set()
+    if worker_name in config.workers:
+        queues.update(config.get_worker(worker_name).queues)
+    if snapshot.active_queues is not None:
+        queues.update(snapshot.active_queues.get(worker_name, []))
+    return sorted(queues)
+
+
+def _worker_summary(
+    config: LyraConfig,
+    snapshot: WorkerInspectSnapshot,
+    worker_name: str,
+) -> WorkerSummary:
+    configured = worker_name in config.workers
+    observed = worker_name in snapshot.observed_worker_names
+    status = (
+        "unknown"
+        if not snapshot.inspect_available
+        else "online"
+        if observed
+        else "offline"
+    )
+    return WorkerSummary(
+        name=worker_name,
+        configured=configured,
+        observed=observed,
+        status=status,
+        queues=_worker_queues(config, snapshot, worker_name),
+        active_count=_task_count(snapshot.active, worker_name),
+        reserved_count=_task_count(snapshot.reserved, worker_name),
+        scheduled_count=_task_count(snapshot.scheduled, worker_name),
+    )
+
+
+def _worker_detail(
+    config: LyraConfig,
+    snapshot: WorkerInspectSnapshot,
+    worker_name: str,
+) -> WorkerDetail:
+    summary = _worker_summary(config, snapshot, worker_name)
+    return WorkerDetail(
+        **summary.model_dump(mode="json"),
+        active_tasks=_task_summaries(snapshot.active, worker_name),
+        reserved_tasks=_task_summaries(snapshot.reserved, worker_name),
+        scheduled_tasks=_task_summaries(snapshot.scheduled, worker_name),
+        stats=(snapshot.stats or {}).get(worker_name),
+    )
+
+
+def _all_worker_names(config: LyraConfig, snapshot: WorkerInspectSnapshot) -> list[str]:
+    return sorted(set(config.workers) | snapshot.observed_worker_names)
 
 
 @router.get("/plugin-repos")
@@ -349,6 +486,123 @@ def refresh_plugin_catalog() -> PluginCatalogRefreshResponse:
             detail=f"Plugin state could not be used: {exc}",
         ) from exc
     return _catalog_refresh_response(result)
+
+
+@router.get("/status")
+def get_status() -> AdminStatusResponse:
+    config = _load_config()
+    return AdminStatusResponse(
+        api_version=APP_VERSION,
+        redis=_redis_health(),
+        metric_count=len(get_loaded_metric_names()),
+        allowed_queues=config.plugins.allowed_queues,
+        default_queue=config.plugins.default_queue,
+        configured_worker_count=len(config.workers),
+        job_store_ttl_seconds=config.job_store.ttl_seconds,
+        catalog_fingerprint=get_loaded_catalog_fingerprint(),
+    )
+
+
+@router.get("/config-summary")
+def get_config_summary() -> ConfigSummaryResponse:
+    config = _load_config()
+    return ConfigSummaryResponse(
+        api_host=config.api.host,
+        api_port=config.api.port,
+        allowed_queues=config.plugins.allowed_queues,
+        default_queue=config.plugins.default_queue,
+        workers=[
+            _worker_config_summary(config, worker_name)
+            for worker_name in sorted(config.workers)
+        ],
+        job_store_ttl_seconds=config.job_store.ttl_seconds,
+        plugin_catalog_dir=str(config.plugins.catalog_dir),
+        plugin_state_path=str(get_plugin_state_path()),
+        plugin_runner_base_dir=str(config.plugins.runner_base_dir),
+    )
+
+
+@router.get("/catalog")
+def get_catalog() -> CatalogSummaryResponse:
+    config = _load_config()
+    store = _state_store(config)
+    state = _load_state(store)
+    metric_names = get_loaded_metric_names()
+    return CatalogSummaryResponse(
+        metric_count=len(metric_names),
+        metric_names=metric_names,
+        catalog_fingerprint=get_loaded_catalog_fingerprint(),
+        plugin_sources=[_plugin_source_summary(repo) for repo in state.repos],
+        metric_queues=get_loaded_metric_queues()
+        or dict(sorted(state.metric_queues.items())),
+    )
+
+
+@router.get("/workers")
+def list_workers() -> WorkersResponse:
+    config = _load_config()
+    snapshot = inspect_workers()
+    return WorkersResponse(
+        inspect_available=snapshot.inspect_available,
+        workers=[
+            _worker_summary(config, snapshot, worker_name)
+            for worker_name in _all_worker_names(config, snapshot)
+        ],
+    )
+
+
+@router.get("/workers/{worker_name}")
+def get_worker(worker_name: str) -> WorkerDetail:
+    config = _load_config()
+    snapshot = inspect_workers()
+    if (
+        worker_name not in config.workers
+        and worker_name not in snapshot.observed_worker_names
+    ):
+        raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_name}")
+    return _worker_detail(config, snapshot, worker_name)
+
+
+@router.get("/queues")
+def list_queues() -> QueuesResponse:
+    config = _load_config()
+    store = _state_store(config)
+    state = _load_state(store)
+    snapshot = inspect_workers()
+    metric_counts = dict.fromkeys(config.plugins.allowed_queues, 0)
+    for queue in state.metric_queues.values():
+        metric_counts[queue] = metric_counts.get(queue, 0) + 1
+
+    configured_consumers: dict[str, list[str]] = {
+        queue: [] for queue in config.plugins.allowed_queues
+    }
+    for worker_name, worker in config.workers.items():
+        for queue in worker.queues:
+            configured_consumers.setdefault(queue, []).append(worker_name)
+
+    observed_consumers: dict[str, list[str]] = {
+        queue: [] for queue in config.plugins.allowed_queues
+    }
+    for worker_name, queues in (snapshot.active_queues or {}).items():
+        for queue in queues:
+            observed_consumers.setdefault(queue, []).append(worker_name)
+
+    return QueuesResponse(
+        allowed_queues=config.plugins.allowed_queues,
+        default_queue=config.plugins.default_queue,
+        queues=[
+            QueueSummary(
+                name=queue,
+                is_default=queue == config.plugins.default_queue,
+                assigned_metric_count=metric_counts.get(queue, 0),
+                configured_workers=sorted(configured_consumers.get(queue, [])),
+                observed_workers=sorted(observed_consumers.get(queue, [])),
+                pending_depth=None,
+                pending_depth_unknown=True,
+            )
+            for queue in config.plugins.allowed_queues
+        ],
+    )
 
 
 @router.post("/workers/restart")

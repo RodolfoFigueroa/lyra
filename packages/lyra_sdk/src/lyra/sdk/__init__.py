@@ -1,9 +1,13 @@
 from lyra.sdk.context import RunContext
 from lyra.sdk.db import LyraDB
 from lyra.sdk.models import (
+    AdminStatusResponse,
     CancelledJobResult,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
     FailedJobResult,
     FileJobResult,
+    HealthResponse,
     JobCancelResponse,
     JobCreateRequest,
     JobCreateResponse,
@@ -12,15 +16,22 @@ from lyra.sdk.models import (
     JobLinks,
     JobListResponse,
     JobStatusInfo,
+    QueuesResponse,
     TableJobResult,
     TerminalJobResult,
+    WorkerDetail,
+    WorkersResponse,
     parse_job_result,
 )
 
 __all__ = [
+    "AdminStatusResponse",
     "CancelledJobResult",
+    "CatalogSummaryResponse",
+    "ConfigSummaryResponse",
     "FailedJobResult",
     "FileJobResult",
+    "HealthResponse",
     "JobCancelResponse",
     "JobCreateRequest",
     "JobCreateResponse",
@@ -30,8 +41,11 @@ __all__ = [
     "JobListResponse",
     "JobStatusInfo",
     "LyraDB",
+    "QueuesResponse",
     "RunContext",
     "TableJobResult",
     "TerminalJobResult",
+    "WorkerDetail",
+    "WorkersResponse",
     "parse_job_result",
 ]

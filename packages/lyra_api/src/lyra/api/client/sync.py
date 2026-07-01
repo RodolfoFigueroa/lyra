@@ -8,16 +8,23 @@ import requests
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
+    AdminStatusResponse,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
     DataTypesResponse,
     FileJobResult,
+    HealthResponse,
     JobCancelResponse,
     JobCreateResponse,
     JobEvent,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    QueuesResponse,
     TableJobResult,
     TerminalJobResult,
+    WorkerDetail,
+    WorkersResponse,
     parse_job_result,
 )
 from lyra.sdk.models.metric import MetricInfoV3
@@ -50,6 +57,24 @@ def _iter_sse_job_events(lines: Iterable[str | bytes]) -> Iterator[JobEvent]:
 
 class LyraAPIClient(_BaseLyraAPIClient):
     """Synchronous client for the Lyra HTTP job API."""
+
+    def get_health(self) -> HealthResponse:
+        try:
+            response = requests.get(
+                self._http_url("health"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Health request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch health. HTTP {response.status_code}: {response.text}"
+            )
+            raise DownloadError(err)
+        return HealthResponse.model_validate(response.json())
 
     def create_job(
         self,
@@ -143,6 +168,120 @@ class LyraAPIClient(_BaseLyraAPIClient):
             )
             raise DownloadError(err)
         return JobCancelResponse.model_validate(response.json())
+
+    def get_admin_status(self) -> AdminStatusResponse:
+        try:
+            response = requests.get(
+                self._http_url("admin/status"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin status request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch admin status. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return AdminStatusResponse.model_validate(response.json())
+
+    def get_admin_config_summary(self) -> ConfigSummaryResponse:
+        try:
+            response = requests.get(
+                self._http_url("admin/config-summary"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin config summary request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                "Failed to fetch admin config summary. "
+                f"HTTP {response.status_code}: {response.text}"
+            )
+            raise DownloadError(err)
+        return ConfigSummaryResponse.model_validate(response.json())
+
+    def get_admin_catalog(self) -> CatalogSummaryResponse:
+        try:
+            response = requests.get(
+                self._http_url("admin/catalog"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin catalog request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch admin catalog. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return CatalogSummaryResponse.model_validate(response.json())
+
+    def get_admin_workers(self) -> WorkersResponse:
+        try:
+            response = requests.get(
+                self._http_url("admin/workers"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin workers request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch admin workers. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return WorkersResponse.model_validate(response.json())
+
+    def get_admin_worker(self, worker_name: str) -> WorkerDetail:
+        try:
+            response = requests.get(
+                self._http_url(f"admin/workers/{worker_name}"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin worker request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch admin worker. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return WorkerDetail.model_validate(response.json())
+
+    def get_admin_queues(self) -> QueuesResponse:
+        try:
+            response = requests.get(
+                self._http_url("admin/queues"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Admin queues request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = (
+                f"Failed to fetch admin queues. HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+            raise DownloadError(err)
+        return QueuesResponse.model_validate(response.json())
 
     def iter_job_events(
         self,

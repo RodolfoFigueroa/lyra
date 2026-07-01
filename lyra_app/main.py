@@ -10,6 +10,7 @@ from lyra_app.celery_app import configure_celery
 from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
+from lyra_app.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +42,15 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     from lyra_app.routes import (  # noqa: PLC0415
         admin,
         data_types,
+        health,
         jobs,
         met_zone,
         metrics,
     )
 
-    app = FastAPI(title="Lyra API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Lyra API", version=APP_VERSION, lifespan=lifespan)
     app.include_router(admin.router)
+    app.include_router(health.router)
     app.include_router(jobs.router)
     app.include_router(data_types.router)
     app.include_router(metrics.router)

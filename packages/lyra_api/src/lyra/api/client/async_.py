@@ -9,16 +9,23 @@ import aiohttp
 from lyra.api.client.base import _BaseLyraAPIClient
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
+    AdminStatusResponse,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
     DataTypesResponse,
     FileJobResult,
+    HealthResponse,
     JobCancelResponse,
     JobCreateResponse,
     JobEvent,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    QueuesResponse,
     TableJobResult,
     TerminalJobResult,
+    WorkerDetail,
+    WorkersResponse,
     parse_job_result,
 )
 from lyra.sdk.models.metric import MetricInfoV3
@@ -55,6 +62,25 @@ async def _response_lines(response: aiohttp.ClientResponse) -> AsyncIterator[str
 
 class AsyncLyraAPIClient(_BaseLyraAPIClient):
     """Asynchronous client for the Lyra HTTP job API."""
+
+    async def get_health(self) -> HealthResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("health"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to fetch health. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return HealthResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Health request error: {exc}"
+            raise DownloadError(err) from exc
 
     async def create_job(
         self,
@@ -153,6 +179,133 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 return JobCancelResponse.model_validate(await response.json())
         except aiohttp.ClientError as exc:
             err = f"Admin job cancellation error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_admin_status(self) -> AdminStatusResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("admin/status"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        f"Failed to fetch admin status. HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
+                return AdminStatusResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin status request error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_admin_config_summary(self) -> ConfigSummaryResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("admin/config-summary"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        "Failed to fetch admin config summary. "
+                        f"HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
+                return ConfigSummaryResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin config summary request error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_admin_catalog(self) -> CatalogSummaryResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("admin/catalog"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        f"Failed to fetch admin catalog. HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
+                return CatalogSummaryResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin catalog request error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_admin_workers(self) -> WorkersResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("admin/workers"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        f"Failed to fetch admin workers. HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
+                return WorkersResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin workers request error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_admin_worker(self, worker_name: str) -> WorkerDetail:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url(f"admin/workers/{worker_name}"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        f"Failed to fetch admin worker. HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
+                return WorkerDetail.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin worker request error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_admin_queues(self) -> QueuesResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("admin/queues"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = (
+                        f"Failed to fetch admin queues. HTTP {response.status}: {text}"
+                    )
+                    raise DownloadError(err)
+                return QueuesResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Admin queues request error: {exc}"
             raise DownloadError(err) from exc
 
     async def iter_job_events(

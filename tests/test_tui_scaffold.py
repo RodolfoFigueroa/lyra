@@ -1,7 +1,9 @@
+import asyncio
+
 import pytest
 from lyra.tui import LyraTuiApp, TuiConfig
 from lyra.tui.__main__ import build_parser, config_from_args, main
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Header, TabbedContent
 
 
 def test_parser_defaults_to_local_http(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -56,13 +58,12 @@ def test_help_exits_before_starting_app(capsys: pytest.CaptureFixture[str]) -> N
     assert "--no-secure" in output
 
 
-def test_app_composes_placeholder_shell() -> None:
-    app = LyraTuiApp(TuiConfig(admin_api_key="secret"))
+def test_app_composes_tabbed_shell() -> None:
+    async def run() -> None:
+        app = LyraTuiApp(TuiConfig(admin_api_key="secret"), poll_on_mount=False)
+        async with app.run_test():
+            assert app.query_one(Header) is not None
+            assert app.query_one(TabbedContent) is not None
+            assert app.query_one(Footer) is not None
 
-    widgets = list(app.compose())
-
-    assert isinstance(widgets[0], Header)
-    assert isinstance(widgets[2], Static)
-    assert isinstance(widgets[3], Footer)
-    assert "localhost:5219" in app.placeholder_text
-    assert "admin key configured" in app.placeholder_text
+    asyncio.run(run())

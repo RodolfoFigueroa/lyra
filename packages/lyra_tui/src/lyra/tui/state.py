@@ -20,7 +20,7 @@ if TYPE_CHECKING:
         QueuesResponse,
         WorkersResponse,
     )
-    from lyra.tui.client import LyraTuiClient
+    from lyra.tui.client import LyraTuiReadClient
 
 ErrorKind = Literal["auth", "connection", "api", "unexpected"]
 SnapshotPhase = Literal["idle", "loading", "ready", "partial", "error", "auth-required"]
@@ -74,7 +74,7 @@ class TuiSnapshot:
 
 @dataclass(slots=True)
 class LyraTuiState:
-    client: LyraTuiClient
+    client: LyraTuiReadClient
     has_admin_key: bool
     snapshot: TuiSnapshot = field(default_factory=TuiSnapshot)
 
@@ -87,7 +87,7 @@ class LyraTuiState:
 
 
 async def refresh_snapshot(
-    client: LyraTuiClient,
+    client: LyraTuiReadClient,
     *,
     has_admin_key: bool,
 ) -> TuiSnapshot:

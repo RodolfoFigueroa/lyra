@@ -9,17 +9,25 @@ if TYPE_CHECKING:
         AdminStatusResponse,
         CatalogSummaryResponse,
         ConfigSummaryResponse,
+        DeleteMetricQueueResponse,
+        DeletePluginRepoResponse,
         HealthResponse,
+        JobCancelResponse,
         JobListResponse,
+        MetricQueueAssignmentResponse,
+        PluginCatalogRefreshResponse,
         PluginRepoListResponse,
+        PluginRepoResponse,
         PluginRoutingResponse,
         QueuesResponse,
+        SyncPluginRepoResponse,
+        WorkerRestartResponse,
         WorkersResponse,
     )
     from lyra.tui.config import TuiConfig
 
 
-class LyraTuiClient(Protocol):
+class LyraTuiReadClient(Protocol):
     async def get_health(self) -> HealthResponse: ...
 
     async def get_admin_status(self) -> AdminStatusResponse: ...
@@ -37,6 +45,47 @@ class LyraTuiClient(Protocol):
     async def list_plugin_repos(self) -> PluginRepoListResponse: ...
 
     async def list_plugin_routing(self) -> PluginRoutingResponse: ...
+
+
+class LyraTuiClient(LyraTuiReadClient, Protocol):
+    async def cancel_admin_job(self, job_id: str) -> JobCancelResponse: ...
+
+    async def restart_workers(
+        self, *, restart_timeout: float = 30.0
+    ) -> WorkerRestartResponse: ...
+
+    async def create_plugin_repo(
+        self,
+        source: str,
+        *,
+        repo_id: str | None = None,
+        enabled: bool = True,
+    ) -> PluginRepoResponse: ...
+
+    async def update_plugin_repo(
+        self,
+        repo_id: str,
+        *,
+        source: str | None = None,
+        enabled: bool | None = None,
+    ) -> PluginRepoResponse: ...
+
+    async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse: ...
+
+    async def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse: ...
+
+    async def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse: ...
+
+    async def set_plugin_routing(
+        self,
+        metric_name: str,
+        queue: str,
+    ) -> MetricQueueAssignmentResponse: ...
+
+    async def delete_plugin_routing(
+        self,
+        metric_name: str,
+    ) -> DeleteMetricQueueResponse: ...
 
 
 class LyraApiClientAdapter:
@@ -76,3 +125,61 @@ class LyraApiClientAdapter:
 
     async def list_plugin_routing(self) -> PluginRoutingResponse:
         return await self._client.list_plugin_routing()
+
+    async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
+        return await self._client.cancel_admin_job(job_id)
+
+    async def restart_workers(
+        self,
+        *,
+        restart_timeout: float = 30.0,
+    ) -> WorkerRestartResponse:
+        return await self._client.restart_workers(timeout=restart_timeout)
+
+    async def create_plugin_repo(
+        self,
+        source: str,
+        *,
+        repo_id: str | None = None,
+        enabled: bool = True,
+    ) -> PluginRepoResponse:
+        return await self._client.create_plugin_repo(
+            source,
+            repo_id=repo_id,
+            enabled=enabled,
+        )
+
+    async def update_plugin_repo(
+        self,
+        repo_id: str,
+        *,
+        source: str | None = None,
+        enabled: bool | None = None,
+    ) -> PluginRepoResponse:
+        return await self._client.update_plugin_repo(
+            repo_id,
+            source=source,
+            enabled=enabled,
+        )
+
+    async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
+        return await self._client.delete_plugin_repo(repo_id)
+
+    async def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
+        return await self._client.sync_plugin_repo(repo_id)
+
+    async def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse:
+        return await self._client.refresh_plugin_catalog()
+
+    async def set_plugin_routing(
+        self,
+        metric_name: str,
+        queue: str,
+    ) -> MetricQueueAssignmentResponse:
+        return await self._client.set_plugin_routing(metric_name, queue)
+
+    async def delete_plugin_routing(
+        self,
+        metric_name: str,
+    ) -> DeleteMetricQueueResponse:
+        return await self._client.delete_plugin_routing(metric_name)

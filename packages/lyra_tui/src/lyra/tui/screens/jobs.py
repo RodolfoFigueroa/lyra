@@ -26,6 +26,7 @@ class JobsView(Vertical):
     def __init__(self, snapshot: TuiSnapshot | None = None) -> None:
         super().__init__()
         self.snapshot = snapshot or TuiSnapshot()
+        self._jobs: list[JobStatusInfo] = []
         self._ready = False
 
     def compose(self) -> ComposeResult:
@@ -44,18 +45,31 @@ class JobsView(Vertical):
         self.snapshot = snapshot
         if not self._ready:
             return
-        jobs = list(snapshot.jobs.jobs) if snapshot.jobs is not None else []
-        self.query_one("#jobs-summary", Static).update(f"{len(jobs)} recent jobs")
+        self._jobs = list(snapshot.jobs.jobs) if snapshot.jobs is not None else []
+        self.query_one("#jobs-summary", Static).update(f"{len(self._jobs)} recent jobs")
         self.query_one("#jobs-empty", EmptyState).set_message(
-            "No recent jobs." if snapshot.jobs is not None and not jobs else ""
+            "No recent jobs." if snapshot.jobs is not None and not self._jobs else ""
         )
         table = self.query_one("#jobs-table", DataTable)
         table.clear()
-        for job in jobs:
+        for job in self._jobs:
             table.add_row(*job_row(job), key=job.job_id)
         self.query_one("#jobs-detail", Static).update(
-            job_detail_text(jobs[0]) if jobs else "No job selected."
+            job_detail_text(self._jobs[0]) if self._jobs else "No job selected."
         )
+
+    def selected_job(self) -> JobStatusInfo | None:
+        if not self._jobs:
+            return None
+        table = self.query_one("#jobs-table", DataTable)
+        row_index = max(0, table.cursor_row)
+        if row_index >= len(self._jobs):
+            return self._jobs[0]
+        return self._jobs[row_index]
+
+
+def is_active_job_status(status: str) -> bool:
+    return status in {"queued", "started", "progress"}
 
 
 def job_row(job: JobStatusInfo) -> tuple[str, str, str, str, str]:

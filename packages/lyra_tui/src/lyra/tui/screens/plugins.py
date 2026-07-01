@@ -16,6 +16,8 @@ class PluginsView(Vertical):
     def __init__(self, snapshot: TuiSnapshot | None = None) -> None:
         super().__init__()
         self.snapshot = snapshot or TuiSnapshot()
+        self._repos: list[PluginRepoResponse] = []
+        self._routes: list[tuple[str, str]] = []
         self._ready = False
 
     def compose(self) -> ComposeResult:
@@ -50,17 +52,37 @@ class PluginsView(Vertical):
 
         repos = self.query_one("#plugins-table", DataTable)
         repos.clear()
+        self._repos = []
         if snapshot.plugin_repos is not None:
+            self._repos = list(snapshot.plugin_repos.repos)
             for repo in snapshot.plugin_repos.repos:
                 repos.add_row(*plugin_repo_row(repo), key=repo.id)
 
         routing = self.query_one("#routing-table", DataTable)
         routing.clear()
+        self._routes = []
         if snapshot.plugin_routing is not None:
-            for metric_name, queue in sorted(
-                snapshot.plugin_routing.metric_queues.items()
-            ):
+            self._routes = sorted(snapshot.plugin_routing.metric_queues.items())
+            for metric_name, queue in self._routes:
                 routing.add_row(*routing_row(metric_name, queue), key=metric_name)
+
+    def selected_repo(self) -> PluginRepoResponse | None:
+        if not self._repos:
+            return None
+        table = self.query_one("#plugins-table", DataTable)
+        row_index = max(0, table.cursor_row)
+        if row_index >= len(self._repos):
+            return self._repos[0]
+        return self._repos[row_index]
+
+    def selected_route(self) -> tuple[str, str] | None:
+        if not self._routes:
+            return None
+        table = self.query_one("#routing-table", DataTable)
+        row_index = max(0, table.cursor_row)
+        if row_index >= len(self._routes):
+            return self._routes[0]
+        return self._routes[row_index]
 
 
 def plugin_repo_row(repo: PluginRepoResponse) -> tuple[str, str, str, str]:

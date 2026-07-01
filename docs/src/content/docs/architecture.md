@@ -20,17 +20,17 @@ Redis is used for Celery transport and for job status, result, and event storage
 
 ## Catalog Flow
 
-1. `/lyra_data/state/plugins.toml` lists plugin sources: GitHub entries,
-   explicit `file://` local git repositories, or development `dir://` directory
-   snapshots.
+1. `/lyra_data/state/plugins.toml` lists plugin sources and repo-owned metric
+   queue assignments: GitHub entries, explicit `file://` local git repositories,
+   or development `dir://` directory snapshots.
 2. The API syncs enabled plugin sources into `plugins.catalog_dir`, usually
    `/lyra_data/plugins/catalog`.
 3. Each synced source must contain `lyra.plugin.json`.
 4. `lyra_app.registry` parses each manifest as `PluginManifestV3`.
 5. The registry compiles each metric's semantic `inputs` into an effective
    `request_schema`, spatial runtime metadata, and batch runtime metadata.
-6. Missing metric queue assignments are added to plugin state using
-   `plugins.default_queue`.
+6. Metric queue assignments are synced to plugin state by repo id: new metrics
+   use `plugins.default_queue`, and stale assignments are removed.
 7. `/metrics` exposes only `name`, `description`, the effective
    `request_schema`, and the `output` declaration.
 

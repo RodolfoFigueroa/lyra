@@ -83,7 +83,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 
 ## Agent Notes
 
-- Metrics are not built into the app. They come from plugin sources stored in `/lyra_data/state/plugins.toml` and managed through `/admin/plugin-repos`, including GitHub entries, explicit `file://` local git repositories, and development `dir://` directory snapshots.
+- Metrics are not built into the app. They come from plugin sources stored in `/lyra_data/state/plugins.toml` and managed through `/admin/plugin-repos`, including GitHub entries, explicit `file://` local git repositories, and development `dir://` directory snapshots. Metric queue assignments are stored with the repo that exposes each metric and are removed when that repo is deleted.
 - Use `/metrics` to discover metric names and JSON Schemas before submitting jobs.
 - Use the Python Client page for end-to-end `lyra-api` workflows, and the lyra-api page for constructor, method, and exception reference.
 - For spatial plugins, use the Spatial Plugin Inputs page. Every metric declares spatial fields in schema v3 `inputs`; the API validates wrapper payloads and resolves them to GeoJSON dictionaries before workers receive `JobEnvelope.input`.

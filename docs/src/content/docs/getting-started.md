@@ -166,7 +166,8 @@ curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
 ```
 
 Missing metric routes are added to `/lyra_data/state/plugins.toml` with
-`plugins.default_queue`. Review or change routes through `/admin/plugin-routing`.
+`plugins.default_queue` and the repo id that exposed the metric. Review or
+change routes through `/admin/plugin-routing`.
 
 If a worker starts before a new metric has an assignment, refresh the API
 catalog first and then restart the worker.

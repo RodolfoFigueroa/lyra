@@ -284,8 +284,8 @@ these models are also available for tests, clients, and manifest tooling:
 | `MetZoneCodeResponse` | Public `/lookups/met-zones` response. |
 | `PluginRepoListResponse` and `PluginRepoResponse` | Admin `/admin/plugin-repos` responses. |
 | `CreatePluginRepoRequest` and `UpdatePluginRepoRequest` | Admin plugin source request bodies. |
-| `DeletePluginRepoResponse` and `SyncPluginRepoResponse` | Admin plugin source operation responses. |
-| `PluginCatalogRefreshResponse` | Admin `/admin/plugin-catalog/refresh` response. |
+| `DeletePluginRepoResponse` and `SyncPluginRepoResponse` | Admin plugin source operation responses, including removed metric routes for deletes. |
+| `PluginCatalogRefreshResponse` | Admin `/admin/plugin-catalog/refresh` response, including assigned and removed metric routes. |
 | `WorkerRestartResponse` | Admin `/admin/workers/restart` response. |
 | `PluginRoutingResponse` | Admin `/admin/plugin-routing` response. |
 | `SetMetricQueueRequest`, `MetricQueueAssignmentResponse`, and `DeleteMetricQueueResponse` | Admin metric routing contracts. |

@@ -157,7 +157,8 @@ uv run python -m lyra_app.worker_launcher interactive
 
 Metric queues are assigned by Lyra-owned plugin state, not in
 `lyra.plugin.json` or `lyra.toml`. Missing routes use `plugins.default_queue`
-during catalog refresh. Use `/admin/plugin-routing` to inspect or change them.
+during catalog refresh and are tied to the repo that exposed the metric. Use
+`/admin/plugin-routing` to inspect or change them.
 
 Refresh the catalog after changing plugin code or manifests:
 

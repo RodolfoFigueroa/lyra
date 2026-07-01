@@ -115,7 +115,7 @@ npm run preview --prefix docs
 | `GET` | `/admin/plugin-repos` | List configured plugin repositories. |
 | `POST` | `/admin/plugin-repos` | Add a plugin repository to Lyra-owned state. |
 | `PATCH` | `/admin/plugin-repos/{repo_id}` | Update a plugin repository. |
-| `DELETE` | `/admin/plugin-repos/{repo_id}` | Remove a plugin repository from state. |
+| `DELETE` | `/admin/plugin-repos/{repo_id}` | Remove a plugin repository and its metric queue assignments from state. |
 | `POST` | `/admin/plugin-repos/{repo_id}/sync` | Sync one enabled plugin source. |
 | `POST` | `/admin/plugin-catalog/refresh` | Refresh plugin catalog repos and report whether workers need restart. |
 | `POST` | `/admin/workers/restart` | Restart worker pools explicitly. |

@@ -124,9 +124,10 @@ The API syncs catalog sources into `plugins.catalog_dir`. Workers sync and
 install runner sources under `plugins.runner_base_dir` or the selected
 worker's `install_dir`.
 
-Metric queues live in `/lyra_data/state/plugins.toml` and are managed through
-`/admin/plugin-routing`. Each worker pool imports and consumes the queues listed
-in its `[workers.<name>]` table.
+Metric queues live in `/lyra_data/state/plugins.toml`, are owned by the plugin
+repo that exposed each metric, and are managed through `/admin/plugin-routing`.
+Each worker pool imports and consumes the queues listed in its
+`[workers.<name>]` table.
 
 Refresh the catalog, then restart worker pools when the response recommends it:
 

@@ -114,9 +114,9 @@ header.
 | `list_plugin_repos()` | `PluginRepoListResponse` | List configured plugin sources. |
 | `create_plugin_repo(source, repo_id=None, enabled=True)` | `PluginRepoResponse` | Add a GitHub, `file://`, or `dir://` plugin source. |
 | `update_plugin_repo(repo_id, source=None, enabled=None)` | `PluginRepoResponse` | Update a plugin source or enabled flag. |
-| `delete_plugin_repo(repo_id)` | `DeletePluginRepoResponse` | Remove a plugin source from Lyra-owned state. |
+| `delete_plugin_repo(repo_id)` | `DeletePluginRepoResponse` | Remove a plugin source and its owned metric queue config from Lyra-owned state. |
 | `sync_plugin_repo(repo_id)` | `SyncPluginRepoResponse` | Sync one enabled plugin source. |
-| `refresh_plugin_catalog()` | `PluginCatalogRefreshResponse` | Sync enabled sources, reload API catalog metadata, and learn if workers should restart. |
+| `refresh_plugin_catalog()` | `PluginCatalogRefreshResponse` | Sync enabled sources, reload API catalog metadata, prune stale metric routes, and learn if workers should restart. |
 | `restart_workers(timeout=30.0)` | `WorkerRestartResponse` | Ask worker pools to restart after draining active work. |
 | `list_plugin_routing()` | `PluginRoutingResponse` | List metric-to-queue assignments. |
 | `set_plugin_routing(metric_name, queue)` | `MetricQueueAssignmentResponse` | Assign a metric to a queue. |

@@ -364,7 +364,8 @@ entrypoint cannot be imported, that worker registry will not load.
 
 Queue names are deployment-owned. Operators choose any queue names they want as
 long as each assignment in `/lyra_data/state/plugins.toml` appears in
-`plugins.allowed_queues`.
+`plugins.allowed_queues`. Each assignment is stored with the repo id that exposed
+the metric and is removed when that repo is deleted.
 
 Plugin authors do not declare queues in `lyra.plugin.json`. During API catalog
 refresh, newly discovered metrics without an assignment are added to Lyra-owned

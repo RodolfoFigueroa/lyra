@@ -75,6 +75,10 @@ class EmptyState(Static):
         self.message = message
         super().__init__(message, id=widget_id, classes=classes, disabled=disabled)
 
+    def set_message(self, message: str) -> None:
+        self.message = message
+        self.update(message)
+
 
 class ActionMessage(Static):
     def __init__(

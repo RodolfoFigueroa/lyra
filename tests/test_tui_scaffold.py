@@ -15,6 +15,7 @@ def test_parser_defaults_to_local_http(monkeypatch: pytest.MonkeyPatch) -> None:
         secure=False,
         admin_api_key=None,
         timeout=30.0,
+        refresh_interval=5.0,
     )
 
 
@@ -50,6 +51,7 @@ def test_help_exits_before_starting_app(capsys: pytest.CaptureFixture[str]) -> N
     assert "lyra-tui" in output
     assert "--host" in output
     assert "--admin-api-key" in output
+    assert "--refresh-interval" in output
     assert "--secure" in output
     assert "--no-secure" in output
 
@@ -60,7 +62,7 @@ def test_app_composes_placeholder_shell() -> None:
     widgets = list(app.compose())
 
     assert isinstance(widgets[0], Header)
-    assert isinstance(widgets[1], Static)
-    assert isinstance(widgets[2], Footer)
+    assert isinstance(widgets[2], Static)
+    assert isinstance(widgets[3], Footer)
     assert "localhost:5219" in app.placeholder_text
     assert "admin key configured" in app.placeholder_text

@@ -32,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="HTTP request timeout in seconds.",
     )
+    parser.add_argument(
+        "--refresh-interval",
+        type=float,
+        default=5.0,
+        help="Status refresh interval in seconds.",
+    )
     secure_group = parser.add_mutually_exclusive_group()
     secure_group.add_argument(
         "--secure",
@@ -55,6 +61,7 @@ def config_from_args(args: argparse.Namespace) -> TuiConfig:
         secure=args.secure,
         admin_api_key=args.admin_api_key or os.getenv("LYRA_ADMIN_API_KEY"),
         timeout=args.timeout,
+        refresh_interval=args.refresh_interval,
     )
 
 

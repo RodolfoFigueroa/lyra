@@ -14,6 +14,7 @@ _INTERRUPTED_TASK_MESSAGE = (
     "This task was interrupted because plugins were updated. Please retry."
 )
 DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS = 0.5
+WORKER_INSPECT_CACHE_TTL_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,15 @@ class WorkerInspectSnapshot:
             if section is not None:
                 names.update(section)
         return names
+
+
+@dataclass
+class _WorkerInspectCache:
+    snapshot: WorkerInspectSnapshot | None = None
+    observed_at: float | None = None
+
+
+_WORKER_INSPECT_CACHE = _WorkerInspectCache()
 
 
 def _inspect_call(inspector: Any, method_name: str) -> Any | None:
@@ -110,6 +120,30 @@ def inspect_workers() -> WorkerInspectSnapshot:
         stats=stats,
         active_queues=active_queues,
     )
+
+
+def clear_worker_inspect_snapshot_cache() -> None:
+    _WORKER_INSPECT_CACHE.snapshot = None
+    _WORKER_INSPECT_CACHE.observed_at = None
+
+
+def get_worker_inspect_snapshot(
+    *,
+    force_refresh: bool = False,
+) -> WorkerInspectSnapshot:
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _WORKER_INSPECT_CACHE.snapshot is not None
+        and _WORKER_INSPECT_CACHE.observed_at is not None
+        and now - _WORKER_INSPECT_CACHE.observed_at < WORKER_INSPECT_CACHE_TTL_SECONDS
+    ):
+        return _WORKER_INSPECT_CACHE.snapshot
+
+    snapshot = inspect_workers()
+    _WORKER_INSPECT_CACHE.snapshot = snapshot
+    _WORKER_INSPECT_CACHE.observed_at = time.monotonic()
+    return snapshot
 
 
 def safe_task_summary(task: dict[str, Any], *, worker_name: str) -> dict[str, Any]:

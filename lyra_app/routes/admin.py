@@ -67,8 +67,8 @@ from lyra_app.registry import (
 from lyra_app.version import APP_VERSION
 from lyra_app.worker_control import (
     WorkerInspectSnapshot,
+    get_worker_inspect_snapshot,
     graceful_worker_restart,
-    inspect_workers,
     revoke_job,
     safe_task_summary,
 )
@@ -478,7 +478,7 @@ def get_catalog() -> CatalogSummaryResponse:
 @router.get("/workers")
 def list_workers() -> WorkersResponse:
     config = _load_config()
-    snapshot = inspect_workers()
+    snapshot = get_worker_inspect_snapshot()
     return WorkersResponse(
         inspect_available=snapshot.inspect_available,
         workers=[
@@ -491,7 +491,7 @@ def list_workers() -> WorkersResponse:
 @router.get("/workers/{worker_name}")
 def get_worker(worker_name: str) -> WorkerDetail:
     config = _load_config()
-    snapshot = inspect_workers()
+    snapshot = get_worker_inspect_snapshot()
     if (
         worker_name not in config.workers
         and worker_name not in snapshot.observed_worker_names
@@ -505,7 +505,7 @@ def list_queues() -> QueuesResponse:
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
-    snapshot = inspect_workers()
+    snapshot = get_worker_inspect_snapshot()
     metric_counts = dict.fromkeys(config.plugins.allowed_queues, 0)
     for queue in state.metric_queues.values():
         metric_counts[queue] = metric_counts.get(queue, 0) + 1

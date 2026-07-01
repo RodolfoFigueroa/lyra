@@ -9,6 +9,7 @@ if TYPE_CHECKING:
         AdminStatusResponse,
         CatalogSummaryResponse,
         ConfigSummaryResponse,
+        CreatePluginRepoResponse,
         DeleteMetricQueueResponse,
         DeletePluginRepoResponse,
         HealthResponse,
@@ -17,10 +18,10 @@ if TYPE_CHECKING:
         MetricQueueAssignmentResponse,
         PluginCatalogRefreshResponse,
         PluginRepoListResponse,
-        PluginRepoResponse,
         PluginRoutingResponse,
         QueuesResponse,
         SyncPluginRepoResponse,
+        UpdatePluginRepoResponse,
         WorkerRestartResponse,
         WorkersResponse,
     )
@@ -60,7 +61,7 @@ class LyraTuiClient(LyraTuiReadClient, Protocol):
         *,
         repo_id: str | None = None,
         enabled: bool = True,
-    ) -> PluginRepoResponse: ...
+    ) -> CreatePluginRepoResponse: ...
 
     async def update_plugin_repo(
         self,
@@ -68,7 +69,7 @@ class LyraTuiClient(LyraTuiReadClient, Protocol):
         *,
         source: str | None = None,
         enabled: bool | None = None,
-    ) -> PluginRepoResponse: ...
+    ) -> UpdatePluginRepoResponse: ...
 
     async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse: ...
 
@@ -142,7 +143,7 @@ class LyraApiClientAdapter:
         *,
         repo_id: str | None = None,
         enabled: bool = True,
-    ) -> PluginRepoResponse:
+    ) -> CreatePluginRepoResponse:
         return await self._client.create_plugin_repo(
             source,
             repo_id=repo_id,
@@ -155,7 +156,7 @@ class LyraApiClientAdapter:
         *,
         source: str | None = None,
         enabled: bool | None = None,
-    ) -> PluginRepoResponse:
+    ) -> UpdatePluginRepoResponse:
         return await self._client.update_plugin_repo(
             repo_id,
             source=source,

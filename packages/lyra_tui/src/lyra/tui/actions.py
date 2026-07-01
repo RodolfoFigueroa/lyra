@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from lyra.sdk.models import PluginCatalogRefreshStatus
     from lyra.tui.client import LyraTuiClient
 
 
@@ -57,7 +58,10 @@ class ActionService:
             return _failure("Add plugin repo", exc)
         return ActionResult(
             succeeded=True,
-            message=f"Added plugin repo {response.id}.",
+            message=_with_catalog_refresh_status(
+                f"Added plugin repo {response.repo.id}.",
+                response.catalog_refresh,
+            ),
             refresh_after=True,
         )
 
@@ -71,10 +75,13 @@ class ActionService:
             response = await self.client.update_plugin_repo(repo_id, enabled=enabled)
         except Exception as exc:  # noqa: BLE001
             return _failure("Update plugin repo", exc)
-        state = "enabled" if response.enabled else "disabled"
+        state = "enabled" if response.repo.enabled else "disabled"
         return ActionResult(
             succeeded=True,
-            message=f"Plugin repo {response.id} {state}.",
+            message=_with_catalog_refresh_status(
+                f"Plugin repo {response.repo.id} {state}.",
+                response.catalog_refresh,
+            ),
             refresh_after=True,
         )
 
@@ -85,7 +92,10 @@ class ActionService:
             return _failure("Delete plugin repo", exc)
         return ActionResult(
             succeeded=response.deleted,
-            message=f"Deleted plugin repo {response.repo_id}.",
+            message=_with_catalog_refresh_status(
+                f"Deleted plugin repo {response.repo_id}.",
+                response.catalog_refresh,
+            ),
             refresh_after=response.deleted,
         )
 
@@ -97,7 +107,10 @@ class ActionService:
         changed = "changed" if response.changed else "unchanged"
         return ActionResult(
             succeeded=True,
-            message=f"Synced {response.display_name} ({changed}).",
+            message=_with_catalog_refresh_status(
+                f"Synced {response.display_name} ({changed}).",
+                response.catalog_refresh,
+            ),
             refresh_after=True,
         )
 
@@ -152,3 +165,13 @@ def _failure(operation: str, exc: Exception) -> ActionResult:
         succeeded=False,
         message=f"{operation} failed: {message}",
     )
+
+
+def _with_catalog_refresh_status(
+    message: str,
+    status: PluginCatalogRefreshStatus,
+) -> str:
+    if status.refreshed:
+        return message
+    error = status.error or "unknown error"
+    return f"{message} Catalog refresh failed: {error}"

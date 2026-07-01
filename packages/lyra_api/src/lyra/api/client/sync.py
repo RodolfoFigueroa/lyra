@@ -12,6 +12,7 @@ from lyra.sdk.models import (
     CatalogSummaryResponse,
     ConfigSummaryResponse,
     CreatePluginRepoRequest,
+    CreatePluginRepoResponse,
     DataTypesResponse,
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
@@ -27,7 +28,6 @@ from lyra.sdk.models import (
     MetZoneCodeResponse,
     PluginCatalogRefreshResponse,
     PluginRepoListResponse,
-    PluginRepoResponse,
     PluginRoutingResponse,
     QueuesResponse,
     SetMetricQueueRequest,
@@ -35,6 +35,7 @@ from lyra.sdk.models import (
     TableJobResult,
     TerminalJobResult,
     UpdatePluginRepoRequest,
+    UpdatePluginRepoResponse,
     WorkerDetail,
     WorkerRestartResponse,
     WorkersResponse,
@@ -239,7 +240,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
         *,
         repo_id: str | None = None,
         enabled: bool = True,
-    ) -> PluginRepoResponse:
+    ) -> CreatePluginRepoResponse:
         request = CreatePluginRepoRequest(
             source=source,
             id=repo_id,
@@ -248,7 +249,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
         return self._request_model(
             "POST",
             "admin/plugin-repos",
-            PluginRepoResponse,
+            CreatePluginRepoResponse,
             error_context="create plugin repo",
             json_body=request.model_dump(mode="json", exclude_none=True),
         )
@@ -259,12 +260,12 @@ class LyraAPIClient(_BaseLyraAPIClient):
         *,
         source: str | None = None,
         enabled: bool | None = None,
-    ) -> PluginRepoResponse:
+    ) -> UpdatePluginRepoResponse:
         request = UpdatePluginRepoRequest(source=source, enabled=enabled)
         return self._request_model(
             "PATCH",
             f"admin/plugin-repos/{repo_id}",
-            PluginRepoResponse,
+            UpdatePluginRepoResponse,
             error_context="update plugin repo",
             json_body=request.model_dump(mode="json", exclude_none=True),
         )

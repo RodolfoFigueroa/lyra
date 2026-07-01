@@ -11,6 +11,7 @@ from lyra.sdk.models import (
     CatalogSummaryResponse,
     ConfigSummaryResponse,
     CreatePluginRepoRequest,
+    CreatePluginRepoResponse,
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
     JobCancelResponse,
@@ -19,6 +20,7 @@ from lyra.sdk.models import (
     JobStatusInfo,
     MetricQueueAssignmentResponse,
     PluginCatalogRefreshResponse,
+    PluginCatalogRefreshStatus,
     PluginRepoListResponse,
     PluginRepoResponse,
     PluginRoutingResponse,
@@ -29,6 +31,7 @@ from lyra.sdk.models import (
     SetMetricQueueRequest,
     SyncPluginRepoResponse,
     UpdatePluginRepoRequest,
+    UpdatePluginRepoResponse,
     WorkerConfigSummary,
     WorkerDetail,
     WorkerInspectMetadata,
@@ -218,15 +221,62 @@ def _remove_repo_snapshot(config: LyraConfig, repo: PluginRepoRecord) -> None:
         )
 
 
-def _catalog_refresh_response(
-    result: CatalogRefreshResult,
-) -> PluginCatalogRefreshResponse:
-    restart_recommended = bool(
+def _catalog_restart_recommended(result: CatalogRefreshResult) -> bool:
+    return bool(
         result.updated_plugins
         or result.catalog_changed
         or result.assigned_metric_queues
         or result.removed_metric_queues
     )
+
+
+def _catalog_refresh_status_from_result(
+    result: CatalogRefreshResult,
+) -> PluginCatalogRefreshStatus:
+    return PluginCatalogRefreshStatus(
+        refreshed=True,
+        error=None,
+        catalog_changed=result.catalog_changed,
+        previous_catalog_fingerprint=result.previous_catalog_fingerprint,
+        catalog_fingerprint=result.catalog_fingerprint,
+        assigned_metric_queues=result.assigned_metric_queues,
+        removed_metric_queues=result.removed_metric_queues,
+        workers_restart_recommended=_catalog_restart_recommended(result),
+    )
+
+
+def _catalog_refresh_failure_status(exc: Exception) -> PluginCatalogRefreshStatus:
+    return PluginCatalogRefreshStatus(
+        refreshed=False,
+        error=_catalog_refresh_error_detail(exc),
+        catalog_changed=None,
+        previous_catalog_fingerprint=None,
+        catalog_fingerprint=None,
+        assigned_metric_queues=[],
+        removed_metric_queues=[],
+        workers_restart_recommended=False,
+    )
+
+
+def _refresh_catalog_status(store: PluginStateStore) -> PluginCatalogRefreshStatus:
+    try:
+        result = refresh_catalog_from_state(store)
+    except (
+        PluginSyncError,
+        subprocess.CalledProcessError,
+        PluginStateLoadError,
+        PluginStateValidationError,
+        RuntimeError,
+    ) as exc:
+        reset_catalog()
+        return _catalog_refresh_failure_status(exc)
+    return _catalog_refresh_status_from_result(result)
+
+
+def _catalog_refresh_response(
+    result: CatalogRefreshResult,
+) -> PluginCatalogRefreshResponse:
+    restart_recommended = _catalog_restart_recommended(result)
     return PluginCatalogRefreshResponse(
         updated_plugins=result.updated_plugins,
         catalog_changed=result.catalog_changed,
@@ -418,7 +468,7 @@ def list_plugin_repos() -> PluginRepoListResponse:
 
 
 @router.post("/plugin-repos")
-def create_plugin_repo(request: CreatePluginRepoRequest) -> PluginRepoResponse:
+def create_plugin_repo(request: CreatePluginRepoRequest) -> CreatePluginRepoResponse:
     store = _state_store()
     try:
         repo = store.add_repo(
@@ -428,14 +478,17 @@ def create_plugin_repo(request: CreatePluginRepoRequest) -> PluginRepoResponse:
         )
     except (PluginStateValidationError, ValueError) as exc:
         raise _validation_error(exc) from exc
-    return _repo_response(repo)
+    return CreatePluginRepoResponse(
+        repo=_repo_response(repo),
+        catalog_refresh=_refresh_catalog_status(store),
+    )
 
 
 @router.patch("/plugin-repos/{repo_id}")
 def update_plugin_repo(
     repo_id: str,
     request: UpdatePluginRepoRequest,
-) -> PluginRepoResponse:
+) -> UpdatePluginRepoResponse:
     store = _state_store()
     try:
         repo = store.update_repo(
@@ -447,7 +500,10 @@ def update_plugin_repo(
         raise _not_found_error(exc) from exc
     except (PluginStateValidationError, ValueError) as exc:
         raise _validation_error(exc) from exc
-    return _repo_response(repo)
+    return UpdatePluginRepoResponse(
+        repo=_repo_response(repo),
+        catalog_refresh=_refresh_catalog_status(store),
+    )
 
 
 @router.delete("/plugin-repos/{repo_id}")
@@ -475,30 +531,11 @@ def delete_plugin_repo(repo_id: str) -> DeletePluginRepoResponse:
         )
 
     _remove_repo_snapshot(config, repo)
-    try:
-        refresh_catalog_from_state(store)
-    except (
-        PluginSyncError,
-        subprocess.CalledProcessError,
-        PluginStateLoadError,
-        PluginStateValidationError,
-        RuntimeError,
-    ) as exc:
-        reset_catalog()
-        return DeletePluginRepoResponse(
-            deleted=True,
-            repo_id=repo_id,
-            removed_metric_queues=result.removed_metric_queues,
-            catalog_refreshed=False,
-            catalog_refresh_error=_catalog_refresh_error_detail(exc),
-        )
-
     return DeletePluginRepoResponse(
         deleted=True,
         repo_id=repo_id,
         removed_metric_queues=result.removed_metric_queues,
-        catalog_refreshed=True,
-        catalog_refresh_error=None,
+        catalog_refresh=_refresh_catalog_status(store),
     )
 
 
@@ -532,6 +569,7 @@ def sync_plugin_repo(repo_id: str) -> SyncPluginRepoResponse:
         repo_id=repo.id,
         changed=synced.changed,
         display_name=synced.entry.display_name,
+        catalog_refresh=_refresh_catalog_status(store),
     )
 
 

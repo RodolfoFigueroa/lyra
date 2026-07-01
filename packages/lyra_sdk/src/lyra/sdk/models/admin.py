@@ -24,18 +24,39 @@ class UpdatePluginRepoRequest(StrictBaseModel):
     enabled: bool | None = None
 
 
+class PluginCatalogRefreshStatus(StrictBaseModel):
+    refreshed: bool
+    error: str | None = None
+    catalog_changed: bool | None
+    previous_catalog_fingerprint: str | None
+    catalog_fingerprint: str | None
+    assigned_metric_queues: list[str]
+    removed_metric_queues: list[str]
+    workers_restart_recommended: bool
+
+
+class CreatePluginRepoResponse(StrictBaseModel):
+    repo: PluginRepoResponse
+    catalog_refresh: PluginCatalogRefreshStatus
+
+
+class UpdatePluginRepoResponse(StrictBaseModel):
+    repo: PluginRepoResponse
+    catalog_refresh: PluginCatalogRefreshStatus
+
+
 class DeletePluginRepoResponse(StrictBaseModel):
     deleted: bool
     repo_id: str = Field(min_length=1)
     removed_metric_queues: list[str]
-    catalog_refreshed: bool
-    catalog_refresh_error: str | None = None
+    catalog_refresh: PluginCatalogRefreshStatus
 
 
 class SyncPluginRepoResponse(StrictBaseModel):
     repo_id: str = Field(min_length=1)
     changed: bool
     display_name: str = Field(min_length=1)
+    catalog_refresh: PluginCatalogRefreshStatus
 
 
 class PluginCatalogRefreshResponse(StrictBaseModel):
@@ -78,15 +99,18 @@ class DeleteMetricQueueResponse(StrictBaseModel):
 
 __all__ = [
     "CreatePluginRepoRequest",
+    "CreatePluginRepoResponse",
     "DeleteMetricQueueResponse",
     "DeletePluginRepoResponse",
     "MetricQueueAssignmentResponse",
     "PluginCatalogRefreshResponse",
+    "PluginCatalogRefreshStatus",
     "PluginRepoListResponse",
     "PluginRepoResponse",
     "PluginRoutingResponse",
     "SetMetricQueueRequest",
     "SyncPluginRepoResponse",
     "UpdatePluginRepoRequest",
+    "UpdatePluginRepoResponse",
     "WorkerRestartResponse",
 ]

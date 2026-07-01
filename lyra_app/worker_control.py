@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 _INTERRUPTED_TASK_MESSAGE = (
     "This task was interrupted because plugins were updated. Please retry."
 )
+DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,9 @@ def _normalise_active_queues(raw: Any | None) -> dict[str, list[str]] | None:
 
 
 def inspect_workers() -> WorkerInspectSnapshot:
-    inspector = celery_app.control.inspect()
+    inspector = celery_app.control.inspect(
+        timeout=DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS
+    )
     active = _normalise_task_section(_inspect_call(inspector, "active"))
     reserved = _normalise_task_section(_inspect_call(inspector, "reserved"))
     scheduled = _normalise_task_section(_inspect_call(inspector, "scheduled"))

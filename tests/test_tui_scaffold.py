@@ -67,3 +67,14 @@ def test_app_composes_tabbed_shell() -> None:
             assert app.query_one(Footer) is not None
 
     asyncio.run(run())
+
+
+def test_q_quits_app() -> None:
+    async def run() -> None:
+        app = LyraTuiApp(TuiConfig(admin_api_key="secret"), poll_on_mount=False)
+        async with app.run_test() as pilot:
+            await pilot.press("q")
+            await pilot.pause()
+            assert app.return_code == 0
+
+    asyncio.run(run())

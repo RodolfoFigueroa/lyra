@@ -27,7 +27,7 @@ from lyra.tui.state import LyraTuiState, TuiSnapshot, refresh_snapshot
 from lyra.tui.widgets import ConnectionStatus
 
 if TYPE_CHECKING:
-    from lyra.tui.client import LyraTuiClient
+    from lyra.tui.client import LyraTuiReadClient
 
 
 class FakeClient:
@@ -313,7 +313,7 @@ def _plugin_routing_response() -> PluginRoutingResponse:
     )
 
 
-def _client_type_check(_: LyraTuiClient) -> None:
+def _client_type_check(_: LyraTuiReadClient) -> None:
     return None
 
 

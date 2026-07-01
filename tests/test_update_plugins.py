@@ -13,10 +13,14 @@ from redis.exceptions import RedisError
 from lyra_app import job_store
 from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
-from lyra_app.registry import CatalogRefreshResult
+from lyra_app.registry import CatalogRefreshResult, reset_catalog
 from lyra_app.routes import admin
 from tests.config_helpers import load_test_config
-from tests.smoke_plugin_helpers import directory_uri
+from tests.smoke_plugin_helpers import (
+    SMOKE_METRIC_QUEUES,
+    directory_uri,
+    smoke_plugin_uri,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -92,10 +96,12 @@ def admin_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Path]:
+    reset_catalog()
     load_test_config(tmp_path)
     state_path = tmp_path / "state" / "plugins.toml"
     monkeypatch.setattr(admin, "get_plugin_state_path", lambda: state_path)
     yield state_path
+    reset_catalog()
     clear_config_cache()
 
 
@@ -112,6 +118,48 @@ def _synced_repo(*, changed: bool = True) -> SyncedPluginRepo:
         path=Path("catalog/owner__example-plugin"),
         changed=changed,
     )
+
+
+def _catalog_refresh_result(
+    *,
+    updated_plugins: list[str] | None = None,
+    catalog_changed: bool = False,
+    previous_catalog_fingerprint: str = "same",
+    catalog_fingerprint: str = "same",
+    assigned_metric_queues: list[str] | None = None,
+    removed_metric_queues: list[str] | None = None,
+) -> CatalogRefreshResult:
+    return CatalogRefreshResult(
+        updated_plugins=updated_plugins or [],
+        previous_catalog_fingerprint=previous_catalog_fingerprint,
+        catalog_fingerprint=catalog_fingerprint,
+        catalog_changed=catalog_changed,
+        assigned_metric_queues=assigned_metric_queues or [],
+        removed_metric_queues=removed_metric_queues or [],
+    )
+
+
+def _catalog_refresh_status(
+    *,
+    refreshed: bool = True,
+    error: str | None = None,
+    catalog_changed: bool | None = False,
+    previous_catalog_fingerprint: str | None = "same",
+    catalog_fingerprint: str | None = "same",
+    assigned_metric_queues: list[str] | None = None,
+    removed_metric_queues: list[str] | None = None,
+    workers_restart_recommended: bool = False,
+) -> dict[str, object]:
+    return {
+        "refreshed": refreshed,
+        "error": error,
+        "catalog_changed": catalog_changed,
+        "previous_catalog_fingerprint": previous_catalog_fingerprint,
+        "catalog_fingerprint": catalog_fingerprint,
+        "assigned_metric_queues": assigned_metric_queues or [],
+        "removed_metric_queues": removed_metric_queues or [],
+        "workers_restart_recommended": workers_restart_recommended,
+    }
 
 
 def _assert_http_error(
@@ -151,7 +199,15 @@ def test_admin_router_requires_bearer_key_for_all_routes() -> None:
     )
 
 
-def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:
+def test_plugin_repo_endpoints_manage_state(
+    admin_context: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        admin,
+        "refresh_catalog_from_state",
+        lambda _store: _catalog_refresh_result(),
+    )
     created = admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(
             id="example",
@@ -170,25 +226,30 @@ def test_plugin_repo_endpoints_manage_state(admin_context: Path) -> None:
     missing = _assert_http_error(404, admin.delete_plugin_repo, "example")
 
     assert created.model_dump() == {
-        "id": "example",
-        "source": "owner/example-plugin",
-        "ref": "main",
-        "enabled": True,
+        "repo": {
+            "id": "example",
+            "source": "owner/example-plugin",
+            "ref": "main",
+            "enabled": True,
+        },
+        "catalog_refresh": _catalog_refresh_status(),
     }
     assert "schema_version = 1" in admin_context.read_text(encoding="utf-8")
-    assert listed.model_dump()["repos"] == [created.model_dump()]
+    assert listed.model_dump()["repos"] == [created.repo.model_dump()]
     assert updated.model_dump() == {
-        "id": "example",
-        "source": "owner/example-plugin",
-        "ref": "v1.2.0",
-        "enabled": False,
+        "repo": {
+            "id": "example",
+            "source": "owner/example-plugin",
+            "ref": "v1.2.0",
+            "enabled": False,
+        },
+        "catalog_refresh": _catalog_refresh_status(),
     }
     assert deleted.model_dump() == {
         "deleted": True,
         "repo_id": "example",
         "removed_metric_queues": [],
-        "catalog_refreshed": True,
-        "catalog_refresh_error": None,
+        "catalog_refresh": _catalog_refresh_status(),
     }
     assert "unknown plugin repo id" in str(missing.detail)
 
@@ -202,13 +263,10 @@ def test_delete_plugin_repo_removes_owned_metric_routes(
     store.add_repo("owner/other-plugin", repo_id="other")
     store.set_metric_queue("walkability_score", "batch", repo_id="example")
     store.set_metric_queue("other_score", "interactive", repo_id="other")
-    result = CatalogRefreshResult(
-        updated_plugins=[],
+    result = _catalog_refresh_result(
         previous_catalog_fingerprint="old",
         catalog_fingerprint="new",
         catalog_changed=True,
-        assigned_metric_queues=[],
-        removed_metric_queues=[],
     )
     monkeypatch.setattr(admin, "refresh_catalog_from_state", lambda _store: result)
 
@@ -218,8 +276,12 @@ def test_delete_plugin_repo_removes_owned_metric_routes(
         "deleted": True,
         "repo_id": "example",
         "removed_metric_queues": ["walkability_score"],
-        "catalog_refreshed": True,
-        "catalog_refresh_error": None,
+        "catalog_refresh": _catalog_refresh_status(
+            previous_catalog_fingerprint="old",
+            catalog_fingerprint="new",
+            catalog_changed=True,
+            workers_restart_recommended=True,
+        ),
     }
     assert admin.list_plugin_routing().metric_queues == {"other_score": "interactive"}
 
@@ -246,17 +308,131 @@ def test_delete_plugin_repo_clears_loaded_catalog_when_refresh_fails(
         "deleted": True,
         "repo_id": "example",
         "removed_metric_queues": ["walkability_score"],
-        "catalog_refreshed": False,
-        "catalog_refresh_error": "catalog refresh failed",
+        "catalog_refresh": _catalog_refresh_status(
+            refreshed=False,
+            error="catalog refresh failed",
+            catalog_changed=None,
+            previous_catalog_fingerprint=None,
+            catalog_fingerprint=None,
+        ),
     }
     assert reset_calls == [None]
     assert admin.list_plugin_routing().metric_queues == {}
 
 
+def test_create_plugin_repo_refreshes_catalog_and_exposes_metrics(
+    admin_context: Path,  # noqa: ARG001
+) -> None:
+    created = admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(id="smoke", source=smoke_plugin_uri())
+    )
+
+    catalog = admin.get_catalog()
+    routing = admin.list_plugin_routing()
+
+    assert created.repo.id == "smoke"
+    assert created.catalog_refresh.refreshed is True
+    assert sorted(created.catalog_refresh.assigned_metric_queues) == sorted(
+        SMOKE_METRIC_QUEUES
+    )
+    assert catalog.metric_names == sorted(SMOKE_METRIC_QUEUES)
+    assert routing.metric_queues == SMOKE_METRIC_QUEUES
+
+
+def test_update_plugin_repo_refreshes_catalog_and_prunes_disabled_metrics(
+    admin_context: Path,  # noqa: ARG001
+) -> None:
+    admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(id="smoke", source=smoke_plugin_uri())
+    )
+
+    updated = admin.update_plugin_repo(
+        "smoke",
+        admin.UpdatePluginRepoRequest(enabled=False),
+    )
+
+    assert updated.repo.enabled is False
+    assert updated.catalog_refresh.refreshed is True
+    assert sorted(updated.catalog_refresh.removed_metric_queues) == sorted(
+        SMOKE_METRIC_QUEUES
+    )
+    assert admin.get_catalog().metric_names == []
+    assert admin.list_plugin_routing().metric_queues == {}
+
+
+def test_create_plugin_repo_reports_refresh_failure_without_rollback(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_calls: list[None] = []
+
+    def fail_refresh(_store: object) -> CatalogRefreshResult:
+        msg = "catalog refresh failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", fail_refresh)
+    monkeypatch.setattr(admin, "reset_catalog", lambda: reset_calls.append(None))
+
+    created = admin.create_plugin_repo(
+        admin.CreatePluginRepoRequest(id="example", source="owner/example-plugin")
+    )
+
+    assert created.model_dump() == {
+        "repo": {
+            "id": "example",
+            "source": "owner/example-plugin",
+            "ref": None,
+            "enabled": True,
+        },
+        "catalog_refresh": _catalog_refresh_status(
+            refreshed=False,
+            error="catalog refresh failed",
+            catalog_changed=None,
+            previous_catalog_fingerprint=None,
+            catalog_fingerprint=None,
+        ),
+    }
+    assert admin.list_plugin_repos().repos[0].id == "example"
+    assert reset_calls == [None]
+
+
+def test_update_plugin_repo_reports_refresh_failure_without_rollback(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = admin._state_store()  # noqa: SLF001
+    store.add_repo("owner/example-plugin", repo_id="example")
+    reset_calls: list[None] = []
+
+    def fail_refresh(_store: object) -> CatalogRefreshResult:
+        msg = "catalog refresh failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", fail_refresh)
+    monkeypatch.setattr(admin, "reset_catalog", lambda: reset_calls.append(None))
+
+    updated = admin.update_plugin_repo(
+        "example",
+        admin.UpdatePluginRepoRequest(enabled=False),
+    )
+
+    assert updated.repo.enabled is False
+    assert updated.catalog_refresh.refreshed is False
+    assert updated.catalog_refresh.error == "catalog refresh failed"
+    assert admin.list_plugin_repos().repos[0].enabled is False
+    assert reset_calls == [None]
+
+
 def test_plugin_repo_endpoints_manage_directory_source(
     admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(
+        admin,
+        "refresh_catalog_from_state",
+        lambda _store: _catalog_refresh_result(),
+    )
     source = tmp_path / "mock-plugin"
     source.mkdir()
     manifest_path = source / MANIFEST_FILENAME
@@ -276,26 +452,32 @@ def test_plugin_repo_endpoints_manage_directory_source(
     synced_edited = admin.sync_plugin_repo("mock")
 
     assert created.model_dump() == {
-        "id": "mock",
-        "source": normalized_source,
-        "ref": None,
-        "enabled": True,
+        "repo": {
+            "id": "mock",
+            "source": normalized_source,
+            "ref": None,
+            "enabled": True,
+        },
+        "catalog_refresh": _catalog_refresh_status(),
     }
-    assert listed.model_dump()["repos"] == [created.model_dump()]
+    assert listed.model_dump()["repos"] == [created.repo.model_dump()]
     assert synced.model_dump() == {
         "repo_id": "mock",
         "changed": True,
         "display_name": f"dir:{source.resolve()}",
+        "catalog_refresh": _catalog_refresh_status(),
     }
     assert synced_again.model_dump() == {
         "repo_id": "mock",
         "changed": False,
         "display_name": f"dir:{source.resolve()}",
+        "catalog_refresh": _catalog_refresh_status(),
     }
     assert synced_edited.model_dump() == {
         "repo_id": "mock",
         "changed": True,
         "display_name": f"dir:{source.resolve()}",
+        "catalog_refresh": _catalog_refresh_status(),
     }
     copied_manifests = list(
         (tmp_path / "plugins" / "catalog").glob(
@@ -307,8 +489,14 @@ def test_plugin_repo_endpoints_manage_directory_source(
 
 def test_plugin_repo_update_can_switch_to_directory_source(
     admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(
+        admin,
+        "refresh_catalog_from_state",
+        lambda _store: _catalog_refresh_result(),
+    )
     source = tmp_path / "mock-plugin"
     source.mkdir()
     (source / MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
@@ -326,16 +514,25 @@ def test_plugin_repo_update_can_switch_to_directory_source(
     )
 
     assert updated.model_dump() == {
-        "id": "mock",
-        "source": directory_uri(source),
-        "ref": None,
-        "enabled": True,
+        "repo": {
+            "id": "mock",
+            "source": directory_uri(source),
+            "ref": None,
+            "enabled": True,
+        },
+        "catalog_refresh": _catalog_refresh_status(),
     }
 
 
 def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(
     admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        admin,
+        "refresh_catalog_from_state",
+        lambda _store: _catalog_refresh_result(),
+    )
     first = admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(id="one", source="owner/example-plugin")
     )
@@ -351,7 +548,7 @@ def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(
         admin.CreatePluginRepoRequest(id="two", source="owner/example-plugin@main"),
     )
 
-    assert first.id == "one"
+    assert first.repo.id == "one"
     assert "provide a unique id" in str(duplicate_id.detail)
     assert "duplicate enabled plugin repo sources" in str(duplicate_source.detail)
 
@@ -361,12 +558,18 @@ def test_sync_plugin_repo_syncs_enabled_repo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[Path, str]] = []
+    refresh_calls: list[object] = []
 
     def sync_source(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
         calls.append((target_dir, raw_entry))
         return _synced_repo(changed=True)
 
+    def refresh_catalog(store: object) -> CatalogRefreshResult:
+        refresh_calls.append(store)
+        return _catalog_refresh_result()
+
     monkeypatch.setattr(admin, "sync_plugin_source", sync_source)
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", refresh_catalog)
     admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(
             id="example",
@@ -380,16 +583,51 @@ def test_sync_plugin_repo_syncs_enabled_repo(
         "repo_id": "example",
         "changed": True,
         "display_name": "owner/example-plugin",
+        "catalog_refresh": _catalog_refresh_status(),
     }
     assert len(calls) == 1
     assert calls[0][0].name == "catalog"
     assert calls[0][1] == "owner/example-plugin@main"
+    assert len(refresh_calls) == 2
+
+
+def test_sync_plugin_repo_reports_refresh_failure_after_successful_sync(
+    admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = admin._state_store()  # noqa: SLF001
+    store.add_repo("owner/example-plugin@main", repo_id="example")
+    reset_calls: list[None] = []
+
+    def fail_refresh(_store: object) -> CatalogRefreshResult:
+        msg = "catalog refresh failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(
+        admin,
+        "sync_plugin_source",
+        lambda _target_dir, _raw_entry: _synced_repo(changed=True),
+    )
+    monkeypatch.setattr(admin, "refresh_catalog_from_state", fail_refresh)
+    monkeypatch.setattr(admin, "reset_catalog", lambda: reset_calls.append(None))
+
+    response = admin.sync_plugin_repo("example")
+
+    assert response.changed is True
+    assert response.catalog_refresh.refreshed is False
+    assert response.catalog_refresh.error == "catalog refresh failed"
+    assert reset_calls == [None]
 
 
 def test_sync_plugin_repo_returns_contract_errors(
     admin_context: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        admin,
+        "refresh_catalog_from_state",
+        lambda _store: _catalog_refresh_result(),
+    )
     admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(
             id="disabled",
@@ -420,8 +658,14 @@ def test_sync_plugin_repo_returns_contract_errors(
 
 def test_sync_plugin_repo_reports_directory_sync_failures(
     admin_context: Path,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(
+        admin,
+        "refresh_catalog_from_state",
+        lambda _store: _catalog_refresh_result(),
+    )
     missing_source = tmp_path / "missing-plugin"
     admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(

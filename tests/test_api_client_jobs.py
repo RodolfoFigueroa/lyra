@@ -234,8 +234,7 @@ def _delete_plugin_repo_response() -> dict[str, Any]:
         "deleted": True,
         "repo_id": "smoke",
         "removed_metric_queues": ["smoke_table_metric"],
-        "catalog_refreshed": True,
-        "catalog_refresh_error": None,
+        "catalog_refresh": _plugin_catalog_refresh_status(),
     }
 
 
@@ -244,6 +243,37 @@ def _sync_plugin_repo_response() -> dict[str, Any]:
         "repo_id": "smoke",
         "changed": True,
         "display_name": "smoke",
+        "catalog_refresh": _plugin_catalog_refresh_status(),
+    }
+
+
+def _create_plugin_repo_response() -> dict[str, Any]:
+    return {
+        "repo": _plugin_repo_response(),
+        "catalog_refresh": _plugin_catalog_refresh_status(),
+    }
+
+
+def _update_plugin_repo_response() -> dict[str, Any]:
+    repo = _plugin_repo_response()
+    repo["source"] = "dir:///plugins/smoke-updated"
+    repo["enabled"] = False
+    return {
+        "repo": repo,
+        "catalog_refresh": _plugin_catalog_refresh_status(),
+    }
+
+
+def _plugin_catalog_refresh_status() -> dict[str, Any]:
+    return {
+        "refreshed": True,
+        "error": None,
+        "catalog_changed": True,
+        "previous_catalog_fingerprint": "before",
+        "catalog_fingerprint": "after",
+        "assigned_metric_queues": ["smoke_table_metric"],
+        "removed_metric_queues": [],
+        "workers_restart_recommended": True,
     }
 
 
@@ -564,8 +594,8 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
     responses = [
         _met_zone_response(),
         _plugin_repo_list_response(),
-        _plugin_repo_response(),
-        _plugin_repo_response() | {"enabled": False},
+        _create_plugin_repo_response(),
+        _update_plugin_repo_response(),
         _delete_plugin_repo_response(),
         _sync_plugin_repo_response(),
         _plugin_catalog_refresh_response(),
@@ -720,10 +750,11 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
     ]
     assert met_zone.cve_met == "0901"
     assert repos.repos[0].source == "dir:///plugins/smoke"
-    assert created.id == "smoke"
-    assert updated.enabled is False
+    assert created.repo.id == "smoke"
+    assert updated.repo.enabled is False
     assert deleted.deleted is True
     assert synced.changed is True
+    assert synced.catalog_refresh.refreshed is True
     assert refreshed.workers_restart_recommended is True
     assert restarted.timeout == 12.5
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
@@ -1115,8 +1146,8 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
     RecordingSession.responses = [
         FakeAsyncResponse(payload=_met_zone_response()),
         FakeAsyncResponse(payload=_plugin_repo_list_response()),
-        FakeAsyncResponse(payload=_plugin_repo_response()),
-        FakeAsyncResponse(payload=_plugin_repo_response() | {"enabled": False}),
+        FakeAsyncResponse(payload=_create_plugin_repo_response()),
+        FakeAsyncResponse(payload=_update_plugin_repo_response()),
         FakeAsyncResponse(payload=_delete_plugin_repo_response()),
         FakeAsyncResponse(payload=_sync_plugin_repo_response()),
         FakeAsyncResponse(payload=_plugin_catalog_refresh_response()),
@@ -1276,10 +1307,11 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
     ]
     assert met_zone.cve_met == "0901"
     assert repos.repos[0].source == "dir:///plugins/smoke"
-    assert created.id == "smoke"
-    assert updated.enabled is False
+    assert created.repo.id == "smoke"
+    assert updated.repo.enabled is False
     assert deleted.deleted is True
     assert synced.changed is True
+    assert synced.catalog_refresh.refreshed is True
     assert refreshed.workers_restart_recommended is True
     assert restarted.timeout == 12.5
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}

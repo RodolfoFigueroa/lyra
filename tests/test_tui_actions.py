@@ -8,6 +8,7 @@ from lyra.api import DownloadError
 from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
+    CreatePluginRepoResponse,
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
     HealthResponse,
@@ -16,12 +17,14 @@ from lyra.sdk.models import (
     JobStatusInfo,
     MetricQueueAssignmentResponse,
     PluginCatalogRefreshResponse,
+    PluginCatalogRefreshStatus,
     PluginRepoListResponse,
     PluginRepoResponse,
     PluginRoutingResponse,
     QueuesResponse,
     RedisHealth,
     SyncPluginRepoResponse,
+    UpdatePluginRepoResponse,
     WorkerRestartResponse,
     WorkersResponse,
 )
@@ -127,14 +130,17 @@ class FakeActionClient:
         *,
         repo_id: str | None = None,
         enabled: bool = True,
-    ) -> PluginRepoResponse:
+    ) -> CreatePluginRepoResponse:
         del enabled
         self.created_repos.append((source, repo_id))
-        return PluginRepoResponse(
-            id=repo_id or "new",
-            source=source,
-            ref=None,
-            enabled=True,
+        return CreatePluginRepoResponse(
+            repo=PluginRepoResponse(
+                id=repo_id or "new",
+                source=source,
+                ref=None,
+                enabled=True,
+            ),
+            catalog_refresh=_catalog_refresh_status(),
         )
 
     async def update_plugin_repo(
@@ -143,14 +149,17 @@ class FakeActionClient:
         *,
         source: str | None = None,
         enabled: bool | None = None,
-    ) -> PluginRepoResponse:
+    ) -> UpdatePluginRepoResponse:
         del source
         self.updated_repos.append((repo_id, enabled))
-        return PluginRepoResponse(
-            id=repo_id,
-            source="dir:///plugins/smoke",
-            ref=None,
-            enabled=bool(enabled),
+        return UpdatePluginRepoResponse(
+            repo=PluginRepoResponse(
+                id=repo_id,
+                source="dir:///plugins/smoke",
+                ref=None,
+                enabled=bool(enabled),
+            ),
+            catalog_refresh=_catalog_refresh_status(),
         )
 
     async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
@@ -159,8 +168,7 @@ class FakeActionClient:
             deleted=True,
             repo_id=repo_id,
             removed_metric_queues=["metric_a"],
-            catalog_refreshed=True,
-            catalog_refresh_error=None,
+            catalog_refresh=_catalog_refresh_status(),
         )
 
     async def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
@@ -169,6 +177,7 @@ class FakeActionClient:
             repo_id=repo_id,
             changed=True,
             display_name="Smoke",
+            catalog_refresh=_catalog_refresh_status(),
         )
 
     async def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse:
@@ -207,6 +216,30 @@ class FailingCancelClient(FakeActionClient):
         raise DownloadError(message)
 
 
+class CatalogRefreshFailureClient(FakeActionClient):
+    async def create_plugin_repo(
+        self,
+        source: str,
+        *,
+        repo_id: str | None = None,
+        enabled: bool = True,
+    ) -> CreatePluginRepoResponse:
+        del enabled
+        self.created_repos.append((source, repo_id))
+        return CreatePluginRepoResponse(
+            repo=PluginRepoResponse(
+                id=repo_id or "new",
+                source=source,
+                ref=None,
+                enabled=True,
+            ),
+            catalog_refresh=_catalog_refresh_status(
+                refreshed=False,
+                error="catalog sync failed",
+            ),
+        )
+
+
 def test_action_service_formats_successes() -> None:
     client = FakeActionClient()
     service = ActionService(cast("LyraTuiClient", client))
@@ -232,6 +265,21 @@ def test_action_service_formats_common_failure() -> None:
 
     assert not result.succeeded
     assert "HTTP 409" in result.message
+
+
+def test_action_service_reports_repo_refresh_failure() -> None:
+    client = CatalogRefreshFailureClient()
+    service = ActionService(cast("LyraTuiClient", client))
+
+    result = asyncio.run(
+        service.create_plugin_repo(source="dir:///plugins/new", repo_id="new")
+    )
+
+    assert result.succeeded
+    assert result.refresh_after
+    assert result.message == (
+        "Added plugin repo new. Catalog refresh failed: catalog sync failed"
+    )
 
 
 def test_cancel_confirmation_declined_does_not_call_client() -> None:
@@ -655,6 +703,23 @@ def _repo() -> PluginRepoResponse:
         source="dir:///plugins/smoke",
         ref=None,
         enabled=True,
+    )
+
+
+def _catalog_refresh_status(
+    *,
+    refreshed: bool = True,
+    error: str | None = None,
+) -> PluginCatalogRefreshStatus:
+    return PluginCatalogRefreshStatus(
+        refreshed=refreshed,
+        error=error,
+        catalog_changed=(False if refreshed else None),
+        previous_catalog_fingerprint=("same" if refreshed else None),
+        catalog_fingerprint=("same" if refreshed else None),
+        assigned_metric_queues=[],
+        removed_metric_queues=[],
+        workers_restart_recommended=False,
     )
 
 

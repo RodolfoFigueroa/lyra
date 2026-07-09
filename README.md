@@ -11,6 +11,7 @@ The written project docs are published with Astro Starlight:
 - Develop Lyra: https://rodolfofigueroa.github.io/lyra/contributor-guide/
 - Build a plugin: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
 - Use the API: https://rodolfofigueroa.github.io/lyra/job-api/
+- Connect agents through MCP: https://rodolfofigueroa.github.io/lyra/mcp-agent-bridge/
 - Run the operator TUI: https://rodolfofigueroa.github.io/lyra/tui/
 
 When the API server is running, FastAPI also exposes generated OpenAPI references:
@@ -115,3 +116,5 @@ curl http://localhost:5219/jobs/{job_id}/result
 ```
 
 See the Starlight docs for plugin manifests, runner entrypoints, deployment shape, and operations notes.
+For Codex and other agent runtimes, see the MCP bridge docs for the stable tool
+sequence, Bearer-token setup, result references, and JSONL analysis handoff.

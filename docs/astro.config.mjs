@@ -145,6 +145,7 @@ export default defineConfig({
           label: 'Agent Guide',
           items: [
             { label: 'AI Agent Guide', slug: 'ai-agent-guide' },
+            { label: 'MCP Agent Bridge', slug: 'mcp-agent-bridge' },
           ],
         },
       ],

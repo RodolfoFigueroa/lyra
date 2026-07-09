@@ -33,7 +33,8 @@ queue-specific Celery workers.
   [Metrics Catalog](metrics-catalog/) for HTTP behavior, [Python Client](python-client/)
   for client workflows, and [lyra-api](lyra-api/) for package reference.
 - Work as an AI agent: use [AI Agent Guide](ai-agent-guide/) as the stable crawl
-  entrypoint.
+  entrypoint, and [MCP Agent Bridge](mcp-agent-bridge/) for Codex setup,
+  stable MCP tools, result references, and JSONL handoffs.
 
 ## Live OpenAPI Docs
 

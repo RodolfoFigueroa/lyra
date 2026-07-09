@@ -169,13 +169,15 @@ Descriptors keep the terminal result payload unchanged and include:
 
 The descriptor shape does not depend on table size. Full table JSON and file
 metadata remain available through the stored terminal result while Redis retains
-the job result key.
+the job result key. MCP tools and ordinary HTTP clients use the same descriptor
+and result reference contract.
 
 ## Export Table JSONL
 
 `GET /jobs/{job_id}/result/table.jsonl` streams successful table results as
-JSONL using one JSON object per line. Each object includes the descriptor's
-result index field and all table columns:
+JSONL using one JSON object per line. JSONL is the required v1 raw table export
+format for MCP handoffs and Python client downloads. Each object includes the
+descriptor's result index field and all table columns:
 
 ```jsonl
 {"_result_index":"area-1","value":42}

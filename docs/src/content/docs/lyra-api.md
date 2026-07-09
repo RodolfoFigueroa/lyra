@@ -127,16 +127,20 @@ client.download_result(job_id, "job-1.jsonl")
 results. `result_dataframe()` uses the same JSONL download path and raises
 `DownloadError` with install guidance when pandas is not available.
 
-Local analysis stays outside the Lyra server. For example, download one or more
-table results and compute correlations in your own Python process:
+Local analysis stays outside the Lyra server. For example, hydrate two table
+results and compute correlations in your own Python process:
 
 ```python
-descriptor = client.get_result_descriptor("lyra://results/job-1")
+access = client.result_dataframe("lyra://results/job-access")
+population = client.result_dataframe("lyra://results/job-population")
 
-if descriptor.result_kind == "table":
-    frame = client.result_dataframe(descriptor.result_ref)
-    correlation = frame["accessibility"].corr(frame["population"])
+joined = access.merge(population, on="_result_index", suffixes=("_access", "_pop"))
+correlation = joined["accessibility_score"].corr(joined["population_count"])
 ```
+
+Lyra does not provide SQL or statistical analysis helpers server-side. Use the
+descriptor metadata to choose columns, then download JSONL or hydrate dataframes
+locally.
 
 ## Admin And Operator Methods
 

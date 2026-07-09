@@ -127,7 +127,9 @@ snapshots. Raw filesystem paths are not supported.
 
 ## MCP Agent Surface
 
-The Lyra MCP server exposes a compact agent contract:
+The Lyra MCP server exposes a compact agent contract for Codex and other MCP
+clients. See [MCP Agent Bridge](../mcp-agent-bridge/) for operator setup,
+Codex configuration, and local analysis examples.
 
 - `lyra_search_metrics`
 - `lyra_get_metric`
@@ -137,7 +139,19 @@ The Lyra MCP server exposes a compact agent contract:
 - `lyra_get_result_preview`
 - `lyra_download_result`
 
-MCP result tools accept `lyra://results/{job_id}` references. Running jobs return
-`status: "running"` with `next_tool: "lyra_get_job_result"`. Terminal jobs return
-compact descriptors, previews, metadata, or JSONL download handoff metadata
-instead of inlining full raw tables.
+The intended sequence is search, inspect, run, poll, then inspect metadata,
+preview rows, or request a raw JSONL handoff. `lyra_run_metric` accepts only a
+raw metropolitan zone code as `met_zone_code` for MCP v1; do not pass raw
+GeoJSON, census tract lists, or the metric's spatial field in `parameters`.
+
+MCP result tools accept `lyra://results/{job_id}` references. Running jobs
+return `status: "running"` with `poll_after_seconds` and
+`next_tool: "lyra_get_job_result"`. Agents should wait, call that tool with the
+same result reference, and avoid rerunning the metric unless the result expired
+or the user explicitly asks for a fresh run. Terminal jobs return compact
+descriptors, previews, metadata, or JSONL download handoff metadata instead of
+inlining full raw tables.
+
+Lyra runs metrics and exposes retained results. It does not provide SQL or
+statistical analysis tools through this MCP feature; clients perform arbitrary
+analysis after downloading result tables.

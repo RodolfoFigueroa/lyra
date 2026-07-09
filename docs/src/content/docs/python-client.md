@@ -69,20 +69,23 @@ print(descriptor.preview.rows)
 
 Descriptor helpers also accept the stable `lyra://results/{job_id}` reference.
 Use `download_result()` for raw table JSONL, or `result_dataframe()` when pandas
-is installed in your local environment.
+is installed in your local environment. Result references last only while the
+Redis-backed job result remains available.
 
 ```python
 result_ref = descriptor.result_ref
 client.download_result(result_ref, "job-1.jsonl")
 
-frame = client.result_dataframe(result_ref)
-correlation = frame["accessibility"].corr(frame["population"])
+access = client.result_dataframe("lyra://results/job-access")
+population = client.result_dataframe("lyra://results/job-population")
+joined = access.merge(population, on="_result_index", suffixes=("_access", "_pop"))
+correlation = joined["accessibility_score"].corr(joined["population_count"])
 print(correlation)
 ```
 
 The correlation is computed by your Python process after downloading the raw
-result. Lyra stores and serves the job result, but it does not run this analysis
-server-side.
+results. Lyra stores and serves job results, but it does not run SQL or
+statistical analysis server-side.
 
 ## Download File Results
 

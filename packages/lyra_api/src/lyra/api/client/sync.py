@@ -1,11 +1,12 @@
 import json
 import os
+import tempfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any, TypeVar
 
 import requests
-from lyra.api.client.base import _BaseLyraAPIClient
+from lyra.api.client.base import _BaseLyraAPIClient, _load_pandas
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     AdminStatusResponse,
@@ -30,6 +31,7 @@ from lyra.sdk.models import (
     PluginRepoListResponse,
     PluginRoutingResponse,
     QueuesResponse,
+    ResultDescriptor,
     SetMetricQueueRequest,
     SyncPluginRepoResponse,
     TableJobResult,
@@ -533,6 +535,59 @@ class LyraAPIClient(_BaseLyraAPIClient):
         except requests.RequestException as exc:
             err = f"Job result download error: {exc}"
             raise DownloadError(err) from exc
+
+    def get_result_descriptor(self, result_ref_or_job_id: str) -> ResultDescriptor:
+        job_id = self._job_id_from_result_ref(result_ref_or_job_id)
+        return self._request_model(
+            "GET",
+            f"jobs/{job_id}/result/descriptor",
+            ResultDescriptor,
+            error_context="fetch result descriptor",
+        )
+
+    def download_result(
+        self,
+        result_ref_or_job_id: str,
+        path: str | os.PathLike[str],
+        *,
+        format: str = "jsonl",  # noqa: A002
+    ) -> None:
+        if format != "jsonl":
+            err = "Only JSONL result downloads are supported. Use format='jsonl'."
+            raise DownloadError(err)
+
+        job_id = self._job_id_from_result_ref(result_ref_or_job_id)
+        output_path = Path(path)
+        try:
+            with requests.get(
+                self._http_url(f"jobs/{job_id}/result/table.jsonl"),
+                timeout=self.timeout,
+                headers=self.headers,
+                stream=True,
+            ) as response:
+                if response.status_code != 200:
+                    err = (
+                        "Failed to download result. "
+                        f"HTTP {response.status_code}: {response.text}"
+                    )
+                    raise DownloadError(err)
+
+                with output_path.open("wb") as file:
+                    file.writelines(response.iter_content(chunk_size=65536))
+        except requests.RequestException as exc:
+            err = f"Result download error: {exc}"
+            raise DownloadError(err) from exc
+
+    def result_dataframe(self, result_ref_or_job_id: str) -> Any:
+        pandas = _load_pandas()
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+
+        try:
+            self.download_result(result_ref_or_job_id, temp_path, format="jsonl")
+            return pandas.read_json(temp_path, lines=True)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
     def get_data_types(self) -> DataTypesResponse:
         data_types_url = self._http_url("data-types")

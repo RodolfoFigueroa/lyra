@@ -1,4 +1,51 @@
+import importlib
 import logging
+from types import ModuleType
+from urllib.parse import urlparse
+
+from lyra.api.exceptions import DownloadError
+
+
+def parse_result_ref(result_ref_or_job_id: str) -> str:
+    """Return the job id from a Lyra result reference or raw job id."""
+
+    value = result_ref_or_job_id.strip()
+    if not value:
+        err = "Result reference or job id must be a non-empty string."
+        raise DownloadError(err)
+
+    if value.startswith("lyra://"):
+        parsed = urlparse(value)
+        if (
+            parsed.scheme != "lyra"
+            or parsed.netloc != "results"
+            or not parsed.path.startswith("/")
+            or parsed.path == "/"
+            or "/" in parsed.path.removeprefix("/")
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            err = "Invalid Lyra result reference. Expected 'lyra://results/{job_id}'."
+            raise DownloadError(err)
+        return parsed.path.removeprefix("/")
+
+    if "://" in value:
+        err = "Unsupported result reference. Expected 'lyra://results/{job_id}'."
+        raise DownloadError(err)
+
+    return value
+
+
+def _load_pandas() -> ModuleType:
+    try:
+        return importlib.import_module("pandas")
+    except ImportError as exc:
+        err = (
+            "pandas is required for result_dataframe(); install pandas or use "
+            "download_result(..., format='jsonl') instead."
+        )
+        raise DownloadError(err) from exc
 
 
 class _BaseLyraAPIClient:
@@ -37,3 +84,6 @@ class _BaseLyraAPIClient:
     def _http_url(self, path: str) -> str:
         protocol = "https" if self.secure else "http"
         return f"{protocol}://{self.host}/{path.lstrip('/')}"
+
+    def _job_id_from_result_ref(self, result_ref_or_job_id: str) -> str:
+        return parse_result_ref(result_ref_or_job_id)

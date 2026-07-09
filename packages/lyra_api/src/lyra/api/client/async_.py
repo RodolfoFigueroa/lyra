@@ -1,12 +1,15 @@
 import json
 import os
+import tempfile
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, TypeVar
 
 import aiofiles
+import aiofiles.os
 import aiohttp
-from lyra.api.client.base import _BaseLyraAPIClient
+from lyra.api.client.base import _BaseLyraAPIClient, _load_pandas
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     AdminStatusResponse,
@@ -31,6 +34,7 @@ from lyra.sdk.models import (
     PluginRepoListResponse,
     PluginRoutingResponse,
     QueuesResponse,
+    ResultDescriptor,
     SetMetricQueueRequest,
     SyncPluginRepoResponse,
     TableJobResult,
@@ -567,6 +571,64 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         except aiohttp.ClientError as exc:
             err = f"Job result download error: {exc}"
             raise DownloadError(err) from exc
+
+    async def get_result_descriptor(
+        self,
+        result_ref_or_job_id: str,
+    ) -> ResultDescriptor:
+        job_id = self._job_id_from_result_ref(result_ref_or_job_id)
+        return await self._request_model(
+            "GET",
+            f"jobs/{job_id}/result/descriptor",
+            ResultDescriptor,
+            error_context="fetch result descriptor",
+        )
+
+    async def download_result(
+        self,
+        result_ref_or_job_id: str,
+        path: str | os.PathLike[str],
+        *,
+        format: str = "jsonl",  # noqa: A002
+    ) -> None:
+        if format != "jsonl":
+            err = "Only JSONL result downloads are supported. Use format='jsonl'."
+            raise DownloadError(err)
+
+        job_id = self._job_id_from_result_ref(result_ref_or_job_id)
+        output_path = Path(path)
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url(f"jobs/{job_id}/result/table.jsonl"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    err = f"Failed to download result. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+
+                async with aiofiles.open(output_path, "wb") as file:
+                    async for chunk in response.content.iter_chunked(65536):
+                        await file.write(chunk)
+        except aiohttp.ClientError as exc:
+            err = f"Result download error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def result_dataframe(self, result_ref_or_job_id: str) -> Any:
+        pandas = _load_pandas()
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+
+        try:
+            await self.download_result(result_ref_or_job_id, temp_path, format="jsonl")
+            return pandas.read_json(temp_path, lines=True)
+        finally:
+            with suppress(FileNotFoundError):
+                await aiofiles.os.remove(temp_path)
 
     async def get_data_types(self) -> DataTypesResponse:
         data_types_url = self._http_url("data-types")

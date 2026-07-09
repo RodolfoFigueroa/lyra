@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Self
 
 import pytest
+from lyra.api import parse_result_ref
 from lyra.api.client.async_ import AsyncLyraAPIClient
 from lyra.api.client.sync import LyraAPIClient
 from lyra.api.exceptions import DownloadError
@@ -351,6 +352,56 @@ def _result_response() -> dict[str, Any]:
         "index": ["area-1"],
         "columns": ["value"],
         "data": [[6]],
+    }
+
+
+def _result_descriptor_response() -> dict[str, Any]:
+    return {
+        "job_id": "job-1",
+        "status": "succeeded",
+        "result_kind": "table",
+        "result_ref": "lyra://results/job-1",
+        "lifetime": {"expires_in_seconds": 3600, "expires_at": None},
+        "raw": {
+            "result_ref": "lyra://results/job-1",
+            "formats": ["terminal_json", "jsonl"],
+            "terminal_json_path": "/jobs/job-1/result",
+            "jsonl_path": "/jobs/job-1/result/table.jsonl",
+        },
+        "table": {
+            "row_count": 1,
+            "column_count": 1,
+            "columns": ["value"],
+            "index_field": "_result_index",
+        },
+        "preview": {
+            "index_field": "_result_index",
+            "rows": [{"_result_index": "area-1", "value": 6}],
+            "row_limit": 20,
+            "truncated": False,
+        },
+        "summary": {
+            "kind": "table",
+            "row_count": 1,
+            "column_count": 1,
+            "columns": [
+                {
+                    "name": "value",
+                    "count": 1,
+                    "null_count": 0,
+                    "numeric": {
+                        "count": 1,
+                        "null_count": 0,
+                        "min": 6,
+                        "max": 6,
+                        "mean": 6.0,
+                    },
+                }
+            ],
+            "error": None,
+        },
+        "file": None,
+        "error": None,
     }
 
 
@@ -929,6 +980,147 @@ def test_sync_client_fetches_file_result_metadata(
     assert result.media_type == "image/tiff"
 
 
+def test_result_ref_parser_accepts_refs_and_raw_job_ids() -> None:
+    assert parse_result_ref("lyra://results/job-1") == "job-1"
+    assert parse_result_ref("job-1") == "job-1"
+
+    with pytest.raises(DownloadError, match="Invalid Lyra result reference"):
+        parse_result_ref("lyra://results/job-1/extra")
+
+    with pytest.raises(DownloadError, match="Unsupported result reference"):
+        parse_result_ref("https://example.test/results/job-1")
+
+
+def test_sync_client_fetches_result_descriptor_from_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    def request(
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None,  # noqa: ARG001
+        json: dict[str, Any] | None,  # noqa: ARG001
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        seen.append(f"{method} {url}")
+        return FakeSyncResponse(payload=_result_descriptor_response())
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
+
+    descriptor = LyraAPIClient("example.test", secure=False).get_result_descriptor(
+        "lyra://results/job-1"
+    )
+
+    assert seen == ["GET http://example.test/jobs/job-1/result/descriptor"]
+    assert descriptor.result_ref == "lyra://results/job-1"
+    assert descriptor.table is not None
+    assert descriptor.table.columns == ["value"]
+    assert descriptor.preview.rows == [{"_result_index": "area-1", "value": 6}]
+
+
+def test_sync_client_downloads_jsonl_result_from_raw_job_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+        stream: bool,
+    ) -> FakeSyncResponse:
+        assert url == "http://example.test/jobs/job-1/result/table.jsonl"
+        assert stream is True
+        return FakeSyncResponse(
+            headers={"content-type": "application/x-ndjson"},
+            chunks=[b'{"_result_index":"area-1",', b'"value":6}\n'],
+        )
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    output = tmp_path / "result.jsonl"
+
+    LyraAPIClient("example.test", secure=False).download_result("job-1", output)
+
+    assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
+
+
+def test_sync_client_reports_result_download_http_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,  # noqa: ARG001
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+        stream: bool,  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        return FakeSyncResponse(status_code=409, text="result is not a table")
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+
+    with pytest.raises(
+        DownloadError,
+        match=r"Failed to download result\. HTTP 409: result is not a table",
+    ):
+        LyraAPIClient("example.test", secure=False).download_result(
+            "job-1",
+            tmp_path / "result.jsonl",
+        )
+
+
+def test_result_dataframe_requires_optional_pandas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def import_module(name: str) -> object:
+        if name == "pandas":
+            raise ImportError(name)
+        raise AssertionError(name)
+
+    monkeypatch.setattr("lyra.api.client.base.importlib.import_module", import_module)
+
+    with pytest.raises(DownloadError, match="pandas is required"):
+        LyraAPIClient("example.test", secure=False).result_dataframe("job-1")
+
+
+def test_sync_client_hydrates_result_dataframe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePandas:
+        @staticmethod
+        def read_json(path: Path, *, lines: bool) -> dict[str, Any]:
+            assert lines is True
+            return {"path_exists": path.exists(), "content": path.read_text()}
+
+    def import_module(name: str) -> object:
+        assert name == "pandas"
+        return FakePandas
+
+    def get(
+        url: str,  # noqa: ARG001
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+        stream: bool,  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        return FakeSyncResponse(chunks=[b'{"_result_index":"area-1","value":6}\n'])
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    monkeypatch.setattr("lyra.api.client.base.importlib.import_module", import_module)
+
+    frame = LyraAPIClient("example.test", secure=False).result_dataframe(
+        "lyra://results/job-1"
+    )
+
+    assert frame == {
+        "path_exists": True,
+        "content": '{"_result_index":"area-1","value":6}\n',
+    }
+
+
 class FakeContent:
     def __init__(
         self,
@@ -1495,3 +1687,105 @@ def test_async_client_fetches_file_result_metadata(
     assert isinstance(result, FileJobResult)
     assert result.file_path == "/lyra_data/cache/jobs/job-1/result.tif"
     assert result.media_type == "image/tiff"
+
+
+def test_async_client_fetches_result_descriptor_from_raw_job_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        requests_seen: ClassVar[list[dict[str, Any]]] = []
+
+        def request(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            self.requests_seen.append({"args": args, "kwargs": kwargs})
+            return super().request(*args, **kwargs)
+
+    RecordingSession.responses = [
+        FakeAsyncResponse(payload=_result_descriptor_response()),
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+    client = AsyncLyraAPIClient(
+        "example.test",
+        secure=False,
+        headers={"Authorization": "Bearer token"},
+    )
+
+    descriptor = asyncio.run(client.get_result_descriptor("job-1"))
+
+    assert RecordingSession.requests_seen == [
+        {
+            "args": ("GET", "http://example.test/jobs/job-1/result/descriptor"),
+            "kwargs": {
+                "params": None,
+                "json": None,
+                "headers": {"Authorization": "Bearer token"},
+            },
+        }
+    ]
+    assert descriptor.result_ref == "lyra://results/job-1"
+    assert descriptor.summary.row_count == 1
+
+
+def test_async_client_downloads_jsonl_result_from_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        urls: ClassVar[list[str]] = []
+
+        def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            self.urls.append(str(args[0]))
+            return super().get(*args, **kwargs)
+
+    def fake_aiofiles_open(path: Path, mode: str) -> FakeAsyncFile:
+        assert mode == "wb"
+        return FakeAsyncFile(path)
+
+    RecordingSession.responses = [
+        FakeAsyncResponse(chunks=[b'{"_result_index":"area-1","value":6}\n']),
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+    monkeypatch.setattr("lyra.api.client.async_.aiofiles.open", fake_aiofiles_open)
+    output = tmp_path / "result.jsonl"
+
+    asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).download_result(
+            "lyra://results/job-1",
+            output,
+        )
+    )
+
+    assert RecordingSession.urls == [
+        "http://example.test/jobs/job-1/result/table.jsonl",
+    ]
+    assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
+
+
+def test_async_client_reports_result_download_http_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ErrorSession(FakeSession):
+        def get(self, *_: object, **__: object) -> FakeAsyncResponse:
+            return FakeAsyncResponse(status=409, text="result is not a table")
+
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        ErrorSession,
+    )
+
+    with pytest.raises(
+        DownloadError,
+        match=r"Failed to download result\. HTTP 409: result is not a table",
+    ):
+        asyncio.run(
+            AsyncLyraAPIClient("example.test", secure=False).download_result(
+                "job-1",
+                tmp_path / "result.jsonl",
+            )
+        )

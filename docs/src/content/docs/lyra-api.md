@@ -10,12 +10,13 @@ development scripts that submit jobs against a running API server.
 ## Common Imports
 
 ```python
-from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient
+from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient, parse_result_ref
 ```
 
 Both clients return models from `lyra-sdk`, such as `DataTypesResponse`,
 `MetricCatalogResponse`, `MetricInfoV3`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`,
-observability models, plugin operation models, and terminal result models.
+observability models, plugin operation models, terminal result models, and
+`ResultDescriptor`.
 
 ## Client Configuration
 
@@ -99,6 +100,9 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 | `iter_job_events(job_id, last_event_id=None)` | Iterator or async iterator of `JobEvent` | Stream progress and terminal events. |
 | `get_job_result(job_id)` | `TerminalJobResult` | Fetch terminal JSON result metadata for table, file, failed, or cancelled jobs. |
 | `download_job_result_to_file(job_id, path)` | `None` | Download a terminal file result. |
+| `get_result_descriptor(result_ref_or_job_id)` | `ResultDescriptor` | Fetch compact result metadata, preview rows, lifetime, and raw-access links. |
+| `download_result(result_ref_or_job_id, path, format="jsonl")` | `None` | Stream a table result as raw JSONL. |
+| `result_dataframe(result_ref_or_job_id)` | pandas `DataFrame` | Optionally hydrate table JSONL locally when pandas is installed. |
 | `list_admin_jobs(limit=50, status=None, metric=None)` | `JobListResponse` | List recent jobs through the admin API. |
 | `cancel_admin_job(job_id)` | `JobCancelResponse` | Request cancellation through the admin API. |
 
@@ -108,6 +112,31 @@ lists. Each item includes `data_type`, `description`, and `wrapper_schema`.
 `get_job_result()` expects a JSON response. If the job produced a file, it
 returns `FileJobResult` metadata. Call `download_job_result_to_file()` to fetch
 the file bytes from `/jobs/{job_id}/result/download`.
+
+`get_result_descriptor()`, `download_result()`, and `result_dataframe()` accept
+either a raw job id or a stable result reference:
+
+```python
+result_ref = "lyra://results/job-1"
+job_id = parse_result_ref(result_ref)
+descriptor = client.get_result_descriptor(result_ref)
+client.download_result(job_id, "job-1.jsonl")
+```
+
+`download_result()` currently supports `format="jsonl"` for successful table
+results. `result_dataframe()` uses the same JSONL download path and raises
+`DownloadError` with install guidance when pandas is not available.
+
+Local analysis stays outside the Lyra server. For example, download one or more
+table results and compute correlations in your own Python process:
+
+```python
+descriptor = client.get_result_descriptor("lyra://results/job-1")
+
+if descriptor.result_kind == "table":
+    frame = client.result_dataframe(descriptor.result_ref)
+    correlation = frame["accessibility"].corr(frame["population"])
+```
 
 ## Admin And Operator Methods
 

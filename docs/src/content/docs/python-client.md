@@ -56,6 +56,34 @@ Failed and cancelled jobs return terminal JSON with `kind: "failed"` or
 `kind: "cancelled"`. File-producing jobs return `FileJobResult` metadata from
 the same method.
 
+## Result References And Local Analysis
+
+The descriptor route gives agents and scripts a stable result reference,
+preview rows, summary statistics, and raw-access metadata.
+
+```python
+descriptor = client.get_result_descriptor(job.job_id)
+print(descriptor.result_ref)
+print(descriptor.preview.rows)
+```
+
+Descriptor helpers also accept the stable `lyra://results/{job_id}` reference.
+Use `download_result()` for raw table JSONL, or `result_dataframe()` when pandas
+is installed in your local environment.
+
+```python
+result_ref = descriptor.result_ref
+client.download_result(result_ref, "job-1.jsonl")
+
+frame = client.result_dataframe(result_ref)
+correlation = frame["accessibility"].corr(frame["population"])
+print(correlation)
+```
+
+The correlation is computed by your Python process after downloading the raw
+result. Lyra stores and serves the job result, but it does not run this analysis
+server-side.
+
 ## Download File Results
 
 ```python

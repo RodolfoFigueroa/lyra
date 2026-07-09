@@ -8,7 +8,11 @@ from typing import Any
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
+from lyra.sdk.models.metric import (
+    MetricCatalogResponse,
+    MetricInfoV3,
+    build_metric_search_text,
+)
 from lyra.sdk.models.plugin_v3 import (
     CompiledMetricManifestV3,
     CompiledPluginManifestV3,
@@ -299,6 +303,13 @@ def get_metrics_info() -> list[MetricInfoV3]:
     ]
 
 
+def get_metric_search_text(name: str) -> str | None:
+    info = get_metric_info(name)
+    if info is None:
+        return None
+    return build_metric_search_text(info)
+
+
 def get_metric_catalog() -> MetricCatalogResponse:
     metrics = get_metrics_info()
     return MetricCatalogResponse(
@@ -371,6 +382,7 @@ def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV3:
         name=entry.metric.name,
         description=entry.metric.description.strip(),
         request_schema=entry.request_schema,
+        spatial_inputs=entry.metric.spatial_inputs,
         output=entry.metric.output,
     )
 

@@ -47,6 +47,9 @@ spatial wrapper definitions; fetch the live route for the full schema:
           "MetZoneCodeWrapperV3": { "...": "canonical wrapper definition" }
         }
       },
+      "spatial_inputs": {
+        "location": "location"
+      },
       "output": {
         "kind": "table",
         "columns": [
@@ -67,21 +70,35 @@ spatial wrapper definitions; fetch the live route for the full schema:
 
 The `catalog_fingerprint` changes when the public metric contract changes: a
 metric is added or removed, or a metric's name, description, `request_schema`,
-or `output` declaration changes. It does not represent internal deployment
-details such as plugin repo ids, worker queues, entrypoints, or job state.
+`spatial_inputs`, or `output` declaration changes. It does not represent
+internal deployment details such as plugin repo ids, worker queues, entrypoints,
+or job state.
 
 Each metric item includes:
 
 - `name`
 - `description`
 - `request_schema`
+- `spatial_inputs`
 - `output`
 
 The `request_schema` is the compiled client contract. It includes Lyra-owned
 spatial wrapper schemas, plugin-owned scalar inputs, batch item schemas, and
 `additionalProperties: false`.
 
+The `spatial_inputs` object maps request field names to Lyra spatial input
+kinds, currently `location` or `bounds`. Agent integrations use this metadata to
+find the field that should receive a supported spatial wrapper without
+reverse-engineering the JSON Schema. For the v1 MCP bridge, agents should use
+raw metropolitan zone codes through these fields.
+
 The catalog does not expose worker routing fields or Python entrypoints.
+
+Lyra also derives lexical search text from the public catalog fields. The
+derived text includes the metric name, description, input field names, input
+descriptions when present, output kind, output column names, column
+descriptions, and units. Optional plugin-authored search metadata such as tags
+or domains is intentionally deferred.
 
 ## Outputs
 

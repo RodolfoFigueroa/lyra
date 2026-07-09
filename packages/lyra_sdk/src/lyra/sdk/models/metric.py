@@ -1,8 +1,20 @@
 from typing import Any
 
-from lyra.sdk.models.plugin_v3 import OutputSpecV3
+from lyra.sdk.models.plugin_v3 import (
+    FileOutputV3,
+    OutputSpecV3,
+    SpatialInputKindV3,
+    TableOutputV3,
+)
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
+
+
+def _append_search_part(parts: list[str], value: Any) -> None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            parts.append(stripped)
 
 
 class MetricInfoV3(StrictBaseModel):
@@ -13,9 +25,53 @@ class MetricInfoV3(StrictBaseModel):
     request_schema: dict[str, Any] = Field(
         description="Effective JSON Schema for the client request payload.",
     )
+    spatial_inputs: dict[str, SpatialInputKindV3] = Field(
+        default_factory=dict,
+        description=(
+            "Request field names mapped to Lyra-owned spatial input kinds resolved "
+            "before worker execution."
+        ),
+    )
     output: OutputSpecV3 = Field(
         description="Successful metric output declaration.",
     )
+
+    def search_text(self) -> str:
+        """Return derived lexical text for catalog search."""
+
+        return build_metric_search_text(self)
+
+
+def build_metric_search_text(metric: MetricInfoV3) -> str:
+    """Build deterministic lexical text from public metric catalog fields."""
+
+    parts: list[str] = [metric.name, metric.description]
+    properties = metric.request_schema.get("properties")
+    if isinstance(properties, dict):
+        for field_name, property_schema in properties.items():
+            _append_search_part(parts, field_name)
+            if isinstance(property_schema, dict):
+                _append_search_part(parts, property_schema.get("description"))
+
+    output = metric.output
+    _append_search_part(parts, output.kind)
+    if isinstance(output, TableOutputV3):
+        for column in output.columns:
+            _append_search_part(parts, column.name)
+            _append_search_part(parts, column.description)
+            _append_search_part(parts, column.unit)
+        for column in output.batched_columns:
+            _append_search_part(parts, column.source)
+            _append_search_part(parts, column.name)
+            _append_search_part(parts, column.description)
+            _append_search_part(parts, column.unit)
+    elif isinstance(output, FileOutputV3):
+        _append_search_part(parts, output.media_type)
+        for extension in output.extensions:
+            _append_search_part(parts, extension)
+
+    unique_parts = dict.fromkeys(parts)
+    return " ".join(unique_parts)
 
 
 class MetricCatalogResponse(StrictBaseModel):
@@ -30,4 +86,4 @@ class MetricCatalogResponse(StrictBaseModel):
     )
 
 
-__all__ = ["MetricCatalogResponse", "MetricInfoV3"]
+__all__ = ["MetricCatalogResponse", "MetricInfoV3", "build_metric_search_text"]

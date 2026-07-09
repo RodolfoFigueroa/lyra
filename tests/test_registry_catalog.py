@@ -139,6 +139,7 @@ def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
     info_payload = info.model_dump()
     assert info_payload["name"] == "light_metric"
     assert info_payload["description"] == "A metric."
+    assert info_payload["spatial_inputs"] == {"location": "location"}
     assert info_payload["output"]["kind"] == "table"
     assert info_payload["output"]["columns"][0]["name"] == "value"
     assert info_payload["request_schema"]["required"] == ["location", "value"]
@@ -149,6 +150,52 @@ def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
     assert entry.queue == "lightweight"
     assert entry.repo_id == "owner__repo"
     assert entry.entrypoint == "fake_plugin.runner:run"
+
+
+def test_metric_search_text_is_derived_from_public_catalog_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    metric = _metric(
+        inputs={
+            "location": {"kind": "location"},
+            "value": {
+                "kind": "integer",
+                "description": "Value supplied by the caller.",
+            },
+        },
+        output={
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                }
+            ],
+        },
+    )
+    _write_manifest(repo, _manifest(metric=metric))
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
+    )
+    registry.refresh_catalog()
+
+    search_text = registry.get_metric_search_text("light_metric")
+
+    assert search_text is not None
+    assert "light_metric" in search_text
+    assert "A metric." in search_text
+    assert "location" in search_text
+    assert "value" in search_text
+    assert "Value supplied by the caller." in search_text
+    assert "table" in search_text
+    assert "Example output value." in search_text
+    assert "count" in search_text
 
 
 def test_catalog_sync_uses_enabled_state_repos_only(
@@ -236,6 +283,8 @@ def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
     metric_names = sorted(info.name for info in registry.get_metrics_info())
     table_entry = registry.get_metric_entry("smoke_table_metric")
     file_entry = registry.get_metric_entry("smoke_file_metric")
+    table_info = registry.get_metric_info("smoke_table_metric")
+    file_info = registry.get_metric_info("smoke_file_metric")
 
     assert result.updated_plugins == [f"dir:{SMOKE_PLUGIN_DIR.resolve()}"]
     assert metric_names == [
@@ -246,8 +295,12 @@ def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
     assert table_entry is not None
     assert table_entry.queue == "interactive"
     assert "GeoJSONLocationWrapperV3" in table_entry.request_schema["$defs"]
+    assert table_info is not None
+    assert table_info.spatial_inputs == {"location": "location"}
     assert file_entry is not None
     assert file_entry.metric.output.kind == "file"
+    assert file_info is not None
+    assert file_info.spatial_inputs == {"location": "location"}
 
 
 def test_catalog_refresh_detects_smoke_directory_manifest_edits(
@@ -602,6 +655,28 @@ def test_public_catalog_fingerprint_changes_when_public_contract_changes(
     registry.refresh_catalog()
 
     assert registry.get_public_catalog_fingerprint() != first
+
+
+def test_public_catalog_fingerprint_includes_spatial_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
+    )
+    registry.refresh_catalog()
+    info = registry.get_metric_info("light_metric")
+    assert info is not None
+    first = registry.public_catalog_fingerprint([info])
+    changed = info.model_copy(
+        update={"spatial_inputs": {"renamed_location": "location"}},
+    )
+
+    assert registry.public_catalog_fingerprint([changed]) != first
 
 
 def test_public_catalog_fingerprint_ignores_queue_assignment_and_repo_id(

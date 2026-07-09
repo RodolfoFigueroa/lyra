@@ -141,6 +141,7 @@ def test_metrics_route_returns_schema_metadata_only(
     metric_payload = payload["metrics"][0]
     assert metric_payload["name"] == "light_metric"
     assert metric_payload["description"] == "A lightweight metric."
+    assert metric_payload["spatial_inputs"] == {"location": "location"}
     assert metric_payload["request_schema"]["required"] == ["location", "value"]
     assert metric_payload["request_schema"]["properties"]["value"] == {
         "type": "integer",
@@ -164,6 +165,7 @@ def test_metric_route_returns_schema_metadata_only(
     payload = response.model_dump()
     assert payload["name"] == "light_metric"
     assert payload["description"] == "A lightweight metric."
+    assert payload["spatial_inputs"] == {"location": "location"}
     assert payload["request_schema"]["required"] == ["location", "value"]
     assert payload["request_schema"]["properties"]["value"] == {"type": "integer"}
     assert "oneOf" in payload["request_schema"]["properties"]["location"]

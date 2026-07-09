@@ -14,6 +14,8 @@ Lyra exposes current execution through:
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
 - `GET /jobs/{job_id}/result`
+- `GET /jobs/{job_id}/result/descriptor`
+- `GET /jobs/{job_id}/result/table.jsonl`
 - `GET /jobs/{job_id}/result/download`
 
 Supporting routes:
@@ -122,3 +124,20 @@ come from plugin sources stored in `/lyra_data/state/plugins.toml` and managed
 through `/admin/plugin-repos`. Supported source forms include GitHub entries,
 explicit `file://` local git repositories, and development `dir://` directory
 snapshots. Raw filesystem paths are not supported.
+
+## MCP Agent Surface
+
+The Lyra MCP server exposes a compact agent contract:
+
+- `lyra_search_metrics`
+- `lyra_get_metric`
+- `lyra_run_metric`
+- `lyra_get_job_result`
+- `lyra_get_result_metadata`
+- `lyra_get_result_preview`
+- `lyra_download_result`
+
+MCP result tools accept `lyra://results/{job_id}` references. Running jobs return
+`status: "running"` with `next_tool: "lyra_get_job_result"`. Terminal jobs return
+compact descriptors, previews, metadata, or JSONL download handoff metadata
+instead of inlining full raw tables.

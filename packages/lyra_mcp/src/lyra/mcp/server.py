@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from json import JSONDecodeError
 from typing import Annotated, Any, NoReturn, Protocol, cast
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -26,6 +27,7 @@ SERVER_INSTRUCTIONS = (
 _PROTOCOL_VERSION = "2025-06-18"
 _JSONRPC_VERSION = "2.0"
 _MAX_WAIT_SECONDS = 10.0
+_MAX_RESULT_WAIT_SECONDS = 30.0
 _POLL_INTERVAL_SECONDS = 0.1
 _DEFAULT_POLL_AFTER_SECONDS = 1
 _bearer = HTTPBearer(auto_error=False)
@@ -275,6 +277,57 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "lyra_get_job_result",
+            "description": (
+                "Continue polling a Lyra result reference. Returns status='running' "
+                "with next_tool='lyra_get_job_result' while the job is active, or "
+                "the compact terminal descriptor for succeeded, failed, or "
+                "cancelled jobs. Expired references return a structured error "
+                "telling the agent to rerun the job if the user still needs data."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "result_ref": {
+                        "type": "string",
+                        "description": "Stable reference shaped lyra://results/{job_id}.",
+                    },
+                    "wait_seconds": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": _MAX_RESULT_WAIT_SECONDS,
+                        "default": 30,
+                    },
+                },
+                "required": ["result_ref"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "lyra_get_result_metadata",
+            "description": (
+                "Return compact descriptor metadata for a Lyra result reference "
+                "without hydrating the raw table."
+            ),
+            "inputSchema": _result_ref_schema(),
+        },
+        {
+            "name": "lyra_get_result_preview",
+            "description": (
+                "Return only the descriptor preview rows and summary for a Lyra "
+                "result reference."
+            ),
+            "inputSchema": _result_ref_schema(),
+        },
+        {
+            "name": "lyra_download_result",
+            "description": (
+                "Return authenticated Lyra API handoff metadata for downloading "
+                "a table result as JSONL. This does not inline raw rows."
+            ),
+            "inputSchema": _result_ref_schema(),
+        },
     ]
 
 
@@ -306,6 +359,14 @@ async def _handle_tool_call(
             payload = await _tool_get_metric(tool_arguments, backend)
         elif tool_name == "lyra_run_metric":
             payload = await _tool_run_metric(tool_arguments, backend)
+        elif tool_name == "lyra_get_job_result":
+            payload = await _tool_get_job_result(tool_arguments, backend)
+        elif tool_name == "lyra_get_result_metadata":
+            payload = await _tool_get_result_metadata(tool_arguments, backend)
+        elif tool_name == "lyra_get_result_preview":
+            payload = await _tool_get_result_preview(tool_arguments, backend)
+        elif tool_name == "lyra_download_result":
+            payload = await _tool_download_result(tool_arguments, backend)
         else:
             _raise_tool_error(
                 "unknown_tool",
@@ -406,6 +467,131 @@ async def _tool_run_metric(
         await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - time.monotonic()))
 
 
+async def _tool_get_job_result(
+    arguments: dict[str, Any],
+    backend: LyraMCPBackend,
+) -> dict[str, Any]:
+    job_id = _job_id_from_result_ref(_required_string(arguments, "result_ref"))
+    wait_seconds = _bounded_float(
+        arguments.get("wait_seconds", 30),
+        field="wait_seconds",
+        minimum=0.0,
+        maximum=_MAX_RESULT_WAIT_SECONDS,
+    )
+    deadline = time.monotonic() + wait_seconds
+
+    while True:
+        snapshot = await backend.get_job(job_id)
+        if snapshot is None:
+            descriptor = await backend.get_result_descriptor(job_id)
+            if descriptor is not None:
+                return _model_dump(descriptor)
+            _raise_result_expired(job_id)
+
+        status = str(getattr(snapshot, "status", ""))
+        if _is_terminal_status(status):
+            descriptor = await backend.get_result_descriptor(job_id)
+            if descriptor is None:
+                _raise_result_expired(job_id)
+            return _model_dump(descriptor)
+
+        if time.monotonic() >= deadline:
+            return _running_payload(job_id)
+        await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - time.monotonic()))
+
+
+async def _tool_get_result_metadata(
+    arguments: dict[str, Any],
+    backend: LyraMCPBackend,
+) -> dict[str, Any]:
+    descriptor = await _descriptor_for_result_ref(arguments, backend)
+    payload = _model_dump(descriptor)
+    return {
+        "job_id": payload["job_id"],
+        "status": payload["status"],
+        "result_kind": payload["result_kind"],
+        "result_ref": payload["result_ref"],
+        "lifetime": payload.get("lifetime", {}),
+        "table": payload.get("table"),
+        "file": payload.get("file"),
+        "summary": payload["summary"],
+        "error": payload.get("error"),
+    }
+
+
+async def _tool_get_result_preview(
+    arguments: dict[str, Any],
+    backend: LyraMCPBackend,
+) -> dict[str, Any]:
+    descriptor = await _descriptor_for_result_ref(arguments, backend)
+    payload = _model_dump(descriptor)
+    return {
+        "job_id": payload["job_id"],
+        "status": payload["status"],
+        "result_kind": payload["result_kind"],
+        "result_ref": payload["result_ref"],
+        "lifetime": payload.get("lifetime", {}),
+        "preview": payload.get("preview", {}),
+        "summary": payload["summary"],
+        "error": payload.get("error"),
+    }
+
+
+async def _tool_download_result(
+    arguments: dict[str, Any],
+    backend: LyraMCPBackend,
+) -> dict[str, Any]:
+    descriptor = await _descriptor_for_result_ref(arguments, backend)
+    payload = _model_dump(descriptor)
+    raw = dict(payload["raw"])
+    jsonl_path = raw.get("jsonl_path")
+    formats = raw.get("formats", [])
+    if payload["result_kind"] != "table" or "jsonl" not in formats or not jsonl_path:
+        _raise_tool_error(
+            "unsupported_result_download",
+            "Only table results can be downloaded as JSONL through MCP v1.",
+            {
+                "job_id": payload["job_id"],
+                "result_ref": payload["result_ref"],
+                "result_kind": payload["result_kind"],
+                "formats": formats,
+            },
+        )
+
+    return {
+        "job_id": payload["job_id"],
+        "result_ref": payload["result_ref"],
+        "status": payload["status"],
+        "format": "jsonl",
+        "media_type": "application/x-ndjson",
+        "lyra_api": {
+            "method": "GET",
+            "path": jsonl_path,
+            "requires_auth": True,
+        },
+        "client_helpers": {
+            "python_sync": (
+                "LyraAPIClient.download_result(result_ref, path, format='jsonl')"
+            ),
+            "python_async": (
+                "AsyncLyraAPIClient.download_result(result_ref, path, format='jsonl')"
+            ),
+        },
+        "expires_in_seconds": payload.get("lifetime", {}).get("expires_in_seconds"),
+    }
+
+
+async def _descriptor_for_result_ref(
+    arguments: dict[str, Any],
+    backend: LyraMCPBackend,
+) -> Any:
+    job_id = _job_id_from_result_ref(_required_string(arguments, "result_ref"))
+    descriptor = await backend.get_result_descriptor(job_id)
+    if descriptor is None:
+        _raise_result_expired(job_id)
+    return descriptor
+
+
 def _run_payload_for_metric(
     *,
     metric: Any,
@@ -474,6 +660,20 @@ def _running_payload(job_id: str) -> dict[str, Any]:
         "result_ref": _result_ref_for_job(job_id),
         "poll_after_seconds": _DEFAULT_POLL_AFTER_SECONDS,
         "next_tool": "lyra_get_job_result",
+    }
+
+
+def _result_ref_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "result_ref": {
+                "type": "string",
+                "description": "Stable reference shaped lyra://results/{job_id}.",
+            },
+        },
+        "required": ["result_ref"],
+        "additionalProperties": False,
     }
 
 
@@ -617,6 +817,44 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
 
 def _result_ref_for_job(job_id: str) -> str:
     return f"lyra://results/{job_id}"
+
+
+def _job_id_from_result_ref(result_ref: str) -> str:
+    if "://" not in result_ref:
+        return result_ref
+
+    parsed = urlparse(result_ref)
+    if (
+        parsed.scheme != "lyra"
+        or parsed.netloc != "results"
+        or not parsed.path.startswith("/")
+        or parsed.path == "/"
+        or "/" in parsed.path.removeprefix("/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        _raise_tool_error(
+            "invalid_result_ref",
+            "Invalid Lyra result reference. Expected 'lyra://results/{job_id}'.",
+            {"result_ref": result_ref},
+        )
+    return parsed.path.removeprefix("/")
+
+
+def _raise_result_expired(job_id: str) -> NoReturn:
+    _raise_tool_error(
+        "result_expired",
+        (
+            f"Result for job {job_id} expired or was not found. Rerun the metric "
+            "if the user still wants this data."
+        ),
+        {
+            "job_id": job_id,
+            "result_ref": _result_ref_for_job(job_id),
+            "rerun_required": True,
+        },
+    )
 
 
 def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:

@@ -135,6 +135,35 @@ File results return stable metadata as JSON:
 Repeated `GET /jobs/{job_id}/result` calls return the same stored terminal
 payload until the job-store TTL expires.
 
+## Result Descriptor Contract
+
+Agent-facing result surfaces use a descriptor instead of embedding the full
+terminal payload. The v1 result reference format is:
+
+```text
+lyra://results/{job_id}
+```
+
+Descriptors keep the terminal result payload unchanged and include:
+
+- `job_id`, terminal `status`, `result_kind`, and `result_ref`.
+- `lifetime.expires_in_seconds` and, when Redis `PTTL` makes it exact,
+  `lifetime.expires_at`.
+- `raw.result_ref`, `raw.formats`, and `raw.terminal_json_path` for fetching the
+  stored terminal JSON separately.
+- `table` metadata for table results: row count, column count, ordered columns,
+  and the preview index field.
+- `preview.rows` as row-oriented JSON objects. Each row includes the result
+  index under the named index field, `_result_index` unless a table column would
+  collide with that name.
+- `summary.columns` with per-column `count` and `null_count`; numeric columns
+  also include `count`, `null_count`, `min`, `max`, and `mean`.
+- `error` details for failed and cancelled terminal results when available.
+
+The descriptor shape does not depend on table size. Full table JSON and file
+metadata remain available through the stored terminal result while Redis retains
+the job result key.
+
 ## Download File Result
 
 `GET /jobs/{job_id}/result/download` streams the produced file bytes for

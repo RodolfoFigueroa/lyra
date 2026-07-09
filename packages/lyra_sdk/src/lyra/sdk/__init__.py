@@ -29,6 +29,9 @@ from lyra.sdk.models import (
     PluginRepoResponse,
     PluginRoutingResponse,
     QueuesResponse,
+    ResultDescriptor,
+    ResultLifetime,
+    ResultReference,
     SetMetricQueueRequest,
     SyncPluginRepoResponse,
     TableJobResult,
@@ -39,7 +42,11 @@ from lyra.sdk.models import (
     WorkerInspectMetadata,
     WorkerRestartResponse,
     WorkersResponse,
+    build_result_descriptor,
+    build_table_preview,
+    build_table_summary,
     parse_job_result,
+    result_ref_for_job,
 )
 
 __all__ = [
@@ -72,6 +79,9 @@ __all__ = [
     "PluginRepoResponse",
     "PluginRoutingResponse",
     "QueuesResponse",
+    "ResultDescriptor",
+    "ResultLifetime",
+    "ResultReference",
     "RunContext",
     "SetMetricQueueRequest",
     "SyncPluginRepoResponse",
@@ -83,5 +93,9 @@ __all__ = [
     "WorkerInspectMetadata",
     "WorkerRestartResponse",
     "WorkersResponse",
+    "build_result_descriptor",
+    "build_table_preview",
+    "build_table_summary",
     "parse_job_result",
+    "result_ref_for_job",
 ]

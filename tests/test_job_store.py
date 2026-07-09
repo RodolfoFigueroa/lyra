@@ -1,11 +1,18 @@
 import asyncio
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from lyra.sdk.models import FailedJobResult, JobEnvelope
+from lyra.sdk.models import (
+    CancelledJobResult,
+    FailedJobResult,
+    JobEnvelope,
+    ResultReference,
+    TableJobResult,
+)
 
 from lyra_app import job_store
 from lyra_app.config import clear_config_cache
@@ -16,6 +23,8 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
+        self.pttl_values: dict[str, int] = {}
+        self.ttl_values: dict[str, int] = {}
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
@@ -28,6 +37,12 @@ class FakeRedisSync:
 
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
+
+    def pttl(self, key: str) -> int:
+        return self.pttl_values.get(key, -2)
+
+    def ttl(self, key: str) -> int:
+        return self.ttl_values.get(key, -2)
 
     def xadd(self, key: str, fields: dict[str, str]) -> str:
         stream = self.streams.setdefault(key, [])
@@ -78,6 +93,8 @@ class FakeRedisAsync:
     def __init__(self, payload: str | None = None) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
+        self.pttl_values: dict[str, int] = {}
+        self.ttl_values: dict[str, int] = {}
         self.deleted: list[str] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
@@ -93,6 +110,12 @@ class FakeRedisAsync:
 
     async def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
+
+    async def pttl(self, key: str) -> int:
+        return self.pttl_values.get(key, -2)
+
+    async def ttl(self, key: str) -> int:
+        return self.ttl_values.get(key, -2)
 
     async def delete(self, key: str) -> None:
         self.deleted.append(key)
@@ -216,6 +239,203 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
     events = job_store.read_job_events("job-1", client=redis)
     assert [event.event.event for event in events] == ["started", "failed"]
     assert events[-1].event.data == payload
+
+
+def test_result_reference_uses_v1_job_uri() -> None:
+    reference = ResultReference.for_job_id("job-1")
+
+    assert reference.uri == "lyra://results/job-1"
+
+    with pytest.raises(ValueError, match="result reference"):
+        ResultReference(job_id="job-1", uri="lyra://results/other-job")
+
+
+def test_table_result_descriptor_builds_preview_and_numeric_summary() -> None:
+    redis = FakeRedisSync()
+    result = TableJobResult(
+        job_id="job-1",
+        index=["area-1", "area-2", "area-3"],
+        columns=["score", "name"],
+        data=[[1, "alpha"], [None, "beta"], [3, "alpha"]],
+    )
+    payload = job_store.save_job_result(result, metric="heavy_metric", client=redis)
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.job_id == "job-1"
+    assert descriptor.status == "succeeded"
+    assert descriptor.result_kind == "table"
+    assert descriptor.result_ref == "lyra://results/job-1"
+    assert descriptor.table is not None
+    assert descriptor.table.row_count == 3
+    assert descriptor.table.column_count == 2
+    assert descriptor.table.columns == ["score", "name"]
+    assert descriptor.table.index_field == "_result_index"
+    assert descriptor.preview.rows == [
+        {"_result_index": "area-1", "score": 1, "name": "alpha"},
+        {"_result_index": "area-2", "score": None, "name": "beta"},
+        {"_result_index": "area-3", "score": 3, "name": "alpha"},
+    ]
+    assert descriptor.preview.truncated is False
+    score_summary = descriptor.summary.columns[0]
+    assert score_summary.name == "score"
+    assert score_summary.count == 2
+    assert score_summary.null_count == 1
+    assert score_summary.numeric is not None
+    assert score_summary.numeric.model_dump() == {
+        "count": 2,
+        "null_count": 1,
+        "min": 1,
+        "max": 3,
+        "mean": 2.0,
+    }
+    name_summary = descriptor.summary.columns[1]
+    assert name_summary.name == "name"
+    assert name_summary.count == 3
+    assert name_summary.null_count == 0
+    assert name_summary.numeric is None
+    assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
+
+
+def test_table_preview_uses_collision_free_named_index_field() -> None:
+    redis = FakeRedisSync()
+    job_store.save_job_result(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1"],
+            columns=["_result_index", "value"],
+            data=[["column-value", 1]],
+        ),
+        client=redis,
+    )
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.table is not None
+    assert descriptor.table.index_field == "__result_index"
+    assert descriptor.preview.rows == [
+        {"__result_index": "area-1", "_result_index": "column-value", "value": 1}
+    ]
+
+
+def test_result_descriptor_uses_pttl_for_exact_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisSync()
+    fixed_now = datetime(2026, 7, 8, 12, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(job_store, "_now", lambda: fixed_now)
+    job_store.save_job_result(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1"],
+            columns=["score"],
+            data=[[1]],
+        ),
+        client=redis,
+    )
+    redis.pttl_values[job_store.result_key("job-1")] = 90_500
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.lifetime.expires_in_seconds == 91
+    assert descriptor.lifetime.expires_at == datetime(
+        2026,
+        7,
+        8,
+        12,
+        1,
+        30,
+        500000,
+        tzinfo=UTC,
+    )
+
+
+def test_result_descriptor_uses_ttl_seconds_without_guessing_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisSync()
+    monkeypatch.setattr(redis, "pttl", None)
+    redis.ttl_values[job_store.result_key("job-1")] = 90
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1"],
+            columns=["score"],
+            data=[[1]],
+        ).model_dump(mode="json", exclude_none=True)
+    )
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.lifetime.expires_in_seconds == 90
+    assert descriptor.lifetime.expires_at is None
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_error"),
+    [
+        (
+            FailedJobResult(
+                job_id="job-1",
+                error={"type": "worker", "message": "boom"},
+            ),
+            {"type": "worker", "message": "boom"},
+        ),
+        (CancelledJobResult(job_id="job-1"), None),
+        (
+            CancelledJobResult(
+                job_id="job-1",
+                error={"type": "cancelled", "message": "stopped"},
+            ),
+            {"type": "cancelled", "message": "stopped"},
+        ),
+    ],
+)
+def test_descriptor_reports_failed_and_cancelled_terminal_results(
+    result: FailedJobResult | CancelledJobResult,
+    expected_error: dict[str, Any] | None,
+) -> None:
+    redis = FakeRedisSync()
+    payload = job_store.save_job_result(result, client=redis)
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.result_ref == "lyra://results/job-1"
+    assert descriptor.result_kind == result.kind
+    assert descriptor.status == result.status
+    assert descriptor.preview.rows == []
+    assert descriptor.summary.kind == result.kind
+    assert descriptor.summary.error == expected_error
+    assert descriptor.error == expected_error
+    assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
+
+
+def test_async_result_descriptor_reads_stored_result_and_lifetime() -> None:
+    redis = FakeRedisAsync(
+        json.dumps(
+            TableJobResult(
+                job_id="job-1",
+                index=["area-1"],
+                columns=["score"],
+                data=[[4]],
+            ).model_dump(mode="json", exclude_none=True)
+        )
+    )
+    redis.pttl_values[job_store.result_key("job-1")] = 1_500
+
+    descriptor = asyncio.run(
+        job_store.get_job_result_descriptor_async("job-1", client=redis)
+    )
+
+    assert descriptor is not None
+    assert descriptor.result_ref == "lyra://results/job-1"
+    assert descriptor.preview.rows == [{"_result_index": "area-1", "score": 4}]
+    assert descriptor.lifetime.expires_in_seconds == 2
 
 
 def test_job_status_index_lists_recent_jobs_newest_first() -> None:

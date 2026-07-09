@@ -17,6 +17,8 @@ from lyra.sdk.models.admin import (
 )
 from lyra.sdk.models.data_types import DataTypeSchemaInfo, DataTypesResponse
 from lyra.sdk.models.job import (
+    DEFAULT_RESULT_INDEX_FIELD,
+    DEFAULT_RESULT_PREVIEW_ROWS,
     CancelledJobResult,
     FailedJobResult,
     FileJobResult,
@@ -29,10 +31,26 @@ from lyra.sdk.models.job import (
     JobLinks,
     JobListResponse,
     JobStatusInfo,
+    NumericColumnSummary,
+    RawResultFormat,
+    ResultColumnSummary,
+    ResultDescriptor,
+    ResultFileMetadata,
+    ResultKind,
+    ResultLifetime,
+    ResultRawAccess,
+    ResultReference,
+    ResultSummary,
+    ResultTableMetadata,
+    ResultTablePreview,
     TableJobResult,
     TerminalJobResult,
     TerminalJobStatus,
+    build_result_descriptor,
+    build_table_preview,
+    build_table_summary,
     parse_job_result,
+    result_ref_for_job,
 )
 from lyra.sdk.models.lookups import MetZoneCodeResponse
 from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
@@ -82,6 +100,8 @@ from lyra.sdk.models.plugin_v3 import (
 )
 
 __all__ = [
+    "DEFAULT_RESULT_INDEX_FIELD",
+    "DEFAULT_RESULT_PREVIEW_ROWS",
     "AdminStatusResponse",
     "BatchInputV3",
     "BatchedTableOutputColumnV3",
@@ -123,6 +143,7 @@ __all__ = [
     "MetricManifestV3",
     "MetricQueueAssignmentResponse",
     "NumberInputV3",
+    "NumericColumnSummary",
     "OutputColumnTypeV3",
     "OutputSpecV3",
     "PluginCatalogRefreshResponse",
@@ -136,8 +157,19 @@ __all__ = [
     "PluginSourceSummary",
     "QueueSummary",
     "QueuesResponse",
+    "RawResultFormat",
     "ReadinessStatus",
     "RedisHealth",
+    "ResultColumnSummary",
+    "ResultDescriptor",
+    "ResultFileMetadata",
+    "ResultKind",
+    "ResultLifetime",
+    "ResultRawAccess",
+    "ResultReference",
+    "ResultSummary",
+    "ResultTableMetadata",
+    "ResultTablePreview",
     "SetMetricQueueRequest",
     "StringInputV3",
     "SyncPluginRepoResponse",
@@ -156,6 +188,10 @@ __all__ = [
     "WorkerSummary",
     "WorkerTaskSummary",
     "WorkersResponse",
+    "build_result_descriptor",
+    "build_table_preview",
+    "build_table_summary",
     "compile_plugin_manifest",
     "parse_job_result",
+    "result_ref_for_job",
 ]

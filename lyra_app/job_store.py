@@ -1,8 +1,17 @@
 import json
-from datetime import UTC, datetime
+import math
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, TypeAlias
 
-from lyra.sdk.models import JobEnvelope, JobEvent, TerminalJobResult
+from lyra.sdk.models import (
+    JobEnvelope,
+    JobEvent,
+    ResultDescriptor,
+    ResultLifetime,
+    TerminalJobResult,
+    build_result_descriptor,
+    parse_job_result,
+)
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
 
@@ -89,6 +98,53 @@ def _job_store_ttl_seconds(config: LyraConfig | None = None) -> int:
     if config is not None:
         return config.job_store.ttl_seconds
     return get_config().job_store.ttl_seconds
+
+
+def _lifetime_from_ttl_ms(ttl_ms: int | None) -> ResultLifetime:
+    if ttl_ms is None or ttl_ms < 0:
+        return ResultLifetime()
+    return ResultLifetime(
+        expires_in_seconds=math.ceil(ttl_ms / 1000),
+        expires_at=_now() + timedelta(milliseconds=ttl_ms),
+    )
+
+
+def _lifetime_from_ttl_seconds(ttl_seconds: int | None) -> ResultLifetime:
+    if ttl_seconds is None or ttl_seconds < 0:
+        return ResultLifetime()
+    return ResultLifetime(expires_in_seconds=ttl_seconds)
+
+
+def get_result_lifetime(
+    job_id: str,
+    *,
+    client: Any | None = None,
+) -> ResultLifetime:
+    client = redis_client_sync if client is None else client
+    key = result_key(job_id)
+    pttl = getattr(client, "pttl", None)
+    if callable(pttl):
+        return _lifetime_from_ttl_ms(pttl(key))
+    ttl = getattr(client, "ttl", None)
+    if callable(ttl):
+        return _lifetime_from_ttl_seconds(ttl(key))
+    return ResultLifetime()
+
+
+async def get_result_lifetime_async(
+    job_id: str,
+    *,
+    client: Any | None = None,
+) -> ResultLifetime:
+    client = redis_client if client is None else client
+    key = result_key(job_id)
+    pttl = getattr(client, "pttl", None)
+    if callable(pttl):
+        return _lifetime_from_ttl_ms(await pttl(key))
+    ttl = getattr(client, "ttl", None)
+    if callable(ttl):
+        return _lifetime_from_ttl_seconds(await ttl(key))
+    return ResultLifetime()
 
 
 def _apply_ttl_sync(client: Any, job_id: str) -> None:
@@ -258,6 +314,32 @@ def save_job_result(
     )
     _apply_ttl_sync(client, result.job_id)
     return payload
+
+
+def get_job_result(
+    job_id: str,
+    client: Any | None = None,
+) -> dict[str, Any] | None:
+    client = redis_client_sync if client is None else client
+    payload = client.get(result_key(job_id))
+    if payload is None:
+        return None
+    return _loads_json(payload)
+
+
+def get_job_result_descriptor(
+    job_id: str,
+    *,
+    client: Any | None = None,
+) -> ResultDescriptor | None:
+    client = redis_client_sync if client is None else client
+    payload = get_job_result(job_id, client=client)
+    if payload is None:
+        return None
+    return build_result_descriptor(
+        parse_job_result(payload),
+        lifetime=get_result_lifetime(job_id, client=client),
+    )
 
 
 def get_job_status(
@@ -445,6 +527,21 @@ async def get_job_result_async(
     return _loads_json(payload)
 
 
+async def get_job_result_descriptor_async(
+    job_id: str,
+    *,
+    client: Any | None = None,
+) -> ResultDescriptor | None:
+    client = redis_client if client is None else client
+    payload = await get_job_result_async(job_id, client=client)
+    if payload is None:
+        return None
+    return build_result_descriptor(
+        parse_job_result(payload),
+        lifetime=await get_result_lifetime_async(job_id, client=client),
+    )
+
+
 async def delete_job_result_async(job_id: str, client: Any | None = None) -> None:
     client = redis_client if client is None else client
     await client.delete(result_key(job_id))
@@ -519,9 +616,14 @@ __all__ = [
     "create_job_async",
     "delete_job_result_async",
     "events_key",
+    "get_job_result",
     "get_job_result_async",
+    "get_job_result_descriptor",
+    "get_job_result_descriptor_async",
     "get_job_status",
     "get_job_status_async",
+    "get_result_lifetime",
+    "get_result_lifetime_async",
     "is_job_cancelled",
     "is_terminal_status",
     "job_index_key",

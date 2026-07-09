@@ -1,3 +1,4 @@
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
@@ -14,6 +15,11 @@ JobLifecycleStatus = Literal[
     "cancelled",
 ]
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
+ResultKind = Literal["table", "file", "failed", "cancelled"]
+RawResultFormat = Literal["terminal_json"]
+
+DEFAULT_RESULT_PREVIEW_ROWS = 20
+DEFAULT_RESULT_INDEX_FIELD = "_result_index"
 
 
 def _string_axis_values(values: Iterable[Any], *, axis: str) -> list[str]:
@@ -258,6 +264,348 @@ def parse_job_result(payload: Any) -> TerminalJobResult:
     return _TERMINAL_JOB_RESULT_ADAPTER.validate_python(payload)
 
 
+def result_ref_for_job(job_id: str) -> str:
+    """Return the stable v1 result reference for a job."""
+
+    return f"lyra://results/{job_id}"
+
+
+class ResultReference(StrictBaseModel):
+    """Stable agent-facing reference to a stored terminal job result."""
+
+    job_id: str = Field(min_length=1, description="Job that produced the result.")
+    uri: str = Field(min_length=1, description="Stable result reference URI.")
+
+    @classmethod
+    def for_job_id(cls, job_id: str) -> Self:
+        return cls(job_id=job_id, uri=result_ref_for_job(job_id))
+
+    @model_validator(mode="after")
+    def validate_uri(self) -> Self:
+        expected = result_ref_for_job(self.job_id)
+        if self.uri != expected:
+            msg = f"result reference must be {expected!r}"
+            raise ValueError(msg)
+        return self
+
+
+class ResultLifetime(StrictBaseModel):
+    """Redis-backed lifetime metadata for a stored result."""
+
+    expires_in_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        description="Approximate remaining result lifetime, when available.",
+    )
+    expires_at: datetime | None = Field(
+        default=None,
+        description="Exact result expiry timestamp, when computable.",
+    )
+
+
+def _default_raw_result_formats() -> list[RawResultFormat]:
+    return ["terminal_json"]
+
+
+class ResultRawAccess(StrictBaseModel):
+    """Metadata for retrieving the raw stored terminal result."""
+
+    result_ref: str = Field(min_length=1, description="Stable result reference URI.")
+    formats: list[RawResultFormat] = Field(
+        default_factory=_default_raw_result_formats,
+        min_length=1,
+        description="Raw result formats supported by the server.",
+    )
+    terminal_json_path: str = Field(
+        min_length=1,
+        description="HTTP path for the stored terminal result JSON payload.",
+    )
+
+
+class ResultTableMetadata(StrictBaseModel):
+    """Shape metadata for a table terminal result."""
+
+    row_count: int = Field(ge=0, description="Total number of rows in the table.")
+    column_count: int = Field(ge=0, description="Total number of table columns.")
+    columns: list[str] = Field(description="Ordered table column names.")
+    index_field: str = Field(
+        min_length=1,
+        description="Preview field name containing the result index value.",
+    )
+
+
+class ResultTablePreview(StrictBaseModel):
+    """Row-oriented preview of a table result."""
+
+    index_field: str = Field(
+        default=DEFAULT_RESULT_INDEX_FIELD,
+        min_length=1,
+        description="Field name containing the result index value.",
+    )
+    rows: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Preview rows as JSON objects.",
+    )
+    row_limit: int = Field(
+        default=DEFAULT_RESULT_PREVIEW_ROWS,
+        ge=0,
+        description="Maximum number of preview rows requested.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="Whether the preview omits rows from the full table.",
+    )
+
+
+class NumericColumnSummary(StrictBaseModel):
+    """Numeric statistics for one table column."""
+
+    count: int = Field(ge=0, description="Number of finite numeric values.")
+    null_count: int = Field(
+        ge=0,
+        description="Number of null or non-finite values.",
+    )
+    min: int | float | None = Field(default=None, description="Minimum value.")
+    max: int | float | None = Field(default=None, description="Maximum value.")
+    mean: float | None = Field(default=None, description="Arithmetic mean.")
+
+
+class ResultColumnSummary(StrictBaseModel):
+    """Summary statistics for one table column."""
+
+    name: str = Field(min_length=1, description="Column name.")
+    count: int = Field(ge=0, description="Number of non-null values.")
+    null_count: int = Field(ge=0, description="Number of null values.")
+    numeric: NumericColumnSummary | None = Field(
+        default=None,
+        description="Numeric statistics when every non-null value is numeric.",
+    )
+
+
+class ResultSummary(StrictBaseModel):
+    """Agent-facing summary of the terminal result."""
+
+    kind: ResultKind = Field(description="Stored terminal result kind.")
+    row_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Total rows for table results.",
+    )
+    column_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Total columns for table results.",
+    )
+    columns: list[ResultColumnSummary] = Field(
+        default_factory=list,
+        description="Per-column summaries for table results.",
+    )
+    error: dict[str, Any] | None = Field(
+        default=None,
+        description="Terminal error details for failed or cancelled results.",
+    )
+
+
+class ResultFileMetadata(StrictBaseModel):
+    """Metadata for a file terminal result."""
+
+    file_path: str = Field(min_length=1, description="Stored file path.")
+    media_type: str = Field(min_length=1, description="Stored file media type.")
+
+
+class ResultDescriptor(StrictBaseModel):
+    """Stable descriptor returned to agents instead of raw terminal payloads."""
+
+    job_id: str = Field(min_length=1, description="Job that produced the result.")
+    status: TerminalJobStatus = Field(description="Terminal job status.")
+    result_kind: ResultKind = Field(description="Stored terminal result kind.")
+    result_ref: str = Field(min_length=1, description="Stable result reference URI.")
+    lifetime: ResultLifetime = Field(description="Redis-backed result lifetime.")
+    raw: ResultRawAccess = Field(description="Raw terminal result access metadata.")
+    table: ResultTableMetadata | None = Field(
+        default=None,
+        description="Table shape metadata for table results.",
+    )
+    preview: ResultTablePreview = Field(
+        default_factory=ResultTablePreview,
+        description="Row-oriented table preview.",
+    )
+    summary: ResultSummary = Field(description="Compact result summary.")
+    file: ResultFileMetadata | None = Field(
+        default=None,
+        description="File metadata for file results.",
+    )
+    error: dict[str, Any] | None = Field(
+        default=None,
+        description="Terminal error details for failed or cancelled results.",
+    )
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> Self:
+        expected = result_ref_for_job(self.job_id)
+        if self.result_ref != expected:
+            msg = f"result_ref must be {expected!r}"
+            raise ValueError(msg)
+        if self.raw.result_ref != self.result_ref:
+            msg = "raw.result_ref must match result_ref"
+            raise ValueError(msg)
+        return self
+
+
+def _preview_index_field(columns: Sequence[str]) -> str:
+    field = DEFAULT_RESULT_INDEX_FIELD
+    while field in columns:
+        field = f"_{field}"
+    return field
+
+
+def build_table_preview(
+    result: TableJobResult,
+    *,
+    row_limit: int = DEFAULT_RESULT_PREVIEW_ROWS,
+    index_field: str | None = None,
+) -> ResultTablePreview:
+    """Build a row-oriented table preview that includes the result index."""
+
+    preview_index_field = index_field or _preview_index_field(result.columns)
+    rows: list[dict[str, Any]] = []
+    for result_index, values in zip(
+        result.index[:row_limit],
+        result.data[:row_limit],
+        strict=True,
+    ):
+        row = {preview_index_field: result_index}
+        row.update(dict(zip(result.columns, values, strict=True)))
+        rows.append(row)
+
+    return ResultTablePreview(
+        index_field=preview_index_field,
+        rows=rows,
+        row_limit=row_limit,
+        truncated=len(result.data) > row_limit,
+    )
+
+
+def _is_nullish(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and not math.isfinite(value))
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _column_values(result: TableJobResult, column_position: int) -> list[Any]:
+    return [row[column_position] for row in result.data]
+
+
+def _numeric_summary(values: Sequence[Any]) -> NumericColumnSummary | None:
+    null_count = sum(1 for value in values if _is_nullish(value))
+    non_null_values = [value for value in values if not _is_nullish(value)]
+    numeric_values = [value for value in non_null_values if _is_finite_number(value)]
+    if not numeric_values or len(numeric_values) != len(non_null_values):
+        return None
+
+    return NumericColumnSummary(
+        count=len(numeric_values),
+        null_count=null_count,
+        min=min(numeric_values),
+        max=max(numeric_values),
+        mean=sum(float(value) for value in numeric_values) / len(numeric_values),
+    )
+
+
+def build_table_summary(result: TableJobResult) -> ResultSummary:
+    """Build deterministic per-column summaries for a table result."""
+
+    columns: list[ResultColumnSummary] = []
+    for position, column in enumerate(result.columns):
+        values = _column_values(result, position)
+        null_count = sum(1 for value in values if _is_nullish(value))
+        columns.append(
+            ResultColumnSummary(
+                name=column,
+                count=len(values) - null_count,
+                null_count=null_count,
+                numeric=_numeric_summary(values),
+            )
+        )
+
+    return ResultSummary(
+        kind="table",
+        row_count=len(result.index),
+        column_count=len(result.columns),
+        columns=columns,
+    )
+
+
+def build_result_descriptor(
+    result: TerminalJobResult,
+    *,
+    lifetime: ResultLifetime | None = None,
+    terminal_json_path: str | None = None,
+    preview_row_limit: int = DEFAULT_RESULT_PREVIEW_ROWS,
+) -> ResultDescriptor:
+    """Build an agent-facing descriptor from a terminal result."""
+
+    result_ref = result_ref_for_job(result.job_id)
+    raw = ResultRawAccess(
+        result_ref=result_ref,
+        terminal_json_path=terminal_json_path or f"/jobs/{result.job_id}/result",
+    )
+    resolved_lifetime = lifetime or ResultLifetime()
+
+    if isinstance(result, TableJobResult):
+        preview = build_table_preview(result, row_limit=preview_row_limit)
+        return ResultDescriptor(
+            job_id=result.job_id,
+            status=result.status,
+            result_kind=result.kind,
+            result_ref=result_ref,
+            lifetime=resolved_lifetime,
+            raw=raw,
+            table=ResultTableMetadata(
+                row_count=len(result.index),
+                column_count=len(result.columns),
+                columns=result.columns,
+                index_field=preview.index_field,
+            ),
+            preview=preview,
+            summary=build_table_summary(result),
+        )
+
+    if isinstance(result, FileJobResult):
+        file_metadata = ResultFileMetadata(
+            file_path=result.file_path,
+            media_type=result.media_type,
+        )
+        return ResultDescriptor(
+            job_id=result.job_id,
+            status=result.status,
+            result_kind=result.kind,
+            result_ref=result_ref,
+            lifetime=resolved_lifetime,
+            raw=raw,
+            summary=ResultSummary(kind="file"),
+            file=file_metadata,
+        )
+
+    error = result.error
+    return ResultDescriptor(
+        job_id=result.job_id,
+        status=result.status,
+        result_kind=result.kind,
+        result_ref=result_ref,
+        lifetime=resolved_lifetime,
+        raw=raw,
+        summary=ResultSummary(kind=result.kind, error=error),
+        error=error,
+    )
+
+
 class JobCreateRequest(StrictBaseModel):
     """HTTP request body for submitting a job."""
 
@@ -324,6 +672,8 @@ class JobCancelResponse(StrictBaseModel):
 
 
 __all__ = [
+    "DEFAULT_RESULT_INDEX_FIELD",
+    "DEFAULT_RESULT_PREVIEW_ROWS",
     "CancelledJobResult",
     "FailedJobResult",
     "FileJobResult",
@@ -336,8 +686,24 @@ __all__ = [
     "JobLinks",
     "JobListResponse",
     "JobStatusInfo",
+    "NumericColumnSummary",
+    "RawResultFormat",
+    "ResultColumnSummary",
+    "ResultDescriptor",
+    "ResultFileMetadata",
+    "ResultKind",
+    "ResultLifetime",
+    "ResultRawAccess",
+    "ResultReference",
+    "ResultSummary",
+    "ResultTableMetadata",
+    "ResultTablePreview",
     "TableJobResult",
     "TerminalJobResult",
     "TerminalJobStatus",
+    "build_result_descriptor",
+    "build_table_preview",
+    "build_table_summary",
     "parse_job_result",
+    "result_ref_for_job",
 ]

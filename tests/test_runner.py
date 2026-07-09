@@ -606,6 +606,14 @@ def test_generic_task_executes_entrypoint_and_persists_result(
         "data": [[6]],
     }
     assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
+    descriptor = worker_module.job_store.get_job_result_descriptor(
+        "job-1",
+        client=fake_redis,
+    )
+    assert descriptor is not None
+    assert descriptor.result_ref == "lyra://results/job-1"
+    assert descriptor.preview.rows == [{"_result_index": "area-1", "value": 6}]
+    assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
     assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "succeeded"
     events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
     assert [event.event.event for event in events] == [

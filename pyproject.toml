@@ -13,6 +13,7 @@ dependencies = [
     "psycopg2>=2.9.12",
     "asyncpg>=0.31.0",
     "jsonschema>=4.26.0",
+    "lyra-mcp",
 ]
 
 [tool.uv.workspace]
@@ -22,6 +23,7 @@ members = ["packages/*"]
 lyra-sdk = { workspace = true }
 lyra-utils = { workspace = true }
 lyra-api = { workspace = true }
+lyra-mcp = { workspace = true }
 lyra-tui = { workspace = true }
 
 [tool.ruff]
@@ -36,6 +38,7 @@ per-file-ignores = { "tests/**/*.py" = ["S101"] }
 [dependency-groups]
 dev = [
     "griffe>=2.1.0",
+    "httpx2>=2.5.0",
     "ipykernel<7",
     "lyra-api",
     "lyra-tui",

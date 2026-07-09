@@ -62,6 +62,13 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     app.include_router(data_types.router)
     app.include_router(metrics.router)
     app.include_router(met_zone.router)
+    if config.mcp.enabled:
+        from lyra.mcp import create_mcp_app  # noqa: PLC0415
+
+        app.mount(
+            config.mcp.mount_path,
+            create_mcp_app(api_key=config.mcp.read_api_key()),
+        )
     return app
 
 

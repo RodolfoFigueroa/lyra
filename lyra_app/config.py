@@ -38,6 +38,8 @@ LYRA_POSTGRES_DB_ENV = "LYRA_POSTGRES_DB"
 LYRA_POSTGRES_USER_ENV = "LYRA_POSTGRES_USER"
 LYRA_POSTGRES_PASSWORD_ENV = "LYRA_POSTGRES_PASSWORD"  # noqa: S105
 LYRA_ADMIN_API_KEY_ENV = "LYRA_ADMIN_API_KEY"
+LYRA_MCP_API_KEY_ENV = "LYRA_MCP_API_KEY"
+DEFAULT_MCP_MOUNT_PATH = "/mcp"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
@@ -277,6 +279,33 @@ class AdminConfig(StrictConfigModel):
         return self.api_key
 
 
+class McpConfig(StrictConfigModel):
+    enabled: bool = False
+    mount_path: str = DEFAULT_MCP_MOUNT_PATH
+
+    @field_validator("mount_path", mode="before")
+    @classmethod
+    def normalize_mount_path(cls, value: Any) -> Any:
+        return _strip_required_string(value)
+
+    @field_validator("mount_path")
+    @classmethod
+    def validate_mount_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            msg = "mcp.mount_path must start with /"
+            raise ValueError(msg)
+        if len(value) > 1 and value.endswith("/"):
+            msg = "mcp.mount_path must not end with /"
+            raise ValueError(msg)
+        return value
+
+    def read_api_key(self) -> str:
+        return read_scalar_env_var(
+            LYRA_MCP_API_KEY_ENV,
+            field_name="mcp.api_key",
+        )
+
+
 class LoggingConfig(StrictConfigModel):
     level: str = Field(default=DEFAULT_LOG_LEVEL)
     file: Path | None = None
@@ -380,6 +409,7 @@ class LyraConfig(StrictConfigModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     earth_engine: EarthEngineConfig
     admin: AdminConfig = Field(default_factory=AdminConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
     logging: LoggingConfig
     job_store: JobStoreConfig
     plugins: PluginsConfig
@@ -429,6 +459,12 @@ class LyraConfig(StrictConfigModel):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def validate_mcp_secret(self) -> Self:
+        if self.mcp.enabled:
+            self.mcp.read_api_key()
+        return self
+
     def get_worker(self, name: str) -> WorkerConfig:
         worker_name = _strip_required_string(name)
         if not isinstance(worker_name, str):
@@ -460,6 +496,8 @@ class LyraConfig(StrictConfigModel):
 def validate_config_secret_references(config: LyraConfig) -> None:
     config.database.read_password()
     config.admin.read_api_key()
+    if config.mcp.enabled:
+        config.mcp.read_api_key()
     require_nonempty_file(
         config.earth_engine.service_account_file,
         field_name="earth_engine.service_account_file",
@@ -608,6 +646,14 @@ def _append_logging_section(lines: list[str], logging_config: LoggingConfig) -> 
     lines.append("")
 
 
+def _append_mcp_section(lines: list[str], mcp: McpConfig) -> None:
+    lines.append("[mcp]")
+    lines.append(f"enabled = {str(mcp.enabled).lower()}")
+    if mcp.mount_path != DEFAULT_MCP_MOUNT_PATH:
+        _append_key(lines, "mount_path", mcp.mount_path)
+    lines.append("")
+
+
 def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> None:
     lines.append("[job_store]")
     _append_key(lines, "ttl_seconds", job_store.ttl_seconds)
@@ -645,6 +691,7 @@ def render_config_toml(config: LyraConfig) -> str:
     _append_api_section(lines, config.api)
     _append_redis_section(lines, config.redis)
     _append_earth_engine_section(lines, config.earth_engine)
+    _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
     _append_plugins_section(lines, config.plugins)
@@ -685,11 +732,13 @@ __all__ = [
     "DEFAULT_JOB_STORE_TTL_SECONDS",
     "DEFAULT_LOG_DIR",
     "DEFAULT_LOG_LEVEL",
+    "DEFAULT_MCP_MOUNT_PATH",
     "DEFAULT_PLUGIN_CATALOG_DIR",
     "DEFAULT_PLUGIN_RUNNER_BASE_DIR",
     "DEFAULT_WORKER_CONCURRENCY",
     "LYRA_ADMIN_API_KEY_ENV",
     "LYRA_DATA_DIR",
+    "LYRA_MCP_API_KEY_ENV",
     "LYRA_POSTGRES_DB_ENV",
     "LYRA_POSTGRES_HOST_ENV",
     "LYRA_POSTGRES_PASSWORD_ENV",
@@ -704,6 +753,7 @@ __all__ = [
     "JobStoreConfig",
     "LoggingConfig",
     "LyraConfig",
+    "McpConfig",
     "PluginsConfig",
     "RedisConfig",
     "WorkerConfig",

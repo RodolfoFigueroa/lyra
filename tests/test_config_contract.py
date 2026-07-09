@@ -12,10 +12,12 @@ from lyra_app.config import (
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
     DEFAULT_JOB_STORE_TTL_SECONDS,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_MCP_MOUNT_PATH,
     DEFAULT_PLUGIN_CATALOG_DIR,
     DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_DATA_DIR,
+    LYRA_MCP_API_KEY_ENV,
     LYRA_POSTGRES_DB_ENV,
     LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -115,6 +117,8 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
         tmp_path / "secrets" / "service-account.json"
     )
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.mcp.enabled is False
+    assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
     assert config.job_store.ttl_seconds == 600
@@ -145,6 +149,8 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
     )
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.mcp.enabled is False
+    assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
     assert config.job_store.ttl_seconds == DEFAULT_JOB_STORE_TTL_SECONDS
@@ -171,6 +177,54 @@ def test_config_contract_rejects_unknown_nested_fields(tmp_path: Path) -> None:
     raw["plugins"]["extra"] = "surprise"
 
     _assert_invalid(raw, "Extra inputs are not permitted")
+
+
+def test_config_contract_accepts_mcp_section_with_dedicated_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["mcp"] = {
+        "enabled": True,
+        "mount_path": "/agent-mcp",
+    }
+    monkeypatch.setenv(LYRA_MCP_API_KEY_ENV, " mcp-secret ")
+
+    config = LyraConfig.model_validate(raw)
+
+    assert config.mcp.enabled is True
+    assert config.mcp.mount_path == "/agent-mcp"
+    assert config.mcp.read_api_key() == "mcp-secret"
+
+
+def test_config_contract_rejects_mcp_enabled_without_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["mcp"] = {"enabled": True}
+    monkeypatch.delenv(LYRA_MCP_API_KEY_ENV, raising=False)
+
+    with pytest.raises(ConfigSecretError, match=LYRA_MCP_API_KEY_ENV):
+        LyraConfig.model_validate(raw)
+
+
+def test_config_contract_rejects_mcp_secret_in_toml(tmp_path: Path) -> None:
+    raw = _valid_config(tmp_path)
+    raw["mcp"] = {"api_key": "not-here"}
+
+    _assert_invalid(raw, "Extra inputs are not permitted")
+
+
+@pytest.mark.parametrize("mount_path", ["mcp", "/mcp/"])
+def test_config_contract_rejects_invalid_mcp_mount_path(
+    tmp_path: Path,
+    mount_path: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["mcp"] = {"mount_path": mount_path}
+
+    _assert_invalid(raw, "mcp.mount_path")
 
 
 def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:

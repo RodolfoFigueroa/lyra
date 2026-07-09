@@ -16,7 +16,7 @@ JobLifecycleStatus = Literal[
 ]
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
 ResultKind = Literal["table", "file", "failed", "cancelled"]
-RawResultFormat = Literal["terminal_json"]
+RawResultFormat = Literal["terminal_json", "jsonl"]
 
 DEFAULT_RESULT_PREVIEW_ROWS = 20
 DEFAULT_RESULT_INDEX_FIELD = "_result_index"
@@ -320,6 +320,11 @@ class ResultRawAccess(StrictBaseModel):
         min_length=1,
         description="HTTP path for the stored terminal result JSON payload.",
     )
+    jsonl_path: str | None = Field(
+        default=None,
+        min_length=1,
+        description="HTTP path for a JSONL table export, when available.",
+    )
 
 
 class ResultTableMetadata(StrictBaseModel):
@@ -547,18 +552,22 @@ def build_result_descriptor(
     *,
     lifetime: ResultLifetime | None = None,
     terminal_json_path: str | None = None,
+    jsonl_path: str | None = None,
     preview_row_limit: int = DEFAULT_RESULT_PREVIEW_ROWS,
 ) -> ResultDescriptor:
     """Build an agent-facing descriptor from a terminal result."""
 
     result_ref = result_ref_for_job(result.job_id)
-    raw = ResultRawAccess(
-        result_ref=result_ref,
-        terminal_json_path=terminal_json_path or f"/jobs/{result.job_id}/result",
-    )
+    resolved_terminal_json_path = terminal_json_path or f"/jobs/{result.job_id}/result"
     resolved_lifetime = lifetime or ResultLifetime()
 
     if isinstance(result, TableJobResult):
+        raw = ResultRawAccess(
+            result_ref=result_ref,
+            formats=["terminal_json", "jsonl"],
+            terminal_json_path=resolved_terminal_json_path,
+            jsonl_path=jsonl_path or f"/jobs/{result.job_id}/result/table.jsonl",
+        )
         preview = build_table_preview(result, row_limit=preview_row_limit)
         return ResultDescriptor(
             job_id=result.job_id,
@@ -576,6 +585,11 @@ def build_result_descriptor(
             preview=preview,
             summary=build_table_summary(result),
         )
+
+    raw = ResultRawAccess(
+        result_ref=result_ref,
+        terminal_json_path=resolved_terminal_json_path,
+    )
 
     if isinstance(result, FileJobResult):
         file_metadata = ResultFileMetadata(

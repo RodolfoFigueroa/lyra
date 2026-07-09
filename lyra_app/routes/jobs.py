@@ -14,7 +14,10 @@ from lyra.sdk.models import (
     JobEnvelope,
     JobLinks,
     JobStatusInfo,
+    TableJobResult,
+    build_table_preview,
     parse_job_result,
+    result_ref_for_job,
 )
 from redis.exceptions import RedisError
 
@@ -63,6 +66,32 @@ def _sse_message(stored_event: job_store.StoredJobEvent) -> str:
         f"event: {stored_event.event.event}\n"
         f"data: {data}\n\n"
     )
+
+
+def _result_status_payload(
+    snapshot: job_store.JobStatusSnapshot,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "job_id": snapshot.job_id,
+        "status": snapshot.status,
+        "updated_at": snapshot.updated_at.isoformat(),
+        "result_ref": result_ref_for_job(snapshot.job_id),
+        "detail": "Result is not available yet",
+    }
+    if snapshot.metric is not None:
+        payload["metric"] = snapshot.metric
+    if snapshot.error is not None:
+        payload["error"] = snapshot.error
+        payload["detail"] = "Job finished without a successful result"
+    return payload
+
+
+async def _table_jsonl_stream(result: TableJobResult) -> AsyncIterator[str]:
+    index_field = build_table_preview(result, row_limit=0).index_field
+    for result_index, values in zip(result.index, result.data, strict=True):
+        row = {index_field: result_index}
+        row.update(dict(zip(result.columns, values, strict=True)))
+        yield json.dumps(row, separators=(",", ":")) + "\n"
 
 
 async def _job_event_stream(
@@ -198,6 +227,50 @@ async def get_job_result(job_id: str) -> JSONResponse:
 
     result = parse_job_result(payload)
     return JSONResponse(content=result.model_dump(mode="json", exclude_none=True))
+
+
+@router.get("/jobs/{job_id}/result/descriptor", response_model=None)
+async def get_job_result_descriptor(job_id: str) -> JSONResponse:
+    await _ensure_redis_available()
+    descriptor = await job_store.get_job_result_descriptor_async(job_id)
+    if descriptor is not None:
+        return JSONResponse(
+            content=descriptor.model_dump(mode="json", exclude_none=True),
+        )
+
+    snapshot = await job_store.get_job_status_async(job_id)
+    if snapshot is None or snapshot.status == "succeeded":
+        raise HTTPException(status_code=404, detail="Result expired or not found")
+
+    status_code = (
+        status.HTTP_200_OK
+        if job_store.is_terminal_status(snapshot.status)
+        else status.HTTP_202_ACCEPTED
+    )
+    return JSONResponse(
+        content=_result_status_payload(snapshot),
+        status_code=status_code,
+    )
+
+
+@router.get("/jobs/{job_id}/result/table.jsonl", response_model=None)
+async def export_job_result_jsonl(job_id: str) -> StreamingResponse:
+    await _ensure_redis_available()
+    payload = await job_store.get_job_result_async(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Result expired or not found")
+
+    result = parse_job_result(payload)
+    if not isinstance(result, TableJobResult):
+        raise HTTPException(status_code=409, detail="Job result is not a table")
+
+    return StreamingResponse(
+        _table_jsonl_stream(result),
+        media_type="application/x-ndjson",
+        headers={
+            "Content-Disposition": f'attachment; filename="{job_id}.jsonl"',
+        },
+    )
 
 
 @router.get("/jobs/{job_id}/result/download", response_model=None)

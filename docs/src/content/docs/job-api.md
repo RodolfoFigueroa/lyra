@@ -137,12 +137,17 @@ payload until the job-store TTL expires.
 
 ## Result Descriptor Contract
 
-Agent-facing result surfaces use a descriptor instead of embedding the full
-terminal payload. The v1 result reference format is:
+`GET /jobs/{job_id}/result/descriptor` returns a compact descriptor for stored
+terminal results instead of embedding the full terminal payload. The v1 result
+reference format is:
 
 ```text
 lyra://results/{job_id}
 ```
+
+If the job is still queued or running, the descriptor route returns `202
+Accepted` with a status envelope containing `job_id`, `status`, `updated_at`,
+`result_ref`, and `detail`. Missing or expired results return `404`.
 
 Descriptors keep the terminal result payload unchanged and include:
 
@@ -151,6 +156,8 @@ Descriptors keep the terminal result payload unchanged and include:
   `lifetime.expires_at`.
 - `raw.result_ref`, `raw.formats`, and `raw.terminal_json_path` for fetching the
   stored terminal JSON separately.
+- `raw.jsonl_path` for successful table results. Table descriptors advertise
+  both `terminal_json` and `jsonl` in `raw.formats`.
 - `table` metadata for table results: row count, column count, ordered columns,
   and the preview index field.
 - `preview.rows` as row-oriented JSON objects. Each row includes the result
@@ -163,6 +170,24 @@ Descriptors keep the terminal result payload unchanged and include:
 The descriptor shape does not depend on table size. Full table JSON and file
 metadata remain available through the stored terminal result while Redis retains
 the job result key.
+
+## Export Table JSONL
+
+`GET /jobs/{job_id}/result/table.jsonl` streams successful table results as
+JSONL using one JSON object per line. Each object includes the descriptor's
+result index field and all table columns:
+
+```jsonl
+{"_result_index":"area-1","value":42}
+{"_result_index":"area-2","value":37}
+```
+
+If a table already has a `_result_index` column, Lyra chooses a collision-free
+index field name and reports it in the descriptor's `table.index_field`.
+
+The JSONL route returns `404` when the result is missing or expired and `409`
+when the stored result is not a table. File results continue to use the download
+endpoint.
 
 ## Download File Result
 

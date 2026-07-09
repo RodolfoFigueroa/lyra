@@ -849,6 +849,210 @@ def test_job_result_returns_file_metadata_without_cleanup(
     assert redis.deleted == []
 
 
+def test_job_result_descriptor_returns_table_metadata_and_jsonl_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1", "area-2"],
+            columns=["value"],
+            data=[[6], [7]],
+        ).model_dump(mode="json", exclude_none=True)
+    )
+
+    response = asyncio.run(jobs.get_job_result_descriptor("job-1"))
+
+    assert isinstance(response, JSONResponse)
+    content = json.loads(bytes(response.body))
+    assert content["job_id"] == "job-1"
+    assert content["status"] == "succeeded"
+    assert content["result_kind"] == "table"
+    assert content["result_ref"] == "lyra://results/job-1"
+    assert content["raw"] == {
+        "result_ref": "lyra://results/job-1",
+        "formats": ["terminal_json", "jsonl"],
+        "terminal_json_path": "/jobs/job-1/result",
+        "jsonl_path": "/jobs/job-1/result/table.jsonl",
+    }
+    assert content["table"] == {
+        "row_count": 2,
+        "column_count": 1,
+        "columns": ["value"],
+        "index_field": "_result_index",
+    }
+    assert content["preview"]["rows"] == [
+        {"_result_index": "area-1", "value": 6},
+        {"_result_index": "area-2", "value": 7},
+    ]
+
+
+def test_job_result_descriptor_returns_file_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    output = tmp_path / "result.tif"
+    output.write_bytes(b"data")
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        FileJobResult(
+            job_id="job-1",
+            file_path=str(output),
+            media_type="image/tiff",
+        ).model_dump(mode="json", exclude_none=True)
+    )
+
+    response = asyncio.run(jobs.get_job_result_descriptor("job-1"))
+
+    assert isinstance(response, JSONResponse)
+    content = json.loads(bytes(response.body))
+    assert content["result_kind"] == "file"
+    assert content["raw"] == {
+        "result_ref": "lyra://results/job-1",
+        "formats": ["terminal_json"],
+        "terminal_json_path": "/jobs/job-1/result",
+    }
+    assert content["file"] == {
+        "file_path": str(output),
+        "media_type": "image/tiff",
+    }
+    assert "jsonl_path" not in content["raw"]
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_kind", "expected_status", "expected_error"),
+    [
+        (
+            FailedJobResult(job_id="job-1", error={"type": "worker"}),
+            "failed",
+            "failed",
+            {"type": "worker"},
+        ),
+        (CancelledJobResult(job_id="job-1"), "cancelled", "cancelled", None),
+    ],
+)
+def test_job_result_descriptor_returns_terminal_error_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+    result: FailedJobResult | CancelledJobResult,
+    expected_kind: str,
+    expected_status: str,
+    expected_error: dict[str, Any] | None,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        result.model_dump(mode="json", exclude_none=True)
+    )
+
+    response = asyncio.run(jobs.get_job_result_descriptor("job-1"))
+
+    assert isinstance(response, JSONResponse)
+    content = json.loads(bytes(response.body))
+    assert content["result_ref"] == "lyra://results/job-1"
+    assert content["result_kind"] == expected_kind
+    assert content["status"] == expected_status
+    assert content["summary"]["kind"] == expected_kind
+    assert content["summary"].get("error") == expected_error
+    assert content.get("error") == expected_error
+
+
+def test_job_result_descriptor_returns_running_status_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    asyncio.run(
+        job_store.set_job_status_async("job-1", "progress", metric="heavy_metric")
+    )
+
+    response = asyncio.run(jobs.get_job_result_descriptor("job-1"))
+
+    assert response.status_code == 202
+    content = json.loads(bytes(response.body))
+    assert content["job_id"] == "job-1"
+    assert content["metric"] == "heavy_metric"
+    assert content["status"] == "progress"
+    assert content["result_ref"] == "lyra://results/job-1"
+    assert content["detail"] == "Result is not available yet"
+
+
+def test_job_result_descriptor_returns_404_for_expired_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_redis(monkeypatch, FakeRedisAsync())
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(jobs.get_job_result_descriptor("job-1"))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Result expired or not found"
+
+
+def test_job_result_jsonl_streams_table_rows_with_result_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1", "area-2"],
+            columns=["_result_index", "value"],
+            data=[["column-1", 6], ["column-2", 7]],
+        ).model_dump(mode="json", exclude_none=True)
+    )
+
+    response = asyncio.run(jobs.export_job_result_jsonl("job-1"))
+
+    assert isinstance(response, StreamingResponse)
+    assert response.media_type == "application/x-ndjson"
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="job-1.jsonl"'
+    )
+    assert asyncio.run(_body(response)) == (
+        '{"__result_index":"area-1","_result_index":"column-1","value":6}\n'
+        '{"__result_index":"area-2","_result_index":"column-2","value":7}\n'
+    )
+
+
+def test_job_result_jsonl_returns_409_for_file_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    output = tmp_path / "result.tif"
+    output.write_bytes(b"data")
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        FileJobResult(
+            job_id="job-1",
+            file_path=str(output),
+            media_type="image/tiff",
+        ).model_dump(mode="json", exclude_none=True)
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(jobs.export_job_result_jsonl("job-1"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Job result is not a table"
+
+
+def test_job_result_jsonl_returns_404_for_expired_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_redis(monkeypatch, FakeRedisAsync())
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(jobs.export_job_result_jsonl("job-1"))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Result expired or not found"
+
+
 def test_job_result_download_returns_file_bytes_repeatedly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

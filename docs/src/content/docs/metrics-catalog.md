@@ -12,55 +12,65 @@ repositories do not contain valid schema v3 manifests.
 
 ## List Metrics
 
-`GET /metrics` returns a list of `MetricInfoV3` objects. This example shortens
-the spatial wrapper definitions; fetch the live route for the full schema:
+`GET /metrics` returns a `MetricCatalogResponse` with a public
+`catalog_fingerprint` and a list of `MetricInfoV3` objects. The response also
+sets the same fingerprint as the `ETag` header. This example shortens the
+spatial wrapper definitions; fetch the live route for the full schema:
 
 ```json
-[
-  {
-    "name": "metric_name",
-    "description": "Compute a metric for the input area.",
-    "request_schema": {
-      "type": "object",
-      "required": ["location", "year"],
-      "additionalProperties": false,
-      "properties": {
-        "location": {
-          "oneOf": [
-            { "$ref": "#/$defs/CVEGEOListWrapperV3" },
-            { "$ref": "#/$defs/GeoJSONLocationWrapperV3" },
-            { "$ref": "#/$defs/MetZoneCodeWrapperV3" }
-          ]
+{
+  "catalog_fingerprint": "hex-sha256",
+  "metrics": [
+    {
+      "name": "metric_name",
+      "description": "Compute a metric for the input area.",
+      "request_schema": {
+        "type": "object",
+        "required": ["location", "year"],
+        "additionalProperties": false,
+        "properties": {
+          "location": {
+            "oneOf": [
+              { "$ref": "#/$defs/CVEGEOListWrapperV3" },
+              { "$ref": "#/$defs/GeoJSONLocationWrapperV3" },
+              { "$ref": "#/$defs/MetZoneCodeWrapperV3" }
+            ]
+          },
+          "year": {
+            "type": "integer",
+            "minimum": 2020
+          }
         },
-        "year": {
-          "type": "integer",
-          "minimum": 2020
+        "$defs": {
+          "CVEGEOListWrapperV3": { "...": "canonical wrapper definition" },
+          "GeoJSONLocationWrapperV3": { "...": "canonical wrapper definition" },
+          "MetZoneCodeWrapperV3": { "...": "canonical wrapper definition" }
         }
       },
-      "$defs": {
-        "CVEGEOListWrapperV3": { "...": "canonical wrapper definition" },
-        "GeoJSONLocationWrapperV3": { "...": "canonical wrapper definition" },
-        "MetZoneCodeWrapperV3": { "...": "canonical wrapper definition" }
+      "output": {
+        "kind": "table",
+        "columns": [
+          {
+            "name": "value",
+            "type": "number",
+            "unit": "dimensionless",
+            "description": "Computed value for each input feature.",
+            "nullable": false
+          }
+        ],
+        "batched_columns": []
       }
-    },
-    "output": {
-      "kind": "table",
-      "columns": [
-        {
-          "name": "value",
-          "type": "number",
-          "unit": "dimensionless",
-          "description": "Computed value for each input feature.",
-          "nullable": false
-        }
-      ],
-      "batched_columns": []
     }
-  }
-]
+  ]
+}
 ```
 
-Each item includes:
+The `catalog_fingerprint` changes when the public metric contract changes: a
+metric is added or removed, or a metric's name, description, `request_schema`,
+or `output` declaration changes. It does not represent internal deployment
+details such as plugin repo ids, worker queues, entrypoints, or job state.
+
+Each metric item includes:
 
 - `name`
 - `description`

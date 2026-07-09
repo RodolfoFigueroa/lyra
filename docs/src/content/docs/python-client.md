@@ -14,7 +14,8 @@ options, exceptions, and sync/async parity, see [lyra-api](../lyra-api/).
 from lyra.api import LyraAPIClient
 
 client = LyraAPIClient("localhost:5219", secure=False)
-metrics = client.get_metrics()
+catalog = client.get_metrics()
+metrics = catalog.metrics
 metric_name = metrics[0].name
 payload = {
     "SPATIAL_FIELD": {
@@ -111,7 +112,8 @@ from lyra.api import AsyncLyraAPIClient
 
 async def main() -> None:
     client = AsyncLyraAPIClient("localhost:5219", secure=False)
-    metrics = await client.get_metrics()
+    catalog = await client.get_metrics()
+    metrics = catalog.metrics
     metric_name = metrics[0].name
     payload = {
         "SPATIAL_FIELD": {
@@ -137,3 +139,7 @@ asyncio.run(main())
 Avoid hard-coding example payloads from these docs. Fetch the metric's
 `request_schema` and submit an `input` object that matches it; every metric has
 at least one required spatial wrapper field.
+
+`client.get_metrics()` returns a catalog object with `catalog_fingerprint` and
+`metrics`. Use `client.get_metric(metric_name)` when you only need one metric's
+schema metadata.

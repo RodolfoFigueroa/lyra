@@ -8,7 +8,7 @@ from typing import Any
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
-from lyra.sdk.models.metric import MetricInfoV3
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 from lyra.sdk.models.plugin_v3 import (
     CompiledMetricManifestV3,
     CompiledPluginManifestV3,
@@ -251,6 +251,21 @@ def get_loaded_catalog_fingerprint() -> str:
     return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
 
 
+def _public_metric_payload(metrics: list[MetricInfoV3]) -> list[dict[str, Any]]:
+    return [
+        metric.model_dump(mode="json")
+        for metric in sorted(metrics, key=lambda item: item.name)
+    ]
+
+
+def public_catalog_fingerprint(metrics: list[MetricInfoV3]) -> str:
+    return _fingerprint_payload(_public_metric_payload(metrics))
+
+
+def get_public_catalog_fingerprint() -> str:
+    return public_catalog_fingerprint(get_metrics_info())
+
+
 def is_catalog_loaded() -> bool:
     return _CATALOG_LOADED
 
@@ -279,7 +294,17 @@ def get_metric_info(name: str) -> MetricInfoV3 | None:
 
 def get_metrics_info() -> list[MetricInfoV3]:
     ensure_catalog_loaded()
-    return [_metric_info_from_entry(entry) for entry in TASK_REGISTRY.values()]
+    return [
+        _metric_info_from_entry(entry) for _name, entry in sorted(TASK_REGISTRY.items())
+    ]
+
+
+def get_metric_catalog() -> MetricCatalogResponse:
+    metrics = get_metrics_info()
+    return MetricCatalogResponse(
+        catalog_fingerprint=public_catalog_fingerprint(metrics),
+        metrics=metrics,
+    )
 
 
 def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:

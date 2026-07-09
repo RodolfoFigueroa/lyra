@@ -104,7 +104,7 @@ npm run preview --prefix docs
 | --- | --- | --- |
 | `GET` | `/health` | Return API liveness and Redis readiness. |
 | `GET` | `/data-types` | Return grouped `location` and `bounds` wrapper schemas for explicit spatial inputs. |
-| `GET` | `/metrics` | List metric schema metadata. |
+| `GET` | `/metrics` | Return the public catalog fingerprint and metric schema metadata. |
 | `GET` | `/metrics/{metric_name}` | Fetch one metric schema metadata record. |
 | `POST` | `/jobs` | Submit a metric job. |
 | `GET` | `/jobs/{job_id}` | Fetch current job status. |

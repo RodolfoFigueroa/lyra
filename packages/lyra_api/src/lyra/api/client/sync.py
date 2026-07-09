@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar
 
 import requests
 from lyra.api.client.base import _BaseLyraAPIClient
@@ -41,7 +41,7 @@ from lyra.sdk.models import (
     WorkersResponse,
     parse_job_result,
 )
-from lyra.sdk.models.metric import MetricInfoV3
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 from pydantic import BaseModel
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
@@ -557,22 +557,10 @@ class LyraAPIClient(_BaseLyraAPIClient):
             err = "Invalid data types response format"
             raise DownloadError(err) from exc
 
-    @overload
-    def get_metrics(self, metric_name: None = None) -> list[MetricInfoV3]: ...
-
-    @overload
-    def get_metrics(self, metric_name: str) -> MetricInfoV3: ...
-
-    def get_metrics(
-        self,
-        metric_name: str | None = None,
-    ) -> list[MetricInfoV3] | MetricInfoV3:
-        metric_str = "" if metric_name is None else metric_name
-        metrics_url = self._http_url(f"metrics/{metric_str}")
-
+    def get_metrics(self) -> MetricCatalogResponse:
         try:
             response = requests.get(
-                metrics_url,
+                self._http_url("metrics"),
                 timeout=self.timeout,
                 headers=self.headers,
             )
@@ -584,12 +572,24 @@ class LyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch metrics. HTTP {response.status_code}"
             raise DownloadError(err)
 
-        metrics = response.json()
-        return (
-            [MetricInfoV3.model_validate(item) for item in metrics]
-            if metric_name is None
-            else MetricInfoV3.model_validate(metrics)
-        )
+        return MetricCatalogResponse.model_validate(response.json())
+
+    def get_metric(self, metric_name: str) -> MetricInfoV3:
+        try:
+            response = requests.get(
+                self._http_url(f"metrics/{metric_name}"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Metric request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code != 200:
+            err = f"Failed to fetch metric. HTTP {response.status_code}"
+            raise DownloadError(err)
+
+        return MetricInfoV3.model_validate(response.json())
 
     def _wait_for_terminal_event(self, job_id: str) -> JobEvent:
         for event in self.iter_job_events(job_id):

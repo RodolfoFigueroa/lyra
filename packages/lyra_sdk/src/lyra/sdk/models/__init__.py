@@ -35,7 +35,7 @@ from lyra.sdk.models.job import (
     parse_job_result,
 )
 from lyra.sdk.models.lookups import MetZoneCodeResponse
-from lyra.sdk.models.metric import MetricInfoV3
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 from lyra.sdk.models.observability import (
     AdminStatusResponse,
     CatalogSummaryResponse,
@@ -118,6 +118,7 @@ __all__ = [
     "JsonSchemaInputV3",
     "LocationInputV3",
     "MetZoneCodeResponse",
+    "MetricCatalogResponse",
     "MetricInfoV3",
     "MetricManifestV3",
     "MetricQueueAssignmentResponse",

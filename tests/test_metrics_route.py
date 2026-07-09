@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
@@ -104,6 +104,24 @@ def _use_repo(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_metrics_route_returns_empty_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [],
+    )
+    response_context = Response()
+
+    response = asyncio.run(metrics.list_metrics(response_context))
+
+    payload = response.model_dump()
+    assert payload["metrics"] == []
+    assert payload["catalog_fingerprint"]
+    assert response_context.headers["ETag"] == payload["catalog_fingerprint"]
+
+
 def test_metrics_route_returns_schema_metadata_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -113,11 +131,37 @@ def test_metrics_route_returns_schema_metadata_only(
     (repo / MANIFEST_FILENAME).write_text(json.dumps(_manifest()), encoding="utf-8")
 
     _use_repo(repo, monkeypatch)
-    response = asyncio.run(metrics.list_metrics())
+    response_context = Response()
+    response = asyncio.run(metrics.list_metrics(response_context))
 
-    assert isinstance(response, list)
-    assert len(response) == 1
-    payload = response[0].model_dump()
+    payload = response.model_dump()
+    assert payload["catalog_fingerprint"]
+    assert response_context.headers["ETag"] == payload["catalog_fingerprint"]
+    assert len(payload["metrics"]) == 1
+    metric_payload = payload["metrics"][0]
+    assert metric_payload["name"] == "light_metric"
+    assert metric_payload["description"] == "A lightweight metric."
+    assert metric_payload["request_schema"]["required"] == ["location", "value"]
+    assert metric_payload["request_schema"]["properties"]["value"] == {
+        "type": "integer",
+    }
+    assert "oneOf" in metric_payload["request_schema"]["properties"]["location"]
+    assert metric_payload["output"]["kind"] == "table"
+    assert metric_payload["output"]["columns"][0]["name"] == "value"
+
+
+def test_metric_route_returns_schema_metadata_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / MANIFEST_FILENAME).write_text(json.dumps(_manifest()), encoding="utf-8")
+
+    _use_repo(repo, monkeypatch)
+    response = asyncio.run(metrics.get_metric("light_metric"))
+
+    payload = response.model_dump()
     assert payload["name"] == "light_metric"
     assert payload["description"] == "A lightweight metric."
     assert payload["request_schema"]["required"] == ["location", "value"]
@@ -139,9 +183,8 @@ def test_metrics_route_returns_batched_column_metadata(
     )
 
     _use_repo(repo, monkeypatch)
-    response = asyncio.run(metrics.list_metrics("light_metric"))
+    response = asyncio.run(metrics.get_metric("light_metric"))
 
-    assert not isinstance(response, list)
     payload = response.model_dump()
     assert payload["output"]["kind"] == "table"
     assert payload["output"]["columns"] == []
@@ -170,6 +213,6 @@ def test_metric_route_returns_404_for_unknown_metric(
     _use_repo(repo, monkeypatch)
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(metrics.list_metrics("missing"))
+        asyncio.run(metrics.get_metric("missing"))
 
     assert exc_info.value.status_code == 404

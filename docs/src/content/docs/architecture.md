@@ -31,8 +31,8 @@ Redis is used for Celery transport and for job status, result, and event storage
    `request_schema`, spatial runtime metadata, and batch runtime metadata.
 6. Metric queue assignments are synced to plugin state by repo id: new metrics
    use `plugins.default_queue`, and stale assignments are removed.
-7. `/metrics` exposes only `name`, `description`, the effective
-   `request_schema`, and the `output` declaration.
+7. `/metrics` exposes a public catalog fingerprint plus each metric's `name`,
+   `description`, effective `request_schema`, and `output` declaration.
 
 The API catalog does not import plugin Python code.
 
@@ -72,6 +72,6 @@ The status key stores lifecycle state. The result key stores the terminal result
 The stable contracts to read first are:
 
 - `PluginManifestV3` for plugin metadata.
-- `MetricInfoV3` for `/metrics` responses.
+- `MetricCatalogResponse` and `MetricInfoV3` for `/metrics` responses.
 - `JobCreateRequest`, `JobCreateResponse`, `JobStatusInfo`, `JobEvent`, and terminal result models for public job APIs.
 - `JobEnvelope` and `RunContext` for runner plugins.

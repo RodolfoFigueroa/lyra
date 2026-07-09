@@ -18,7 +18,7 @@ Lyra exposes current execution through:
 
 Supporting routes:
 
-- `GET /metrics`
+- `GET /metrics` for the public catalog fingerprint and metric schema metadata
 - `GET /metrics/{metric_name}`
 - `GET /data-types` for grouped `location` and `bounds` wrapper schemas
 - `GET /lookups/met-zones`
@@ -64,6 +64,11 @@ Supporting routes:
 Plugin manifests are `PluginManifestV3` with integer `schema_version: 3`.
 Plugin authors write semantic `inputs`; Lyra compiles them into effective JSON
 Schema for `/metrics` and `POST /jobs`.
+
+`GET /metrics` returns a `MetricCatalogResponse` with `catalog_fingerprint` and
+`metrics`. The fingerprint changes only when the public metric contract changes:
+metric names, descriptions, request schemas, or output declarations. It ignores
+worker queues, plugin repo ids, entrypoints, and job state.
 
 Metric entrypoints are sync functions shaped as:
 

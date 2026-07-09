@@ -300,7 +300,8 @@ these models are also available for tests, clients, and manifest tooling:
 | `FileJobResult` | Successful terminal result for file metrics. |
 | `FailedJobResult` | Terminal result for expected or runtime failures. |
 | `CancelledJobResult` | Terminal result persisted by the worker for cancelled jobs. |
-| `MetricInfoV3` | Public metric catalog item exposed by `/metrics`. |
+| `MetricCatalogResponse` | Public `/metrics` response with catalog fingerprint and metric items. |
+| `MetricInfoV3` | Public metric catalog item exposed by `/metrics` and `/metrics/{metric_name}`. |
 | `PluginManifestV3` | Strict schema v3 `lyra.plugin.json` authoring model. |
 | `MetricManifestV3` | One metric entry inside a plugin manifest. |
 | `compile_plugin_manifest()` | Compiler from compact authoring manifests to Lyra's runtime contract. |

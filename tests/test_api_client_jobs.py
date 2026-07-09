@@ -427,6 +427,13 @@ def _metric_response() -> dict[str, Any]:
     }
 
 
+def _metric_catalog_response() -> dict[str, Any]:
+    return {
+        "catalog_fingerprint": "abc123",
+        "metrics": [_metric_response()],
+    }
+
+
 def test_sync_client_uses_job_api_for_job_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -813,15 +820,16 @@ def test_sync_client_returns_v3_metric_catalog(
         timeout: float,  # noqa: ARG001
         headers: dict[str, str],  # noqa: ARG001
     ) -> FakeSyncResponse:
-        assert url == "http://example.test/metrics/"
-        return FakeSyncResponse(payload=[_metric_response()])
+        assert url == "http://example.test/metrics"
+        return FakeSyncResponse(payload=_metric_catalog_response())
 
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    metrics = LyraAPIClient("example.test", secure=False).get_metrics()
+    catalog = LyraAPIClient("example.test", secure=False).get_metrics()
 
-    assert len(metrics) == 1
-    assert metrics[0].name == "accessibility_by_destination"
-    output = metrics[0].output.model_dump(mode="json")
+    assert catalog.catalog_fingerprint == "abc123"
+    assert len(catalog.metrics) == 1
+    assert catalog.metrics[0].name == "accessibility_by_destination"
+    output = catalog.metrics[0].output.model_dump(mode="json")
     batched_column = output["batched_columns"][0]
     assert set(batched_column) == {
         "source",
@@ -832,6 +840,26 @@ def test_sync_client_returns_v3_metric_catalog(
         "nullable",
     }
     assert batched_column["name"] == "job_accessibility_{key}"
+
+
+def test_sync_client_returns_one_v3_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get(
+        url: str,
+        *,
+        timeout: float,  # noqa: ARG001
+        headers: dict[str, str],  # noqa: ARG001
+    ) -> FakeSyncResponse:
+        assert url == "http://example.test/metrics/accessibility_by_destination"
+        return FakeSyncResponse(payload=_metric_response())
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    metric = LyraAPIClient("example.test", secure=False).get_metric(
+        "accessibility_by_destination"
+    )
+
+    assert metric.name == "accessibility_by_destination"
 
 
 def test_sync_client_rejects_invalid_data_type_response(
@@ -1360,18 +1388,18 @@ def test_async_client_returns_v3_metric_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeSession.responses = [
-        FakeAsyncResponse(payload=_metric_response()),
+        FakeAsyncResponse(payload=_metric_catalog_response()),
     ]
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
-    metric = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).get_metrics(
-            "accessibility_by_destination"
-        )
+    catalog = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).get_metrics()
     )
 
-    assert metric.name == "accessibility_by_destination"
-    output = metric.output.model_dump(mode="json")
+    assert catalog.catalog_fingerprint == "abc123"
+    assert len(catalog.metrics) == 1
+    assert catalog.metrics[0].name == "accessibility_by_destination"
+    output = catalog.metrics[0].output.model_dump(mode="json")
     batched_column = output["batched_columns"][0]
     assert set(batched_column) == {
         "source",
@@ -1382,6 +1410,23 @@ def test_async_client_returns_v3_metric_catalog(
         "nullable",
     }
     assert batched_column["description"] == "Job accessibility for {label}."
+
+
+def test_async_client_returns_one_v3_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSession.responses = [
+        FakeAsyncResponse(payload=_metric_response()),
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+
+    metric = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).get_metric(
+            "accessibility_by_destination"
+        )
+    )
+
+    assert metric.name == "accessibility_by_destination"
 
 
 def test_async_client_rejects_invalid_data_type_response(

@@ -581,6 +581,113 @@ def test_catalog_fingerprint_changes_only_when_manifest_content_changes(
     assert third.catalog_fingerprint != first.catalog_fingerprint
 
 
+def test_public_catalog_fingerprint_changes_when_public_contract_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
+    )
+
+    registry.refresh_catalog()
+    first = registry.get_public_catalog_fingerprint()
+    (repo / MANIFEST_FILENAME).write_text(
+        json.dumps(_manifest(metric=_metric(description="A changed metric."))),
+        encoding="utf-8",
+    )
+    registry.refresh_catalog()
+
+    assert registry.get_public_catalog_fingerprint() != first
+
+
+def test_public_catalog_fingerprint_ignores_queue_assignment_and_repo_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
+    )
+    store = plugin_state_store(tmp_path, get_config())
+
+    registry.refresh_catalog()
+    first = registry.get_public_catalog_fingerprint()
+    store.set_metric_queue("light_metric", "batch", repo_id="owner__repo")
+    registry.refresh_catalog()
+    after_queue_change = registry.get_public_catalog_fingerprint()
+
+    assert after_queue_change == first
+
+    store.delete_repo("owner__repo")
+    store.add_repo("owner/renamed", repo_id="custom-repo")
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [
+            _synced_repo(repo, raw="owner/renamed", repo_name="renamed"),
+        ],
+    )
+    registry.refresh_catalog()
+
+    assert registry.get_public_catalog_fingerprint() == first
+
+
+def test_public_catalog_fingerprint_is_deterministic_across_plugin_load_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_test_config(
+        tmp_path,
+        repos=["owner/repo-a", "owner/repo-b"],
+    )
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    _write_manifest(
+        repo_a,
+        _manifest(
+            plugin_name="plugin-a",
+            metric=_metric(name="alpha_metric", description="Alpha metric."),
+        ),
+    )
+    _write_manifest(
+        repo_b,
+        _manifest(
+            plugin_name="plugin-b",
+            metric=_metric(name="beta_metric", description="Beta metric."),
+        ),
+    )
+
+    first_order = [
+        _synced_repo(repo_a, raw="owner/repo-a", repo_name="repo-a"),
+        _synced_repo(repo_b, raw="owner/repo-b", repo_name="repo-b"),
+    ]
+    second_order = list(reversed(first_order))
+
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: first_order,
+    )
+    registry.refresh_catalog()
+    first = registry.get_public_catalog_fingerprint()
+
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: second_order,
+    )
+    registry.refresh_catalog()
+
+    assert registry.get_public_catalog_fingerprint() == first
+
+
 def test_validate_metric_payload_uses_manifest_json_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

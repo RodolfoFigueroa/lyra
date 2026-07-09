@@ -5,9 +5,9 @@ description: Submit metric jobs, stream events, fetch result metadata, and downl
 
 Lyra's public execution API is job-first. Clients submit a metric request, receive a `job_id`, stream typed server-sent events, and fetch the terminal result.
 
-Before creating a job, call `GET /metrics` and choose a metric from the current
-catalog. The job `input` must match that metric's effective `request_schema`.
-Every metric has at least one required spatial wrapper field.
+Before creating a job, call `GET /metrics` and choose a metric from the
+response's `metrics` list. The job `input` must match that metric's effective
+`request_schema`. Every metric has at least one required spatial wrapper field.
 
 ## Submit A Job
 

@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar
 
 import aiofiles
 import aiohttp
@@ -42,7 +42,7 @@ from lyra.sdk.models import (
     WorkersResponse,
     parse_job_result,
 )
-from lyra.sdk.models.metric import MetricInfoV3
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 from pydantic import BaseModel
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
@@ -599,18 +599,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = "Invalid data types response format"
             raise DownloadError(err) from exc
 
-    @overload
-    async def get_metrics(self, metric_name: None = None) -> list[MetricInfoV3]: ...
-
-    @overload
-    async def get_metrics(self, metric_name: str) -> MetricInfoV3: ...
-
-    async def get_metrics(
-        self,
-        metric_name: str | None = None,
-    ) -> list[MetricInfoV3] | MetricInfoV3:
-        metric_str = "" if metric_name is None else metric_name
-        metrics_url = self._http_url(f"metrics/{metric_str}")
+    async def get_metrics(self) -> MetricCatalogResponse:
         metrics: Any = None
         status: int = 0
 
@@ -619,7 +608,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
-                    metrics_url,
+                    self._http_url("metrics"),
                     headers=self.headers,
                 ) as response,
             ):
@@ -634,11 +623,33 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch metrics. HTTP {status}"
             raise DownloadError(err)
 
-        return (
-            [MetricInfoV3.model_validate(item) for item in metrics]
-            if metric_name is None
-            else MetricInfoV3.model_validate(metrics)
-        )
+        return MetricCatalogResponse.model_validate(metrics)
+
+    async def get_metric(self, metric_name: str) -> MetricInfoV3:
+        metric: Any = None
+        status: int = 0
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url(f"metrics/{metric_name}"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                status = response.status
+                if status == 200:
+                    metric = await response.json()
+        except aiohttp.ClientError as exc:
+            err = f"Metric request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if status != 200:
+            err = f"Failed to fetch metric. HTTP {status}"
+            raise DownloadError(err)
+
+        return MetricInfoV3.model_validate(metric)
 
     async def _wait_for_terminal_event(self, job_id: str) -> JobEvent:
         async for event in self.iter_job_events(job_id):

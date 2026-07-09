@@ -18,4 +18,16 @@ class MetricInfoV3(StrictBaseModel):
     )
 
 
-__all__ = ["MetricInfoV3"]
+class MetricCatalogResponse(StrictBaseModel):
+    """Public metric catalog with a contract-only fingerprint."""
+
+    catalog_fingerprint: str = Field(
+        min_length=1,
+        description="SHA-256 fingerprint of the public metric catalog contract.",
+    )
+    metrics: list[MetricInfoV3] = Field(
+        description="Client-facing metric metadata sorted by metric name.",
+    )
+
+
+__all__ = ["MetricCatalogResponse", "MetricInfoV3"]

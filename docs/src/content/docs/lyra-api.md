@@ -14,7 +14,7 @@ from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient
 ```
 
 Both clients return models from `lyra-sdk`, such as `DataTypesResponse`,
-`MetricInfoV3`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`,
+`MetricCatalogResponse`, `MetricInfoV3`, `JobCreateResponse`, `JobEvent`, `JobStatusInfo`,
 observability models, plugin operation models, and terminal result models.
 
 ## Client Configuration
@@ -50,7 +50,8 @@ Use `LyraAPIClient` when your caller is synchronous.
 from lyra.api import LyraAPIClient
 
 client = LyraAPIClient("localhost:5219", secure=False)
-metrics = client.get_metrics()
+catalog = client.get_metrics()
+metrics = catalog.metrics
 ```
 
 Use `AsyncLyraAPIClient` when your caller is already async.
@@ -60,7 +61,8 @@ from lyra.api import AsyncLyraAPIClient
 
 async def get_metrics() -> None:
     client = AsyncLyraAPIClient("localhost:5219", secure=False)
-    metrics = await client.get_metrics()
+    catalog = await client.get_metrics()
+    metrics = catalog.metrics
 ```
 
 Both clients expose the same method names. Async client methods are awaited,
@@ -73,13 +75,17 @@ submit, wait, and result workflow, see [Python Client](../python-client/).
 | --- | --- | --- |
 | `get_health()` | `HealthResponse` | You need public API and Redis readiness from `/health`. |
 | `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data-types`. |
-| `get_metrics()` | `list[MetricInfoV3]` | You need all metric names, descriptions, request schemas, and output declarations. |
-| `get_metrics(metric_name)` | `MetricInfoV3` | You need one metric's schema metadata. |
+| `get_metrics()` | `MetricCatalogResponse` | You need the public catalog fingerprint plus all metric names, descriptions, request schemas, and output declarations. |
+| `get_metric(metric_name)` | `MetricInfoV3` | You need one metric's schema metadata. |
 | `get_met_zone_code(name)` | `MetZoneCodeResponse` | You need the metropolitan zone code matching a display name. |
 
 Fetch metric schemas before submitting jobs. The `input` object passed to
 `create_job()` must match the chosen metric's compiled `request_schema`. Every
 metric has at least one required spatial wrapper field.
+
+`MetricCatalogResponse.catalog_fingerprint` changes only when the public metric
+contract changes. It ignores worker queues, plugin repo ids, entrypoints, and
+job state.
 
 `get_data_types()` returns a grouped response with `location` and `bounds`
 lists. Each item includes `data_type`, `description`, and `wrapper_schema`.

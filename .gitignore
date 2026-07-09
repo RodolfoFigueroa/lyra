@@ -230,3 +230,4 @@ service-account.json
 cache/
 lyra_data/
 config.toml
+.roadmap-runner

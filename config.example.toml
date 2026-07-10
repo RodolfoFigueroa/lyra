@@ -8,6 +8,10 @@ schema_version = 1
 [api]
 host = "0.0.0.0"
 port = 5219
+# Agents use this operator-controlled URL for authenticated result downloads.
+# Production deployments must use HTTPS. Explicit loopback HTTP is accepted for
+# local development, for example http://127.0.0.1:5219.
+public_base_url = "https://lyra.example.com"
 
 [redis]
 # For docker/docker-compose-dev.yml, use lyra-redis-dev.

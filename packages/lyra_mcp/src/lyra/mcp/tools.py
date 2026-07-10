@@ -5,6 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from lyra.sdk.models.metric import normalize_metric_search_tokens
 
@@ -184,6 +185,8 @@ async def execute_tool(
     name: str,
     arguments: MCPContractModel,
     backend: LyraMCPBackend,
+    *,
+    public_api_base_url: str,
 ) -> dict[str, Any]:
     """Execute one validated tool call against the Lyra domain service."""
 
@@ -202,7 +205,11 @@ async def execute_tool(
     elif name == "lyra_get_result_preview":
         payload = await _get_result_preview(cast("ResultRefInput", arguments), backend)
     elif name == "lyra_download_result":
-        payload = await _download_result(cast("ResultRefInput", arguments), backend)
+        payload = await _download_result(
+            cast("ResultRefInput", arguments),
+            backend,
+            public_api_base_url=public_api_base_url,
+        )
     else:
         code = "unknown_tool"
         raise ToolCallError(code, f"Unknown Lyra MCP tool: {name}")
@@ -376,7 +383,10 @@ async def _get_result_preview(
 async def _download_result(
     arguments: ResultRefInput,
     backend: LyraMCPBackend,
+    *,
+    public_api_base_url: str,
 ) -> dict[str, Any]:
+    referenced_job_id = _job_id_from_result_ref(arguments.result_ref)
     descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
     payload = _model_dump(descriptor)
     raw = dict(payload["raw"])
@@ -402,8 +412,14 @@ async def _download_result(
         "media_type": "application/x-ndjson",
         "lyra_api": {
             "method": "GET",
-            "path": jsonl_path,
-            "requires_auth": True,
+            "url": _jsonl_download_url(
+                public_api_base_url,
+                referenced_job_id,
+            ),
+            "authentication": {
+                "scheme": "Bearer",
+                "credential_env_var": "LYRA_AGENT_API_KEY",
+            },
         },
         "client_helpers": {
             "python_sync": (
@@ -414,7 +430,15 @@ async def _download_result(
             ),
         },
         "expires_in_seconds": payload.get("lifetime", {}).get("expires_in_seconds"),
+        "expires_at": payload.get("lifetime", {}).get("expires_at"),
     }
+
+
+def _jsonl_download_url(public_api_base_url: str, job_id: str) -> str:
+    base = urlsplit(public_api_base_url)
+    job_segment = quote(job_id, safe="-._~")
+    path = f"{base.path.rstrip('/')}/jobs/{job_segment}/result/table.jsonl"
+    return urlunsplit((base.scheme, base.netloc, path, "", ""))
 
 
 async def _descriptor_for_result_ref(

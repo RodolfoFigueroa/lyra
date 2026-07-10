@@ -60,6 +60,7 @@ schema_version = 1
 [api]
 host = "0.0.0.0"
 port = {api_port}
+public_base_url = "http://127.0.0.1:{api_port}"
 
 [redis]
 url = "redis://redis:6379/0"

@@ -294,10 +294,15 @@ class ResultPreviewOutput(MCPContractModel):
     error: dict[str, Any] | None
 
 
+class BearerAuthenticationOutput(MCPContractModel):
+    scheme: Literal["Bearer"]
+    credential_env_var: Literal["LYRA_AGENT_API_KEY"]
+
+
 class LyraAPIHandoffOutput(MCPContractModel):
     method: Literal["GET"]
-    path: str = Field(min_length=1)
-    requires_auth: Literal[True]
+    url: str = Field(pattern=r"^https?://[^/?#]+(?:/[^?#]*)?$")
+    authentication: BearerAuthenticationOutput
 
 
 class ClientHelpersOutput(MCPContractModel):
@@ -313,7 +318,8 @@ class DownloadResultOutput(MCPContractModel):
     media_type: Literal["application/x-ndjson"]
     lyra_api: LyraAPIHandoffOutput
     client_helpers: ClientHelpersOutput
-    expires_in_seconds: int | None = Field(ge=0)
+    expires_in_seconds: int | None = Field(default=None, ge=0)
+    expires_at: str | None = None
 
 
 @dataclass(frozen=True)

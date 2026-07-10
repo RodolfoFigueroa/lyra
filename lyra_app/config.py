@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -8,7 +9,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any, Literal, Self
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from pydantic import (
     BaseModel,
@@ -165,11 +166,59 @@ def require_nonempty_file(path: Path, *, field_name: str) -> None:
 class ApiConfig(StrictConfigModel):
     host: str = Field(default=DEFAULT_API_HOST)
     port: int = Field(default=DEFAULT_API_PORT, ge=1, le=65535)
+    public_base_url: str = Field(min_length=1)
 
-    @field_validator("host", mode="before")
+    @field_validator("host", "public_base_url", mode="before")
     @classmethod
-    def validate_host(cls, value: Any) -> Any:
+    def normalize_required_strings(cls, value: Any) -> Any:
         return _strip_required_string(value)
+
+    @field_validator("public_base_url")
+    @classmethod
+    def validate_public_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            msg = "api.public_base_url must be an absolute http:// or https:// URL"
+            raise ValueError(msg)
+        if parsed.username is not None or parsed.password is not None:
+            msg = "api.public_base_url must not contain credentials"
+            raise ValueError(msg)
+        if parsed.query or parsed.fragment:
+            msg = "api.public_base_url must not contain a query or fragment"
+            raise ValueError(msg)
+
+        hostname = parsed.hostname
+        if hostname is None:
+            msg = "api.public_base_url must contain a hostname"
+            raise ValueError(msg)
+        try:
+            _port = parsed.port
+        except ValueError as exc:
+            msg = "api.public_base_url contains an invalid port"
+            raise ValueError(msg) from exc
+
+        is_loopback = hostname.lower() == "localhost"
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None:
+            is_loopback = address.is_loopback
+        elif "." not in hostname and not is_loopback:
+            msg = (
+                "api.public_base_url must use a public hostname, not a "
+                "single-label internal hostname"
+            )
+            raise ValueError(msg)
+
+        if parsed.scheme == "http" and not is_loopback:
+            msg = (
+                "api.public_base_url must use https; http is allowed only for "
+                "loopback development"
+            )
+            raise ValueError(msg)
+
+        return value.rstrip("/")
 
 
 class RedisConfig(StrictConfigModel):
@@ -635,6 +684,7 @@ def _append_api_section(lines: list[str], api: ApiConfig) -> None:
     lines.append("[api]")
     _append_key(lines, "host", api.host)
     _append_key(lines, "port", api.port)
+    _append_key(lines, "public_base_url", api.public_base_url)
     lines.append("")
 
 

@@ -4,14 +4,17 @@ import asyncio
 import json
 import threading
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
-from lyra.mcp import SERVER_INSTRUCTIONS, create_mcp_app
+from lyra.mcp import SERVER_INSTRUCTIONS
+from lyra.mcp import create_mcp_app as _create_mcp_app
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
+    FileJobResult,
     JobCreateResponse,
     JobLifecycleStatus,
     JobLinks,
@@ -37,6 +40,10 @@ from lyra_app import main
 from tests.config_helpers import load_test_config
 
 _COMPLETED_AT = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
+create_mcp_app = partial(
+    _create_mcp_app,
+    public_api_base_url="https://lyra.example.test/api",
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1104,7 +1111,10 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
             columns=["value"],
             data=[[6], [8]],
         ),
-        lifetime=ResultLifetime(expires_in_seconds=3600),
+        lifetime=ResultLifetime(
+            expires_in_seconds=3600,
+            expires_at=datetime(2026, 7, 9, 13, 5, tzinfo=UTC),
+        ),
         completed_at=_COMPLETED_AT,
         provenance=provenance,
     )
@@ -1149,7 +1159,12 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
                 {"result_ref": "lyra://results/job-1"},
                 request_id=22,
             ),
-            headers=_mcp_headers(),
+            headers={
+                **_mcp_headers(),
+                "Forwarded": "host=proxy-only.internal;proto=http",
+                "X-Forwarded-Host": "proxy-only.internal",
+                "X-Forwarded-Proto": "http",
+            },
         )
     )
 
@@ -1161,7 +1176,10 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
         "result_ref": "lyra://results/job-1",
         "provenance": provenance.model_dump(mode="json", exclude_none=True),
         "completed_at": "2026-07-09T12:05:00Z",
-        "lifetime": {"expires_in_seconds": 3600},
+        "lifetime": {
+            "expires_in_seconds": 3600,
+            "expires_at": "2026-07-09T13:05:00Z",
+        },
         "table": {
             "row_count": 2,
             "column_count": 1,
@@ -1203,8 +1221,11 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
         "media_type": "application/x-ndjson",
         "lyra_api": {
             "method": "GET",
-            "path": "/jobs/job-1/result/table.jsonl",
-            "requires_auth": True,
+            "url": ("https://lyra.example.test/api/jobs/job-1/result/table.jsonl"),
+            "authentication": {
+                "scheme": "Bearer",
+                "credential_env_var": "LYRA_AGENT_API_KEY",
+            },
         },
         "client_helpers": {
             "python_sync": (
@@ -1215,10 +1236,15 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
             ),
         },
         "expires_in_seconds": 3600,
+        "expires_at": "2026-07-09T13:05:00Z",
     }
+    assert "agent-secret" not in json.dumps(download)
+    assert "proxy-only" not in json.dumps(download)
+    assert "?" not in download["lyra_api"]["url"]
+    assert "#" not in download["lyra_api"]["url"]
 
 
-def test_mcp_result_tools_return_structured_expired_error() -> None:
+def test_mcp_download_returns_structured_expired_error() -> None:
     client = _ManagedTestClient(
         create_mcp_app(
             agent_api_key="agent-secret",
@@ -1229,7 +1255,7 @@ def test_mcp_result_tools_return_structured_expired_error() -> None:
     response = client.post(
         "/",
         json=_tool_call_payload(
-            "lyra_get_result_preview",
+            "lyra_download_result",
             {"result_ref": "lyra://results/job-expired"},
         ),
         headers=_mcp_headers(),
@@ -1245,6 +1271,48 @@ def test_mcp_result_tools_return_structured_expired_error() -> None:
         "rerun_required": True,
     }
     assert "Rerun the metric" in error["message"]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        FileJobResult(
+            job_id="job-file",
+            file_path="/lyra_data/internal/result.tif",
+            media_type="image/tiff",
+        ),
+        FailedJobResult(
+            job_id="job-failed",
+            error={"type": "runtime_error", "message": "boom"},
+        ),
+        CancelledJobResult(job_id="job-cancelled"),
+    ],
+)
+def test_mcp_download_preserves_structured_result_kind_errors(result: Any) -> None:
+    backend = FakeMCPBackend([_table_metric("metric", "Return a table.")])
+    backend.descriptors[result.job_id] = build_result_descriptor(
+        result,
+        completed_at=_COMPLETED_AT,
+    )
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload(
+            "lyra_download_result",
+            {"result_ref": f"lyra://results/{result.job_id}"},
+        ),
+        headers=_mcp_headers(),
+    )
+
+    tool_result = response.json()["result"]
+    assert tool_result["isError"] is True
+    error = tool_result["structuredContent"]["error"]
+    assert error["code"] == "unsupported_result_download"
+    assert error["details"]["result_kind"] == result.kind
+    assert "/lyra_data/" not in json.dumps(error)
 
 
 def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:

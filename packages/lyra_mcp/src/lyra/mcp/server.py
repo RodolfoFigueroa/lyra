@@ -16,6 +16,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 
 from lyra_app.agent_auth import AgentBearerAuthMiddleware
+from lyra_app.config import ApiConfig
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
@@ -47,9 +48,11 @@ _DEFAULT_ALLOWED_HOSTS = [
 def create_mcp_app(
     *,
     agent_api_key: str,
+    public_api_base_url: str,
     name: str = "lyra",
     backend: LyraMCPBackend | None = None,
 ) -> Starlette:
+    public_api_base_url = ApiConfig(public_base_url=public_api_base_url).public_base_url
     tool_backend = backend or InProcessLyraBackend()
     server = Server(
         name=name,
@@ -95,7 +98,12 @@ def create_mcp_app(
             return _invalid_argument_result(exc)
 
         try:
-            payload = await execute_tool(tool_name, validated_arguments, tool_backend)
+            payload = await execute_tool(
+                tool_name,
+                validated_arguments,
+                tool_backend,
+                public_api_base_url=public_api_base_url,
+            )
         except ToolCallError as exc:
             return _domain_error_result(exc)
 

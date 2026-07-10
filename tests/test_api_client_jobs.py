@@ -1088,10 +1088,11 @@ def test_sync_client_downloads_jsonl_result_from_raw_job_id(
         url: str,
         *,
         timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        headers: dict[str, str],
         stream: bool,
     ) -> FakeSyncResponse:
         assert url == "http://example.test/jobs/job-1/result/table.jsonl"
+        assert headers == {"Authorization": "Bearer agent-secret"}
         assert stream is True
         return FakeSyncResponse(
             headers={"content-type": "application/x-ndjson"},
@@ -1101,7 +1102,11 @@ def test_sync_client_downloads_jsonl_result_from_raw_job_id(
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
     output = tmp_path / "result.jsonl"
 
-    LyraAPIClient("example.test", secure=False).download_result("job-1", output)
+    LyraAPIClient(
+        "example.test",
+        secure=False,
+        agent_api_key="agent-secret",
+    ).download_result("job-1", output)
 
     assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
 
@@ -1830,10 +1835,10 @@ def test_async_client_downloads_jsonl_result_from_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingSession(FakeSession):
-        urls: ClassVar[list[str]] = []
+        requests_seen: ClassVar[list[dict[str, Any]]] = []
 
         def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
-            self.urls.append(str(args[0]))
+            self.requests_seen.append({"args": args, "kwargs": kwargs})
             return super().get(*args, **kwargs)
 
     def fake_aiofiles_open(path: Path, mode: str) -> FakeAsyncFile:
@@ -1851,14 +1856,21 @@ def test_async_client_downloads_jsonl_result_from_ref(
     output = tmp_path / "result.jsonl"
 
     asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).download_result(
+        AsyncLyraAPIClient(
+            "example.test",
+            secure=False,
+            agent_api_key="agent-secret",
+        ).download_result(
             "lyra://results/job-1",
             output,
         )
     )
 
-    assert RecordingSession.urls == [
-        "http://example.test/jobs/job-1/result/table.jsonl",
+    assert RecordingSession.requests_seen == [
+        {
+            "args": ("http://example.test/jobs/job-1/result/table.jsonl",),
+            "kwargs": {"headers": {"Authorization": "Bearer agent-secret"}},
+        }
     ]
     assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
 

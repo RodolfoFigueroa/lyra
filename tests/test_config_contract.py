@@ -50,6 +50,7 @@ def _valid_config(base: Path) -> dict[str, Any]:
         "api": {
             "host": "0.0.0.0",
             "port": 5219,
+            "public_base_url": "https://lyra.example.test/",
         },
         "redis": {
             "url": "redis://redis:6379/0",
@@ -114,6 +115,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.schema_version == 1
     assert config.api.host == "0.0.0.0"
     assert config.api.port == 5219
+    assert config.api.public_base_url == "https://lyra.example.test"
     assert config.redis.url == "redis://redis:6379/0"
     assert config.database.host == "postgres"
     assert config.database.port == 5432
@@ -138,7 +140,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
 
 def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
-    raw["api"] = {}
+    raw["api"] = {"public_base_url": "http://localhost:5219"}
     del raw["earth_engine"]["service_account_file"]
     raw["logging"] = {}
     raw["job_store"] = {}
@@ -151,6 +153,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
 
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == DEFAULT_API_PORT
+    assert config.api.public_base_url == "http://localhost:5219"
     assert config.database.host == "postgres"
     assert config.database.port == 5432
     assert config.database.name == "lyra"
@@ -283,6 +286,48 @@ def test_config_contract_rejects_invalid_values(
     raw[section][field] = value
 
     _assert_invalid(raw, match)
+
+
+@pytest.mark.parametrize(
+    ("public_base_url", "match"),
+    [
+        ("http://lyra.example.test", "must use https"),
+        ("https://agent:secret@lyra.example.test", "must not contain credentials"),
+        ("https://lyra.example.test?token=secret", "query or fragment"),
+        ("https://lyra.example.test/#secret", "query or fragment"),
+        ("https://lyra-api:5219", "single-label internal hostname"),
+        ("/api", "absolute http:// or https:// URL"),
+    ],
+)
+def test_config_contract_rejects_unsafe_public_base_urls(
+    tmp_path: Path,
+    public_base_url: str,
+    match: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["api"]["public_base_url"] = public_base_url
+
+    _assert_invalid(raw, match)
+
+
+@pytest.mark.parametrize(
+    "public_base_url",
+    [
+        "http://localhost:5219/",
+        "http://127.0.0.1:5219/api/",
+        "http://[::1]:5219/",
+    ],
+)
+def test_config_contract_accepts_explicit_loopback_http(
+    tmp_path: Path,
+    public_base_url: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["api"]["public_base_url"] = public_base_url
+
+    config = LyraConfig.model_validate(raw)
+
+    assert config.api.public_base_url == public_base_url.rstrip("/")
 
 
 @pytest.mark.parametrize(

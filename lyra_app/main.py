@@ -71,7 +71,7 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     if config.mcp.enabled:
         from lyra.mcp import create_mcp_app  # noqa: PLC0415
 
-        mcp_app = create_mcp_app(api_key=config.mcp.read_api_key())
+        mcp_app = create_mcp_app(agent_api_key=config.agent.read_api_key())
         app.state.mcp_app = mcp_app
         app.mount(config.mcp.mount_path, mcp_app)
     return app

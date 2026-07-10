@@ -2,12 +2,14 @@ import asyncio
 import json
 import sys
 from collections.abc import Iterator, MutableMapping
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models import (
     CancelledJobResult,
@@ -17,13 +19,14 @@ from lyra.sdk.models import (
     TableJobResult,
 )
 from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk.models.metric import MetricCatalogResponse
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, registry
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
-from lyra_app.routes import jobs
+from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.config_helpers import load_test_config, plugin_state_store
 
 
@@ -343,6 +346,163 @@ def _use_repo(
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis: FakeRedisAsync) -> None:
     monkeypatch.setattr(jobs, "redis_client", redis)
     monkeypatch.setattr(jobs.job_store, "redis_client", redis)
+
+
+async def _request_app(
+    app: FastAPI,
+    method: str,
+    path: str,
+    *,
+    authorization: str | None = None,
+) -> httpx.Response:
+    headers = {} if authorization is None else {"Authorization": authorization}
+    request_kwargs: dict[str, Any] = {"headers": headers}
+    if method == "POST":
+        request_kwargs["json"] = {"metric": "missing", "input": {}}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        return await client.request(method, path, **request_kwargs)
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/jobs"),
+        ("GET", "/jobs/missing"),
+        ("GET", "/jobs/missing/events"),
+        ("GET", "/jobs/missing/result"),
+        ("GET", "/jobs/missing/result/descriptor"),
+        ("GET", "/jobs/missing/result/table.jsonl"),
+        ("GET", "/jobs/missing/result/download"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("authorization", "expected_status"),
+    [
+        (None, 401),
+        ("Basic agent-secret", 401),
+        ("Bearer invalid-secret", 403),
+        ("Bearer admin-secret", 403),
+    ],
+)
+def test_job_lifecycle_routes_require_agent_bearer_token(
+    method: str,
+    path: str,
+    authorization: str | None,
+    expected_status: int,
+) -> None:
+    app = FastAPI()
+    app.include_router(jobs.router)
+
+    response = asyncio.run(_request_app(app, method, path, authorization=authorization))
+
+    assert response.status_code == expected_status
+    assert "secret" not in response.text
+    if expected_status == 401:
+        assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/jobs"),
+        ("GET", "/jobs/missing"),
+        ("GET", "/jobs/missing/events"),
+        ("GET", "/jobs/missing/result"),
+        ("GET", "/jobs/missing/result/descriptor"),
+        ("GET", "/jobs/missing/result/table.jsonl"),
+        ("GET", "/jobs/missing/result/download"),
+    ],
+)
+def test_job_lifecycle_routes_accept_agent_bearer_token(
+    method: str,
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_redis(monkeypatch, FakeRedisAsync())
+    monkeypatch.setattr(jobs, "get_metric_entry", lambda _metric: None)
+    app = FastAPI()
+    app.include_router(jobs.router)
+
+    response = asyncio.run(
+        _request_app(app, method, path, authorization="Bearer agent-secret")
+    )
+
+    assert response.status_code == 404
+
+
+def test_agent_token_cannot_authorize_admin_routes() -> None:
+    app = FastAPI()
+    app.include_router(admin.router)
+
+    response = asyncio.run(
+        _request_app(
+            app,
+            "GET",
+            "/admin/status",
+            authorization="Bearer agent-secret",
+        )
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        None,
+        "Bearer agent-secret",
+        "Bearer admin-secret",
+        "Bearer invalid-secret",
+    ],
+)
+def test_discovery_and_lookup_routes_remain_public(
+    authorization: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lyra_app.routes import met_zone  # noqa: PLC0415
+
+    monkeypatch.setattr(health, "redis_client", FakeRedisAsync())
+    monkeypatch.setattr(
+        metrics,
+        "get_metric_catalog",
+        lambda: MetricCatalogResponse(catalog_fingerprint="catalog-1", metrics=[]),
+    )
+    monkeypatch.setattr(
+        met_zone,
+        "engine",
+        SimpleNamespace(connect=lambda: nullcontext(object())),
+    )
+
+    def lookup_met_zone(_name: str, *, conn: object) -> tuple[str, str]:
+        assert conn is not None
+        return "09.01", "Valle de México"
+
+    monkeypatch.setattr(met_zone, "get_met_zone_code_from_name", lookup_met_zone)
+
+    async def run_inline(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(met_zone.asyncio, "to_thread", run_inline)
+    app = FastAPI()
+    app.include_router(health.router)
+    app.include_router(data_types.router)
+    app.include_router(metrics.router)
+    app.include_router(met_zone.router)
+
+    responses = [
+        asyncio.run(_request_app(app, "GET", path, authorization=authorization))
+        for path in (
+            "/health",
+            "/data-types",
+            "/metrics",
+            "/lookups/met-zones?name=Valle%20de%20México",
+        )
+    ]
+
+    assert [response.status_code for response in responses] == [200, 200, 200, 200]
 
 
 async def _body(response: StreamingResponse) -> str:

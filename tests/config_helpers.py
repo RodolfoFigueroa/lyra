@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from lyra_app.config import (
     LYRA_ADMIN_API_KEY_ENV,
+    LYRA_AGENT_API_KEY_ENV,
     LYRA_POSTGRES_DB_ENV,
     LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -49,6 +50,7 @@ def _set_config_env() -> None:
             LYRA_POSTGRES_USER_ENV: "lyra",
             LYRA_POSTGRES_PASSWORD_ENV: "postgres-secret",
             LYRA_ADMIN_API_KEY_ENV: "admin-secret",
+            LYRA_AGENT_API_KEY_ENV: "agent-secret",
         }
     )
 

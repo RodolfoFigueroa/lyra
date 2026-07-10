@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import re
 import time
@@ -11,9 +10,9 @@ from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 from urllib.parse import urlparse
 
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from lyra_app.agent_auth import AgentBearerAuthMiddleware
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
@@ -23,7 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from fastapi import HTTPException
-    from starlette.types import ASGIApp, Receive, Scope, Send
+    from starlette.types import Receive, Scope, Send
 
 SERVER_INSTRUCTIONS = (
     "Lyra MCP exposes a small set of stable tools for metric catalog search, "
@@ -124,7 +123,7 @@ class InProcessLyraBackend:
 
 def create_mcp_app(
     *,
-    api_key: str,
+    agent_api_key: str,
     name: str = "lyra",
     backend: LyraMCPBackend | None = None,
 ) -> Starlette:
@@ -163,9 +162,9 @@ def create_mcp_app(
             allowed_origins=[],
         ),
     )
-    transport = _BearerAuthMiddleware(
+    transport = AgentBearerAuthMiddleware(
         _StreamableHTTPApplication(session_manager),
-        api_key=api_key,
+        agent_api_key=agent_api_key,
     )
 
     @asynccontextmanager
@@ -184,36 +183,6 @@ class _StreamableHTTPApplication:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await self._session_manager.handle_request(scope, receive, send)
-
-
-class _BearerAuthMiddleware:
-    def __init__(self, app: ASGIApp, *, api_key: str) -> None:
-        self._app = app
-        self._api_key = api_key
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self._app(scope, receive, send)
-            return
-
-        headers = dict(scope["headers"])
-        authorization = headers.get(b"authorization", b"").decode("latin-1")
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not token:
-            await JSONResponse(
-                {"detail": "MCP bearer token is required."},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )(scope, receive, send)
-            return
-        if not hmac.compare_digest(token, self._api_key):
-            await JSONResponse(
-                {"detail": "Invalid MCP bearer token."},
-                status_code=403,
-            )(scope, receive, send)
-            return
-
-        await self._app(scope, receive, send)
 
 
 def _tool_definitions() -> list[dict[str, Any]]:

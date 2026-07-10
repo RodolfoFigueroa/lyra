@@ -38,13 +38,13 @@ LYRA_POSTGRES_DB_ENV = "LYRA_POSTGRES_DB"
 LYRA_POSTGRES_USER_ENV = "LYRA_POSTGRES_USER"
 LYRA_POSTGRES_PASSWORD_ENV = "LYRA_POSTGRES_PASSWORD"  # noqa: S105
 LYRA_ADMIN_API_KEY_ENV = "LYRA_ADMIN_API_KEY"
-LYRA_MCP_API_KEY_ENV = "LYRA_MCP_API_KEY"
+LYRA_AGENT_API_KEY_ENV = "LYRA_AGENT_API_KEY"
 DEFAULT_MCP_MOUNT_PATH = "/mcp"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "database"})
+_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "agent", "database"})
 
 
 class ConfigSecretError(RuntimeError):
@@ -279,6 +279,25 @@ class AdminConfig(StrictConfigModel):
         return self.api_key
 
 
+class AgentConfig(StrictConfigModel):
+    api_key: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_AGENT_API_KEY_ENV,
+            field_name="agent.api_key",
+        ),
+        min_length=1,
+        repr=False,
+    )
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def normalize_api_key(cls, value: Any) -> Any:
+        return _strip_required_string(value)
+
+    def read_api_key(self) -> str:
+        return self.api_key
+
+
 class McpConfig(StrictConfigModel):
     enabled: bool = False
     mount_path: str = DEFAULT_MCP_MOUNT_PATH
@@ -298,12 +317,6 @@ class McpConfig(StrictConfigModel):
             msg = "mcp.mount_path must not end with /"
             raise ValueError(msg)
         return value
-
-    def read_api_key(self) -> str:
-        return read_scalar_env_var(
-            LYRA_MCP_API_KEY_ENV,
-            field_name="mcp.api_key",
-        )
 
 
 class LoggingConfig(StrictConfigModel):
@@ -409,6 +422,7 @@ class LyraConfig(StrictConfigModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     earth_engine: EarthEngineConfig
     admin: AdminConfig = Field(default_factory=AdminConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     logging: LoggingConfig
     job_store: JobStoreConfig
@@ -459,12 +473,6 @@ class LyraConfig(StrictConfigModel):
             raise ValueError(msg)
         return self
 
-    @model_validator(mode="after")
-    def validate_mcp_secret(self) -> Self:
-        if self.mcp.enabled:
-            self.mcp.read_api_key()
-        return self
-
     def get_worker(self, name: str) -> WorkerConfig:
         worker_name = _strip_required_string(name)
         if not isinstance(worker_name, str):
@@ -496,8 +504,7 @@ class LyraConfig(StrictConfigModel):
 def validate_config_secret_references(config: LyraConfig) -> None:
     config.database.read_password()
     config.admin.read_api_key()
-    if config.mcp.enabled:
-        config.mcp.read_api_key()
+    config.agent.read_api_key()
     require_nonempty_file(
         config.earth_engine.service_account_file,
         field_name="earth_engine.service_account_file",
@@ -737,14 +744,15 @@ __all__ = [
     "DEFAULT_PLUGIN_RUNNER_BASE_DIR",
     "DEFAULT_WORKER_CONCURRENCY",
     "LYRA_ADMIN_API_KEY_ENV",
+    "LYRA_AGENT_API_KEY_ENV",
     "LYRA_DATA_DIR",
-    "LYRA_MCP_API_KEY_ENV",
     "LYRA_POSTGRES_DB_ENV",
     "LYRA_POSTGRES_HOST_ENV",
     "LYRA_POSTGRES_PASSWORD_ENV",
     "LYRA_POSTGRES_PORT_ENV",
     "LYRA_POSTGRES_USER_ENV",
     "AdminConfig",
+    "AgentConfig",
     "ApiConfig",
     "ConfigLoadError",
     "ConfigSecretError",

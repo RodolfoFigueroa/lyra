@@ -56,7 +56,7 @@ def _initialize_payload() -> dict[str, object]:
 
 
 def _mcp_headers(bearer: str | None = None) -> dict[str, str]:
-    token = "mcp-secret" if bearer is None else bearer
+    token = "agent-secret" if bearer is None else bearer
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json, text/event-stream",
@@ -334,7 +334,7 @@ def _file_metric(name: str, description: str) -> MetricInfoV3:
 
 
 def test_mcp_package_initializes_with_bearer_auth() -> None:
-    app = create_mcp_app(api_key="mcp-secret")
+    app = create_mcp_app(agent_api_key="agent-secret")
     client = _ManagedTestClient(app)
 
     missing = client.post("/", json=_initialize_payload())
@@ -367,7 +367,7 @@ def test_mcp_package_initializes_with_bearer_auth() -> None:
 def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
     metric = _table_metric("smoke_table_metric", "Return a table.")
     mcp_app = create_mcp_app(
-        api_key="mcp-secret",
+        agent_api_key="agent-secret",
         backend=FakeMCPBackend([metric]),
     )
     mounted_app = Starlette(routes=[Mount("/mcp", app=mcp_app)])
@@ -418,7 +418,7 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
 
 
 def test_streamable_http_transport_enforces_sdk_request_rules() -> None:
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret"))
+    client = _ManagedTestClient(create_mcp_app(agent_api_key="agent-secret"))
 
     invalid_origin = client.post(
         "/",
@@ -464,7 +464,9 @@ def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
             _table_metric("population_count", "Count residents by area."),
         ]
     )
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     response = client.post(
         "/",
@@ -493,7 +495,7 @@ def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
 def test_mcp_get_metric_returns_public_contract() -> None:
     metric = _table_metric("smoke_table_metric", "Return a table.")
     client = _ManagedTestClient(
-        create_mcp_app(api_key="mcp-secret", backend=FakeMCPBackend([metric]))
+        create_mcp_app(agent_api_key="agent-secret", backend=FakeMCPBackend([metric]))
     )
 
     response = client.post(
@@ -513,7 +515,9 @@ def test_mcp_get_metric_returns_public_contract() -> None:
 
 def test_mcp_run_metric_translates_location_met_zone_and_returns_descriptor() -> None:
     backend = FakeMCPBackend([_table_metric("smoke_table_metric", "Return a table.")])
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     response = client.post(
         "/",
@@ -550,7 +554,9 @@ def test_mcp_run_metric_translates_bounds_met_zone() -> None:
             )
         ]
     )
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     response = client.post(
         "/",
@@ -577,7 +583,9 @@ def test_mcp_run_metric_translates_bounds_met_zone() -> None:
 def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["queued"]
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     response = client.post(
         "/",
@@ -606,7 +614,9 @@ def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None
 def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["queued", "succeeded"]
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     run_response = client.post(
         "/",
@@ -641,7 +651,9 @@ def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
 def test_mcp_get_job_result_returns_running_continuation() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["started"]
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
         status="started",
@@ -685,7 +697,9 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
         metric="smoke_table_metric",
     )
     backend.descriptors["job-1"] = descriptor
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     metadata = _tool_payload(
         client.post(
@@ -769,7 +783,7 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
 def test_mcp_result_tools_return_structured_expired_error() -> None:
     client = _ManagedTestClient(
         create_mcp_app(
-            api_key="mcp-secret",
+            agent_api_key="agent-secret",
             backend=FakeMCPBackend([_table_metric("metric", "Return a table.")]),
         )
     )
@@ -806,7 +820,9 @@ def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:
     cancelled_descriptor = build_result_descriptor(CancelledJobResult(job_id="job-x"))
     backend.descriptors["job-failed"] = failed_descriptor
     backend.descriptors["job-x"] = cancelled_descriptor
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     failed = _tool_payload(
         client.post(
@@ -842,7 +858,7 @@ def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:
 def test_mcp_result_tools_reject_invalid_result_ref() -> None:
     client = _ManagedTestClient(
         create_mcp_app(
-            api_key="mcp-secret",
+            agent_api_key="agent-secret",
             backend=FakeMCPBackend([_table_metric("metric", "Return a table.")]),
         )
     )
@@ -863,7 +879,7 @@ def test_mcp_result_tools_reject_invalid_result_ref() -> None:
 
 def test_mcp_run_metric_surfaces_unknown_metric_as_tool_error() -> None:
     client = _ManagedTestClient(
-        create_mcp_app(api_key="mcp-secret", backend=FakeMCPBackend([]))
+        create_mcp_app(agent_api_key="agent-secret", backend=FakeMCPBackend([]))
     )
 
     response = client.post(
@@ -884,7 +900,9 @@ def test_mcp_run_metric_surfaces_invalid_parameters_as_tool_error() -> None:
     backend = FakeMCPBackend(
         [_table_metric("smoke_table_metric", "Return a table.", value_type="integer")]
     )
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     response = client.post(
         "/",
@@ -916,7 +934,9 @@ def test_mcp_run_metric_rejects_unsupported_spatial_shapes() -> None:
             )
         ]
     )
-    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
 
     response = client.post(
         "/",
@@ -940,7 +960,7 @@ def test_main_mounts_mcp_when_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LYRA_MCP_API_KEY", "mcp-secret")
+    monkeypatch.setenv("LYRA_AGENT_API_KEY", "agent-secret")
     config = load_test_config(tmp_path)
     config.mcp.enabled = True
     client = _app_with_mcp(config, monkeypatch)
@@ -959,7 +979,7 @@ def test_main_mcp_mount_requires_dedicated_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LYRA_MCP_API_KEY", "mcp-secret")
+    monkeypatch.setenv("LYRA_AGENT_API_KEY", "agent-secret")
     config = load_test_config(tmp_path)
     config.mcp.enabled = True
     client = _app_with_mcp(config, monkeypatch)

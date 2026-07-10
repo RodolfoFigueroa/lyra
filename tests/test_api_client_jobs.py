@@ -517,7 +517,12 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
 
     monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    client = LyraAPIClient("example.test", secure=False, timeout=12.0)
+    client = LyraAPIClient(
+        "example.test",
+        secure=False,
+        timeout=12.0,
+        agent_api_key="agent-secret",
+    )
 
     job = client.create_job("heavy_metric", {"value": 3}, idempotency_key="key-1")
     status = client.get_job(job.job_id)
@@ -531,6 +536,7 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
         "input": {"value": 3},
         "idempotency_key": "key-1",
     }
+    assert posted[0]["headers"] == {"Authorization": "Bearer agent-secret"}
     assert job.job_id == "job-1"
     assert status.status == "started"
     assert [event.event for event in events] == ["succeeded"]
@@ -571,7 +577,8 @@ def test_sync_client_uses_admin_job_operations(
         "example.test",
         secure=False,
         timeout=12.0,
-        headers={"Authorization": "Bearer admin-secret"},
+        agent_api_key="agent-secret",
+        admin_api_key="admin-secret",
     )
 
     jobs = client.list_admin_jobs(limit=10, status="started", metric="heavy_metric")
@@ -716,7 +723,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
             "params": {"name": "Valle de Mexico"},
             "json": None,
             "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
+            "headers": {},
         },
         {
             "method": "GET",
@@ -1003,16 +1010,19 @@ def test_sync_client_fetches_result_descriptor_from_ref(
         params: dict[str, Any] | None,  # noqa: ARG001
         json: dict[str, Any] | None,  # noqa: ARG001
         timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        headers: dict[str, str],
     ) -> FakeSyncResponse:
         seen.append(f"{method} {url}")
+        assert headers == {"Authorization": "Bearer agent-secret"}
         return FakeSyncResponse(payload=_result_descriptor_response())
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
 
-    descriptor = LyraAPIClient("example.test", secure=False).get_result_descriptor(
-        "lyra://results/job-1"
-    )
+    descriptor = LyraAPIClient(
+        "example.test",
+        secure=False,
+        agent_api_key="agent-secret",
+    ).get_result_descriptor("lyra://results/job-1")
 
     assert seen == ["GET http://example.test/jobs/job-1/result/descriptor"]
     assert descriptor.result_ref == "lyra://results/job-1"
@@ -1264,7 +1274,8 @@ def test_async_client_uses_admin_job_operations(
         "example.test",
         secure=False,
         timeout=12.0,
-        headers={"Authorization": "Bearer admin-secret"},
+        agent_api_key="agent-secret",
+        admin_api_key="admin-secret",
     )
 
     jobs = asyncio.run(
@@ -1428,7 +1439,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
             "kwargs": {
                 "params": {"name": "Valle de Mexico"},
                 "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
+                "headers": {},
             },
         },
         {
@@ -1709,7 +1720,7 @@ def test_async_client_fetches_result_descriptor_from_raw_job_id(
     client = AsyncLyraAPIClient(
         "example.test",
         secure=False,
-        headers={"Authorization": "Bearer token"},
+        agent_api_key="agent-secret",
     )
 
     descriptor = asyncio.run(client.get_result_descriptor("job-1"))
@@ -1720,7 +1731,7 @@ def test_async_client_fetches_result_descriptor_from_raw_job_id(
             "kwargs": {
                 "params": None,
                 "json": None,
-                "headers": {"Authorization": "Bearer token"},
+                "headers": {"Authorization": "Bearer agent-secret"},
             },
         }
     ]

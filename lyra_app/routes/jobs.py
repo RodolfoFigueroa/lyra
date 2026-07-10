@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from anyio import Path
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models import (
     FileJobResult,
@@ -22,6 +22,7 @@ from lyra.sdk.models import (
 from redis.exceptions import RedisError
 
 from lyra_app import job_store
+from lyra_app.agent_auth import require_agent_key
 from lyra_app.celery_app import celery_app
 from lyra_app.db.redis import redis_client
 from lyra_app.registry import (
@@ -35,7 +36,7 @@ from lyra_app.spatial_inputs import (
     resolve_spatial_inputs,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_agent_key)])
 
 GENERIC_TASK_NAME = "lyra.run_metric"
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}

@@ -8,6 +8,7 @@ from lyra_app.config import (
     DEFAULT_PLUGIN_CATALOG_DIR,
     DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     LYRA_ADMIN_API_KEY_ENV,
+    LYRA_AGENT_API_KEY_ENV,
     LYRA_POSTGRES_DB_ENV,
     LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -27,6 +28,7 @@ def test_example_config_matches_config_contract(
     monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, "lyra")
     monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "postgres-secret")
     monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "admin-secret")
+    monkeypatch.setenv(LYRA_AGENT_API_KEY_ENV, "agent-secret")
     example_path = Path(__file__).resolve().parents[1] / "config.example.toml"
     raw_config = tomllib.loads(example_path.read_text(encoding="utf-8"))
 
@@ -37,8 +39,10 @@ def test_example_config_matches_config_contract(
     assert config.plugins.default_queue in config.plugins.allowed_queues
     assert "database" not in raw_config
     assert "admin" not in raw_config
+    assert "agent" not in raw_config
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.agent.read_api_key() == "agent-secret"
     assert config.earth_engine.service_account_file == (
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
     )
@@ -51,6 +55,7 @@ def test_example_config_matches_config_contract(
 
     assert "[database]" not in rendered
     assert "[admin]" not in rendered
+    assert "[agent]" not in rendered
     assert "password_file" not in rendered
     assert "service_account_file" not in rendered
     assert "api_key_file" not in rendered

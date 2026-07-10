@@ -1,6 +1,7 @@
 # Copy this file to /lyra_data/config/lyra.toml and adjust values for your
-# deployment. PostgreSQL connection settings and the admin API key are supplied
-# through environment variables, not this TOML file.
+# deployment. PostgreSQL connection settings plus the separate admin and agent
+# API keys are supplied through environment variables, not this TOML file.
+# LYRA_AGENT_API_KEY authenticates MCP and every /jobs lifecycle route.
 
 schema_version = 1
 

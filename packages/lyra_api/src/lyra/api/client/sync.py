@@ -94,7 +94,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 params=params,
                 json=json_body,
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._headers_for_path(path),
             )
         except requests.RequestException as exc:
             err = f"{error_context} request error: {exc}"
@@ -151,7 +151,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 self._http_url("jobs"),
                 json=body,
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._agent_headers,
             )
         except requests.RequestException as exc:
             err = f"Job creation error: {exc}"
@@ -167,7 +167,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url(f"jobs/{job_id}"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._agent_headers,
             )
         except requests.RequestException as exc:
             err = f"Job status error: {exc}"
@@ -195,7 +195,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
                 self._http_url("admin/jobs"),
                 params=params,
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin job list error: {exc}"
@@ -214,7 +214,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.post(
                 self._http_url(f"admin/jobs/{job_id}/cancel"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin job cancellation error: {exc}"
@@ -340,7 +340,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url("admin/status"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin status request error: {exc}"
@@ -359,7 +359,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url("admin/config-summary"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin config summary request error: {exc}"
@@ -378,7 +378,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url("admin/catalog"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin catalog request error: {exc}"
@@ -397,7 +397,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url("admin/workers"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin workers request error: {exc}"
@@ -416,7 +416,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url(f"admin/workers/{worker_name}"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin worker request error: {exc}"
@@ -435,7 +435,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url("admin/queues"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._admin_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin queues request error: {exc}"
@@ -455,7 +455,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
         *,
         last_event_id: str | None = None,
     ) -> Iterator[JobEvent]:
-        headers = dict(self.headers)
+        headers = dict(self._agent_headers)
         if last_event_id is not None:
             headers["Last-Event-ID"] = last_event_id
 
@@ -485,7 +485,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             response = requests.get(
                 self._http_url(f"jobs/{job_id}/result"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._agent_headers,
             )
         except requests.RequestException as exc:
             err = f"Job result error: {exc}"
@@ -512,7 +512,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             with requests.get(
                 self._http_url(f"jobs/{job_id}/result/download"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._agent_headers,
                 stream=True,
             ) as response:
                 if response.status_code != 200:
@@ -562,7 +562,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             with requests.get(
                 self._http_url(f"jobs/{job_id}/result/table.jsonl"),
                 timeout=self.timeout,
-                headers=self.headers,
+                headers=self._agent_headers,
                 stream=True,
             ) as response:
                 if response.status_code != 200:

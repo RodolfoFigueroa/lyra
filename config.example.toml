@@ -37,6 +37,10 @@ ttl_seconds = 600
 limit = 10
 window_seconds = 60
 
+[mcp]
+enabled = true
+mount_path = "/mcp"
+
 [plugins]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]

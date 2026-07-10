@@ -372,7 +372,7 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
     )
     mounted_app = Starlette(routes=[Mount("/mcp", app=mcp_app)])
 
-    async def use_official_client() -> tuple[Any, Any, Any]:
+    async def use_official_client() -> tuple[Any, Any, Any, Any, Any, Any]:
         async with (
             mcp_app.router.lifespan_context(mcp_app),
             httpx.AsyncClient(
@@ -393,9 +393,27 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
                 "lyra_get_metric",
                 {"metric": "smoke_table_metric"},
             )
-            return initialized, tools, called
+            extra_argument = await session.call_tool(
+                "lyra_get_metric",
+                {"metric": "smoke_table_metric", "unexpected": True},
+            )
+            invalid_type = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "smoke", "limit": "2"},
+            )
+            unknown = await session.call_tool("lyra_not_a_tool", {})
+            return (
+                initialized,
+                tools,
+                called,
+                extra_argument,
+                invalid_type,
+                unknown,
+            )
 
-    initialized, tools, called = asyncio.run(use_official_client())
+    initialized, tools, called, extra_argument, invalid_type, unknown = asyncio.run(
+        use_official_client()
+    )
 
     assert initialized.serverInfo.name == "lyra"
     assert initialized.instructions == SERVER_INSTRUCTIONS
@@ -412,9 +430,32 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
     run_tool = next(tool for tool in tools.tools if tool.name == "lyra_run_metric")
     assert "do not rerun" in (run_tool.description or "")
     assert "lyra_get_job_result" in (run_tool.description or "")
+    for tool in tools.tools:
+        assert tool.inputSchema["type"] == "object"
+        assert tool.inputSchema["additionalProperties"] is False
+        assert tool.outputSchema is not None
+        assert tool.annotations is not None
+        assert tool.annotations.destructiveHint is False
+        if tool.name == "lyra_run_metric":
+            assert tool.annotations.readOnlyHint is False
+            assert tool.annotations.idempotentHint is False
+            assert tool.annotations.openWorldHint is True
+        else:
+            assert tool.annotations.readOnlyHint is True
+            assert tool.annotations.idempotentHint is True
+            assert tool.annotations.openWorldHint is False
     assert called.isError is False
     assert called.structuredContent is not None
     assert called.structuredContent["name"] == "smoke_table_metric"
+    assert extra_argument.isError is True
+    assert extra_argument.structuredContent is None
+    assert "Input validation error" in extra_argument.content[0].text
+    assert invalid_type.isError is True
+    assert invalid_type.structuredContent is None
+    assert "Input validation error" in invalid_type.content[0].text
+    assert unknown.isError is True
+    assert unknown.structuredContent is not None
+    assert unknown.structuredContent["error"]["code"] == "unknown_tool"
 
 
 def test_streamable_http_transport_enforces_sdk_request_rules() -> None:
@@ -874,7 +915,133 @@ def test_mcp_result_tools_reject_invalid_result_ref() -> None:
 
     result = response.json()["result"]
     assert result["isError"] is True
-    assert result["structuredContent"]["error"]["code"] == "invalid_result_ref"
+    assert "structuredContent" not in result
+    assert "Input validation error" in result["content"][0]["text"]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        (
+            "lyra_run_metric",
+            {
+                "metric": "slow_metric",
+                "met_zone_code": "09.01",
+                "wait_seconds": -0.01,
+            },
+        ),
+        (
+            "lyra_run_metric",
+            {
+                "metric": "slow_metric",
+                "met_zone_code": "09.01",
+                "wait_seconds": 10.01,
+            },
+        ),
+        (
+            "lyra_get_job_result",
+            {"result_ref": "lyra://results/job-1", "wait_seconds": -0.01},
+        ),
+        (
+            "lyra_get_job_result",
+            {"result_ref": "lyra://results/job-1", "wait_seconds": 30.01},
+        ),
+    ],
+)
+def test_mcp_wait_ranges_are_rejected_before_polling(
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> None:
+    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
+    backend.job_status_sequence = ["started"]
+    backend.jobs["job-1"] = JobStatusInfo(
+        job_id="job-1",
+        status="started",
+        updated_at=datetime.now(UTC),
+        metric="slow_metric",
+    )
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload(tool_name, arguments),
+        headers=_mcp_headers(),
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "Input validation error" in result["content"][0]["text"]
+    assert backend.payloads == []
+
+
+@pytest.mark.parametrize("wait_seconds", [float("nan"), float("inf"), -float("inf")])
+def test_mcp_non_finite_waits_are_rejected_before_polling(
+    wait_seconds: float,
+) -> None:
+    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
+    backend.job_status_sequence = ["started"]
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    request = _tool_call_payload(
+        "lyra_run_metric",
+        {
+            "metric": "slow_metric",
+            "met_zone_code": "09.01",
+            "wait_seconds": wait_seconds,
+        },
+    )
+
+    response = client.post(
+        "/",
+        content=json.dumps(request),
+        headers={**_mcp_headers(), "Content-Type": "application/json"},
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "Input validation error" in result["content"][0]["text"]
+    assert backend.payloads == []
+
+
+def test_mcp_wait_boundaries_are_accepted() -> None:
+    backend = FakeMCPBackend([_table_metric("metric", "Return a table.")])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+
+    run_result = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload(
+                "lyra_run_metric",
+                {
+                    "metric": "metric",
+                    "met_zone_code": "09.01",
+                    "wait_seconds": 10,
+                },
+            ),
+            headers=_mcp_headers(),
+        )
+    )
+    poll_result = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload(
+                "lyra_get_job_result",
+                {
+                    "result_ref": run_result["result_ref"],
+                    "wait_seconds": 30,
+                },
+            ),
+            headers=_mcp_headers(),
+        )
+    )
+
+    assert run_result["status"] == "succeeded"
+    assert poll_result["status"] == "succeeded"
 
 
 def test_mcp_run_metric_surfaces_unknown_metric_as_tool_error() -> None:

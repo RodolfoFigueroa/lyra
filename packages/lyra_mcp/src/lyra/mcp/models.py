@@ -44,6 +44,11 @@ class RunMetricInput(MCPContractModel):
         default_factory=dict,
         description="Non-spatial metric input values.",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Caller-provided key for safely retrying this metric submission.",
+    )
     wait_seconds: float = Field(
         default=2,
         ge=0,
@@ -131,6 +136,10 @@ class RunningOutput(MCPContractModel):
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
     poll_after_seconds: int = Field(ge=0)
     next_tool: Literal["lyra_get_job_result"]
+
+
+class RunMetricRunningOutput(RunningOutput):
+    reused: bool
 
 
 class ResultLifetimeOutput(MCPContractModel):
@@ -227,7 +236,11 @@ class ResultDescriptorOutput(MCPContractModel):
     error: dict[str, Any] | None = None
 
 
-RunMetricOutput = RunningOutput | ResultDescriptorOutput
+class RunMetricResultDescriptorOutput(ResultDescriptorOutput):
+    reused: bool
+
+
+RunMetricOutput = RunMetricRunningOutput | RunMetricResultDescriptorOutput
 GetJobResultOutput = RunningOutput | ResultDescriptorOutput
 
 

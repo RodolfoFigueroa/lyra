@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, cast
 
 import pytest
 from lyra.api import parse_result_ref
@@ -47,11 +47,12 @@ class FakeSyncResponse:
         yield from self._chunks
 
 
-def _job_response() -> dict[str, Any]:
+def _job_response(*, reused: bool = False) -> dict[str, Any]:
     return {
         "job_id": "job-1",
         "metric": "heavy_metric",
         "status": "queued",
+        "reused": reused,
         "links": {
             "self": "/jobs/job-1",
             "events": "/jobs/job-1/events",
@@ -582,6 +583,7 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     }
     assert posted[0]["headers"] == {"Authorization": "Bearer agent-secret"}
     assert job.job_id == "job-1"
+    assert job.reused is False
     assert status.status == "started"
     assert [event.event for event in events] == ["succeeded"]
     assert result.kind == "table"
@@ -1291,6 +1293,42 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert result.kind == "table"
     assert result.data == [[6]]
+
+
+def test_async_client_exposes_idempotent_replay_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        posted_json: ClassVar[dict[str, Any] | None] = None
+
+        def post(self, *_: object, **kwargs: object) -> FakeAsyncResponse:
+            posted_json = kwargs.get("json")
+            assert isinstance(posted_json, dict)
+            type(self).posted_json = cast("dict[str, Any]", posted_json)
+            return super().post()
+
+    RecordingSession.responses = [
+        FakeAsyncResponse(status=202, payload=_job_response(reused=True))
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+
+    response = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).create_job(
+            "heavy_metric",
+            {"value": 3},
+            idempotency_key="retry-key",
+        )
+    )
+
+    assert response.reused is True
+    assert RecordingSession.posted_json == {
+        "metric": "heavy_metric",
+        "input": {"value": 3},
+        "idempotency_key": "retry-key",
+    }
 
 
 def test_async_client_uses_admin_job_operations(

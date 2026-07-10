@@ -143,6 +143,18 @@ class FakeRedisAsync:
         self.deleted.append(key)
         self.values.pop(key, None)
 
+    async def eval(
+        self,
+        _script: str,
+        _numkeys: int,
+        key: str,
+        expected: str,
+    ) -> int:
+        if self.values.get(key) != expected:
+            return 0
+        await self.delete(key)
+        return 1
+
     async def xadd(self, key: str, fields: dict[str, str]) -> str:
         stream = self.streams.setdefault(key, [])
         stream_id = f"{len(stream) + 1}-0"
@@ -267,6 +279,101 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     stored = json.loads(redis.values[job_store.provenance_key("job-1")])
     assert stored == provenance.model_dump(mode="json", exclude_none=True)
     assert "coordinates" not in json.dumps(stored)
+
+
+def test_idempotency_claim_is_atomic_scoped_and_conditionally_released() -> None:
+    redis = FakeRedisAsync()
+
+    first, acquired = asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-1",
+            "job-1",
+            client=redis,
+        )
+    )
+    replay, replay_acquired = asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-1",
+            "job-2",
+            client=redis,
+        )
+    )
+    other_scope, other_scope_acquired = asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-2",
+            "job-3",
+            agent_scope="other-agent",
+            client=redis,
+        )
+    )
+
+    assert acquired is True
+    assert first.job_id == "job-1"
+    assert replay_acquired is False
+    assert replay == first
+    assert other_scope_acquired is True
+    assert other_scope.job_id == "job-3"
+    assert job_store.idempotency_key("retry-key") != job_store.idempotency_key(
+        "retry-key",
+        agent_scope="other-agent",
+    )
+    assert (
+        asyncio.run(
+            job_store.release_idempotency_key_async(
+                "retry-key",
+                job_store.IdempotencyRecord(
+                    request_digest="different",
+                    job_id="job-1",
+                ),
+                client=redis,
+            )
+        )
+        is False
+    )
+    assert (
+        asyncio.run(
+            job_store.release_idempotency_key_async(
+                "retry-key",
+                first,
+                client=redis,
+            )
+        )
+        is True
+    )
+    assert redis.values.get(job_store.idempotency_key("retry-key")) is None
+
+
+def test_job_updates_refresh_idempotency_ttl() -> None:
+    redis = FakeRedisAsync()
+    asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-1",
+            "job-1",
+            client=redis,
+        )
+    )
+    redis.expirations.clear()
+
+    asyncio.run(
+        job_store.set_job_status_async(
+            "job-1",
+            "progress",
+            client=redis,
+        )
+    )
+
+    assert (
+        job_store.idempotency_key("retry-key"),
+        job_store.JOB_STORE_TTL_SECONDS,
+    ) in redis.expirations
+    assert (
+        job_store.job_idempotency_key("job-1"),
+        job_store.JOB_STORE_TTL_SECONDS,
+    ) in redis.expirations
 
 
 def test_job_provenance_is_immutable_and_supports_async_reads() -> None:

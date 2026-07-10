@@ -720,8 +720,18 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         err = f"Job {job_id} event stream ended before a terminal event."
         raise DownloadError(err)
 
-    async def process(self, metric: str, payload: dict[str, Any]) -> TableJobResult:
-        job = await self.create_job(metric, payload)
+    async def process(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> TableJobResult:
+        job = await self.create_job(
+            metric,
+            payload,
+            idempotency_key=idempotency_key,
+        )
         await self._wait_for_terminal_event(job.job_id)
         result = await self.get_job_result(job.job_id)
         if result.status != "succeeded":
@@ -739,8 +749,14 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         metric: str,
         payload: dict[str, Any],
         path: str | os.PathLike[str],
+        *,
+        idempotency_key: str | None = None,
     ) -> None:
-        job = await self.create_job(metric, payload)
+        job = await self.create_job(
+            metric,
+            payload,
+            idempotency_key=idempotency_key,
+        )
         event = await self._wait_for_terminal_event(job.job_id)
         result = parse_job_result(event.data)
         if result.status != "succeeded":

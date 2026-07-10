@@ -179,6 +179,10 @@ class FakeMCPBackend:
         self.jobs: dict[str, JobStatusInfo] = {}
         self.descriptors: dict[str, Any] = {}
         self.payloads: list[dict[str, Any]] = []
+        self.idempotency_records: dict[
+            str,
+            tuple[str, dict[str, Any], str],
+        ] = {}
         self.job_status_sequence: list[JobLifecycleStatus] = ["succeeded"]
 
     async def get_metrics(self) -> MetricCatalogResponse:
@@ -198,6 +202,8 @@ class FakeMCPBackend:
         self,
         metric: str,
         payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
     ) -> JobCreateResponse:
         if payload.get("value") == "invalid":
             code = "invalid_parameters"
@@ -209,8 +215,24 @@ class FakeMCPBackend:
                 details,
             )
 
+        if idempotency_key is not None and idempotency_key in self.idempotency_records:
+            prior_metric, prior_payload, prior_job_id = self.idempotency_records[
+                idempotency_key
+            ]
+            if (prior_metric, prior_payload) != (metric, payload):
+                code = "idempotency_conflict"
+                message = "The idempotency key is already bound to a different request."
+                raise self._tool_error(
+                    code,
+                    message,
+                    {"idempotency_key": idempotency_key, "job_id": prior_job_id},
+                )
+            return self._job_response(prior_job_id, metric, reused=True)
+
         job_id = f"job-{len(self.payloads) + 1}"
         self.payloads.append(payload)
+        if idempotency_key is not None:
+            self.idempotency_records[idempotency_key] = (metric, payload, job_id)
         self.jobs[job_id] = self._job_status(
             job_id, self.job_status_sequence[0], metric
         )
@@ -223,10 +245,20 @@ class FakeMCPBackend:
             ),
             completed_at=_COMPLETED_AT,
         )
+        return self._job_response(job_id, metric, reused=False)
+
+    @staticmethod
+    def _job_response(
+        job_id: str,
+        metric: str,
+        *,
+        reused: bool,
+    ) -> JobCreateResponse:
         return JobCreateResponse(
             job_id=job_id,
             metric=metric,
             status="queued",
+            reused=reused,
             links=JobLinks(
                 self=f"/jobs/{job_id}",
                 events=f"/jobs/{job_id}/events",
@@ -587,6 +619,7 @@ def test_mcp_run_metric_translates_location_met_zone_and_returns_descriptor() ->
     assert payload["status"] == "succeeded"
     assert payload["result_ref"] == "lyra://results/job-1"
     assert payload["preview"]["rows"] == [{"_result_index": "area-1", "value": 7}]
+    assert payload["reused"] is False
 
 
 def test_mcp_run_metric_translates_bounds_met_zone() -> None:
@@ -653,6 +686,86 @@ def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None
         "result_ref": "lyra://results/job-1",
         "poll_after_seconds": 1,
         "next_tool": "lyra_get_job_result",
+        "reused": False,
+    }
+
+
+def test_mcp_run_metric_reuses_idempotent_submission() -> None:
+    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
+    backend.job_status_sequence = ["queued"]
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    arguments = {
+        "metric": "slow_metric",
+        "met_zone_code": "09.01",
+        "parameters": {"value": 7},
+        "idempotency_key": "retry-key",
+        "wait_seconds": 0,
+    }
+
+    first = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_run_metric", arguments),
+            headers=_mcp_headers(),
+        )
+    )
+    replay = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_run_metric", arguments),
+            headers=_mcp_headers(),
+        )
+    )
+
+    assert first["job_id"] == replay["job_id"] == "job-1"
+    assert first["reused"] is False
+    assert replay["reused"] is True
+    assert [payload for payload in backend.payloads if "_poll" not in payload] == [
+        {
+            "value": 7,
+            "location": {"data_type": "met_zone_code", "value": "09.01"},
+        }
+    ]
+
+
+def test_mcp_run_metric_reports_idempotency_conflict() -> None:
+    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
+    backend.job_status_sequence = ["queued"]
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    base = {
+        "metric": "slow_metric",
+        "met_zone_code": "09.01",
+        "idempotency_key": "conflict-key",
+        "wait_seconds": 0,
+    }
+    client.post(
+        "/",
+        json=_tool_call_payload(
+            "lyra_run_metric",
+            {**base, "parameters": {"value": 7}},
+        ),
+        headers=_mcp_headers(),
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload(
+            "lyra_run_metric",
+            {**base, "parameters": {"value": 8}},
+        ),
+        headers=_mcp_headers(),
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"] == {
+        "code": "idempotency_conflict",
+        "message": "The idempotency key is already bound to a different request.",
+        "details": {"idempotency_key": "conflict-key", "job_id": "job-1"},
     }
 
 

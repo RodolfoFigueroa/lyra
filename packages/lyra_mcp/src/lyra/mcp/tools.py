@@ -21,6 +21,10 @@ _POLL_INTERVAL_SECONDS = 0.1
 _DEFAULT_POLL_AFTER_SECONDS = 1
 _TOKEN_PATTERN = re.compile(r"[a-z0-9_]+")
 _RESULT_REF_PATTERN = re.compile(r"^lyra://results/([^/?#\s]+)$")
+_UNKNOWN_METRIC_ERROR = "unknown_metric"
+_INVALID_PARAMETERS_ERROR = "invalid_parameters"
+_IDEMPOTENCY_CONFLICT_ERROR = "idempotency_conflict"
+_BACKEND_ERROR = "backend_error"
 
 
 class LyraMCPBackend(Protocol):
@@ -28,7 +32,13 @@ class LyraMCPBackend(Protocol):
 
     async def get_metric(self, metric: str) -> Any | None: ...
 
-    async def create_job(self, metric: str, payload: dict[str, Any]) -> Any: ...
+    async def create_job(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> Any: ...
 
     async def get_job(self, job_id: str) -> Any | None: ...
 
@@ -63,16 +73,58 @@ class InProcessLyraBackend:
 
         return await asyncio.to_thread(get_metric_info, metric)
 
-    async def create_job(self, metric: str, payload: dict[str, Any]) -> Any:
-        from fastapi import HTTPException as FastAPIHTTPException  # noqa: PLC0415
+    async def create_job(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> Any:
         from lyra.sdk.models import JobCreateRequest  # noqa: PLC0415
 
-        from lyra_app.routes import jobs  # noqa: PLC0415
+        from lyra_app.job_submission import (  # noqa: PLC0415
+            IdempotencyConflictError,
+            SubmissionUnavailableError,
+            UnknownMetricError,
+            submit_job,
+        )
+        from lyra_app.registry import MetricPayloadValidationError  # noqa: PLC0415
+        from lyra_app.spatial_inputs import (  # noqa: PLC0415
+            SpatialInputResolutionUnavailableError,
+            SpatialInputValidationError,
+        )
 
         try:
-            return await jobs.create_job(JobCreateRequest(metric=metric, input=payload))
-        except FastAPIHTTPException as exc:
-            raise _tool_error_from_http(exc, context="create job") from exc
+            return await submit_job(
+                JobCreateRequest(
+                    metric=metric,
+                    input=payload,
+                    idempotency_key=idempotency_key,
+                )
+            )
+        except UnknownMetricError as exc:
+            raise ToolCallError(_UNKNOWN_METRIC_ERROR, str(exc)) from exc
+        except (MetricPayloadValidationError, SpatialInputValidationError) as exc:
+            raise ToolCallError(
+                _INVALID_PARAMETERS_ERROR,
+                "Invalid metric parameters.",
+                exc.errors,
+            ) from exc
+        except IdempotencyConflictError as exc:
+            raise ToolCallError(
+                _IDEMPOTENCY_CONFLICT_ERROR,
+                str(exc),
+                exc.details,
+            ) from exc
+        except (
+            SpatialInputResolutionUnavailableError,
+            SubmissionUnavailableError,
+        ) as exc:
+            raise ToolCallError(
+                _BACKEND_ERROR,
+                "Failed to create job.",
+                str(exc),
+            ) from exc
 
     async def get_job(self, job_id: str) -> Any | None:
         from fastapi import HTTPException as FastAPIHTTPException  # noqa: PLC0415
@@ -172,8 +224,13 @@ async def _run_metric(
         met_zone_code=arguments.met_zone_code,
         parameters=arguments.parameters,
     )
-    job = await backend.create_job(arguments.metric, payload)
+    job = await backend.create_job(
+        arguments.metric,
+        payload,
+        idempotency_key=arguments.idempotency_key,
+    )
     job_id = str(job.job_id)
+    reused = bool(getattr(job, "reused", False))
     deadline = time.monotonic() + arguments.wait_seconds
 
     while True:
@@ -189,9 +246,9 @@ async def _run_metric(
                     "result_unavailable",
                     f"Job {job_id} finished but its result descriptor is unavailable.",
                 )
-            return _model_dump(descriptor)
+            return {**_model_dump(descriptor), "reused": reused}
         if time.monotonic() >= deadline:
-            return _running_payload(job_id)
+            return _running_payload(job_id, reused=reused)
         await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - time.monotonic()))
 
 
@@ -381,14 +438,21 @@ def _is_terminal_status(status: str) -> bool:
     return status in {"succeeded", "failed", "cancelled"}
 
 
-def _running_payload(job_id: str) -> dict[str, Any]:
-    return {
+def _running_payload(
+    job_id: str,
+    *,
+    reused: bool | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "status": "running",
         "job_id": job_id,
         "result_ref": _result_ref_for_job(job_id),
         "poll_after_seconds": _DEFAULT_POLL_AFTER_SECONDS,
         "next_tool": "lyra_get_job_result",
     }
+    if reused is not None:
+        payload["reused"] = reused
+    return payload
 
 
 def _search_candidate(metric: Any, query: str) -> dict[str, Any]:
@@ -509,6 +573,8 @@ def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:
         code = "unknown_metric"
     elif exc.status_code == 422:
         code = "invalid_parameters"
+    elif exc.status_code == 409:
+        code = "idempotency_conflict"
     else:
         code = "backend_error"
     return ToolCallError(code, f"Failed to {context}.", exc.detail)

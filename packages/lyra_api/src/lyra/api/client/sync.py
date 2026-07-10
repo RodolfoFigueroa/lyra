@@ -653,8 +653,14 @@ class LyraAPIClient(_BaseLyraAPIClient):
         err = f"Job {job_id} event stream ended before a terminal event."
         raise DownloadError(err)
 
-    def process(self, metric: str, payload: dict[str, Any]) -> TableJobResult:
-        job = self.create_job(metric, payload)
+    def process(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> TableJobResult:
+        job = self.create_job(metric, payload, idempotency_key=idempotency_key)
         self._wait_for_terminal_event(job.job_id)
         result = self.get_job_result(job.job_id)
         if result.status != "succeeded":
@@ -672,8 +678,10 @@ class LyraAPIClient(_BaseLyraAPIClient):
         metric: str,
         payload: dict[str, Any],
         path: str | os.PathLike[str],
+        *,
+        idempotency_key: str | None = None,
     ) -> None:
-        job = self.create_job(metric, payload)
+        job = self.create_job(metric, payload, idempotency_key=idempotency_key)
         event = self._wait_for_terminal_event(job.job_id)
         result = parse_job_result(event.data)
         if result.status != "succeeded":

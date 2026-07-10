@@ -23,7 +23,7 @@ from lyra.sdk.models.metric import MetricCatalogResponse
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
-from lyra_app import job_store, registry
+from lyra_app import job_store, job_submission, registry
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import admin, data_types, health, jobs, metrics
@@ -207,6 +207,18 @@ class FakeRedisAsync:
         self.deleted.append(key)
         self.values.pop(key, None)
 
+    async def eval(
+        self,
+        _script: str,
+        _numkeys: int,
+        key: str,
+        expected: str,
+    ) -> int:
+        if self.values.get(key) != expected:
+            return 0
+        await self.delete(key)
+        return 1
+
     async def xadd(self, key: str, fields: dict[str, str]) -> str:
         stream = self.streams.setdefault(key, [])
         stream_id = f"{len(stream) + 1}-0"
@@ -283,6 +295,41 @@ class FakeCelery:
         )
 
 
+class FailOnceCelery(FakeCelery):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def send_task(
+        self,
+        name: str,
+        *,
+        args: list[dict[str, Any]],
+        queue: str,
+        task_id: str,
+    ) -> None:
+        if not self.failed:
+            self.failed = True
+            error = "dispatch failed"
+            raise RuntimeError(error)
+        super().send_task(name, args=args, queue=queue, task_id=task_id)
+
+
+class ConcurrentFakeRedisAsync(FakeRedisAsync):
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        acquired = await super().set(key, value, ex=ex, nx=nx)
+        if key.startswith("jobs:idempotency:"):
+            await asyncio.sleep(0)
+        return acquired
+
+
 class FakeRequest:
     async def is_disconnected(self) -> bool:
         return False
@@ -314,7 +361,7 @@ def reset_catalog(
     async def run_inline(func: Any, /, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(jobs.asyncio, "to_thread", run_inline)
+    monkeypatch.setattr(job_submission.asyncio, "to_thread", run_inline)
     registry.reset_catalog()
     load_test_config(
         tmp_path,
@@ -432,7 +479,7 @@ def test_job_lifecycle_routes_accept_agent_bearer_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_redis(monkeypatch, FakeRedisAsync())
-    monkeypatch.setattr(jobs, "get_metric_entry", lambda _metric: None)
+    monkeypatch.setattr(job_submission, "get_metric_entry", lambda _metric: None)
     app = FastAPI()
     app.include_router(jobs.router)
 
@@ -572,6 +619,7 @@ def test_create_job_dispatches_generic_task_to_state_queue(
         "job_id": "job-1",
         "metric": "heavy_metric",
         "status": "queued",
+        "reused": False,
         "links": {
             "self": "/jobs/job-1",
             "events": "/jobs/job-1/events",
@@ -600,6 +648,175 @@ def test_create_job_dispatches_generic_task_to_state_queue(
     assert len(redis.streams[job_store.events_key("job-1")]) == 1
     provenance = json.loads(redis.values[job_store.provenance_key("job-1")])
     assert provenance["row_identity"] == {"field": "id"}
+
+
+def test_canonical_request_fingerprint_ignores_nested_mapping_order() -> None:
+    first = job_submission.canonical_request_fingerprint(
+        "heavy_metric",
+        {"outer": {"b": 2, "a": 1}, "value": 3},
+    )
+    second = job_submission.canonical_request_fingerprint(
+        "heavy_metric",
+        {"value": 3, "outer": {"a": 1, "b": 2}},
+    )
+
+    assert first == second
+    assert first != job_submission.canonical_request_fingerprint(
+        "other_metric",
+        {"value": 3, "outer": {"a": 1, "b": 2}},
+    )
+
+
+def test_create_job_reuses_equivalent_idempotent_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    job_ids = iter(["job-1", "job-2"])
+    monkeypatch.setattr(
+        jobs,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(job_ids)),
+    )
+    request = JobCreateRequest(
+        metric="heavy_metric",
+        input=_spatial_payload(),
+        idempotency_key="retry-key",
+    )
+
+    first = asyncio.run(jobs.create_job(request))
+    replay = asyncio.run(jobs.create_job(request))
+
+    assert first.job_id == replay.job_id == "job-1"
+    assert first.reused is False
+    assert replay.reused is True
+    assert len(celery.sent) == 1
+    assert len(redis.streams[job_store.events_key("job-1")]) == 1
+    reservation_key = job_store.idempotency_key("retry-key")
+    assert (reservation_key, job_store.JOB_STORE_TTL_SECONDS) in redis.expirations
+    assert (
+        job_store.job_idempotency_key("job-1"),
+        job_store.JOB_STORE_TTL_SECONDS,
+    ) in redis.expirations
+
+
+def test_concurrent_equivalent_submissions_dispatch_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = ConcurrentFakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    job_ids = iter(["job-1", "job-2"])
+    monkeypatch.setattr(
+        jobs,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(job_ids)),
+    )
+    request = JobCreateRequest(
+        metric="heavy_metric",
+        input=_spatial_payload(),
+        idempotency_key="concurrent-key",
+    )
+
+    async def submit_both() -> tuple[Any, Any]:
+        first, second = await asyncio.gather(
+            jobs.create_job(request),
+            jobs.create_job(request),
+        )
+        return first, second
+
+    first, second = asyncio.run(submit_both())
+
+    assert first.job_id == second.job_id
+    assert sorted([first.reused, second.reused]) == [False, True]
+    assert len(celery.sent) == 1
+
+
+def test_create_job_rejects_conflicting_idempotency_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    job_ids = iter(["job-1", "job-2"])
+    monkeypatch.setattr(
+        jobs,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(job_ids)),
+    )
+    asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(
+                metric="heavy_metric",
+                input=_spatial_payload(),
+                idempotency_key="conflict-key",
+            )
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric="heavy_metric",
+                    input={**_spatial_payload(), "value": 4},
+                    idempotency_key="conflict-key",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "code": "idempotency_conflict",
+        "message": "The idempotency key is already bound to a different request.",
+        "idempotency_key": "conflict-key",
+        "job_id": "job-1",
+    }
+    assert len(celery.sent) == 1
+
+
+def test_dispatch_failure_releases_idempotency_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FailOnceCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    job_ids = iter(["job-1", "job-2"])
+    monkeypatch.setattr(
+        jobs,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(job_ids)),
+    )
+    request = JobCreateRequest(
+        metric="heavy_metric",
+        input=_spatial_payload(),
+        idempotency_key="recoverable-key",
+    )
+
+    with pytest.raises(RuntimeError, match="dispatch failed"):
+        asyncio.run(jobs.create_job(request))
+    recovered = asyncio.run(jobs.create_job(request))
+
+    assert recovered.job_id == "job-2"
+    assert recovered.reused is False
+    assert len(celery.sent) == 1
 
 
 def test_create_job_rejects_unknown_metric(

@@ -768,6 +768,12 @@ class JobCreateResponse(StrictBaseModel):
     job_id: str = Field(min_length=1, description="Identifier assigned to the job.")
     metric: str = Field(min_length=1, description="Metric accepted for execution.")
     status: Literal["queued"] = Field(description="Initial lifecycle status.")
+    reused: bool = Field(
+        description=(
+            "Whether this response reused a job from an equivalent idempotent "
+            "submission."
+        ),
+    )
     links: JobLinks = Field(description="Related job API URLs.")
 
 

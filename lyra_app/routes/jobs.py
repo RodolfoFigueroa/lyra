@@ -1,7 +1,5 @@
-import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
 
@@ -12,11 +10,7 @@ from lyra.sdk.models import (
     FileJobResult,
     JobCreateRequest,
     JobCreateResponse,
-    JobEnvelope,
-    JobLinks,
-    JobRunProvenance,
     JobStatusInfo,
-    PluginInfoV3,
     TableJobResult,
     build_table_preview,
     parse_job_result,
@@ -28,20 +22,20 @@ from lyra_app import job_store
 from lyra_app.agent_auth import require_agent_key
 from lyra_app.celery_app import celery_app
 from lyra_app.db.redis import redis_client
-from lyra_app.registry import (
-    MetricPayloadValidationError,
-    get_metric_entry,
-    validate_metric_entry_payload,
+from lyra_app.job_submission import (
+    IdempotencyConflictError,
+    SubmissionUnavailableError,
+    UnknownMetricError,
+    submit_job,
 )
+from lyra_app.registry import MetricPayloadValidationError
 from lyra_app.spatial_inputs import (
     SpatialInputResolutionUnavailableError,
     SpatialInputValidationError,
-    resolve_spatial_inputs_with_metadata,
 )
 
 router = APIRouter(dependencies=[Depends(require_agent_key)])
 
-GENERIC_TASK_NAME = "lyra.run_metric"
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 SSE_KEEPALIVE = ": keepalive\n\n"
 
@@ -55,11 +49,6 @@ async def _ensure_redis_available() -> None:
     if not pong:
         err = "Cannot connect to Redis. Please try again later."
         raise HTTPException(status_code=503, detail=err)
-
-
-def _job_links(job_id: str) -> JobLinks:
-    base = f"/jobs/{job_id}"
-    return JobLinks(self=base, events=f"{base}/events", result=f"{base}/result")
 
 
 def _sse_message(stored_event: job_store.StoredJobEvent) -> str:
@@ -144,62 +133,36 @@ async def _job_event_stream(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def create_job(request: JobCreateRequest) -> JobCreateResponse:
-    await _ensure_redis_available()
-
-    entry = get_metric_entry(request.metric)
-    if entry is None:
+    try:
+        return await submit_job(
+            request,
+            client=redis_client,
+            dispatcher=celery_app,
+            job_id_factory=lambda: uuid4().hex,
+        )
+    except UnknownMetricError as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"Unknown metric: {request.metric}",
-        )
-
-    try:
-        validated_input = validate_metric_entry_payload(entry, request.input)
+            detail=str(exc),
+        ) from exc
     except MetricPayloadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
-    created_at = datetime.now(UTC)
-    try:
-        resolution = await asyncio.to_thread(
-            resolve_spatial_inputs_with_metadata,
-            validated_input,
-            entry.metric.spatial_inputs,
-        )
     except SpatialInputValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
     except SpatialInputResolutionUnavailableError as exc:
         err = "Cannot resolve spatial input. Please try again later."
         raise HTTPException(status_code=503, detail=err) from exc
-
-    job_id = uuid4().hex
-    envelope = JobEnvelope(
-        job_id=job_id,
-        metric=request.metric,
-        input=resolution.input,
-        idempotency_key=request.idempotency_key,
-    )
-    provenance = JobRunProvenance(
-        metric=request.metric,
-        catalog_fingerprint=entry.catalog_fingerprint,
-        plugin=PluginInfoV3(name=entry.plugin_name, version=entry.plugin_version),
-        input=validated_input,
-        output=entry.metric.output,
-        created_at=created_at,
-        row_identity=resolution.row_identity,
-    )
-    await job_store.create_job_async(envelope, provenance)
-    celery_app.send_task(
-        GENERIC_TASK_NAME,
-        args=[envelope.model_dump(mode="json")],
-        queue=entry.queue,
-        task_id=job_id,
-    )
-
-    return JobCreateResponse(
-        job_id=job_id,
-        metric=request.metric,
-        status="queued",
-        links=_job_links(job_id),
-    )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "idempotency_conflict",
+                "message": str(exc),
+                **exc.details,
+            },
+        ) from exc
+    except SubmissionUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/jobs/{job_id}")

@@ -184,9 +184,24 @@ class FakeMCPBackend:
             tuple[str, dict[str, Any], str],
         ] = {}
         self.job_status_sequence: list[JobLifecycleStatus] = ["succeeded"]
+        self.met_zone_matches: dict[str, dict[str, str]] = {
+            "Mexico City": {
+                "cve_met": "09.01",
+                "nom_met": "Valle de México",
+            },
+            "Mexcio City": {
+                "cve_met": "09.01",
+                "nom_met": "Valle de México",
+            },
+        }
+        self.met_zone_queries: list[str] = []
 
     async def get_metrics(self) -> MetricCatalogResponse:
         return self.catalog
+
+    async def lookup_met_zone(self, name: str) -> dict[str, str] | None:
+        self.met_zone_queries.append(name)
+        return self.met_zone_matches.get(name)
 
     async def get_metric(self, metric: str) -> MetricInfoV3 | None:
         return next(
@@ -408,7 +423,7 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
     )
     mounted_app = Starlette(routes=[Mount("/mcp", app=mcp_app)])
 
-    async def use_official_client() -> tuple[Any, Any, Any, Any, Any, Any]:
+    async def use_official_client() -> tuple[Any, Any, Any, Any, Any, Any, Any]:
         async with (
             mcp_app.router.lifespan_context(mcp_app),
             httpx.AsyncClient(
@@ -429,6 +444,10 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
                 "lyra_get_metric",
                 {"metric": "smoke_table_metric"},
             )
+            lookup = await session.call_tool(
+                "lyra_lookup_met_zone",
+                {"name": "Mexico City"},
+            )
             extra_argument = await session.call_tool(
                 "lyra_get_metric",
                 {"metric": "smoke_table_metric", "unexpected": True},
@@ -442,14 +461,21 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
                 initialized,
                 tools,
                 called,
+                lookup,
                 extra_argument,
                 invalid_type,
                 unknown,
             )
 
-    initialized, tools, called, extra_argument, invalid_type, unknown = asyncio.run(
-        use_official_client()
-    )
+    (
+        initialized,
+        tools,
+        called,
+        lookup,
+        extra_argument,
+        invalid_type,
+        unknown,
+    ) = asyncio.run(use_official_client())
 
     assert initialized.serverInfo.name == "lyra"
     assert initialized.instructions == SERVER_INSTRUCTIONS
@@ -461,6 +487,7 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
         "lyra_get_metric",
         "lyra_get_result_metadata",
         "lyra_get_result_preview",
+        "lyra_lookup_met_zone",
         "lyra_run_metric",
     }
     run_tool = next(tool for tool in tools.tools if tool.name == "lyra_run_metric")
@@ -483,6 +510,11 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
     assert called.isError is False
     assert called.structuredContent is not None
     assert called.structuredContent["name"] == "smoke_table_metric"
+    assert lookup.isError is False
+    assert lookup.structuredContent == {
+        "cve_met": "09.01",
+        "nom_met": "Valle de México",
+    }
     assert extra_argument.isError is True
     assert extra_argument.structuredContent is None
     assert "Input validation error" in extra_argument.content[0].text
@@ -567,6 +599,168 @@ def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
     assert first["output_kind"] == "table"
     assert first["relevant_columns"][0]["name"] == "value"
     assert "Matches" in first["reason"]
+
+
+def test_official_client_supports_met_zone_lookup_and_normalized_discovery() -> None:
+    backend = FakeMCPBackend(
+        [
+            _table_metric(
+                "tree_coverage",
+                "Cobertura de árboles urbanos.",
+            ),
+            _table_metric(
+                "populationDensity",
+                "Population density by neighborhood.",
+            ),
+            _table_metric(
+                "heat-risk-index",
+                "Heat risk by neighborhood.",
+            ),
+        ]
+    )
+    mcp_app = create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    mounted_app = Starlette(routes=[Mount("/mcp", app=mcp_app)])
+
+    async def exercise_discovery() -> tuple[Any, ...]:
+        async with (
+            mcp_app.router.lifespan_context(mcp_app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=mounted_app),
+                base_url="http://testserver",
+                headers=_mcp_headers(),
+                follow_redirects=True,
+            ) as http_client,
+            streamable_http_client(
+                "http://testserver/mcp",
+                http_client=http_client,
+            ) as (read_stream, write_stream, _),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.initialize()
+            tools = await session.list_tools()
+            canonical = await session.call_tool(
+                "lyra_lookup_met_zone",
+                {"name": "Mexico City"},
+            )
+            fuzzy = await session.call_tool(
+                "lyra_lookup_met_zone",
+                {"name": "Mexcio City"},
+            )
+            missing = await session.call_tool(
+                "lyra_lookup_met_zone",
+                {"name": "Atlantis"},
+            )
+            snake = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "tree coverage"},
+            )
+            kebab = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "heat risk"},
+            )
+            camel = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "population density"},
+            )
+            accent = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "arboles"},
+            )
+            repeated = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "value value"},
+            )
+            repeated_again = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "value value"},
+            )
+            single = await session.call_tool(
+                "lyra_search_metrics",
+                {"query": "value"},
+            )
+            return (
+                tools,
+                canonical,
+                fuzzy,
+                missing,
+                snake,
+                kebab,
+                camel,
+                accent,
+                repeated,
+                repeated_again,
+                single,
+            )
+
+    (
+        tools,
+        canonical,
+        fuzzy,
+        missing,
+        snake,
+        kebab,
+        camel,
+        accent,
+        repeated,
+        repeated_again,
+        single,
+    ) = asyncio.run(exercise_discovery())
+
+    expected_lookup = {"cve_met": "09.01", "nom_met": "Valle de México"}
+    assert canonical.structuredContent == expected_lookup
+    assert fuzzy.structuredContent == expected_lookup
+    assert backend.met_zone_queries == ["Mexico City", "Mexcio City", "Atlantis"]
+
+    assert missing.isError is True
+    assert missing.structuredContent is not None
+    error = missing.structuredContent["error"]
+    assert error["code"] == "unknown_met_zone"
+    assert error["details"] == {
+        "name": "Atlantis",
+        "action": "Revise name and call lyra_lookup_met_zone again.",
+    }
+
+    for result, expected_metric in (
+        (snake, "tree_coverage"),
+        (kebab, "heat-risk-index"),
+        (camel, "populationDensity"),
+        (accent, "tree_coverage"),
+    ):
+        assert result.isError is False
+        assert result.structuredContent is not None
+        assert result.structuredContent["candidates"][0]["metric"] == expected_metric
+        assert (
+            "public metric contract"
+            in result.structuredContent["candidates"][0]["reason"]
+        )
+
+    assert repeated.structuredContent is not None
+    assert repeated_again.structuredContent is not None
+    assert single.structuredContent is not None
+    repeated_candidates = repeated.structuredContent["candidates"]
+    assert repeated_candidates == repeated_again.structuredContent["candidates"]
+    assert repeated_candidates == single.structuredContent["candidates"]
+    assert [candidate["metric"] for candidate in repeated_candidates] == [
+        "heat-risk-index",
+        "populationDensity",
+        "tree_coverage",
+    ]
+
+    lookup_tool = next(
+        tool for tool in tools.tools if tool.name == "lyra_lookup_met_zone"
+    )
+    search_tool = next(
+        tool for tool in tools.tools if tool.name == "lyra_search_metrics"
+    )
+    for tool in (lookup_tool, search_tool):
+        assert tool.inputSchema["additionalProperties"] is False
+        assert tool.outputSchema is not None
+        assert tool.outputSchema["additionalProperties"] is False
+        assert tool.annotations is not None
+        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.idempotentHint is True
+        assert tool.annotations.destructiveHint is False
+        assert tool.annotations.openWorldHint is False
 
 
 def test_mcp_get_metric_returns_public_contract() -> None:

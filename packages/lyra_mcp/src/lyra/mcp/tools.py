@@ -6,11 +6,14 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 
+from lyra.sdk.models.metric import normalize_metric_search_tokens
+
 if TYPE_CHECKING:
     from fastapi import HTTPException
     from lyra.mcp.models import (
         GetJobResultInput,
         GetMetricInput,
+        LookupMetZoneInput,
         MCPContractModel,
         ResultRefInput,
         RunMetricInput,
@@ -19,7 +22,6 @@ if TYPE_CHECKING:
 
 _POLL_INTERVAL_SECONDS = 0.1
 _DEFAULT_POLL_AFTER_SECONDS = 1
-_TOKEN_PATTERN = re.compile(r"[a-z0-9_]+")
 _RESULT_REF_PATTERN = re.compile(r"^lyra://results/([^/?#\s]+)$")
 _UNKNOWN_METRIC_ERROR = "unknown_metric"
 _INVALID_PARAMETERS_ERROR = "invalid_parameters"
@@ -30,6 +32,8 @@ _BACKEND_ERROR = "backend_error"
 
 class LyraMCPBackend(Protocol):
     async def get_metrics(self) -> Any: ...
+
+    async def lookup_met_zone(self, name: str) -> Any | None: ...
 
     async def get_metric(self, metric: str) -> Any | None: ...
 
@@ -68,6 +72,23 @@ class InProcessLyraBackend:
         from lyra_app.registry import get_metric_catalog  # noqa: PLC0415
 
         return await asyncio.to_thread(get_metric_catalog)
+
+    async def lookup_met_zone(self, name: str) -> Any | None:
+        from lyra_app.db.connection import engine  # noqa: PLC0415
+        from lyra_app.loaders.db import (  # noqa: PLC0415
+            get_met_zone_code_from_name,
+        )
+
+        with engine.connect() as conn:
+            result = await asyncio.to_thread(
+                get_met_zone_code_from_name,
+                name,
+                conn=conn,
+            )
+        if result is None:
+            return None
+        cve_met, nom_met = result
+        return {"cve_met": cve_met, "nom_met": nom_met}
 
     async def get_metric(self, metric: str) -> Any | None:
         from lyra_app.registry import get_metric_info  # noqa: PLC0415
@@ -166,7 +187,9 @@ async def execute_tool(
 ) -> dict[str, Any]:
     """Execute one validated tool call against the Lyra domain service."""
 
-    if name == "lyra_search_metrics":
+    if name == "lyra_lookup_met_zone":
+        payload = await _lookup_met_zone(cast("LookupMetZoneInput", arguments), backend)
+    elif name == "lyra_search_metrics":
         payload = await _search_metrics(cast("SearchMetricsInput", arguments), backend)
     elif name == "lyra_get_metric":
         payload = await _get_metric(cast("GetMetricInput", arguments), backend)
@@ -184,6 +207,26 @@ async def execute_tool(
         code = "unknown_tool"
         raise ToolCallError(code, f"Unknown Lyra MCP tool: {name}")
     return payload
+
+
+async def _lookup_met_zone(
+    arguments: LookupMetZoneInput,
+    backend: LyraMCPBackend,
+) -> dict[str, Any]:
+    match = await backend.lookup_met_zone(arguments.name)
+    if match is None:
+        _raise_tool_error(
+            "unknown_met_zone",
+            (
+                "No metropolitan zone matched the given name. Check the spelling "
+                "or try the official name of a nearby metropolitan zone."
+            ),
+            {
+                "name": arguments.name,
+                "action": "Revise name and call lyra_lookup_met_zone again.",
+            },
+        )
+    return _model_dump(match)
 
 
 async def _search_metrics(
@@ -535,7 +578,7 @@ def _without_score(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tokens(value: str) -> list[str]:
-    return _TOKEN_PATTERN.findall(value.lower())
+    return list(normalize_metric_search_tokens(value))
 
 
 def _model_dump(value: Any) -> dict[str, Any]:

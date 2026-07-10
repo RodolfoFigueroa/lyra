@@ -30,6 +30,16 @@ class SearchMetricsInput(MCPContractModel):
     limit: int = Field(default=5, ge=1, le=20)
 
 
+class LookupMetZoneInput(MCPContractModel):
+    name: str = Field(
+        min_length=1,
+        description=(
+            "Natural-language metropolitan-zone name, including supported "
+            "misspellings, to resolve through Lyra's public fuzzy lookup."
+        ),
+    )
+
+
 class GetMetricInput(MCPContractModel):
     metric: str = Field(min_length=1, description="Public metric name.")
 
@@ -102,6 +112,17 @@ class SearchMetricsOutput(MCPContractModel):
     query: str
     catalog_fingerprint: str | None
     candidates: list[SearchCandidate]
+
+
+class LookupMetZoneOutput(MCPContractModel):
+    cve_met: str = Field(
+        min_length=1,
+        description="Canonical metropolitan-zone code accepted by Lyra metrics.",
+    )
+    nom_met: str = Field(
+        min_length=1,
+        description="Canonical display name matched by the public fuzzy lookup.",
+    )
 
 
 class TableMetricOutput(MCPContractModel):
@@ -336,6 +357,18 @@ def _contract(
 
 
 TOOL_CONTRACTS = (
+    _contract(
+        "lyra_lookup_met_zone",
+        (
+            "Resolve a natural-language metropolitan-zone name or supported "
+            "misspelling to the canonical cve_met code and matched nom_met display "
+            "name. Use cve_met as met_zone_code when calling lyra_run_metric."
+        ),
+        LookupMetZoneInput,
+        LookupMetZoneOutput,
+        read_only=True,
+        idempotent=True,
+    ),
     _contract(
         "lyra_search_metrics",
         (

@@ -3,7 +3,8 @@ title: Architecture
 description: How Lyra routes requests from manifest metadata to warm workers and Redis-backed job records.
 ---
 
-Lyra separates catalog metadata, public job submission, and runner execution.
+Lyra separates public catalog metadata, agent-authenticated job submission, and
+runner execution.
 
 ## Main Components
 
@@ -38,10 +39,11 @@ The API catalog does not import plugin Python code.
 
 ## Job Flow
 
-1. A client submits `POST /jobs` with `metric`, `input`, and optional `idempotency_key`.
+1. A client submits authenticated `POST /jobs` with `metric`, `input`, and an idempotency key.
 2. The API validates `input` against the selected metric's effective `request_schema`.
 3. The API resolves each declared spatial wrapper into canonical GeoJSON.
-4. The API creates a `JobEnvelope`, stores a queued job snapshot, and dispatches `lyra.run_metric` to the metric's server-assigned queue.
+4. The API deduplicates equivalent keys, applies the shared submission limit,
+   captures run provenance, creates a `JobEnvelope`, and dispatches the task.
 5. A worker consuming that queue validates the envelope, builds a `RunContext`, and calls the metric entrypoint.
 6. The worker stores progress events, terminal status, and a normalized terminal result.
 7. Clients read status, stream events, and fetch results through the `/jobs/{job_id}` routes.
@@ -73,5 +75,6 @@ The stable contracts to read first are:
 
 - `PluginManifestV3` for plugin metadata.
 - `MetricCatalogResponse` and `MetricInfoV3` for `/metrics` responses.
-- `JobCreateRequest`, `JobCreateResponse`, `JobStatusInfo`, `JobEvent`, and terminal result models for public job APIs.
+- `JobCreateRequest`, `JobCreateResponse`, `JobStatusInfo`, `JobEvent`, and
+  descriptor models for agent-authenticated job APIs.
 - `JobEnvelope` and `RunContext` for runner plugins.

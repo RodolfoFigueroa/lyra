@@ -11,9 +11,15 @@ options, exceptions, and sync/async parity, see [lyra-api](../lyra-api/).
 ## Sync Client
 
 ```python
+import os
+
 from lyra.api import LyraAPIClient
 
-client = LyraAPIClient("localhost:5219", secure=False)
+client = LyraAPIClient(
+    "localhost:5219",
+    secure=False,
+    agent_api_key=os.environ["LYRA_AGENT_API_KEY"],
+)
 catalog = client.get_metrics()
 metrics = catalog.metrics
 metric_name = metrics[0].name
@@ -24,7 +30,7 @@ payload = {
     }
 }
 
-job = client.create_job(metric_name, payload)
+job = client.create_job(metric_name, payload, idempotency_key="client-operation")
 status = client.get_job(job.job_id)
 ```
 
@@ -58,7 +64,7 @@ the same method.
 
 ## Result References And Local Analysis
 
-The descriptor route gives agents and scripts a stable result reference,
+The authenticated descriptor route gives agents and scripts a stable result reference,
 preview rows, summary statistics, and raw-access metadata.
 
 ```python
@@ -76,11 +82,9 @@ Redis-backed job result remains available.
 result_ref = descriptor.result_ref
 client.download_result(result_ref, "job-1.jsonl")
 
-access = client.result_dataframe("lyra://results/job-access")
-population = client.result_dataframe("lyra://results/job-population")
-joined = access.merge(population, on="_result_index", suffixes=("_access", "_pop"))
-correlation = joined["accessibility_score"].corr(joined["population_count"])
-print(correlation)
+# For two-result analysis, require matching non-null `table.row_identity`, use
+# each descriptor's `table.index_field`, and select numeric names from
+# `table.column_contracts`. See the MCP Agent Bridge for the complete example.
 ```
 
 The correlation is computed by your Python process after downloading the raw
@@ -121,7 +125,7 @@ Use `admin_api_key` when calling `/admin/*` routes through the client.
 admin = LyraAPIClient(
     "localhost:5219",
     secure=False,
-    admin_api_key="admin-secret",
+    admin_api_key=os.environ["LYRA_ADMIN_API_KEY"],
 )
 
 admin.create_plugin_repo("dir:///plugins/mock-plugin", repo_id="mock")
@@ -137,12 +141,17 @@ The same methods are available on `AsyncLyraAPIClient` with `await`.
 
 ```python
 import asyncio
+import os
 
 from lyra.api import AsyncLyraAPIClient
 
 
 async def main() -> None:
-    client = AsyncLyraAPIClient("localhost:5219", secure=False)
+    client = AsyncLyraAPIClient(
+        "localhost:5219",
+        secure=False,
+        agent_api_key=os.environ["LYRA_AGENT_API_KEY"],
+    )
     catalog = await client.get_metrics()
     metrics = catalog.metrics
     metric_name = metrics[0].name
@@ -152,7 +161,9 @@ async def main() -> None:
             "value": ["090020001"],
         }
     }
-    job = await client.create_job(metric_name, payload)
+    job = await client.create_job(
+        metric_name, payload, idempotency_key="client-operation"
+    )
 
     async for event in client.iter_job_events(job.job_id):
         if event.event in {"succeeded", "failed", "cancelled"}:

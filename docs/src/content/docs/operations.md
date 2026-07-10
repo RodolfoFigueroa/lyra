@@ -28,8 +28,9 @@ Status snapshots include:
 
 Job store keys use `[job_store].ttl_seconds`. The default is `600` seconds.
 
-File result cleanup deletes only `job:{job_id}:result` after the file response
-completes. Status and events remain until their TTL expires.
+Status, events, provenance, results, and idempotency records expire with the
+configured TTL. Downloads do not delete retained results. Descriptors expose
+remaining lifetime; copy needed data externally before expiry.
 
 ## Events
 
@@ -42,6 +43,7 @@ Lifecycle transitions append events:
 
 The `/jobs/{job_id}/events` route replays stored events, supports
 `Last-Event-ID`, blocks for live updates, and closes after a terminal event.
+It and every other `/jobs` route require the agent Bearer credential.
 
 ## Cancellation
 

@@ -5,49 +5,24 @@ description: Stable source map, contracts, commands, and current behavior for AI
 
 This page is optimized for agents that need to inspect, edit, or reason about Lyra.
 
-## Current Public Behavior
+## Route And Credential Boundary
 
-Lyra exposes current execution through:
+| Access | Routes | Authentication |
+| --- | --- | --- |
+| Public discovery | `GET /health`, `GET /data-types`, `GET /metrics`, `GET /metrics/{metric_name}`, `GET /lookups/met-zones` | None |
+| Agent execution | `POST /jobs`; every status, event, terminal JSON, descriptor, JSONL, and file route under `/jobs/{job_id}`; configured MCP mount | `Authorization: Bearer $LYRA_AGENT_API_KEY` |
+| Administration | Every `/admin/*` plugin, catalog, worker, queue, job-list, cancellation, and routing route | `Authorization: Bearer $LYRA_ADMIN_API_KEY` |
 
-- `GET /health`
-- `POST /jobs`
-- `GET /jobs/{job_id}`
-- `GET /jobs/{job_id}/events`
-- `GET /jobs/{job_id}/result`
-- `GET /jobs/{job_id}/result/descriptor`
-- `GET /jobs/{job_id}/result/table.jsonl`
-- `GET /jobs/{job_id}/result/download`
-
-Supporting routes:
-
-- `GET /metrics` for the public catalog fingerprint and metric schema metadata
-- `GET /metrics/{metric_name}`
-- `GET /data-types` for grouped `location` and `bounds` wrapper schemas
-- `GET /lookups/met-zones`
-- `GET /admin/plugin-repos`
-- `POST /admin/plugin-repos`
-- `PATCH /admin/plugin-repos/{repo_id}`
-- `DELETE /admin/plugin-repos/{repo_id}`
-- `POST /admin/plugin-repos/{repo_id}/sync`
-- `POST /admin/plugin-catalog/refresh`
-- `POST /admin/workers/restart`
-- `GET /admin/status`
-- `GET /admin/config-summary`
-- `GET /admin/catalog`
-- `GET /admin/workers`
-- `GET /admin/workers/{worker_name}`
-- `GET /admin/queues`
-- `GET /admin/jobs`
-- `POST /admin/jobs/{job_id}/cancel`
-- `GET /admin/plugin-routing`
-- `PUT /admin/plugin-routing/{metric_name}`
-- `DELETE /admin/plugin-routing/{metric_name}`
+The agent key does not authorize admin routes, and the admin key is not an agent
+credential. Never configure an external agent with the admin key.
 
 ## Source Map
 
 | Task | Start Here |
 | --- | --- |
-| Public job routes | `lyra_app/routes/jobs.py` |
+| Agent-authenticated job routes | `lyra_app/routes/jobs.py` |
+| Shared submission, idempotency, and limits | `lyra_app/job_submission.py` and `lyra_app/job_store.py` |
+| Agent authentication | `lyra_app/agent_auth.py` |
 | Metric catalog and payload validation | `lyra_app/registry.py` |
 | Redis job status, result, and event store | `lyra_app/job_store.py` |
 | Generic Celery worker execution | `lyra_app/worker.py` |
@@ -58,6 +33,7 @@ Supporting routes:
 | Runner context protocol | `packages/lyra_sdk/src/lyra/sdk/context.py` |
 | Sync Python client | `packages/lyra_api/src/lyra/api/client/sync.py` |
 | Async Python client | `packages/lyra_api/src/lyra/api/client/async_.py` |
+| MCP transport and strict tools | `packages/lyra_mcp/src/lyra/mcp/server.py`, `models.py`, and `tools.py` |
 | Compose deployment examples | `docker/docker-compose.yml` and `docker/docker-compose-dev.yml` |
 | Documentation site | `docs/` |
 
@@ -83,6 +59,11 @@ The only Celery task name for metric execution is `lyra.run_metric`.
 
 Terminal result models include `TableJobResult`, `FileJobResult`,
 `FailedJobResult`, and `CancelledJobResult`.
+
+Submission captures immutable `JobRunProvenance`: metric, catalog fingerprint,
+plugin identity, validated unresolved input, output declaration, creation time,
+and row identity when known. Descriptors add concrete column contracts, the
+synthetic index field, summary, preview, and remaining lifetime.
 
 Job lifecycle status can be `queued`, `started`, `progress`, `succeeded`, `failed`, or `cancelled`.
 
@@ -127,10 +108,11 @@ snapshots. Raw filesystem paths are not supported.
 
 ## MCP Agent Surface
 
-The Lyra MCP server exposes a compact agent contract for Codex and other MCP
-clients. See [MCP Agent Bridge](../mcp-agent-bridge/) for operator setup,
-Codex configuration, and local analysis examples.
+The Lyra MCP server uses the official Python MCP SDK's stateless Streamable HTTP
+transport and strict input/output JSON Schema contracts. See [MCP Agent
+Bridge](../mcp-agent-bridge/) for setup and analysis examples.
 
+- `lyra_lookup_met_zone`
 - `lyra_search_metrics`
 - `lyra_get_metric`
 - `lyra_run_metric`
@@ -139,9 +121,10 @@ Codex configuration, and local analysis examples.
 - `lyra_get_result_preview`
 - `lyra_download_result`
 
-The intended sequence is search, inspect, run, poll, then inspect metadata,
-preview rows, or request a raw JSONL handoff. `lyra_run_metric` accepts only a
-raw metropolitan zone code as `met_zone_code` for MCP v1; do not pass raw
+The sequence is lookup, search, inspect, run with an idempotency key, poll one
+reference, inspect provenance, then request an absolute authenticated JSONL
+handoff. `lyra_run_metric` accepts only a raw metropolitan zone code as
+`met_zone_code`; do not pass raw
 GeoJSON, census tract lists, or the metric's spatial field in `parameters`.
 
 MCP result tools accept `lyra://results/{job_id}` references. Running jobs
@@ -151,6 +134,11 @@ same result reference, and avoid rerunning the metric unless the result expired
 or the user explicitly asks for a fresh run. Terminal jobs return compact
 descriptors, previews, metadata, or JSONL download handoff metadata instead of
 inlining full raw tables.
+
+Equivalent retries reuse the original job without consuming the shared quota.
+New REST and MCP submissions default to 10 per 60 seconds. Rate-limited callers
+wait the advertised interval and reuse the key. Results expire with the
+job-store TTL, so clients inspect lifetime and download promptly.
 
 Lyra runs metrics and exposes retained results. It does not provide SQL or
 statistical analysis tools through this MCP feature; clients perform arbitrary

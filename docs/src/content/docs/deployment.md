@@ -6,7 +6,7 @@ description: Run the API and workers from one server-owned TOML config and data 
 Lyra separates deployment config from plugin operational state. API and worker
 containers read `/lyra_data/config/lyra.toml` from a read-only file mount, read
 the Earth Engine service account from a read-only file mount, receive
-Postgres/admin settings from environment variables, and share one writable
+Postgres plus separate agent/admin credentials from environment variables, and share one writable
 `lyra_data` volume for Lyra-owned state and runtime files.
 
 ## API Containers
@@ -22,6 +22,8 @@ API containers:
 - Assign missing metric queues in plugin state using `plugins.default_queue`.
 - Dispatch the generic `lyra.run_metric` Celery task to the metric's
   server-assigned queue.
+- Mount the official Python MCP SDK's Streamable HTTP transport when enabled.
+- Use `api.public_base_url` for absolute authenticated JSONL handoffs.
 
 The API catalog does not import plugin Python code.
 
@@ -67,7 +69,7 @@ volumes:
   - ${LYRA_SERVICE_ACCOUNT_FILE}:/lyra_data/secrets/service-account.json:ro
 ```
 
-Compose also passes Postgres/admin settings from `.env` to each app container:
+Compose also passes Postgres plus agent/admin settings from `.env`:
 
 ```yaml
 environment:
@@ -76,12 +78,13 @@ environment:
   LYRA_POSTGRES_DB: ${LYRA_POSTGRES_DB}
   LYRA_POSTGRES_USER: ${LYRA_POSTGRES_USER}
   LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}
+  LYRA_AGENT_API_KEY: ${LYRA_AGENT_API_KEY}
   LYRA_ADMIN_API_KEY: ${LYRA_ADMIN_API_KEY}
 ```
 
 Use `.env` for the host file locations and runtime env values:
 
-```env
+```text
 LYRA_CONFIG_FILE=./lyra_data/config/lyra.toml
 LYRA_SERVICE_ACCOUNT_FILE=./secrets/service-account.json
 LYRA_POSTGRES_HOST=postgres
@@ -89,8 +92,48 @@ LYRA_POSTGRES_PORT=5432
 LYRA_POSTGRES_DB=lyra
 LYRA_POSTGRES_USER=lyra
 LYRA_POSTGRES_PASSWORD=change-me
-LYRA_ADMIN_API_KEY=change-me
+LYRA_AGENT_API_KEY=replace-with-agent-secret
+LYRA_ADMIN_API_KEY=replace-with-admin-secret
 ```
+
+Generate the credentials independently. The agent key is for MCP and every
+`/jobs` route; the admin key is only for `/admin` and must not be distributed to
+agents.
+
+## Agent Bridge Configuration
+
+```toml
+[api]
+host = "0.0.0.0"
+port = 5219
+public_base_url = "https://lyra.example.com"
+
+[mcp]
+enabled = true
+mount_path = "/mcp"
+
+[job_store]
+ttl_seconds = 600
+
+[agent_submission_limit]
+limit = 10
+window_seconds = 60
+```
+
+`public_base_url` is an externally reachable base URL, not a bind address. It
+may contain a reverse-proxy path prefix. Use HTTPS in production; loopback HTTP
+is accepted for local development. Do not include credentials, a query, or a
+fragment. Preserve the `Authorization` header at the proxy.
+
+The default fixed window accepts 10 new REST/MCP submissions every 60 seconds.
+Tune both positive integers to capacity. Replays of equivalent idempotent
+requests consume no capacity. REST returns `429` plus `Retry-After`; MCP returns
+`rate_limited` plus `retry_after_seconds`. Clients wait and retry with the same
+key.
+
+The job-store TTL covers status, events, provenance, results, and associated
+idempotency records. Descriptors expose remaining lifetime. Downstream systems
+must download needed results before expiry; Lyra is not durable result storage.
 
 `/lyra_data/state/plugins.toml` is not mounted from the host. Lyra creates and
 writes it inside the named volume.

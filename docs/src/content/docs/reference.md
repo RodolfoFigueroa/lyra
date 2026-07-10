@@ -10,15 +10,17 @@ runtime settings:
 
 | Section | Purpose |
 | --- | --- |
-| `[api]` | API host and port. |
+| `[api]` | Bind host/port and externally reachable `public_base_url`. |
 | `[redis]` | Redis URL used by Celery and the Redis clients. |
 | `[earth_engine]` | Earth Engine project and service account file reference. |
 | `[logging]` | Application log level and optional log file. |
 | `[job_store]` | Job status, result, and event TTL. |
+| `[agent_submission_limit]` | Shared REST/MCP fixed-window quota. |
+| `[mcp]` | Official Streamable HTTP MCP enablement and mount path. |
 | `[plugins]` | Plugin runtime paths, default queue, and allowed queues. |
 | `[workers.<name>]` | Worker queues, concurrency, install directory, and temp directory. |
 
-PostgreSQL settings and the admin API key are environment variables:
+PostgreSQL settings plus agent and admin keys are environment variables:
 
 | Variable | Purpose |
 | --- | --- |
@@ -27,6 +29,7 @@ PostgreSQL settings and the admin API key are environment variables:
 | `LYRA_POSTGRES_DB` | PostgreSQL database name. |
 | `LYRA_POSTGRES_USER` | PostgreSQL user. |
 | `LYRA_POSTGRES_PASSWORD` | PostgreSQL password. |
+| `LYRA_AGENT_API_KEY` | Bearer token required by MCP and every `/jobs` route. |
 | `LYRA_ADMIN_API_KEY` | Bearer token required by `/admin/*` routes. |
 
 Do not put API keys or database passwords in TOML. The Earth Engine service
@@ -98,7 +101,15 @@ Preview docs locally:
 npm run preview --prefix docs
 ```
 
-## Public API Paths
+## API Paths And Access
+
+| Access | Routes | Credential |
+| --- | --- | --- |
+| Public | `/health`, `/data-types`, `/metrics`, `/metrics/{metric_name}`, `/lookups/met-zones` | None |
+| Agent | `/jobs` lifecycle routes and configured MCP mount | `LYRA_AGENT_API_KEY` |
+| Admin | Every `/admin/*` route | `LYRA_ADMIN_API_KEY` |
+
+The following table lists the concrete HTTP routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |

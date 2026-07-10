@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from fastapi.testclient import TestClient
+import httpx
+import pytest
 from lyra.mcp import SERVER_INSTRUCTIONS, create_mcp_app
 from lyra.sdk.models import (
     CancelledJobResult,
@@ -24,14 +27,17 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputColumnV3,
     TableOutputV3,
 )
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from lyra_app import main
 from tests.config_helpers import load_test_config
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
-
-    import pytest
 
     from lyra_app.config import LyraConfig
 
@@ -51,7 +57,11 @@ def _initialize_payload() -> dict[str, object]:
 
 def _mcp_headers(bearer: str | None = None) -> dict[str, str]:
     token = "mcp-secret" if bearer is None else bearer
-    return {"Authorization": f"Bearer {token}"}
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
+    }
 
 
 def _tool_call_payload(
@@ -75,10 +85,72 @@ def _tool_payload(response: Any) -> dict[str, Any]:
     return result["structuredContent"]
 
 
+class _ManagedTestClient:
+    def __init__(self, app: Starlette) -> None:
+        self._app = app
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
+        self._client: httpx.AsyncClient | None = None
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        assert self._ready.wait(timeout=5)
+        _MANAGED_CLIENTS.append(self)
+
+    def _run(self) -> None:
+        asyncio.run(self._serve())
+
+    async def _serve(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._stop = asyncio.Event()
+        async with (
+            self._app.router.lifespan_context(self._app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self._app),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            self._client = client
+            self._ready.set()
+            await self._stop.wait()
+
+    def get(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self._request("GET", path, **kwargs)
+
+    def post(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self._request("POST", path, **kwargs)
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        assert self._client is not None
+        assert self._loop is not None
+        request = self._client.request(method, path, **kwargs)
+        return asyncio.run_coroutine_threadsafe(request, self._loop).result(timeout=10)
+
+    def close(self) -> None:
+        if self._client is None:
+            return
+        assert self._loop is not None
+        assert self._stop is not None
+        self._loop.call_soon_threadsafe(self._stop.set)
+        self._thread.join(timeout=5)
+        assert not self._thread.is_alive()
+        self._client = None
+
+
+_MANAGED_CLIENTS: list[_ManagedTestClient] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_managed_clients() -> Iterator[None]:
+    yield
+    while _MANAGED_CLIENTS:
+        _MANAGED_CLIENTS.pop().close()
+
+
 def _app_with_mcp(
     config: LyraConfig,
     monkeypatch: pytest.MonkeyPatch,
-) -> TestClient:
+) -> _ManagedTestClient:
     monkeypatch.setattr(
         main, "bootstrap_runtime", lambda runtime_config: runtime_config
     )
@@ -86,7 +158,13 @@ def _app_with_mcp(
     from lyra_app import registry  # noqa: PLC0415
 
     monkeypatch.setattr(registry, "ensure_catalog_loaded", lambda: None)
-    return TestClient(main.create_app(config))
+
+    async def noop() -> None:
+        return None
+
+    monkeypatch.setattr(main, "start_worker_inspect_collector", noop)
+    monkeypatch.setattr(main, "stop_worker_inspect_collector", noop)
+    return _ManagedTestClient(main.create_app(config))
 
 
 class FakeMCPBackend:
@@ -257,7 +335,7 @@ def _file_metric(name: str, description: str) -> MetricInfoV3:
 
 def test_mcp_package_initializes_with_bearer_auth() -> None:
     app = create_mcp_app(api_key="mcp-secret")
-    client = TestClient(app)
+    client = _ManagedTestClient(app)
 
     missing = client.post("/", json=_initialize_payload())
     invalid = client.post(
@@ -276,30 +354,52 @@ def test_mcp_package_initializes_with_bearer_auth() -> None:
     assert initialized.status_code == 200
     result = initialized.json()["result"]
     assert result["serverInfo"]["name"] == "lyra"
-    assert result["capabilities"] == {"tools": {}}
+    assert result["capabilities"] == {
+        "experimental": {},
+        "tools": {"listChanged": False},
+    }
     assert result["instructions"] == SERVER_INSTRUCTIONS
     assert "metropolitan zone codes" in result["instructions"]
     assert "lyra://results/{job_id}" in result["instructions"]
     assert "poll the result tools" in result["instructions"]
 
 
-def test_mcp_package_exposes_discovery_health_and_static_tools() -> None:
-    client = TestClient(create_mcp_app(api_key="mcp-secret"))
-
-    discovery = client.get("/", headers=_mcp_headers())
-    health = client.get("/health", headers=_mcp_headers())
-    tools = client.post(
-        "/",
-        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        headers=_mcp_headers(),
+def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
+    metric = _table_metric("smoke_table_metric", "Return a table.")
+    mcp_app = create_mcp_app(
+        api_key="mcp-secret",
+        backend=FakeMCPBackend([metric]),
     )
+    mounted_app = Starlette(routes=[Mount("/mcp", app=mcp_app)])
 
-    assert discovery.status_code == 200
-    assert discovery.json()["transport"] == "streamable-http"
-    assert health.status_code == 200
-    assert health.json()["status"] == "ok"
-    assert tools.status_code == 200
-    tool_names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+    async def use_official_client() -> tuple[Any, Any, Any]:
+        async with (
+            mcp_app.router.lifespan_context(mcp_app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=mounted_app),
+                base_url="http://testserver",
+                headers=_mcp_headers(),
+                follow_redirects=True,
+            ) as http_client,
+            streamable_http_client(
+                "http://testserver/mcp",
+                http_client=http_client,
+            ) as (read_stream, write_stream, _),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            initialized = await session.initialize()
+            tools = await session.list_tools()
+            called = await session.call_tool(
+                "lyra_get_metric",
+                {"metric": "smoke_table_metric"},
+            )
+            return initialized, tools, called
+
+    initialized, tools, called = asyncio.run(use_official_client())
+
+    assert initialized.serverInfo.name == "lyra"
+    assert initialized.instructions == SERVER_INSTRUCTIONS
+    tool_names = {tool.name for tool in tools.tools}
     assert tool_names == {
         "lyra_download_result",
         "lyra_get_job_result",
@@ -309,14 +409,48 @@ def test_mcp_package_exposes_discovery_health_and_static_tools() -> None:
         "lyra_get_result_preview",
         "lyra_run_metric",
     }
-    run_tool = next(
-        tool
-        for tool in tools.json()["result"]["tools"]
-        if tool["name"] == "lyra_run_metric"
+    run_tool = next(tool for tool in tools.tools if tool.name == "lyra_run_metric")
+    assert "do not rerun" in (run_tool.description or "")
+    assert "lyra_get_job_result" in (run_tool.description or "")
+    assert called.isError is False
+    assert called.structuredContent is not None
+    assert called.structuredContent["name"] == "smoke_table_metric"
+
+
+def test_streamable_http_transport_enforces_sdk_request_rules() -> None:
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret"))
+
+    invalid_origin = client.post(
+        "/",
+        json=_initialize_payload(),
+        headers={**_mcp_headers(), "Origin": "https://attacker.example"},
     )
-    assert "do not rerun" in run_tool["description"]
-    assert "lyra_get_job_result" in run_tool["description"]
-    assert "admin" not in tools.text.lower()
+    invalid_protocol = client.post(
+        "/",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        headers={**_mcp_headers(), "MCP-Protocol-Version": "1900-01-01"},
+    )
+    notification = client.post(
+        "/",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers=_mcp_headers(),
+    )
+    invalid_content_type = client.post(
+        "/",
+        content="{}",
+        headers={**_mcp_headers(), "Content-Type": "text/plain"},
+    )
+    invalid_get_accept = client.get(
+        "/",
+        headers={**_mcp_headers(), "Accept": "application/json"},
+    )
+
+    assert invalid_origin.status_code == 403
+    assert invalid_protocol.status_code == 400
+    assert "Unsupported protocol version" in invalid_protocol.text
+    assert notification.status_code == 202
+    assert invalid_content_type.status_code == 400
+    assert invalid_get_accept.status_code == 406
 
 
 def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
@@ -330,7 +464,7 @@ def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
             _table_metric("population_count", "Count residents by area."),
         ]
     )
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     response = client.post(
         "/",
@@ -358,7 +492,7 @@ def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
 
 def test_mcp_get_metric_returns_public_contract() -> None:
     metric = _table_metric("smoke_table_metric", "Return a table.")
-    client = TestClient(
+    client = _ManagedTestClient(
         create_mcp_app(api_key="mcp-secret", backend=FakeMCPBackend([metric]))
     )
 
@@ -379,7 +513,7 @@ def test_mcp_get_metric_returns_public_contract() -> None:
 
 def test_mcp_run_metric_translates_location_met_zone_and_returns_descriptor() -> None:
     backend = FakeMCPBackend([_table_metric("smoke_table_metric", "Return a table.")])
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     response = client.post(
         "/",
@@ -416,7 +550,7 @@ def test_mcp_run_metric_translates_bounds_met_zone() -> None:
             )
         ]
     )
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     response = client.post(
         "/",
@@ -443,7 +577,7 @@ def test_mcp_run_metric_translates_bounds_met_zone() -> None:
 def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["queued"]
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     response = client.post(
         "/",
@@ -472,7 +606,7 @@ def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None
 def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["queued", "succeeded"]
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     run_response = client.post(
         "/",
@@ -507,7 +641,7 @@ def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
 def test_mcp_get_job_result_returns_running_continuation() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["started"]
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
         status="started",
@@ -551,7 +685,7 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
         metric="smoke_table_metric",
     )
     backend.descriptors["job-1"] = descriptor
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     metadata = _tool_payload(
         client.post(
@@ -633,7 +767,7 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
 
 
 def test_mcp_result_tools_return_structured_expired_error() -> None:
-    client = TestClient(
+    client = _ManagedTestClient(
         create_mcp_app(
             api_key="mcp-secret",
             backend=FakeMCPBackend([_table_metric("metric", "Return a table.")]),
@@ -672,7 +806,7 @@ def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:
     cancelled_descriptor = build_result_descriptor(CancelledJobResult(job_id="job-x"))
     backend.descriptors["job-failed"] = failed_descriptor
     backend.descriptors["job-x"] = cancelled_descriptor
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     failed = _tool_payload(
         client.post(
@@ -706,7 +840,7 @@ def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:
 
 
 def test_mcp_result_tools_reject_invalid_result_ref() -> None:
-    client = TestClient(
+    client = _ManagedTestClient(
         create_mcp_app(
             api_key="mcp-secret",
             backend=FakeMCPBackend([_table_metric("metric", "Return a table.")]),
@@ -728,7 +862,7 @@ def test_mcp_result_tools_reject_invalid_result_ref() -> None:
 
 
 def test_mcp_run_metric_surfaces_unknown_metric_as_tool_error() -> None:
-    client = TestClient(
+    client = _ManagedTestClient(
         create_mcp_app(api_key="mcp-secret", backend=FakeMCPBackend([]))
     )
 
@@ -750,7 +884,7 @@ def test_mcp_run_metric_surfaces_invalid_parameters_as_tool_error() -> None:
     backend = FakeMCPBackend(
         [_table_metric("smoke_table_metric", "Return a table.", value_type="integer")]
     )
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     response = client.post(
         "/",
@@ -782,7 +916,7 @@ def test_mcp_run_metric_rejects_unsupported_spatial_shapes() -> None:
             )
         ]
     )
-    client = TestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
+    client = _ManagedTestClient(create_mcp_app(api_key="mcp-secret", backend=backend))
 
     response = client.post(
         "/",

@@ -5,14 +5,25 @@ import hmac
 import json
 import re
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from json import JSONDecodeError
-from typing import Annotated, Any, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+from mcp.server.lowlevel import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent, Tool
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from fastapi import HTTPException
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 SERVER_INSTRUCTIONS = (
     "Lyra MCP exposes a small set of stable tools for metric catalog search, "
@@ -24,14 +35,17 @@ SERVER_INSTRUCTIONS = (
     "operations are not available through MCP."
 )
 
-_PROTOCOL_VERSION = "2025-06-18"
-_JSONRPC_VERSION = "2.0"
 _MAX_WAIT_SECONDS = 10.0
 _MAX_RESULT_WAIT_SECONDS = 30.0
 _POLL_INTERVAL_SECONDS = 0.1
 _DEFAULT_POLL_AFTER_SECONDS = 1
-_bearer = HTTPBearer(auto_error=False)
 _TOKEN_PATTERN = re.compile(r"[a-z0-9_]+")
+_DEFAULT_ALLOWED_HOSTS = [
+    "127.0.0.1:*",
+    "localhost:*",
+    "testserver",
+    "testserver:*",
+]
 
 
 class LyraMCPBackend(Protocol):
@@ -113,93 +127,93 @@ def create_mcp_app(
     api_key: str,
     name: str = "lyra",
     backend: LyraMCPBackend | None = None,
-) -> FastAPI:
+) -> Starlette:
     tool_backend = backend or InProcessLyraBackend()
-    app = FastAPI(
-        title="Lyra MCP",
+    server = Server(
+        name=name,
         version="0.1.0",
-        docs_url=None,
-        redoc_url=None,
-        openapi_url=None,
+        instructions=SERVER_INSTRUCTIONS,
     )
 
-    def require_mcp_key(
-        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    ) -> None:
-        if credentials is None:
-            raise HTTPException(
-                status_code=401,
-                detail="MCP bearer token is required.",
-                headers={"WWW-Authenticate": "Bearer"},
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        return [
+            Tool(
+                name=definition["name"],
+                description=definition["description"],
+                inputSchema=definition["inputSchema"],
             )
-        if not hmac.compare_digest(credentials.credentials, api_key):
-            raise HTTPException(status_code=403, detail="Invalid MCP bearer token.")
+            for definition in _tool_definitions()
+        ]
 
-    @app.get("/", dependencies=[Depends(require_mcp_key)])
-    async def discovery() -> dict[str, Any]:
-        return {
-            "name": name,
-            "transport": "streamable-http",
-            "protocol_version": _PROTOCOL_VERSION,
-            "instructions": SERVER_INSTRUCTIONS,
-            "tools": _tool_definitions(),
-        }
-
-    @app.get("/health", dependencies=[Depends(require_mcp_key)])
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "name": name}
-
-    @app.post("/", dependencies=[Depends(require_mcp_key)], response_model=None)
-    async def handle_message(request: Request) -> JSONResponse | Response:
-        try:
-            payload = await request.json()
-        except JSONDecodeError:
-            return _jsonrpc_error(None, -32700, "Parse error")
-
-        if not isinstance(payload, dict):
-            return _jsonrpc_error(None, -32600, "Invalid Request")
-
-        return await _handle_rpc_method(
-            method=payload.get("method"),
-            request_id=payload.get("id"),
-            params=payload.get("params"),
-            server_name=name,
+    @server.call_tool(validate_input=False)
+    async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
+        return await _handle_tool_call(
+            params={"name": name, "arguments": arguments},
             backend=tool_backend,
         )
 
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=True,
+        stateless=True,
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_DEFAULT_ALLOWED_HOSTS,
+            allowed_origins=[],
+        ),
+    )
+    transport = _BearerAuthMiddleware(
+        _StreamableHTTPApplication(session_manager),
+        api_key=api_key,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
+
+    app = Starlette(routes=[Route("/", endpoint=transport)], lifespan=lifespan)
+    app.state.session_manager = session_manager
     return app
 
 
-async def _handle_rpc_method(
-    *,
-    method: object,
-    request_id: Any,
-    params: object,
-    server_name: str,
-    backend: LyraMCPBackend,
-) -> JSONResponse | Response:
-    if method == "initialize":
-        response: JSONResponse | Response = _jsonrpc_result(
-            request_id,
-            {
-                "protocolVersion": _PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": server_name, "version": "0.1.0"},
-                "instructions": SERVER_INSTRUCTIONS,
-            },
-        )
-    elif method == "tools/list":
-        response = _jsonrpc_result(request_id, {"tools": _tool_definitions()})
-    elif method == "tools/call":
-        response = _jsonrpc_result(
-            request_id,
-            await _handle_tool_call(params=params, backend=backend),
-        )
-    elif method == "notifications/initialized" or request_id is None:
-        response = Response(status_code=202)
-    else:
-        response = _jsonrpc_error(request_id, -32601, "Method not found")
-    return response
+class _StreamableHTTPApplication:
+    def __init__(self, session_manager: StreamableHTTPSessionManager) -> None:
+        self._session_manager = session_manager
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._session_manager.handle_request(scope, receive, send)
+
+
+class _BearerAuthMiddleware:
+    def __init__(self, app: ASGIApp, *, api_key: str) -> None:
+        self._app = app
+        self._api_key = api_key
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        headers = dict(scope["headers"])
+        authorization = headers.get(b"authorization", b"").decode("latin-1")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            await JSONResponse(
+                {"detail": "MCP bearer token is required."},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )(scope, receive, send)
+            return
+        if not hmac.compare_digest(token, self._api_key):
+            await JSONResponse(
+                {"detail": "Invalid MCP bearer token."},
+                status_code=403,
+            )(scope, receive, send)
+            return
+
+        await self._app(scope, receive, send)
 
 
 def _tool_definitions() -> list[dict[str, Any]]:
@@ -335,7 +349,7 @@ async def _handle_tool_call(
     *,
     params: object,
     backend: LyraMCPBackend,
-) -> dict[str, Any]:
+) -> CallToolResult:
     try:
         if not isinstance(params, dict):
             _raise_tool_error(
@@ -800,19 +814,21 @@ def _model_dump(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
-def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "content": [
-            {
-                "type": "text",
-                "text": json.dumps(payload, sort_keys=True, separators=(",", ":")),
-            }
+def _tool_result(
+    payload: dict[str, Any],
+    *,
+    is_error: bool = False,
+) -> CallToolResult:
+    return CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            )
         ],
-        "structuredContent": payload,
-    }
-    if is_error:
-        result["isError"] = True
-    return result
+        structuredContent=payload,
+        isError=is_error,
+    )
 
 
 def _result_ref_for_job(job_id: str) -> str:
@@ -869,27 +885,3 @@ def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:
 
 def _raise_tool_error(code: str, message: str, details: Any = None) -> NoReturn:
     raise ToolCallError(code, message, details)
-
-
-def _jsonrpc_result(request_id: Any, result: dict[str, Any]) -> JSONResponse:
-    return JSONResponse(
-        {
-            "jsonrpc": _JSONRPC_VERSION,
-            "id": request_id,
-            "result": result,
-        }
-    )
-
-
-def _jsonrpc_error(request_id: Any, code: int, message: str) -> JSONResponse:
-    return JSONResponse(
-        {
-            "jsonrpc": _JSONRPC_VERSION,
-            "id": request_id,
-            "error": {
-                "code": code,
-                "message": message,
-            },
-        },
-        status_code=400,
-    )

@@ -3,7 +3,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
-from lyra.sdk.models.plugin_v3 import OutputSpecV3, PluginInfoV3
+from lyra.sdk.models.plugin_v3 import (
+    OutputSpecV3,
+    PluginInfoV3,
+    TableOutputColumnV3,
+    TableOutputV3,
+    expand_table_output_columns,
+)
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field, TypeAdapter, model_validator
 
@@ -375,10 +381,27 @@ class ResultTableMetadata(StrictBaseModel):
     row_count: int = Field(ge=0, description="Total number of rows in the table.")
     column_count: int = Field(ge=0, description="Total number of table columns.")
     columns: list[str] = Field(description="Ordered table column names.")
+    column_contracts: list[TableOutputColumnV3] = Field(
+        description=(
+            "Ordered concrete column contracts captured for this result table."
+        ),
+    )
     index_field: str = Field(
         min_length=1,
         description="Preview field name containing the result index value.",
     )
+    row_identity: RowIdentityMetadata | None = Field(
+        default=None,
+        description="Authoritative identity represented by the result index.",
+    )
+
+    @model_validator(mode="after")
+    def validate_column_contracts(self) -> Self:
+        contract_names = [column.name for column in self.column_contracts]
+        if contract_names and contract_names != self.columns:
+            msg = "column_contracts must match columns in terminal result order"
+            raise ValueError(msg)
+        return self
 
 
 class ResultTablePreview(StrictBaseModel):
@@ -463,10 +486,20 @@ class ResultFileMetadata(StrictBaseModel):
 class ResultDescriptor(StrictBaseModel):
     """Stable descriptor returned to agents instead of raw terminal payloads."""
 
+    schema_version: Literal[1] = Field(
+        description="Result descriptor schema version.",
+    )
     job_id: str = Field(min_length=1, description="Job that produced the result.")
     status: TerminalJobStatus = Field(description="Terminal job status.")
     result_kind: ResultKind = Field(description="Stored terminal result kind.")
     result_ref: str = Field(min_length=1, description="Stable result reference URI.")
+    provenance: JobRunProvenance | None = Field(
+        default=None,
+        description="Immutable submission-time run contract, when available.",
+    )
+    completed_at: datetime = Field(
+        description="Persisted UTC timestamp when the job became terminal.",
+    )
     lifetime: ResultLifetime = Field(description="Redis-backed result lifetime.")
     raw: ResultRawAccess = Field(description="Raw terminal result access metadata.")
     table: ResultTableMetadata | None = Field(
@@ -495,6 +528,23 @@ class ResultDescriptor(StrictBaseModel):
             raise ValueError(msg)
         if self.raw.result_ref != self.result_ref:
             msg = "raw.result_ref must match result_ref"
+            raise ValueError(msg)
+        if self.result_kind == "table":
+            if self.table is None:
+                msg = "table results must include table metadata"
+                raise ValueError(msg)
+            if self.provenance is not None:
+                if not isinstance(self.provenance.output, TableOutputV3):
+                    msg = "table result provenance must declare a table output"
+                    raise ValueError(msg)
+                if not self.table.column_contracts:
+                    msg = "table result provenance requires concrete column contracts"
+                    raise ValueError(msg)
+                if self.table.row_identity != self.provenance.row_identity:
+                    msg = "table row_identity must match run provenance"
+                    raise ValueError(msg)
+        elif self.table is not None:
+            msg = "non-table results must not include table metadata"
             raise ValueError(msg)
         return self
 
@@ -592,6 +642,8 @@ def build_table_summary(result: TableJobResult) -> ResultSummary:
 def build_result_descriptor(
     result: TerminalJobResult,
     *,
+    completed_at: datetime,
+    provenance: JobRunProvenance | None = None,
     lifetime: ResultLifetime | None = None,
     terminal_json_path: str | None = None,
     jsonl_path: str | None = None,
@@ -604,6 +656,23 @@ def build_result_descriptor(
     resolved_lifetime = lifetime or ResultLifetime()
 
     if isinstance(result, TableJobResult):
+        column_contracts: list[TableOutputColumnV3] = []
+        row_identity: RowIdentityMetadata | None = None
+        if provenance is not None:
+            if not isinstance(provenance.output, TableOutputV3):
+                msg = "table result provenance must declare a table output"
+                raise ValueError(msg)
+            column_contracts = expand_table_output_columns(
+                provenance.output,
+                provenance.input,
+            )
+            if [column.name for column in column_contracts] != result.columns:
+                msg = (
+                    "Terminal table columns must match expanded provenance output "
+                    "columns."
+                )
+                raise ValueError(msg)
+            row_identity = provenance.row_identity
         raw = ResultRawAccess(
             result_ref=result_ref,
             formats=["terminal_json", "jsonl"],
@@ -612,17 +681,22 @@ def build_result_descriptor(
         )
         preview = build_table_preview(result, row_limit=preview_row_limit)
         return ResultDescriptor(
+            schema_version=1,
             job_id=result.job_id,
             status=result.status,
             result_kind=result.kind,
             result_ref=result_ref,
+            provenance=provenance,
+            completed_at=completed_at,
             lifetime=resolved_lifetime,
             raw=raw,
             table=ResultTableMetadata(
                 row_count=len(result.index),
                 column_count=len(result.columns),
                 columns=result.columns,
+                column_contracts=column_contracts,
                 index_field=preview.index_field,
+                row_identity=row_identity,
             ),
             preview=preview,
             summary=build_table_summary(result),
@@ -639,10 +713,13 @@ def build_result_descriptor(
             media_type=result.media_type,
         )
         return ResultDescriptor(
+            schema_version=1,
             job_id=result.job_id,
             status=result.status,
             result_kind=result.kind,
             result_ref=result_ref,
+            provenance=provenance,
+            completed_at=completed_at,
             lifetime=resolved_lifetime,
             raw=raw,
             summary=ResultSummary(kind="file"),
@@ -651,10 +728,13 @@ def build_result_descriptor(
 
     error = result.error
     return ResultDescriptor(
+        schema_version=1,
         job_id=result.job_id,
         status=result.status,
         result_kind=result.kind,
         result_ref=result_ref,
+        provenance=provenance,
+        completed_at=completed_at,
         lifetime=resolved_lifetime,
         raw=raw,
         summary=ResultSummary(kind=result.kind, error=error),

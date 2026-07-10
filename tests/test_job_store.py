@@ -9,6 +9,7 @@ import pytest
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
+    FileJobResult,
     JobEnvelope,
     JobRunProvenance,
     ResultReference,
@@ -379,6 +380,143 @@ def test_table_result_descriptor_builds_preview_and_numeric_summary() -> None:
     assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
 
 
+def test_table_descriptor_captures_static_and_batched_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisSync()
+    completed_at = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
+    read_at = datetime(2026, 7, 9, 13, 0, tzinfo=UTC)
+    monkeypatch.setattr(job_store, "_now", lambda: completed_at)
+    provenance_payload = _provenance().model_dump()
+    provenance_payload.update(
+        {
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "sector_filters": [
+                    {
+                        "key": "retail",
+                        "value": "^46.*",
+                        "label": "Retail jobs",
+                    },
+                    {"key": "health", "value": "^62.*"},
+                ],
+            },
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "population",
+                        "type": "integer",
+                        "unit": "people",
+                        "description": "Resident population.",
+                    }
+                ],
+                "batched_columns": [
+                    {
+                        "source": "sector_filters",
+                        "name": "accessibility_{key}",
+                        "type": "number",
+                        "unit": "jobs",
+                        "description": "Accessibility for {label}.",
+                        "nullable": True,
+                    }
+                ],
+            },
+        }
+    )
+    provenance = JobRunProvenance.model_validate(provenance_payload)
+    job = JobEnvelope(job_id="job-1", metric=provenance.metric, input={})
+    job_store.create_job(job, provenance, client=redis)
+    job_store.save_job_result(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1"],
+            columns=[
+                "population",
+                "accessibility_retail",
+                "accessibility_health",
+            ],
+            data=[[100, 8.5, None]],
+        ),
+        client=redis,
+    )
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+    monkeypatch.setattr(job_store, "_now", lambda: read_at)
+    reread = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert reread is not None
+    assert descriptor.schema_version == 1
+    assert descriptor.provenance == provenance
+    assert descriptor.completed_at == completed_at
+    assert reread.completed_at == completed_at
+    assert descriptor.table is not None
+    assert descriptor.table.row_identity == provenance.row_identity
+    assert [column.model_dump() for column in descriptor.table.column_contracts] == [
+        {
+            "name": "population",
+            "type": "integer",
+            "unit": "people",
+            "description": "Resident population.",
+            "nullable": False,
+        },
+        {
+            "name": "accessibility_retail",
+            "type": "number",
+            "unit": "jobs",
+            "description": "Accessibility for Retail jobs.",
+            "nullable": True,
+        },
+        {
+            "name": "accessibility_health",
+            "type": "number",
+            "unit": "jobs",
+            "description": "Accessibility for health.",
+            "nullable": True,
+        },
+    ]
+
+
+def test_file_descriptor_retains_run_provenance_without_table_columns(
+    tmp_path: Path,
+) -> None:
+    redis = FakeRedisSync()
+    provenance_payload = _provenance().model_dump()
+    provenance_payload.update(
+        {
+            "output": {
+                "kind": "file",
+                "media_type": "image/tiff",
+                "extensions": [".tif"],
+            },
+            "row_identity": None,
+        }
+    )
+    provenance = JobRunProvenance.model_validate(provenance_payload)
+    job_store.create_job(
+        JobEnvelope(job_id="job-1", metric=provenance.metric, input={}),
+        provenance,
+        client=redis,
+    )
+    job_store.save_job_result(
+        FileJobResult(
+            job_id="job-1",
+            file_path=str(tmp_path / "result.tif"),
+            media_type="image/tiff",
+        ),
+        client=redis,
+    )
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.provenance == provenance
+    assert descriptor.table is None
+    assert descriptor.file is not None
+    assert descriptor.file.media_type == "image/tiff"
+
+
 def test_table_preview_uses_collision_free_named_index_field() -> None:
     redis = FakeRedisSync()
     job_store.save_job_result(
@@ -439,6 +577,7 @@ def test_result_descriptor_uses_ttl_seconds_without_guessing_expiry(
 ) -> None:
     redis = FakeRedisSync()
     monkeypatch.setattr(redis, "pttl", None)
+    job_store.set_job_status("job-1", "succeeded", client=redis)
     redis.ttl_values[job_store.result_key("job-1")] = 90
     redis.values[job_store.result_key("job-1")] = json.dumps(
         TableJobResult(
@@ -481,6 +620,12 @@ def test_descriptor_reports_failed_and_cancelled_terminal_results(
     expected_error: dict[str, Any] | None,
 ) -> None:
     redis = FakeRedisSync()
+    provenance = _provenance()
+    job_store.create_job(
+        JobEnvelope(job_id="job-1", metric=provenance.metric, input={}),
+        provenance,
+        client=redis,
+    )
     payload = job_store.save_job_result(result, client=redis)
 
     descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
@@ -493,6 +638,8 @@ def test_descriptor_reports_failed_and_cancelled_terminal_results(
     assert descriptor.summary.kind == result.kind
     assert descriptor.summary.error == expected_error
     assert descriptor.error == expected_error
+    assert descriptor.provenance == provenance
+    assert descriptor.table is None
     assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
 
 
@@ -507,6 +654,7 @@ def test_async_result_descriptor_reads_stored_result_and_lifetime() -> None:
             ).model_dump(mode="json", exclude_none=True)
         )
     )
+    asyncio.run(job_store.set_job_status_async("job-1", "succeeded", client=redis))
     redis.pttl_values[job_store.result_key("job-1")] = 1_500
 
     descriptor = asyncio.run(

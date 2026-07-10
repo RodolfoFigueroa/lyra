@@ -357,10 +357,40 @@ def _result_response() -> dict[str, Any]:
 
 def _result_descriptor_response() -> dict[str, Any]:
     return {
+        "schema_version": 1,
         "job_id": "job-1",
         "status": "succeeded",
         "result_kind": "table",
         "result_ref": "lyra://results/job-1",
+        "provenance": {
+            "metric": "heavy_metric",
+            "catalog_fingerprint": "catalog-1",
+            "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "value": 3,
+            },
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "value",
+                        "type": "integer",
+                        "unit": "count",
+                        "description": "Example output value.",
+                        "nullable": False,
+                    }
+                ],
+                "batched_columns": [],
+            },
+            "created_at": "2026-07-09T12:00:00Z",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
+        },
+        "completed_at": "2026-07-09T12:05:00Z",
         "lifetime": {"expires_in_seconds": 3600, "expires_at": None},
         "raw": {
             "result_ref": "lyra://results/job-1",
@@ -372,7 +402,21 @@ def _result_descriptor_response() -> dict[str, Any]:
             "row_count": 1,
             "column_count": 1,
             "columns": ["value"],
+            "column_contracts": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                    "nullable": False,
+                }
+            ],
             "index_field": "_result_index",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
         },
         "preview": {
             "index_field": "_result_index",
@@ -1028,6 +1072,9 @@ def test_sync_client_fetches_result_descriptor_from_ref(
     assert descriptor.result_ref == "lyra://results/job-1"
     assert descriptor.table is not None
     assert descriptor.table.columns == ["value"]
+    assert descriptor.table.column_contracts[0].unit == "count"
+    assert descriptor.provenance is not None
+    assert descriptor.provenance.plugin.version == "1.0.0"
     assert descriptor.preview.rows == [{"_result_index": "area-1", "value": 6}]
 
 
@@ -1737,6 +1784,7 @@ def test_async_client_fetches_result_descriptor_from_raw_job_id(
     ]
     assert descriptor.result_ref == "lyra://results/job-1"
     assert descriptor.summary.row_count == 1
+    assert descriptor.completed_at.isoformat() == "2026-07-09T12:05:00+00:00"
 
 
 def test_async_client_downloads_jsonl_result_from_ref(

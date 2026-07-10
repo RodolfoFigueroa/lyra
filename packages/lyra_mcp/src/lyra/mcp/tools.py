@@ -229,10 +229,13 @@ async def _get_result_metadata(
     descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
     payload = _model_dump(descriptor)
     return {
+        "schema_version": payload["schema_version"],
         "job_id": payload["job_id"],
         "status": payload["status"],
         "result_kind": payload["result_kind"],
         "result_ref": payload["result_ref"],
+        "provenance": payload.get("provenance"),
+        "completed_at": payload["completed_at"],
         "lifetime": payload.get("lifetime", {}),
         "table": payload.get("table"),
         "file": payload.get("file"),
@@ -248,10 +251,13 @@ async def _get_result_preview(
     descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
     payload = _model_dump(descriptor)
     return {
+        "schema_version": payload["schema_version"],
         "job_id": payload["job_id"],
         "status": payload["status"],
         "result_kind": payload["result_kind"],
         "result_ref": payload["result_ref"],
+        "provenance": payload.get("provenance"),
+        "completed_at": payload["completed_at"],
         "lifetime": payload.get("lifetime", {}),
         "preview": payload.get("preview", {}),
         "summary": payload["summary"],

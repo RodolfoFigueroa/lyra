@@ -791,6 +791,18 @@ def test_stored_provenance_survives_catalog_refresh(
         )
     )
     stored = redis.values[job_store.provenance_key("job-1")]
+    awaitable = job_store.set_job_status_async("job-1", "succeeded")
+    asyncio.run(awaitable)
+    redis.values[job_store.result_key("job-1")] = json.dumps(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1"],
+            columns=["value"],
+            data=[[3]],
+        ).model_dump(mode="json")
+    )
+    descriptor_before = asyncio.run(job_store.get_job_result_descriptor_async("job-1"))
+    assert descriptor_before is not None
     old_entry = registry.get_metric_entry("heavy_metric")
     assert old_entry is not None
 
@@ -808,6 +820,13 @@ def test_stored_provenance_survives_catalog_refresh(
     assert new_entry.catalog_fingerprint != old_entry.catalog_fingerprint
     assert new_entry.plugin_version == "2.0.0"
     assert redis.values[job_store.provenance_key("job-1")] == stored
+    descriptor_after = asyncio.run(job_store.get_job_result_descriptor_async("job-1"))
+    assert descriptor_after is not None
+    before_payload = descriptor_before.model_dump(mode="json")
+    after_payload = descriptor_after.model_dump(mode="json")
+    before_payload.pop("lifetime")
+    after_payload.pop("lifetime")
+    assert after_payload == before_payload
 
 
 def test_create_job_rejects_invalid_cvegeo_list(
@@ -1085,6 +1104,7 @@ def test_job_result_descriptor_returns_table_metadata_and_jsonl_access(
 ) -> None:
     redis = FakeRedisAsync()
     _patch_redis(monkeypatch, redis)
+    asyncio.run(job_store.set_job_status_async("job-1", "succeeded"))
     redis.values[job_store.result_key("job-1")] = json.dumps(
         TableJobResult(
             job_id="job-1",
@@ -1099,6 +1119,8 @@ def test_job_result_descriptor_returns_table_metadata_and_jsonl_access(
     assert isinstance(response, JSONResponse)
     content = json.loads(bytes(response.body))
     assert content["job_id"] == "job-1"
+    assert content["schema_version"] == 1
+    assert "completed_at" in content
     assert content["status"] == "succeeded"
     assert content["result_kind"] == "table"
     assert content["result_ref"] == "lyra://results/job-1"
@@ -1112,6 +1134,7 @@ def test_job_result_descriptor_returns_table_metadata_and_jsonl_access(
         "row_count": 2,
         "column_count": 1,
         "columns": ["value"],
+        "column_contracts": [],
         "index_field": "_result_index",
     }
     assert content["preview"]["rows"] == [
@@ -1126,6 +1149,7 @@ def test_job_result_descriptor_returns_file_metadata(
 ) -> None:
     redis = FakeRedisAsync()
     _patch_redis(monkeypatch, redis)
+    asyncio.run(job_store.set_job_status_async("job-1", "succeeded"))
     output = tmp_path / "result.tif"
     output.write_bytes(b"data")
     redis.values[job_store.result_key("job-1")] = json.dumps(
@@ -1174,6 +1198,7 @@ def test_job_result_descriptor_returns_terminal_error_descriptors(
 ) -> None:
     redis = FakeRedisAsync()
     _patch_redis(monkeypatch, redis)
+    asyncio.run(job_store.set_job_status_async("job-1", result.status))
     redis.values[job_store.result_key("job-1")] = json.dumps(
         result.model_dump(mode="json", exclude_none=True)
     )

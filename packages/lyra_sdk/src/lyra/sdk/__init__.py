@@ -47,6 +47,7 @@ from lyra.sdk.models import (
     build_result_descriptor,
     build_table_preview,
     build_table_summary,
+    expand_table_output_columns,
     parse_job_result,
     result_ref_for_job,
 )
@@ -100,6 +101,7 @@ __all__ = [
     "build_result_descriptor",
     "build_table_preview",
     "build_table_summary",
+    "expand_table_output_columns",
     "parse_job_result",
     "result_ref_for_job",
 ]

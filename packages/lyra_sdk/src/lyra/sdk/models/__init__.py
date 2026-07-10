@@ -99,6 +99,7 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputColumnV3,
     TableOutputV3,
     compile_plugin_manifest,
+    expand_table_output_columns,
 )
 
 __all__ = [
@@ -196,6 +197,7 @@ __all__ = [
     "build_table_preview",
     "build_table_summary",
     "compile_plugin_manifest",
+    "expand_table_output_columns",
     "parse_job_result",
     "result_ref_for_job",
 ]

@@ -391,8 +391,13 @@ def get_job_result_descriptor(
     payload = get_job_result(job_id, client=client)
     if payload is None:
         return None
+    snapshot = get_job_status(job_id, client=client)
+    if snapshot is None or not is_terminal_status(snapshot.status):
+        return None
     return build_result_descriptor(
         parse_job_result(payload),
+        completed_at=snapshot.updated_at,
+        provenance=get_job_provenance(job_id, client=client),
         lifetime=get_result_lifetime(job_id, client=client),
     )
 
@@ -606,8 +611,13 @@ async def get_job_result_descriptor_async(
     payload = await get_job_result_async(job_id, client=client)
     if payload is None:
         return None
+    snapshot = await get_job_status_async(job_id, client=client)
+    if snapshot is None or not is_terminal_status(snapshot.status):
+        return None
     return build_result_descriptor(
         parse_job_result(payload),
+        completed_at=snapshot.updated_at,
+        provenance=await get_job_provenance_async(job_id, client=client),
         lifetime=await get_result_lifetime_async(job_id, client=client),
     )
 

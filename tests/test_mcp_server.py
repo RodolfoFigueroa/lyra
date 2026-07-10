@@ -15,6 +15,7 @@ from lyra.sdk.models import (
     JobCreateResponse,
     JobLifecycleStatus,
     JobLinks,
+    JobRunProvenance,
     JobStatusInfo,
     ResultLifetime,
     TableJobResult,
@@ -34,6 +35,8 @@ from starlette.routing import Mount
 
 from lyra_app import main
 from tests.config_helpers import load_test_config
+
+_COMPLETED_AT = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -217,7 +220,8 @@ class FakeMCPBackend:
                 index=["area-1"],
                 columns=["value"],
                 data=[[payload.get("value", 1)]],
-            )
+            ),
+            completed_at=_COMPLETED_AT,
         )
         return JobCreateResponse(
             job_id=job_id,
@@ -722,6 +726,24 @@ def test_mcp_get_job_result_returns_running_continuation() -> None:
 
 def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
     backend = FakeMCPBackend([_table_metric("smoke_table_metric", "Return a table.")])
+    provenance = JobRunProvenance.model_validate(
+        {
+            "metric": "smoke_table_metric",
+            "catalog_fingerprint": "catalog-1",
+            "plugin": {"name": "smoke-plugin", "version": "1.2.3"},
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "value": 6,
+            },
+            "output": backend.catalog.metrics[0].output,
+            "created_at": "2026-07-09T12:00:00Z",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
+        }
+    )
     descriptor = build_result_descriptor(
         TableJobResult(
             job_id="job-1",
@@ -730,6 +752,8 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
             data=[[6], [8]],
         ),
         lifetime=ResultLifetime(expires_in_seconds=3600),
+        completed_at=_COMPLETED_AT,
+        provenance=provenance,
     )
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
@@ -777,16 +801,33 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
     )
 
     assert metadata == {
+        "schema_version": 1,
         "job_id": "job-1",
         "status": "succeeded",
         "result_kind": "table",
         "result_ref": "lyra://results/job-1",
+        "provenance": provenance.model_dump(mode="json", exclude_none=True),
+        "completed_at": "2026-07-09T12:05:00Z",
         "lifetime": {"expires_in_seconds": 3600},
         "table": {
             "row_count": 2,
             "column_count": 1,
             "columns": ["value"],
+            "column_contracts": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Submitted value.",
+                    "nullable": False,
+                }
+            ],
             "index_field": "_result_index",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
         },
         "file": None,
         "summary": metadata["summary"],
@@ -797,6 +838,9 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
         {"_result_index": "area-1", "value": 6},
         {"_result_index": "area-2", "value": 8},
     ]
+    assert preview["schema_version"] == 1
+    assert preview["provenance"]["plugin"]["version"] == "1.2.3"
+    assert preview["completed_at"] == "2026-07-09T12:05:00Z"
     assert "raw" not in preview
     assert download == {
         "job_id": "job-1",
@@ -856,9 +900,13 @@ def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:
         FailedJobResult(
             job_id="job-failed",
             error={"type": "runtime_error", "message": "boom"},
-        )
+        ),
+        completed_at=_COMPLETED_AT,
     )
-    cancelled_descriptor = build_result_descriptor(CancelledJobResult(job_id="job-x"))
+    cancelled_descriptor = build_result_descriptor(
+        CancelledJobResult(job_id="job-x"),
+        completed_at=_COMPLETED_AT,
+    )
     backend.descriptors["job-failed"] = failed_descriptor
     backend.descriptors["job-x"] = cancelled_descriptor
     client = _ManagedTestClient(

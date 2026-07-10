@@ -145,11 +145,34 @@ class ResultRawAccessOutput(MCPContractModel):
     jsonl_path: str | None = Field(default=None, min_length=1)
 
 
+class PluginInfoOutput(MCPContractModel):
+    name: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+
+
+class RowIdentityOutput(MCPContractModel):
+    field: str = Field(min_length=1)
+    namespace: str | None = Field(default=None, min_length=1)
+    version: str | None = Field(default=None, min_length=1)
+
+
+class JobRunProvenanceOutput(MCPContractModel):
+    metric: str = Field(min_length=1)
+    catalog_fingerprint: str = Field(min_length=1)
+    plugin: PluginInfoOutput
+    input: dict[str, Any]
+    output: MetricOutput
+    created_at: str = Field(min_length=1)
+    row_identity: RowIdentityOutput | None = None
+
+
 class ResultTableMetadataOutput(MCPContractModel):
     row_count: int = Field(ge=0)
     column_count: int = Field(ge=0)
     columns: list[str]
+    column_contracts: list[OutputColumn]
     index_field: str = Field(min_length=1)
+    row_identity: RowIdentityOutput | None = None
 
 
 class ResultTablePreviewOutput(MCPContractModel):
@@ -188,10 +211,13 @@ class ResultFileMetadataOutput(MCPContractModel):
 
 
 class ResultDescriptorOutput(MCPContractModel):
+    schema_version: Literal[1]
     job_id: str = Field(min_length=1)
     status: Literal["succeeded", "failed", "cancelled"]
     result_kind: Literal["table", "file", "failed", "cancelled"]
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
+    provenance: JobRunProvenanceOutput | None = None
+    completed_at: str = Field(min_length=1)
     lifetime: ResultLifetimeOutput
     raw: ResultRawAccessOutput
     table: ResultTableMetadataOutput | None = None
@@ -206,10 +232,13 @@ GetJobResultOutput = RunningOutput | ResultDescriptorOutput
 
 
 class ResultMetadataOutput(MCPContractModel):
+    schema_version: Literal[1]
     job_id: str = Field(min_length=1)
     status: Literal["succeeded", "failed", "cancelled"]
     result_kind: Literal["table", "file", "failed", "cancelled"]
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
+    provenance: JobRunProvenanceOutput | None
+    completed_at: str = Field(min_length=1)
     lifetime: ResultLifetimeOutput
     table: ResultTableMetadataOutput | None
     file: ResultFileMetadataOutput | None
@@ -218,10 +247,13 @@ class ResultMetadataOutput(MCPContractModel):
 
 
 class ResultPreviewOutput(MCPContractModel):
+    schema_version: Literal[1]
     job_id: str = Field(min_length=1)
     status: Literal["succeeded", "failed", "cancelled"]
     result_kind: Literal["table", "file", "failed", "cancelled"]
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
+    provenance: JobRunProvenanceOutput | None
+    completed_at: str = Field(min_length=1)
     lifetime: ResultLifetimeOutput
     preview: ResultTablePreviewOutput
     summary: ResultSummaryOutput

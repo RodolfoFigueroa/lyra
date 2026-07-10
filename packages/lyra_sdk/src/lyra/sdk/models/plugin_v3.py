@@ -27,6 +27,8 @@ _BATCH_LABEL_SCHEMA = {
     "minLength": 1,
     "maxLength": 120,
 }
+_BATCHED_ITEM_FIELDS = {"key", "value", "label"}
+_BATCHED_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _validate_json_schema(schema: dict[str, Any], field_name: str) -> None:
@@ -422,6 +424,89 @@ class TableOutputV3(StrictBaseModel):
             msg = f"duplicate table output column name(s): {names}"
             raise ValueError(msg)
         return self
+
+
+def _batched_template_context(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        msg = "Batched column source values must be objects."
+        raise TypeError(msg)
+
+    invalid_fields = sorted(set(value) - _BATCHED_ITEM_FIELDS)
+    if invalid_fields:
+        names = ", ".join(invalid_fields)
+        msg = f"Batched column source values contain unsupported fields: {names}."
+        raise ValueError(msg)
+
+    key = value.get("key")
+    if not isinstance(key, str) or not _BATCHED_KEY_PATTERN.fullmatch(key):
+        msg = (
+            "Batched column source value 'key' must be a non-empty string matching "
+            "Lyra's batched key pattern."
+        )
+        raise ValueError(msg)
+
+    if "value" not in value:
+        msg = "Batched column source values must contain 'value'."
+        raise ValueError(msg)
+
+    label = value.get("label", key)
+    if not isinstance(label, str):
+        msg = "Batched column source value 'label' must be a string when provided."
+        raise TypeError(msg)
+
+    return {"key": key, "label": label}
+
+
+def _expand_batched_template(template: str, context: dict[str, str]) -> str:
+    value = template
+    for name, replacement in context.items():
+        value = value.replace(f"{{{name}}}", replacement)
+    return value
+
+
+def expand_table_output_columns(
+    output: TableOutputV3,
+    job_input: dict[str, Any],
+) -> list[TableOutputColumnV3]:
+    """Expand a table output contract for one validated job input."""
+
+    columns = [column.model_copy(deep=True) for column in output.columns]
+
+    for column_group in output.batched_columns:
+        source_values = job_input.get(column_group.source)
+        if not isinstance(source_values, list):
+            msg = (
+                f"Batched column source {column_group.source!r} must be present "
+                "as an array."
+            )
+            raise TypeError(msg)
+
+        for source_value in source_values:
+            template_context = _batched_template_context(source_value)
+            name = _expand_batched_template(column_group.name, template_context)
+            if not name:
+                msg = "Batched column templates must produce non-empty names."
+                raise ValueError(msg)
+            description = _expand_batched_template(
+                column_group.description,
+                template_context,
+            )
+            columns.append(
+                TableOutputColumnV3(
+                    name=name,
+                    type=column_group.type,
+                    unit=column_group.unit,
+                    description=description,
+                    nullable=column_group.nullable,
+                )
+            )
+
+    names = [column.name for column in columns]
+    if len(names) != len(set(names)):
+        msg = "Expanded table output columns must be unique."
+        raise ValueError(msg)
+
+    return columns
 
 
 class FileOutputV3(StrictBaseModel):
@@ -906,4 +991,5 @@ __all__ = [
     "TableOutputColumnV3",
     "TableOutputV3",
     "compile_plugin_manifest",
+    "expand_table_output_columns",
 ]

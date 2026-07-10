@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lyra.sdk.models import JobEnvelope, TableJobResult
+from lyra.sdk.models import JobEnvelope, TableJobResult, expand_table_output_columns
 from lyra.sdk.models.plugin_v3 import TableOutputV3
 
 from lyra_app import registry
@@ -207,14 +207,11 @@ def test_catalog_refresh_preserves_batched_column_metadata(
     assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
 
 
-def test_worker_expands_batched_column_descriptions_from_label_or_key(
-    worker_module: Any,
-) -> None:
+def test_sdk_expands_batched_column_descriptions_from_label_or_key() -> None:
     output = _table_output(
         description="Job accessibility for {label} ({key}).",
     )
 
-    expand_table_output_columns = worker_module.__dict__["_expand_table_output_columns"]
     columns = expand_table_output_columns(
         output,
         {

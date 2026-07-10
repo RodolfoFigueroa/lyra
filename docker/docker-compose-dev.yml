@@ -10,6 +10,7 @@ x-lyra-app-environment: &lyra-app-environment
   LYRA_POSTGRES_USER: ${LYRA_POSTGRES_USER}
   LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}
   LYRA_ADMIN_API_KEY: ${LYRA_ADMIN_API_KEY}
+  LYRA_AGENT_API_KEY: ${LYRA_AGENT_API_KEY}
 
 services:
   lyra-dev:

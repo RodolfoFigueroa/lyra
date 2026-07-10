@@ -148,12 +148,34 @@ class FakeRedisAsync:
         _script: str,
         _numkeys: int,
         key: str,
-        expected: str,
-    ) -> int:
-        if self.values.get(key) != expected:
-            return 0
-        await self.delete(key)
-        return 1
+        *args: str | int,
+    ) -> int | list[int]:
+        if not args:
+            current = int(self.values.get(key, "0"))
+            if current <= 0:
+                return 0
+            if current == 1:
+                await self.delete(key)
+            else:
+                self.values[key] = str(current - 1)
+            return 1
+        if len(args) == 1:
+            expected = str(args[0])
+            if self.values.get(key) != expected:
+                return 0
+            await self.delete(key)
+            return 1
+
+        limit, window_seconds = (int(value) for value in args)
+        current = int(self.values.get(key, "0"))
+        if current >= limit:
+            return [0, current, self.ttl_values.get(key, window_seconds)]
+        current += 1
+        self.values[key] = str(current)
+        if current == 1:
+            self.expirations.append((key, window_seconds))
+            self.ttl_values[key] = window_seconds
+        return [1, current, self.ttl_values[key]]
 
     async def xadd(self, key: str, fields: dict[str, str]) -> str:
         stream = self.streams.setdefault(key, [])
@@ -344,6 +366,44 @@ def test_idempotency_claim_is_atomic_scoped_and_conditionally_released() -> None
         is True
     )
     assert redis.values.get(job_store.idempotency_key("retry-key")) is None
+
+
+def test_agent_submission_limit_is_atomic_expires_and_resets_at_boundary() -> None:
+    redis = FakeRedisAsync()
+
+    async def consume() -> job_store.AgentSubmissionLimitDecision:
+        return await job_store.consume_agent_submission_limit_async(
+            limit=2,
+            window_seconds=60,
+            client=redis,
+        )
+
+    first = asyncio.run(consume())
+    second = asyncio.run(consume())
+    rejected = asyncio.run(consume())
+
+    assert (first.accepted, first.count) == (True, 1)
+    assert (second.accepted, second.count) == (True, 2)
+    assert rejected.model_dump() == {
+        "accepted": False,
+        "count": 2,
+        "retry_after_seconds": 60,
+    }
+    key = job_store.agent_submission_limit_key()
+    assert key == "jobs:submission-limit:shared-agent"
+    assert "secret" not in key
+    assert redis.expirations.count((key, 60)) == 1
+    assert redis.values[key] == "2"
+
+    redis.values.pop(key)
+    redis.ttl_values.pop(key)
+    after_boundary = asyncio.run(consume())
+
+    assert (after_boundary.accepted, after_boundary.count) == (True, 1)
+    assert redis.expirations.count((key, 60)) == 2
+
+    assert asyncio.run(job_store.release_agent_submission_limit_async(client=redis))
+    assert key not in redis.values
 
 
 def test_job_updates_refresh_idempotency_ttl() -> None:

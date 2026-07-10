@@ -92,6 +92,7 @@ def load_test_config(
         },
         "logging": {},
         "job_store": {},
+        "agent_submission_limit": {},
         "plugins": {
             "catalog_dir": str(base / "plugins" / "catalog"),
             "runner_base_dir": str(base / "plugins" / "runners"),

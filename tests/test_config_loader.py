@@ -75,6 +75,10 @@ file = {_q(base / "logs" / "lyra.log")}
 [job_store]
 ttl_seconds = 600
 
+[agent_submission_limit]
+limit = 10
+window_seconds = 60
+
 [plugins]
 catalog_dir = {_q(base / "plugins" / "catalog")}
 runner_base_dir = {_q(base / "plugins" / "runners")}
@@ -122,6 +126,8 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
     assert config.agent.read_api_key() == "agent-secret"
+    assert config.agent_submission_limit.limit == 10
+    assert config.agent_submission_limit.window_seconds == 60
     assert config.earth_engine.service_account_file.exists()
     assert config.plugins.allowed_queues == ["interactive", "batch"]
 

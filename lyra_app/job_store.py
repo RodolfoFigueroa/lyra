@@ -42,6 +42,49 @@ DEFAULT_STREAM_BLOCK_MS = 5000
 JOB_INDEX_KEY = "jobs:index"
 TERMINAL_STATUSES: set[TerminalJobStatus] = {"succeeded", "failed", "cancelled"}
 DEFAULT_AGENT_SCOPE = "shared-agent"
+AGENT_SUBMISSION_LIMIT_KEY = "jobs:submission-limit:shared-agent"
+
+_CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT = """
+local limit = tonumber(ARGV[1])
+local window_seconds = tonumber(ARGV[2])
+local current = tonumber(redis.call('get', KEYS[1]) or '0')
+
+if current >= limit then
+    local retry_after_seconds = redis.call('ttl', KEYS[1])
+    if retry_after_seconds < 0 then
+        redis.call('expire', KEYS[1], window_seconds)
+        retry_after_seconds = window_seconds
+    elseif retry_after_seconds < 1 then
+        retry_after_seconds = 1
+    end
+    return {0, current, retry_after_seconds}
+end
+
+current = redis.call('incr', KEYS[1])
+if current == 1 then
+    redis.call('expire', KEYS[1], window_seconds)
+end
+
+local retry_after_seconds = redis.call('ttl', KEYS[1])
+if retry_after_seconds < 0 then
+    redis.call('expire', KEYS[1], window_seconds)
+    retry_after_seconds = window_seconds
+end
+return {1, current, retry_after_seconds}
+""".strip()
+
+_RELEASE_AGENT_SUBMISSION_LIMIT_SCRIPT = """
+local current = tonumber(redis.call('get', KEYS[1]) or '0')
+if current <= 0 then
+    return 0
+end
+if current == 1 then
+    redis.call('del', KEYS[1])
+    return 1
+end
+redis.call('decr', KEYS[1])
+return 1
+""".strip()
 
 _RELEASE_IDEMPOTENCY_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -67,6 +110,12 @@ class StoredJobEvent(StrictBaseModel):
 class IdempotencyRecord(StrictBaseModel):
     request_digest: str = Field(min_length=1)
     job_id: str = Field(min_length=1)
+
+
+class AgentSubmissionLimitDecision(StrictBaseModel):
+    accepted: bool
+    count: int = Field(ge=0)
+    retry_after_seconds: int = Field(ge=1)
 
 
 class JobCancelledError(RuntimeError):
@@ -108,6 +157,51 @@ def job_idempotency_key(job_id: str) -> str:
 
 def job_index_key() -> str:
     return JOB_INDEX_KEY
+
+
+def agent_submission_limit_key() -> str:
+    """Return the non-secret Redis key shared by all agent submissions."""
+
+    return AGENT_SUBMISSION_LIMIT_KEY
+
+
+async def consume_agent_submission_limit_async(
+    *,
+    limit: int,
+    window_seconds: int,
+    client: Any | None = None,
+) -> AgentSubmissionLimitDecision:
+    """Atomically consume capacity from the shared agent fixed window."""
+
+    client = redis_client if client is None else client
+    raw_decision = await client.eval(
+        _CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT,
+        1,
+        agent_submission_limit_key(),
+        limit,
+        window_seconds,
+    )
+    accepted, count, retry_after_seconds = (int(value) for value in raw_decision)
+    return AgentSubmissionLimitDecision(
+        accepted=bool(accepted),
+        count=count,
+        retry_after_seconds=max(1, retry_after_seconds),
+    )
+
+
+async def release_agent_submission_limit_async(
+    *,
+    client: Any | None = None,
+) -> bool:
+    """Return capacity when a consumed submission fails before dispatch."""
+
+    client = redis_client if client is None else client
+    released = await client.eval(
+        _RELEASE_AGENT_SUBMISSION_LIMIT_SCRIPT,
+        1,
+        agent_submission_limit_key(),
+    )
+    return bool(released)
 
 
 def _now() -> datetime:

@@ -24,6 +24,8 @@ DEFAULT_CONFIG_PATH = LYRA_DATA_DIR / "config" / "lyra.toml"
 DEFAULT_API_HOST = "0.0.0.0"
 DEFAULT_API_PORT = 5219
 DEFAULT_JOB_STORE_TTL_SECONDS = 600
+DEFAULT_AGENT_SUBMISSION_LIMIT = 10
+DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = 60
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_WORKER_CONCURRENCY = 1
 DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
@@ -353,6 +355,15 @@ class JobStoreConfig(StrictConfigModel):
     ttl_seconds: int = Field(default=DEFAULT_JOB_STORE_TTL_SECONDS, gt=0)
 
 
+class AgentSubmissionLimitConfig(StrictConfigModel):
+    limit: int = Field(default=DEFAULT_AGENT_SUBMISSION_LIMIT, gt=0, strict=True)
+    window_seconds: int = Field(
+        default=DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
+        gt=0,
+        strict=True,
+    )
+
+
 class PluginsConfig(StrictConfigModel):
     catalog_dir: Path = DEFAULT_PLUGIN_CATALOG_DIR
     runner_base_dir: Path = DEFAULT_PLUGIN_RUNNER_BASE_DIR
@@ -426,6 +437,9 @@ class LyraConfig(StrictConfigModel):
     mcp: McpConfig = Field(default_factory=McpConfig)
     logging: LoggingConfig
     job_store: JobStoreConfig
+    agent_submission_limit: AgentSubmissionLimitConfig = Field(
+        default_factory=AgentSubmissionLimitConfig
+    )
     plugins: PluginsConfig
     workers: dict[str, WorkerConfig] = Field(min_length=1)
 
@@ -667,6 +681,16 @@ def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> No
     lines.append("")
 
 
+def _append_agent_submission_limit_section(
+    lines: list[str],
+    submission_limit: AgentSubmissionLimitConfig,
+) -> None:
+    lines.append("[agent_submission_limit]")
+    _append_key(lines, "limit", submission_limit.limit)
+    _append_key(lines, "window_seconds", submission_limit.window_seconds)
+    lines.append("")
+
+
 def _append_plugins_section(lines: list[str], plugins: PluginsConfig) -> None:
     lines.append("[plugins]")
     _append_key(lines, "default_queue", plugins.default_queue)
@@ -701,6 +725,7 @@ def render_config_toml(config: LyraConfig) -> str:
     _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
+    _append_agent_submission_limit_section(lines, config.agent_submission_limit)
     _append_plugins_section(lines, config.plugins)
     _append_workers_section(lines, config.workers)
     return "\n".join(lines).rstrip() + "\n"
@@ -732,6 +757,8 @@ def save_config(config: LyraConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> N
 
 
 __all__ = [
+    "DEFAULT_AGENT_SUBMISSION_LIMIT",
+    "DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS",
     "DEFAULT_API_HOST",
     "DEFAULT_API_PORT",
     "DEFAULT_CONFIG_PATH",
@@ -753,6 +780,7 @@ __all__ = [
     "LYRA_POSTGRES_USER_ENV",
     "AdminConfig",
     "AgentConfig",
+    "AgentSubmissionLimitConfig",
     "ApiConfig",
     "ConfigLoadError",
     "ConfigSecretError",

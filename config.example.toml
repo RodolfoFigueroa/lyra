@@ -27,6 +27,12 @@ level = "INFO"
 [job_store]
 ttl_seconds = 600
 
+[agent_submission_limit]
+# New REST and MCP jobs share this fixed-window quota. Idempotent replays do not
+# consume capacity.
+limit = 10
+window_seconds = 60
+
 [plugins]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]

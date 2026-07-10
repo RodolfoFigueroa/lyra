@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import sys
 from collections.abc import Iterator, MutableMapping
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from lyra.mcp.tools import InProcessLyraBackend
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -176,6 +178,7 @@ class FakeRedisAsync:
         self.available = available
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
+        self.rate_limit_ttls: dict[str, int] = {}
         self.deleted: list[str] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
@@ -212,12 +215,34 @@ class FakeRedisAsync:
         _script: str,
         _numkeys: int,
         key: str,
-        expected: str,
-    ) -> int:
-        if self.values.get(key) != expected:
-            return 0
-        await self.delete(key)
-        return 1
+        *args: str | int,
+    ) -> int | list[int]:
+        if not args:
+            current = int(self.values.get(key, "0"))
+            if current <= 0:
+                return 0
+            if current == 1:
+                await self.delete(key)
+            else:
+                self.values[key] = str(current - 1)
+            return 1
+        if len(args) == 1:
+            expected = str(args[0])
+            if self.values.get(key) != expected:
+                return 0
+            await self.delete(key)
+            return 1
+
+        limit, window_seconds = (int(value) for value in args)
+        current = int(self.values.get(key, "0"))
+        if current >= limit:
+            return [0, current, self.rate_limit_ttls.get(key, window_seconds)]
+        current += 1
+        self.values[key] = str(current)
+        if current == 1:
+            self.expirations.append((key, window_seconds))
+            self.rate_limit_ttls[key] = window_seconds
+        return [1, current, self.rate_limit_ttls[key]]
 
     async def xadd(self, key: str, fields: dict[str, str]) -> str:
         stream = self.streams.setdefault(key, [])
@@ -788,6 +813,124 @@ def test_create_job_rejects_conflicting_idempotency_key(
     assert len(celery.sent) == 1
 
 
+def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    get_config().agent_submission_limit.limit = 1
+    get_config().agent_submission_limit.window_seconds = 23
+    job_ids = iter(["job-1", "job-2", "job-3", "job-4"])
+    monkeypatch.setattr(
+        jobs,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(job_ids)),
+    )
+    request = JobCreateRequest(
+        metric="heavy_metric",
+        input=_spatial_payload(),
+        idempotency_key="accepted-key",
+    )
+
+    accepted = asyncio.run(jobs.create_job(request))
+    replay = asyncio.run(jobs.create_job(request))
+    with pytest.raises(HTTPException) as conflict_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric="heavy_metric",
+                    input={**_spatial_payload(), "value": 4},
+                    idempotency_key="accepted-key",
+                )
+            )
+        )
+    with pytest.raises(HTTPException) as limited_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric="heavy_metric",
+                    input=_spatial_payload(),
+                    idempotency_key="rejected-key",
+                )
+            )
+        )
+
+    assert accepted.reused is False
+    assert replay.reused is True
+    assert conflict_info.value.status_code == 409
+    assert limited_info.value.status_code == 429
+    assert limited_info.value.headers == {"Retry-After": "23"}
+    assert limited_info.value.detail == {
+        "code": "rate_limited",
+        "message": "Agent job submission limit exceeded. Please try again later.",
+        "retry_after_seconds": 23,
+    }
+    assert redis.values[job_store.agent_submission_limit_key()] == "1"
+    assert redis.values.get(job_store.idempotency_key("rejected-key")) is None
+    assert redis.values.get(job_store.job_idempotency_key("job-4")) is None
+    assert redis.values.get(job_store.status_key("job-4")) is None
+    assert redis.values.get(job_store.provenance_key("job-4")) is None
+    assert job_store.events_key("job-4") not in redis.streams
+    assert len(celery.sent) == 1
+
+
+def test_rest_and_mcp_submissions_share_one_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    monkeypatch.setattr(job_submission, "redis_client", redis)
+    celery_module = importlib.import_module("lyra_app.celery_app")
+    monkeypatch.setattr(celery_module, "celery_app", celery)
+    get_config().agent_submission_limit.limit = 2
+    get_config().agent_submission_limit.window_seconds = 31
+    rest_job_ids = iter(["rest-job-1", "rest-job-2"])
+    monkeypatch.setattr(
+        jobs,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(rest_job_ids)),
+    )
+    monkeypatch.setattr(job_submission, "_new_job_id", lambda: "mcp-job-1")
+
+    rest_response = asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+        )
+    )
+    mcp_response = asyncio.run(
+        InProcessLyraBackend().create_job(
+            "heavy_metric",
+            _spatial_payload(data_type="met_zone_code", value="09.01"),
+        )
+    )
+    with pytest.raises(HTTPException) as limited_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+            )
+        )
+
+    assert rest_response.job_id == "rest-job-1"
+    assert mcp_response.job_id == "mcp-job-1"
+    assert limited_info.value.status_code == 429
+    assert limited_info.value.headers == {"Retry-After": "31"}
+    assert redis.values[job_store.agent_submission_limit_key()] == "2"
+    assert [task["task_id"] for task in celery.sent] == [
+        "rest-job-1",
+        "mcp-job-1",
+    ]
+
+
 def test_dispatch_failure_releases_idempotency_reservation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -817,6 +960,7 @@ def test_dispatch_failure_releases_idempotency_reservation(
     assert recovered.job_id == "job-2"
     assert recovered.reused is False
     assert len(celery.sent) == 1
+    assert redis.values[job_store.agent_submission_limit_key()] == "1"
 
 
 def test_create_job_rejects_unknown_metric(

@@ -7,6 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from lyra_app.config import (
+    DEFAULT_AGENT_SUBMISSION_LIMIT,
+    DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
@@ -62,6 +64,10 @@ def _valid_config(base: Path) -> dict[str, Any]:
         },
         "job_store": {
             "ttl_seconds": 600,
+        },
+        "agent_submission_limit": {
+            "limit": 10,
+            "window_seconds": 60,
         },
         "plugins": {
             "catalog_dir": str(base / "plugins" / "catalog"),
@@ -124,6 +130,8 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
     assert config.job_store.ttl_seconds == 600
+    assert config.agent_submission_limit.limit == 10
+    assert config.agent_submission_limit.window_seconds == 60
     assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.get_worker("interactive").concurrency == 32
 
@@ -134,6 +142,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     del raw["earth_engine"]["service_account_file"]
     raw["logging"] = {}
     raw["job_store"] = {}
+    raw["agent_submission_limit"] = {}
     del raw["plugins"]["catalog_dir"]
     del raw["plugins"]["runner_base_dir"]
     raw["workers"]["interactive"] = {"queues": ["interactive"]}
@@ -157,6 +166,11 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
     assert config.job_store.ttl_seconds == DEFAULT_JOB_STORE_TTL_SECONDS
+    assert config.agent_submission_limit.limit == DEFAULT_AGENT_SUBMISSION_LIMIT
+    assert (
+        config.agent_submission_limit.window_seconds
+        == DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS
+    )
     assert config.plugins.catalog_dir == DEFAULT_PLUGIN_CATALOG_DIR
     assert config.plugins.runner_base_dir == DEFAULT_PLUGIN_RUNNER_BASE_DIR
     assert config.get_worker("interactive").concurrency == 1
@@ -250,6 +264,12 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
         ("redis", "url", "postgres://db:5432/lyra", "redis.url"),
         ("logging", "level", "NOPE", "logging.level"),
         ("job_store", "ttl_seconds", 0, "greater than 0"),
+        ("agent_submission_limit", "limit", 0, "greater than 0"),
+        ("agent_submission_limit", "limit", -1, "greater than 0"),
+        ("agent_submission_limit", "window_seconds", 0, "greater than 0"),
+        ("agent_submission_limit", "window_seconds", -1, "greater than 0"),
+        ("agent_submission_limit", "limit", True, "valid integer"),
+        ("agent_submission_limit", "window_seconds", False, "valid integer"),
     ],
 )
 def test_config_contract_rejects_invalid_values(

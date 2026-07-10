@@ -18,6 +18,7 @@ from lyra.sdk.models import (
 from redis.exceptions import RedisError
 
 from lyra_app import job_store
+from lyra_app.config import get_config
 from lyra_app.db.redis import redis_client
 from lyra_app.registry import get_metric_entry, validate_metric_entry_payload
 from lyra_app.spatial_inputs import resolve_spatial_inputs_with_metadata
@@ -48,6 +49,16 @@ class UnknownMetricError(Exception):
 class SubmissionUnavailableError(Exception):
     def __init__(self) -> None:
         super().__init__("Cannot connect to Redis. Please try again later.")
+
+
+class SubmissionRateLimitedError(Exception):
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__("Agent job submission limit exceeded. Please try again later.")
+
+    @property
+    def details(self) -> dict[str, int]:
+        return {"retry_after_seconds": self.retry_after_seconds}
 
 
 class IdempotencyConflictError(Exception):
@@ -96,6 +107,27 @@ async def _ensure_redis_available(client: Any) -> None:
 
 def _new_job_id() -> str:
     return uuid4().hex
+
+
+async def _release_failed_submission(
+    *,
+    caller_key: str | None,
+    reservation: job_store.IdempotencyRecord | None,
+    limit_consumed: bool,
+    agent_scope: str,
+    client: Any,
+) -> None:
+    try:
+        if limit_consumed:
+            await job_store.release_agent_submission_limit_async(client=client)
+    finally:
+        if reservation is not None and caller_key is not None:
+            await job_store.release_idempotency_key_async(
+                caller_key,
+                reservation,
+                agent_scope=agent_scope,
+                client=client,
+            )
 
 
 async def submit_job(
@@ -149,6 +181,7 @@ async def submit_job(
             )
 
     dispatched = False
+    limit_consumed = False
     try:
         created_at = datetime.now(UTC)
         resolution = await asyncio.to_thread(
@@ -156,6 +189,18 @@ async def submit_job(
             validated_input,
             entry.metric.spatial_inputs,
         )
+        submission_limit = get_config().agent_submission_limit
+        try:
+            limit_decision = await job_store.consume_agent_submission_limit_async(
+                limit=submission_limit.limit,
+                window_seconds=submission_limit.window_seconds,
+                client=client,
+            )
+        except RedisError as exc:
+            raise SubmissionUnavailableError from exc
+        if not limit_decision.accepted:
+            raise SubmissionRateLimitedError(limit_decision.retry_after_seconds)
+        limit_consumed = True
         envelope = JobEnvelope(
             job_id=job_id,
             metric=request.metric,
@@ -183,14 +228,11 @@ async def submit_job(
         )
         dispatched = True
     finally:
-        if (
-            not dispatched
-            and reservation is not None
-            and request.idempotency_key is not None
-        ):
-            await job_store.release_idempotency_key_async(
-                request.idempotency_key,
-                reservation,
+        if not dispatched:
+            await _release_failed_submission(
+                caller_key=request.idempotency_key,
+                reservation=reservation,
+                limit_consumed=limit_consumed,
                 agent_scope=agent_scope,
                 client=client,
             )
@@ -207,6 +249,7 @@ async def submit_job(
 __all__ = [
     "GENERIC_TASK_NAME",
     "IdempotencyConflictError",
+    "SubmissionRateLimitedError",
     "SubmissionUnavailableError",
     "TaskDispatcher",
     "UnknownMetricError",

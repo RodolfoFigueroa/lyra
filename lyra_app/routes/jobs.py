@@ -24,6 +24,7 @@ from lyra_app.celery_app import celery_app
 from lyra_app.db.redis import redis_client
 from lyra_app.job_submission import (
     IdempotencyConflictError,
+    SubmissionRateLimitedError,
     SubmissionUnavailableError,
     UnknownMetricError,
     submit_job,
@@ -160,6 +161,16 @@ async def create_job(request: JobCreateRequest) -> JobCreateResponse:
                 "message": str(exc),
                 **exc.details,
             },
+        ) from exc
+    except SubmissionRateLimitedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "rate_limited",
+                "message": str(exc),
+                **exc.details,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
         ) from exc
     except SubmissionUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

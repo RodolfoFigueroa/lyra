@@ -24,6 +24,7 @@ _RESULT_REF_PATTERN = re.compile(r"^lyra://results/([^/?#\s]+)$")
 _UNKNOWN_METRIC_ERROR = "unknown_metric"
 _INVALID_PARAMETERS_ERROR = "invalid_parameters"
 _IDEMPOTENCY_CONFLICT_ERROR = "idempotency_conflict"
+_RATE_LIMITED_ERROR = "rate_limited"
 _BACKEND_ERROR = "backend_error"
 
 
@@ -84,6 +85,7 @@ class InProcessLyraBackend:
 
         from lyra_app.job_submission import (  # noqa: PLC0415
             IdempotencyConflictError,
+            SubmissionRateLimitedError,
             SubmissionUnavailableError,
             UnknownMetricError,
             submit_job,
@@ -113,6 +115,12 @@ class InProcessLyraBackend:
         except IdempotencyConflictError as exc:
             raise ToolCallError(
                 _IDEMPOTENCY_CONFLICT_ERROR,
+                str(exc),
+                exc.details,
+            ) from exc
+        except SubmissionRateLimitedError as exc:
+            raise ToolCallError(
+                _RATE_LIMITED_ERROR,
                 str(exc),
                 exc.details,
             ) from exc
@@ -575,6 +583,8 @@ def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:
         code = "invalid_parameters"
     elif exc.status_code == 409:
         code = "idempotency_conflict"
+    elif exc.status_code == 429:
+        code = "rate_limited"
     else:
         code = "backend_error"
     return ToolCallError(code, f"Failed to {context}.", exc.detail)

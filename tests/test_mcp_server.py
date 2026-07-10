@@ -769,6 +769,52 @@ def test_mcp_run_metric_reports_idempotency_conflict() -> None:
     }
 
 
+def test_mcp_run_metric_reports_structured_rate_limit_retry_metadata() -> None:
+    class RateLimitedBackend(FakeMCPBackend):
+        async def create_job(
+            self,
+            metric: str,
+            payload: dict[str, Any],
+            *,
+            idempotency_key: str | None = None,
+        ) -> JobCreateResponse:
+            del metric, payload, idempotency_key
+            code = "rate_limited"
+            message = "Agent job submission limit exceeded. Please try again later."
+            raise self._tool_error(
+                code,
+                message,
+                {"retry_after_seconds": 17},
+            )
+
+    backend = RateLimitedBackend([_table_metric("slow_metric", "Return later.")])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload(
+            "lyra_run_metric",
+            {
+                "metric": "slow_metric",
+                "met_zone_code": "09.01",
+                "parameters": {"value": 7},
+                "wait_seconds": 0,
+            },
+        ),
+        headers=_mcp_headers(),
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"] == {
+        "code": "rate_limited",
+        "message": "Agent job submission limit exceeded. Please try again later.",
+        "details": {"retry_after_seconds": 17},
+    }
+
+
 def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["queued", "succeeded"]

@@ -2,15 +2,24 @@
 # Do not edit it directly, make changes in the source file instead.
 
 from abc import ABC, abstractmethod
-
 from collections.abc import Sequence
 from typing import Literal
+
 import geopandas as gpd
 
-class LyraDB(ABC):
 
+class LyraDB(ABC):
     @abstractmethod
-    def load_denue_from_bounds(self, xmin: float, ymin: float, xmax: float, ymax: float, *, year: Literal[2020, 2021, 2022, 2023, 2024, 2025], month: Literal[5, 11]) -> gpd.GeoDataFrame:
+    def load_denue_from_bounds(
+        self,
+        xmin: float,
+        ymin: float,
+        xmax: float,
+        ymax: float,
+        *,
+        year: Literal[2020, 2021, 2022, 2023, 2024, 2025],
+        month: Literal[5, 11],
+    ) -> gpd.GeoDataFrame:
         """Load DENUE economic-unit records that intersect a bounding box.
 
         DENUE (Directorio Estadístico Nacional de Unidades Económicas) tables are
@@ -33,7 +42,15 @@ class LyraDB(ABC):
         ...
 
     @abstractmethod
-    def load_mesh_from_bounds(self, xmin: float, ymin: float, xmax: float, ymax: float, *, level: Literal[4, 5, 6, 7, 8, 9]=9) -> gpd.GeoDataFrame:
+    def load_mesh_from_bounds(
+        self,
+        xmin: float,
+        ymin: float,
+        xmax: float,
+        ymax: float,
+        *,
+        level: Literal[4, 5, 6, 7, 8, 9] = 9,
+    ) -> gpd.GeoDataFrame:
         """Load mesh-grid cells that intersect a bounding box.
 
         Queries the ``mesh_level_{level}`` table and returns cells with their
@@ -54,7 +71,16 @@ class LyraDB(ABC):
         ...
 
     @abstractmethod
-    def load_census_from_bounds(self, xmin: float, ymin: float, xmax: float, ymax: float, *, level: Literal['ent', 'mun', 'loc', 'ageb', 'mza'], columns: Sequence[str]) -> gpd.GeoDataFrame:
+    def load_census_from_bounds(
+        self,
+        xmin: float,
+        ymin: float,
+        xmax: float,
+        ymax: float,
+        *,
+        level: Literal["ent", "mun", "loc", "ageb", "mza"],
+        columns: Sequence[str],
+    ) -> gpd.GeoDataFrame:
         """Load 2020 census records that intersect a bounding box.
 
         Queries the ``census_2020_{level}`` table for the specified geographic

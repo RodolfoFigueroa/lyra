@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import threading
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from lyra.mcp import SERVER_INSTRUCTIONS
 from lyra.mcp import create_mcp_app as _create_mcp_app
+from lyra.mcp.models import TOOL_CONTRACTS_BY_NAME
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -93,6 +95,20 @@ def _tool_payload(response: Any) -> dict[str, Any]:
     result = response.json()["result"]
     assert json.loads(result["content"][0]["text"]) == result["structuredContent"]
     return result["structuredContent"]
+
+
+def _metric_cursor_payload(
+    *,
+    fingerprint: str = "catalog-1",
+    offset: int = 1,
+    version: int = 1,
+) -> str:
+    payload = json.dumps(
+        {"fingerprint": fingerprint, "offset": offset, "version": version},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
 
 
 class _ManagedTestClient:
@@ -494,6 +510,7 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
         "lyra_get_metric",
         "lyra_get_result_metadata",
         "lyra_get_result_preview",
+        "lyra_list_metrics",
         "lyra_lookup_met_zone",
         "lyra_run_metric",
     }
@@ -523,11 +540,11 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
         "nom_met": "Valle de México",
     }
     assert extra_argument.isError is True
-    assert extra_argument.structuredContent is None
-    assert "Input validation error" in extra_argument.content[0].text
+    assert extra_argument.structuredContent is not None
+    assert extra_argument.structuredContent["error"]["code"] == "invalid_arguments"
     assert invalid_type.isError is True
-    assert invalid_type.structuredContent is None
-    assert "Input validation error" in invalid_type.content[0].text
+    assert invalid_type.structuredContent is not None
+    assert invalid_type.structuredContent["error"]["code"] == "invalid_arguments"
     assert unknown.isError is True
     assert unknown.structuredContent is not None
     assert unknown.structuredContent["error"]["code"] == "unknown_tool"
@@ -606,6 +623,241 @@ def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
     assert first["output_kind"] == "table"
     assert first["relevant_columns"][0]["name"] == "value"
     assert "Matches" in first["reason"]
+
+
+def test_mcp_search_metrics_does_not_treat_tokenless_query_as_inventory() -> None:
+    client = _ManagedTestClient(
+        create_mcp_app(
+            agent_api_key="agent-secret",
+            backend=FakeMCPBackend([_table_metric("population", "Residents.")]),
+        )
+    )
+
+    payload = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_search_metrics", {"query": "?!"}),
+            headers=_mcp_headers(),
+        )
+    )
+
+    assert payload["candidates"] == []
+
+
+@pytest.mark.parametrize(("limit", "suggested"), [(0, 1), (100, 20)])
+@pytest.mark.parametrize(
+    ("tool_name", "base_arguments"),
+    [
+        ("lyra_search_metrics", {"query": "population"}),
+        ("lyra_list_metrics", {}),
+    ],
+)
+def test_metric_discovery_limit_errors_include_correction(
+    tool_name: str,
+    base_arguments: dict[str, Any],
+    limit: int,
+    suggested: int,
+) -> None:
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=FakeMCPBackend([]))
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload(
+            tool_name,
+            {**base_arguments, "limit": limit},
+        ),
+        headers=_mcp_headers(),
+    )
+
+    result = response.json()["result"]
+    error = result["structuredContent"]["error"]
+    assert result["isError"] is True
+    assert error["code"] == "invalid_arguments"
+    assert error["details"]["allowed_bounds"] == {
+        "limit": {"minimum": 1, "maximum": 20}
+    }
+    assert error["details"]["suggested_arguments"] == {
+        **base_arguments,
+        "limit": suggested,
+    }
+
+
+def test_metric_discovery_contracts_route_inventory_and_search() -> None:
+    list_contract = TOOL_CONTRACTS_BY_NAME["lyra_list_metrics"]
+    search_contract = TOOL_CONTRACTS_BY_NAME["lyra_search_metrics"]
+
+    assert "explicitly asks" in list_contract.description
+    assert "task-specific" in search_contract.description
+    assert search_contract.input_schema["properties"]["limit"]["maximum"] == 20
+    assert (
+        "Usually omit"
+        in search_contract.input_schema["properties"]["limit"]["description"]
+    )
+    assert list_contract.input_schema["properties"]["limit"]["default"] == 20
+
+
+def test_mcp_list_metrics_returns_compact_paginated_inventory() -> None:
+    long_description = f"  First\nmetric  {'x' * 300}  "
+    metrics = [
+        _table_metric(
+            f"metric_{index:02d}",
+            long_description if index == 0 else f"Metric {index}.",
+        )
+        for index in reversed(range(22))
+    ]
+    client = _ManagedTestClient(
+        create_mcp_app(
+            agent_api_key="agent-secret",
+            backend=FakeMCPBackend(metrics),
+        )
+    )
+
+    first = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_list_metrics", {}),
+            headers=_mcp_headers(),
+        )
+    )
+    assert first["catalog_fingerprint"] == "catalog-1"
+    assert first["total_count"] == 22
+    assert [metric["name"] for metric in first["metrics"]] == [
+        f"metric_{index:02d}" for index in range(20)
+    ]
+    assert len(first["metrics"][0]["description"]) == 240
+    assert "\n" not in first["metrics"][0]["description"]
+    assert first["metrics"][0]["description"].endswith("…")
+    assert first["next_cursor"]
+
+    second = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload(
+                "lyra_list_metrics",
+                {"cursor": first["next_cursor"], "limit": 1},
+            ),
+            headers=_mcp_headers(),
+        )
+    )
+    assert [metric["name"] for metric in second["metrics"]] == ["metric_20"]
+    assert second["next_cursor"]
+
+    third = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload(
+                "lyra_list_metrics",
+                {"cursor": second["next_cursor"]},
+            ),
+            headers=_mcp_headers(),
+        )
+    )
+    assert [metric["name"] for metric in third["metrics"]] == ["metric_21"]
+    assert third["next_cursor"] is None
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "not-a-cursor!",
+        _metric_cursor_payload(version=2),
+        _metric_cursor_payload(offset=0),
+        _metric_cursor_payload(offset=2),
+    ],
+)
+def test_mcp_list_metrics_rejects_invalid_cursors(cursor: str) -> None:
+    client = _ManagedTestClient(
+        create_mcp_app(
+            agent_api_key="agent-secret",
+            backend=FakeMCPBackend([_table_metric("metric", "A metric.")]),
+        )
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload("lyra_list_metrics", {"cursor": cursor}),
+        headers=_mcp_headers(),
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"]["code"] == "invalid_cursor"
+    assert "without cursor" in result["structuredContent"]["error"]["details"]["action"]
+
+
+def test_mcp_list_metrics_rejects_cursor_after_catalog_change() -> None:
+    backend = FakeMCPBackend(
+        [
+            _table_metric("metric_a", "First metric."),
+            _table_metric("metric_b", "Second metric."),
+        ]
+    )
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    first = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_list_metrics", {"limit": 1}),
+            headers=_mcp_headers(),
+        )
+    )
+    backend.catalog = backend.catalog.model_copy(
+        update={"catalog_fingerprint": "catalog-2"}
+    )
+
+    response = client.post(
+        "/",
+        json=_tool_call_payload("lyra_list_metrics", {"cursor": first["next_cursor"]}),
+        headers=_mcp_headers(),
+    )
+
+    result = response.json()["result"]
+    assert result["isError"] is True
+    details = result["structuredContent"]["error"]["details"]
+    assert details["reason"] == "The metric catalog changed between pages."
+
+
+def test_mcp_list_metrics_handles_empty_and_exact_boundary_catalogs() -> None:
+    empty_client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=FakeMCPBackend([]))
+    )
+    empty = _tool_payload(
+        empty_client.post(
+            "/",
+            json=_tool_call_payload("lyra_list_metrics", {}),
+            headers=_mcp_headers(),
+        )
+    )
+    assert empty["total_count"] == 0
+    assert empty["metrics"] == []
+    assert empty["next_cursor"] is None
+
+    exact_client = _ManagedTestClient(
+        create_mcp_app(
+            agent_api_key="agent-secret",
+            backend=FakeMCPBackend(
+                [
+                    _table_metric("metric_b", "Second."),
+                    _table_metric("metric_a", "First."),
+                ]
+            ),
+        )
+    )
+    exact = _tool_payload(
+        exact_client.post(
+            "/",
+            json=_tool_call_payload("lyra_list_metrics", {"limit": 2}),
+            headers=_mcp_headers(),
+        )
+    )
+    assert [metric["name"] for metric in exact["metrics"]] == [
+        "metric_a",
+        "metric_b",
+    ]
+    assert exact["next_cursor"] is None
 
 
 def test_official_client_supports_met_zone_lookup_and_normalized_discovery() -> None:
@@ -1384,8 +1636,7 @@ def test_mcp_result_tools_reject_invalid_result_ref() -> None:
 
     result = response.json()["result"]
     assert result["isError"] is True
-    assert "structuredContent" not in result
-    assert "Input validation error" in result["content"][0]["text"]
+    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
 
 
 @pytest.mark.parametrize(
@@ -1441,7 +1692,7 @@ def test_mcp_wait_ranges_are_rejected_before_polling(
 
     result = response.json()["result"]
     assert result["isError"] is True
-    assert "Input validation error" in result["content"][0]["text"]
+    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
     assert backend.payloads == []
 
 
@@ -1471,7 +1722,7 @@ def test_mcp_non_finite_waits_are_rejected_before_polling(
 
     result = response.json()["result"]
     assert result["isError"] is True
-    assert "Input validation error" in result["content"][0]["text"]
+    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
     assert backend.payloads == []
 
 

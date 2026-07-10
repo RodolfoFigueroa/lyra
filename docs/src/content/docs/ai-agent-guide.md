@@ -113,6 +113,7 @@ transport and strict input/output JSON Schema contracts. See [MCP Agent
 Bridge](../mcp-agent-bridge/) for setup and analysis examples.
 
 - `lyra_lookup_met_zone`
+- `lyra_list_metrics`
 - `lyra_search_metrics`
 - `lyra_get_metric`
 - `lyra_run_metric`
@@ -121,9 +122,14 @@ Bridge](../mcp-agent-bridge/) for setup and analysis examples.
 - `lyra_get_result_preview`
 - `lyra_download_result`
 
-The sequence is lookup, search, inspect, run with an idempotency key, poll one
-reference, inspect provenance, then request an absolute authenticated JSONL
-handoff. `lyra_run_metric` accepts only a raw metropolitan zone code as
+For a specific question, the sequence is lookup, focused search, inspect, run
+with an idempotency key, poll one reference, inspect provenance, then request an
+absolute authenticated JSONL handoff. Use meaningful task terms for search, not
+empty, single-letter, broad, or inventory queries. Use `lyra_list_metrics` only
+when the user explicitly requests a catalog inventory or focused searches find
+no candidates. Its compact alphabetical pages contain at most 20 names and
+descriptions; follow `next_cursor` only as needed and restart without it if the
+catalog changes. `lyra_run_metric` accepts only a raw metropolitan zone code as
 `met_zone_code`; do not pass raw
 GeoJSON, census tract lists, or the metric's spatial field in `parameters`.
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ if TYPE_CHECKING:
     from lyra.mcp.models import (
         GetJobResultInput,
         GetMetricInput,
+        ListMetricsInput,
         LookupMetZoneInput,
         MCPContractModel,
         ResultRefInput,
@@ -29,6 +32,8 @@ _INVALID_PARAMETERS_ERROR = "invalid_parameters"
 _IDEMPOTENCY_CONFLICT_ERROR = "idempotency_conflict"
 _RATE_LIMITED_ERROR = "rate_limited"
 _BACKEND_ERROR = "backend_error"
+_METRIC_CURSOR_VERSION = 1
+_MAX_COMPACT_DESCRIPTION_LENGTH = 240
 
 
 class LyraMCPBackend(Protocol):
@@ -192,6 +197,8 @@ async def execute_tool(
 
     if name == "lyra_lookup_met_zone":
         payload = await _lookup_met_zone(cast("LookupMetZoneInput", arguments), backend)
+    elif name == "lyra_list_metrics":
+        payload = await _list_metrics(cast("ListMetricsInput", arguments), backend)
     elif name == "lyra_search_metrics":
         payload = await _search_metrics(cast("SearchMetricsInput", arguments), backend)
     elif name == "lyra_get_metric":
@@ -247,8 +254,6 @@ async def _search_metrics(
         key=lambda item: (-item["score"], item["metric"]),
     )
     filtered = [candidate for candidate in candidates if candidate["score"] > 0]
-    if not filtered and not _tokens(arguments.query):
-        filtered = candidates
 
     return {
         "query": arguments.query,
@@ -256,6 +261,40 @@ async def _search_metrics(
         "candidates": [
             _without_score(candidate) for candidate in filtered[: arguments.limit]
         ],
+    }
+
+
+async def _list_metrics(
+    arguments: ListMetricsInput,
+    backend: LyraMCPBackend,
+) -> dict[str, Any]:
+    catalog = await backend.get_metrics()
+    fingerprint = str(getattr(catalog, "catalog_fingerprint", ""))
+    metrics = sorted(
+        getattr(catalog, "metrics", []),
+        key=lambda metric: str(getattr(metric, "name", "")),
+    )
+    offset = _metric_page_offset(arguments.cursor, fingerprint, len(metrics))
+    page = metrics[offset : offset + arguments.limit]
+    next_offset = offset + len(page)
+    next_cursor = (
+        _encode_metric_cursor(fingerprint, next_offset)
+        if next_offset < len(metrics)
+        else None
+    )
+    return {
+        "catalog_fingerprint": fingerprint,
+        "total_count": len(metrics),
+        "metrics": [
+            {
+                "name": str(getattr(metric, "name", "")),
+                "description": _compact_description(
+                    str(getattr(metric, "description", ""))
+                ),
+            }
+            for metric in page
+        ],
+        "next_cursor": next_cursor,
     }
 
 
@@ -603,6 +642,80 @@ def _without_score(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _tokens(value: str) -> list[str]:
     return list(normalize_metric_search_tokens(value))
+
+
+def _compact_description(value: str) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= _MAX_COMPACT_DESCRIPTION_LENGTH:
+        return compact
+    return f"{compact[: _MAX_COMPACT_DESCRIPTION_LENGTH - 1]}…"
+
+
+def _encode_metric_cursor(fingerprint: str, offset: int) -> str:
+    payload = json.dumps(
+        {
+            "fingerprint": fingerprint,
+            "offset": offset,
+            "version": _METRIC_CURSOR_VERSION,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _metric_page_offset(
+    cursor: str | None,
+    fingerprint: str,
+    total_count: int,
+) -> int:
+    if cursor is None:
+        return 0
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        decoded = base64.b64decode(
+            f"{cursor}{padding}",
+            altchars=b"-_",
+            validate=True,
+        )
+        payload = json.loads(decoded)
+    except (UnicodeDecodeError, ValueError) as exc:
+        _raise_invalid_metric_cursor("The cursor is malformed.", exc)
+
+    if not isinstance(payload, dict) or set(payload) != {
+        "fingerprint",
+        "offset",
+        "version",
+    }:
+        _raise_invalid_metric_cursor("The cursor payload is invalid.")
+    if payload["version"] != _METRIC_CURSOR_VERSION:
+        _raise_invalid_metric_cursor("The cursor version is unsupported.")
+    if payload["fingerprint"] != fingerprint:
+        _raise_invalid_metric_cursor("The metric catalog changed between pages.")
+
+    offset = payload["offset"]
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        _raise_invalid_metric_cursor("The cursor offset is invalid.")
+    if offset <= 0 or offset >= total_count:
+        _raise_invalid_metric_cursor("The cursor offset is outside the catalog.")
+    return offset
+
+
+def _raise_invalid_metric_cursor(
+    reason: str,
+    cause: Exception | None = None,
+) -> NoReturn:
+    error = ToolCallError(
+        "invalid_cursor",
+        "Metric catalog cursor is invalid or no longer current.",
+        {
+            "reason": reason,
+            "action": "Call lyra_list_metrics again without cursor.",
+        },
+    )
+    if cause is None:
+        raise error
+    raise error from cause
 
 
 def _model_dump(value: Any) -> dict[str, Any]:

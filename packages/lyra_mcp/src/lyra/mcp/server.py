@@ -4,7 +4,11 @@ import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from lyra.mcp.models import TOOL_CONTRACTS, TOOL_CONTRACTS_BY_NAME
+from lyra.mcp.models import (
+    MAX_METRIC_PAGE_SIZE,
+    TOOL_CONTRACTS,
+    TOOL_CONTRACTS_BY_NAME,
+)
 from lyra.mcp.tools import (
     InProcessLyraBackend,
     LyraMCPBackend,
@@ -28,8 +32,12 @@ if TYPE_CHECKING:
     from starlette.types import Receive, Scope, Send
 
 SERVER_INSTRUCTIONS = (
-    "Lyra MCP exposes a small set of stable tools for metric catalog search, "
-    "metric inspection, met-zone metric runs, and result polling. MCP v1 "
+    "Lyra MCP exposes stable tools for metric discovery, inspection, met-zone "
+    "metric runs, and result polling. Use lyra_search_metrics with meaningful "
+    "task terms when selecting a metric for a specific question. Use "
+    "lyra_list_metrics only for explicit catalog-inventory requests or after "
+    "focused searches return no candidates. Inspect a selected metric with "
+    "lyra_get_metric. MCP v1 "
     "accepts only raw metropolitan zone codes for spatial input. Metric runs "
     "return lyra://results/{job_id} references; when a run is still running, "
     "poll the result tools until terminal status before reading preview or raw "
@@ -78,7 +86,9 @@ def create_mcp_app(
             for contract in TOOL_CONTRACTS
         ]
 
-    @server.call_tool()
+    # Validate with the contract models below so failures can include structured,
+    # actionable corrections instead of the SDK's text-only JSON Schema error.
+    @server.call_tool(validate_input=False)
     async def call_tool(
         tool_name: str,
         arguments: dict[str, Any],
@@ -95,7 +105,7 @@ def create_mcp_app(
         try:
             validated_arguments = contract.input_model.model_validate(arguments)
         except ValidationError as exc:
-            return _invalid_argument_result(exc)
+            return _invalid_argument_result(tool_name, arguments, exc)
 
         try:
             payload = await execute_tool(
@@ -158,15 +168,41 @@ def _domain_error_result(error: ToolCallError) -> CallToolResult:
     )
 
 
-def _invalid_argument_result(error: ValidationError) -> CallToolResult:
-    message = error.errors(include_url=False)[0]["msg"]
+def _invalid_argument_result(
+    tool_name: str,
+    arguments: dict[str, Any],
+    error: ValidationError,
+) -> CallToolResult:
+    issues = [
+        {
+            "location": list(issue["loc"]),
+            "message": issue["msg"],
+            "type": issue["type"],
+        }
+        for issue in error.errors(include_url=False)
+    ]
+    details: dict[str, Any] = {"issues": issues}
+    limit = arguments.get("limit")
+    if tool_name in {"lyra_list_metrics", "lyra_search_metrics"} and any(
+        issue["location"] == ["limit"] for issue in issues
+    ):
+        details["allowed_bounds"] = {
+            "limit": {"minimum": 1, "maximum": MAX_METRIC_PAGE_SIZE}
+        }
+        if isinstance(limit, int) and not isinstance(limit, bool):
+            details["suggested_arguments"] = {
+                **arguments,
+                "limit": min(max(limit, 1), MAX_METRIC_PAGE_SIZE),
+            }
+
+    payload = ToolCallError(
+        "invalid_arguments",
+        f"Invalid arguments for {tool_name}.",
+        details,
+    ).to_payload()
     return CallToolResult(
-        content=[
-            TextContent(
-                type="text",
-                text=f"Input validation error: {message}",
-            )
-        ],
+        content=[_text_content(payload)],
+        structuredContent=payload,
         isError=True,
     )
 

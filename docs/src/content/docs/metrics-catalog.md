@@ -100,10 +100,22 @@ descriptions when present, output kind, output column names, column
 descriptions, and units. Optional plugin-authored search metadata such as tags
 or domains is intentionally deferred.
 
-MCP agents use strict `lyra_search_metrics` input with a non-empty query and a
+MCP agents use `lyra_search_metrics` with meaningful task-specific terms and a
 limit from 1 through 20. Results explain matches and expose required spatial
-fields, output kind, and relevant columns. Call `lyra_get_metric` before
-submission; search results do not replace the complete request schema.
+fields, output kind, and relevant columns. Empty, single-letter, broad, and
+inventory-style queries are not appropriate for search.
+
+When a user explicitly asks which or all metrics are available,
+`lyra_list_metrics` returns an alphabetically ordered inventory with
+`catalog_fingerprint`, `total_count`, compact name/description entries, and an
+opaque `next_cursor`. Pages default to and are capped at 20 entries. Cursors are
+bound to the catalog fingerprint; restart without a cursor if the catalog
+changes. The list tool is also an appropriate fallback after focused searches
+return no candidates, but should not replace search for ordinary metric
+selection.
+
+Call `lyra_get_metric` before submission; search and list results do not replace
+the complete request schema.
 
 ## Outputs
 

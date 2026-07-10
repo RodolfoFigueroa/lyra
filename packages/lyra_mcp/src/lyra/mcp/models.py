@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 MAX_RUN_WAIT_SECONDS = 10.0
 MAX_RESULT_WAIT_SECONDS = 30.0
+MAX_METRIC_PAGE_SIZE = 20
 RESULT_REF_PATTERN = r"^lyra://results/[^/?#\s]+$"
 
 
@@ -24,10 +25,33 @@ class SearchMetricsInput(MCPContractModel):
     query: str = Field(
         min_length=1,
         description=(
-            "Words to match against metric names, descriptions, inputs, and outputs."
+            "Meaningful task-specific words to match against metric names, "
+            "descriptions, inputs, and outputs. Do not use empty, single-letter, "
+            "or generic inventory queries."
         ),
     )
-    limit: int = Field(default=5, ge=1, le=20)
+    limit: int = Field(
+        default=5,
+        ge=1,
+        le=MAX_METRIC_PAGE_SIZE,
+        description=(
+            "Maximum candidates to return. Usually omit this field; maximum 20."
+        ),
+    )
+
+
+class ListMetricsInput(MCPContractModel):
+    cursor: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Opaque continuation cursor from the preceding list response.",
+    )
+    limit: int = Field(
+        default=MAX_METRIC_PAGE_SIZE,
+        ge=1,
+        le=MAX_METRIC_PAGE_SIZE,
+        description="Maximum catalog entries to return. Usually omit; maximum 20.",
+    )
 
 
 class LookupMetZoneInput(MCPContractModel):
@@ -112,6 +136,18 @@ class SearchMetricsOutput(MCPContractModel):
     query: str
     catalog_fingerprint: str | None
     candidates: list[SearchCandidate]
+
+
+class MetricListItem(MCPContractModel):
+    name: str = Field(min_length=1)
+    description: str
+
+
+class ListMetricsOutput(MCPContractModel):
+    catalog_fingerprint: str = Field(min_length=1)
+    total_count: int = Field(ge=0)
+    metrics: list[MetricListItem]
+    next_cursor: str | None = Field(default=None, min_length=1)
 
 
 class LookupMetZoneOutput(MCPContractModel):
@@ -376,11 +412,26 @@ TOOL_CONTRACTS = (
         idempotent=True,
     ),
     _contract(
+        "lyra_list_metrics",
+        (
+            "List a compact, paginated inventory of Lyra's public metric catalog. "
+            "Use only when the user explicitly asks which or all metrics are "
+            "available, or after focused searches return no candidates. Do not "
+            "use this for ordinary task-specific metric selection; use "
+            "lyra_search_metrics instead."
+        ),
+        ListMetricsInput,
+        ListMetricsOutput,
+        read_only=True,
+        idempotent=True,
+    ),
+    _contract(
         "lyra_search_metrics",
         (
-            "Lexically search Lyra's public metric catalog. Use this before "
-            "choosing a metric; it returns candidate reasons, required spatial "
-            "fields, output kind, and relevant output columns."
+            "Search Lyra's public metric catalog for task-specific metric "
+            "selection. Use meaningful task terms rather than empty, single-letter, "
+            "broad, or inventory queries. Returns candidate reasons, required "
+            "spatial fields, output kind, and relevant output columns."
         ),
         SearchMetricsInput,
         SearchMetricsOutput,
@@ -466,6 +517,7 @@ TOOL_CONTRACTS_BY_NAME = {contract.name: contract for contract in TOOL_CONTRACTS
 
 
 __all__ = [
+    "MAX_METRIC_PAGE_SIZE",
     "MAX_RESULT_WAIT_SECONDS",
     "MAX_RUN_WAIT_SECONDS",
     "TOOL_CONTRACTS",

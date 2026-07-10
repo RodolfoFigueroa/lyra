@@ -54,12 +54,15 @@ returns `401`; a wrong credential, including an admin-only credential, returns
 ## Strict Tools
 
 Tools publish MCP input and output JSON Schemas. Inputs reject unknown fields
-and wrong primitive types. Respect declared ranges: search `limit` is 1 through
-20, run wait time is 0 through 10 seconds, and poll wait time is 0 through 30.
+and wrong primitive types. Respect declared ranges: metric search and list
+`limit` values are 1 through 20, run wait time is 0 through 10 seconds, and poll
+wait time is 0 through 30. Invalid arguments return structured issues and, when
+the correction is deterministic, suggested arguments.
 
 | Tool | Use |
 | --- | --- |
 | `lyra_lookup_met_zone` | Resolve a natural-language name to canonical `cve_met` and `nom_met`. |
+| `lyra_list_metrics` | Page through a compact catalog inventory when the user explicitly asks what is available. |
 | `lyra_search_metrics` | Search public catalog names, descriptions, inputs, outputs, and units. |
 | `lyra_get_metric` | Inspect one request schema, spatial mapping, and output declaration. |
 | `lyra_run_metric` | Submit one metric for a raw metropolitan-zone code. |
@@ -70,7 +73,8 @@ and wrong primitive types. Respect declared ranges: search `limit` is 1 through
 
 ## One Agent Workflow
 
-Start with location lookup, then metric search:
+For a task-specific request, start with location lookup and a focused metric
+search:
 
 ```json
 {"name": "Valle de México"}
@@ -79,6 +83,20 @@ Start with location lookup, then metric search:
 ```json
 {"query": "clinic accessibility", "limit": 5}
 ```
+
+Do not use empty, single-letter, or generic searches to enumerate the catalog.
+If the user explicitly asks which or all metrics are available, use the compact
+inventory tool instead:
+
+```json
+{"limit": 20}
+```
+
+The response includes `total_count`, up to 20 metric names and compact
+descriptions, and `next_cursor`. Pass a non-null cursor back unchanged to read
+the next page. A cursor is bound to the catalog fingerprint; if the catalog
+changes, restart without a cursor. Use inventory only for explicit catalog
+requests or after focused searches return no candidates.
 
 Use the lookup's `cve_met` as `met_zone_code`. Inspect the selected metric
 before running it:

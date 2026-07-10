@@ -30,6 +30,7 @@ from lyra.sdk.models.job import (
     JobLifecycleStatus,
     JobLinks,
     JobListResponse,
+    JobRunProvenance,
     JobStatusInfo,
     NumericColumnSummary,
     RawResultFormat,
@@ -43,6 +44,7 @@ from lyra.sdk.models.job import (
     ResultSummary,
     ResultTableMetadata,
     ResultTablePreview,
+    RowIdentityMetadata,
     TableJobResult,
     TerminalJobResult,
     TerminalJobStatus,
@@ -97,6 +99,7 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputColumnV3,
     TableOutputV3,
     compile_plugin_manifest,
+    expand_table_output_columns,
 )
 
 __all__ = [
@@ -134,6 +137,7 @@ __all__ = [
     "JobLifecycleStatus",
     "JobLinks",
     "JobListResponse",
+    "JobRunProvenance",
     "JobStatusInfo",
     "JsonSchemaInputV3",
     "LocationInputV3",
@@ -170,6 +174,7 @@ __all__ = [
     "ResultSummary",
     "ResultTableMetadata",
     "ResultTablePreview",
+    "RowIdentityMetadata",
     "SetMetricQueueRequest",
     "StringInputV3",
     "SyncPluginRepoResponse",
@@ -192,6 +197,7 @@ __all__ = [
     "build_table_preview",
     "build_table_summary",
     "compile_plugin_manifest",
+    "expand_table_output_columns",
     "parse_job_result",
     "result_ref_for_job",
 ]

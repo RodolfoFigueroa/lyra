@@ -51,7 +51,7 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
 | `job_id` | `str` | Stable job identifier assigned by Lyra. |
 | `metric` | `str` | Metric name selected from the plugin manifest. |
 | `input` | `dict[str, Any]` | Client payload after API-side JSON Schema validation. |
-| `idempotency_key` | `str | None` | Optional client-supplied key. Lyra passes it through but does not deduplicate jobs. |
+| `idempotency_key` | `str | None` | Client key already used by the API to deduplicate equivalent submissions; it remains available to the runner. |
 | `metadata` | `dict[str, Any]` | Optional metadata carried with the job envelope. |
 
 `RunContext` exposes runtime services:
@@ -275,9 +275,9 @@ these models are also available for tests, clients, and manifest tooling:
 
 | Model | Where it is used |
 | --- | --- |
-| `JobCreateRequest` | Public `/jobs` request body. |
-| `JobCreateResponse` | Public `/jobs` submission response. |
-| `JobStatusInfo` | Public `/jobs/{job_id}` status response. |
+| `JobCreateRequest` | Agent-authenticated `/jobs` request body. |
+| `JobCreateResponse` | Agent-authenticated submission response, including idempotent reuse. |
+| `JobStatusInfo` | Agent-authenticated `/jobs/{job_id}` status response. |
 | `JobListResponse` | Admin `/admin/jobs` response. |
 | `JobCancelResponse` | Admin `/admin/jobs/{job_id}/cancel` response. |
 | `HealthResponse` | Public `/health` response. |

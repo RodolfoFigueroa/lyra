@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from lyra_app.config import (
     LYRA_ADMIN_API_KEY_ENV,
+    LYRA_AGENT_API_KEY_ENV,
     LYRA_POSTGRES_DB_ENV,
     LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -49,6 +50,7 @@ def _set_config_env() -> None:
             LYRA_POSTGRES_USER_ENV: "lyra",
             LYRA_POSTGRES_PASSWORD_ENV: "postgres-secret",
             LYRA_ADMIN_API_KEY_ENV: "admin-secret",
+            LYRA_AGENT_API_KEY_ENV: "agent-secret",
         }
     )
 
@@ -82,7 +84,7 @@ def load_test_config(
     )
     raw_config = {
         "schema_version": 1,
-        "api": {},
+        "api": {"public_base_url": "http://127.0.0.1:5219"},
         "redis": {"url": "redis://redis:6379/0"},
         "earth_engine": {
             "project": "earth-engine-project",
@@ -90,6 +92,7 @@ def load_test_config(
         },
         "logging": {},
         "job_store": {},
+        "agent_submission_limit": {},
         "plugins": {
             "catalog_dir": str(base / "plugins" / "catalog"),
             "runner_base_dir": str(base / "plugins" / "runners"),

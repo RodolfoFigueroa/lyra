@@ -8,6 +8,7 @@ import pytest
 from lyra_app import config as config_module
 from lyra_app.config import (
     LYRA_ADMIN_API_KEY_ENV,
+    LYRA_AGENT_API_KEY_ENV,
     LYRA_POSTGRES_DB_ENV,
     LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -59,6 +60,7 @@ schema_version = 1
 [api]
 host = "0.0.0.0"
 port = {api_port}
+public_base_url = "http://127.0.0.1:{api_port}"
 
 [redis]
 url = "redis://redis:6379/0"
@@ -73,6 +75,10 @@ file = {_q(base / "logs" / "lyra.log")}
 
 [job_store]
 ttl_seconds = 600
+
+[agent_submission_limit]
+limit = 10
+window_seconds = 60
 
 [plugins]
 catalog_dir = {_q(base / "plugins" / "catalog")}
@@ -103,6 +109,7 @@ def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, "lyra")
     monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "postgres-secret")
     monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "admin-secret")
+    monkeypatch.setenv(LYRA_AGENT_API_KEY_ENV, "agent-secret")
     clear_config_cache()
     yield
     clear_config_cache()
@@ -119,6 +126,9 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.api.port == 5219
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.agent.read_api_key() == "agent-secret"
+    assert config.agent_submission_limit.limit == 10
+    assert config.agent_submission_limit.window_seconds == 60
     assert config.earth_engine.service_account_file.exists()
     assert config.plugins.allowed_queues == ["interactive", "batch"]
 
@@ -179,6 +189,18 @@ def test_load_config_fails_for_missing_admin_api_key_env(
     monkeypatch.delenv(LYRA_ADMIN_API_KEY_ENV)
 
     with pytest.raises(ConfigLoadError, match=LYRA_ADMIN_API_KEY_ENV):
+        load_config(config_path)
+
+
+def test_load_config_fails_for_missing_agent_api_key_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config" / "lyra.toml"
+    _write_config(config_path, _valid_toml(tmp_path))
+    monkeypatch.delenv(LYRA_AGENT_API_KEY_ENV)
+
+    with pytest.raises(ConfigLoadError, match=LYRA_AGENT_API_KEY_ENV):
         load_config(config_path)
 
 

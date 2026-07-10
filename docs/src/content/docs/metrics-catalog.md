@@ -100,6 +100,11 @@ descriptions when present, output kind, output column names, column
 descriptions, and units. Optional plugin-authored search metadata such as tags
 or domains is intentionally deferred.
 
+MCP agents use strict `lyra_search_metrics` input with a non-empty query and a
+limit from 1 through 20. Results explain matches and expose required spatial
+fields, output kind, and relevant columns. Call `lyra_get_metric` before
+submission; search results do not replace the complete request schema.
+
 ## Outputs
 
 `output.kind` is either `table` or `file`. File outputs include a `media_type`
@@ -109,13 +114,19 @@ Table outputs include ordered static `columns` and may include
 `batched_columns`. Static columns are concrete result columns known from the
 catalog before a job is submitted. Batched columns are declarations: the final
 column names depend on the submitted source array and are available in the
-terminal table result.
+terminal descriptor's `table.column_contracts`.
 
 For `batched_columns`, clients should use the source array order from the
 validated input. Each source item has a stable `key`, plugin-specific `value`,
 and optional display `label`; Lyra uses `key` for column names and `label` for
 descriptions. Plugin authors should use
 [Metric Output Design](../metric-output-design/) when choosing an output shape.
+
+External analysis selects numeric values from concrete `column_contracts`,
+using type, name, description, unit, and nullability. Never assume a hard-coded
+column name. Join on each descriptor's `table.index_field` only after requiring
+compatible `table.row_identity` field, namespace, and version. Captured
+provenance records the catalog fingerprint and output declaration for that run.
 
 ## Fetch One Metric
 
@@ -127,6 +138,9 @@ descriptions. Plugin authors should use
 `POST /jobs` validates `input` against the selected metric's effective
 `request_schema` before dispatching work. Every metric includes at least one
 required spatial wrapper field compiled from its v3 `inputs`.
+
+Catalog and lookup routes are public. Submission and every result route require
+`LYRA_AGENT_API_KEY`; a public catalog does not make computed results public.
 
 After validation, the API resolves spatial wrappers into canonical GeoJSON for
 the worker. Clients should treat the `/metrics` schema as the source of truth

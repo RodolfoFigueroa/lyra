@@ -1,7 +1,6 @@
 import importlib
 import logging
 import math
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,8 +22,8 @@ from lyra.sdk.models.plugin_v3 import (
     FileOutputV3,
     OutputColumnTypeV3,
     OutputSpecV3,
-    TableOutputColumnV3,
     TableOutputV3,
+    expand_table_output_columns,
 )
 from pydantic import ValidationError as PydanticValidationError
 
@@ -46,8 +45,6 @@ from lyra_app.registry import load_plugin_manifest
 logger = logging.getLogger(__name__)
 
 GENERIC_TASK_NAME = "lyra.run_metric"
-_BATCHED_ITEM_FIELDS = {"key", "value", "label"}
-_BATCHED_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 MetricRunCallable = Callable[
     [JobEnvelope, "WorkerRunContext"], TerminalJobResult | dict[str, Any]
@@ -299,90 +296,6 @@ def _cell_error(
     return error
 
 
-def _batched_template_context(value: Any) -> dict[str, str]:
-    if not isinstance(value, dict):
-        msg = "Batched column source values must be objects."
-        raise TypeError(msg)
-
-    invalid_fields = sorted(set(value) - _BATCHED_ITEM_FIELDS)
-    if invalid_fields:
-        names = ", ".join(invalid_fields)
-        msg = f"Batched column source values contain unsupported fields: {names}."
-        raise ValueError(msg)
-
-    key = value.get("key")
-    if not isinstance(key, str) or not _BATCHED_KEY_PATTERN.fullmatch(key):
-        msg = (
-            "Batched column source value 'key' must be a non-empty string matching "
-            "Lyra's batched key pattern."
-        )
-        raise ValueError(msg)
-
-    if "value" not in value:
-        msg = "Batched column source values must contain 'value'."
-        raise ValueError(msg)
-
-    label = value.get("label", key)
-    if not isinstance(label, str):
-        msg = "Batched column source value 'label' must be a string when provided."
-        raise TypeError(msg)
-
-    return {"key": key, "label": label}
-
-
-def _expand_batched_template(template: str, context: dict[str, str]) -> str:
-    value = template
-    for name, replacement in context.items():
-        value = value.replace(f"{{{name}}}", replacement)
-    return value
-
-
-def _expand_table_output_columns(
-    output: TableOutputV3,
-    job_input: dict[str, Any],
-) -> list[TableOutputColumnV3]:
-    columns = list(output.columns)
-
-    for column_group in output.batched_columns:
-        source_values = job_input.get(column_group.source)
-        if not isinstance(source_values, list):
-            msg = (
-                f"Batched column source {column_group.source!r} must be present "
-                "as an array."
-            )
-            raise TypeError(msg)
-
-        for source_value in source_values:
-            template_context = _batched_template_context(source_value)
-            name = _expand_batched_template(
-                column_group.name,
-                template_context,
-            )
-            if not name:
-                msg = "Batched column templates must produce non-empty names."
-                raise ValueError(msg)
-            description = _expand_batched_template(
-                column_group.description,
-                template_context,
-            )
-            columns.append(
-                TableOutputColumnV3(
-                    name=name,
-                    type=column_group.type,
-                    unit=column_group.unit,
-                    description=description,
-                    nullable=column_group.nullable,
-                )
-            )
-
-    names = [column.name for column in columns]
-    if len(names) != len(set(names)):
-        msg = "Expanded table output columns must be unique."
-        raise ValueError(msg)
-
-    return columns
-
-
 def _expected_table_index(
     job: JobEnvelope,
 ) -> list[str] | FailedJobResult:
@@ -419,7 +332,7 @@ def _validate_table_result(
         )
 
     try:
-        expanded_columns = _expand_table_output_columns(output, job.input)
+        expanded_columns = expand_table_output_columns(output, job.input)
     except (TypeError, ValueError) as exc:
         return _failed_result(job.job_id, "invalid_result", str(exc))
 

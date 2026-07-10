@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -8,7 +9,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any, Literal, Self
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from pydantic import (
     BaseModel,
@@ -24,6 +25,8 @@ DEFAULT_CONFIG_PATH = LYRA_DATA_DIR / "config" / "lyra.toml"
 DEFAULT_API_HOST = "0.0.0.0"
 DEFAULT_API_PORT = 5219
 DEFAULT_JOB_STORE_TTL_SECONDS = 600
+DEFAULT_AGENT_SUBMISSION_LIMIT = 10
+DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = 60
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_WORKER_CONCURRENCY = 1
 DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
@@ -38,13 +41,13 @@ LYRA_POSTGRES_DB_ENV = "LYRA_POSTGRES_DB"
 LYRA_POSTGRES_USER_ENV = "LYRA_POSTGRES_USER"
 LYRA_POSTGRES_PASSWORD_ENV = "LYRA_POSTGRES_PASSWORD"  # noqa: S105
 LYRA_ADMIN_API_KEY_ENV = "LYRA_ADMIN_API_KEY"
-LYRA_MCP_API_KEY_ENV = "LYRA_MCP_API_KEY"
+LYRA_AGENT_API_KEY_ENV = "LYRA_AGENT_API_KEY"
 DEFAULT_MCP_MOUNT_PATH = "/mcp"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "database"})
+_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "agent", "database"})
 
 
 class ConfigSecretError(RuntimeError):
@@ -163,11 +166,59 @@ def require_nonempty_file(path: Path, *, field_name: str) -> None:
 class ApiConfig(StrictConfigModel):
     host: str = Field(default=DEFAULT_API_HOST)
     port: int = Field(default=DEFAULT_API_PORT, ge=1, le=65535)
+    public_base_url: str = Field(min_length=1)
 
-    @field_validator("host", mode="before")
+    @field_validator("host", "public_base_url", mode="before")
     @classmethod
-    def validate_host(cls, value: Any) -> Any:
+    def normalize_required_strings(cls, value: Any) -> Any:
         return _strip_required_string(value)
+
+    @field_validator("public_base_url")
+    @classmethod
+    def validate_public_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            msg = "api.public_base_url must be an absolute http:// or https:// URL"
+            raise ValueError(msg)
+        if parsed.username is not None or parsed.password is not None:
+            msg = "api.public_base_url must not contain credentials"
+            raise ValueError(msg)
+        if parsed.query or parsed.fragment:
+            msg = "api.public_base_url must not contain a query or fragment"
+            raise ValueError(msg)
+
+        hostname = parsed.hostname
+        if hostname is None:
+            msg = "api.public_base_url must contain a hostname"
+            raise ValueError(msg)
+        try:
+            _port = parsed.port
+        except ValueError as exc:
+            msg = "api.public_base_url contains an invalid port"
+            raise ValueError(msg) from exc
+
+        is_loopback = hostname.lower() == "localhost"
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None:
+            is_loopback = address.is_loopback
+        elif "." not in hostname and not is_loopback:
+            msg = (
+                "api.public_base_url must use a public hostname, not a "
+                "single-label internal hostname"
+            )
+            raise ValueError(msg)
+
+        if parsed.scheme == "http" and not is_loopback:
+            msg = (
+                "api.public_base_url must use https; http is allowed only for "
+                "loopback development"
+            )
+            raise ValueError(msg)
+
+        return value.rstrip("/")
 
 
 class RedisConfig(StrictConfigModel):
@@ -279,6 +330,25 @@ class AdminConfig(StrictConfigModel):
         return self.api_key
 
 
+class AgentConfig(StrictConfigModel):
+    api_key: str = Field(
+        default_factory=lambda: read_scalar_env_var(
+            LYRA_AGENT_API_KEY_ENV,
+            field_name="agent.api_key",
+        ),
+        min_length=1,
+        repr=False,
+    )
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def normalize_api_key(cls, value: Any) -> Any:
+        return _strip_required_string(value)
+
+    def read_api_key(self) -> str:
+        return self.api_key
+
+
 class McpConfig(StrictConfigModel):
     enabled: bool = False
     mount_path: str = DEFAULT_MCP_MOUNT_PATH
@@ -298,12 +368,6 @@ class McpConfig(StrictConfigModel):
             msg = "mcp.mount_path must not end with /"
             raise ValueError(msg)
         return value
-
-    def read_api_key(self) -> str:
-        return read_scalar_env_var(
-            LYRA_MCP_API_KEY_ENV,
-            field_name="mcp.api_key",
-        )
 
 
 class LoggingConfig(StrictConfigModel):
@@ -338,6 +402,15 @@ class LoggingConfig(StrictConfigModel):
 
 class JobStoreConfig(StrictConfigModel):
     ttl_seconds: int = Field(default=DEFAULT_JOB_STORE_TTL_SECONDS, gt=0)
+
+
+class AgentSubmissionLimitConfig(StrictConfigModel):
+    limit: int = Field(default=DEFAULT_AGENT_SUBMISSION_LIMIT, gt=0, strict=True)
+    window_seconds: int = Field(
+        default=DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
+        gt=0,
+        strict=True,
+    )
 
 
 class PluginsConfig(StrictConfigModel):
@@ -409,9 +482,13 @@ class LyraConfig(StrictConfigModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     earth_engine: EarthEngineConfig
     admin: AdminConfig = Field(default_factory=AdminConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     logging: LoggingConfig
     job_store: JobStoreConfig
+    agent_submission_limit: AgentSubmissionLimitConfig = Field(
+        default_factory=AgentSubmissionLimitConfig
+    )
     plugins: PluginsConfig
     workers: dict[str, WorkerConfig] = Field(min_length=1)
 
@@ -459,12 +536,6 @@ class LyraConfig(StrictConfigModel):
             raise ValueError(msg)
         return self
 
-    @model_validator(mode="after")
-    def validate_mcp_secret(self) -> Self:
-        if self.mcp.enabled:
-            self.mcp.read_api_key()
-        return self
-
     def get_worker(self, name: str) -> WorkerConfig:
         worker_name = _strip_required_string(name)
         if not isinstance(worker_name, str):
@@ -496,8 +567,7 @@ class LyraConfig(StrictConfigModel):
 def validate_config_secret_references(config: LyraConfig) -> None:
     config.database.read_password()
     config.admin.read_api_key()
-    if config.mcp.enabled:
-        config.mcp.read_api_key()
+    config.agent.read_api_key()
     require_nonempty_file(
         config.earth_engine.service_account_file,
         field_name="earth_engine.service_account_file",
@@ -614,6 +684,7 @@ def _append_api_section(lines: list[str], api: ApiConfig) -> None:
     lines.append("[api]")
     _append_key(lines, "host", api.host)
     _append_key(lines, "port", api.port)
+    _append_key(lines, "public_base_url", api.public_base_url)
     lines.append("")
 
 
@@ -660,6 +731,16 @@ def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> No
     lines.append("")
 
 
+def _append_agent_submission_limit_section(
+    lines: list[str],
+    submission_limit: AgentSubmissionLimitConfig,
+) -> None:
+    lines.append("[agent_submission_limit]")
+    _append_key(lines, "limit", submission_limit.limit)
+    _append_key(lines, "window_seconds", submission_limit.window_seconds)
+    lines.append("")
+
+
 def _append_plugins_section(lines: list[str], plugins: PluginsConfig) -> None:
     lines.append("[plugins]")
     _append_key(lines, "default_queue", plugins.default_queue)
@@ -694,6 +775,7 @@ def render_config_toml(config: LyraConfig) -> str:
     _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
+    _append_agent_submission_limit_section(lines, config.agent_submission_limit)
     _append_plugins_section(lines, config.plugins)
     _append_workers_section(lines, config.workers)
     return "\n".join(lines).rstrip() + "\n"
@@ -725,6 +807,8 @@ def save_config(config: LyraConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> N
 
 
 __all__ = [
+    "DEFAULT_AGENT_SUBMISSION_LIMIT",
+    "DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS",
     "DEFAULT_API_HOST",
     "DEFAULT_API_PORT",
     "DEFAULT_CONFIG_PATH",
@@ -737,14 +821,16 @@ __all__ = [
     "DEFAULT_PLUGIN_RUNNER_BASE_DIR",
     "DEFAULT_WORKER_CONCURRENCY",
     "LYRA_ADMIN_API_KEY_ENV",
+    "LYRA_AGENT_API_KEY_ENV",
     "LYRA_DATA_DIR",
-    "LYRA_MCP_API_KEY_ENV",
     "LYRA_POSTGRES_DB_ENV",
     "LYRA_POSTGRES_HOST_ENV",
     "LYRA_POSTGRES_PASSWORD_ENV",
     "LYRA_POSTGRES_PORT_ENV",
     "LYRA_POSTGRES_USER_ENV",
     "AdminConfig",
+    "AgentConfig",
+    "AgentSubmissionLimitConfig",
     "ApiConfig",
     "ConfigLoadError",
     "ConfigSecretError",

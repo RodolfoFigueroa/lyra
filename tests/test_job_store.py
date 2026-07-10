@@ -9,7 +9,9 @@ import pytest
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
+    FileJobResult,
     JobEnvelope,
+    JobRunProvenance,
     ResultReference,
     TableJobResult,
 )
@@ -28,9 +30,19 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         self.expirations.append((key, ex))
+        return True
 
     def get(self, key: str) -> str | None:
         return self.values.get(key)
@@ -101,9 +113,19 @@ class FakeRedisAsync:
         if payload is not None:
             self.values[job_store.result_key("job-1")] = payload
 
-    async def set(self, key: str, value: str, *, ex: int) -> None:
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         self.expirations.append((key, ex))
+        return True
 
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
@@ -120,6 +142,40 @@ class FakeRedisAsync:
     async def delete(self, key: str) -> None:
         self.deleted.append(key)
         self.values.pop(key, None)
+
+    async def eval(
+        self,
+        _script: str,
+        _numkeys: int,
+        key: str,
+        *args: str | int,
+    ) -> int | list[int]:
+        if not args:
+            current = int(self.values.get(key, "0"))
+            if current <= 0:
+                return 0
+            if current == 1:
+                await self.delete(key)
+            else:
+                self.values[key] = str(current - 1)
+            return 1
+        if len(args) == 1:
+            expected = str(args[0])
+            if self.values.get(key) != expected:
+                return 0
+            await self.delete(key)
+            return 1
+
+        limit, window_seconds = (int(value) for value in args)
+        current = int(self.values.get(key, "0"))
+        if current >= limit:
+            return [0, current, self.ttl_values.get(key, window_seconds)]
+        current += 1
+        self.values[key] = str(current)
+        if current == 1:
+            self.expirations.append((key, window_seconds))
+            self.ttl_values[key] = window_seconds
+        return [1, current, self.ttl_values[key]]
 
     async def xadd(self, key: str, fields: dict[str, str]) -> str:
         stream = self.streams.setdefault(key, [])
@@ -179,6 +235,37 @@ def _load_status(redis: FakeRedisSync, job_id: str) -> dict[str, Any]:
     return json.loads(redis.values[job_store.status_key(job_id)])
 
 
+def _provenance() -> JobRunProvenance:
+    return JobRunProvenance.model_validate(
+        {
+            "metric": "heavy_metric",
+            "catalog_fingerprint": "catalog-1",
+            "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "value": 1,
+            },
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "value",
+                        "type": "integer",
+                        "unit": "count",
+                        "description": "Example output value.",
+                    }
+                ],
+            },
+            "created_at": "2026-07-09T12:00:00Z",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
+        }
+    )
+
+
 @pytest.fixture(autouse=True)
 def _load_config(tmp_path: Path) -> Iterator[None]:
     load_test_config(tmp_path)
@@ -189,8 +276,9 @@ def _load_config(tmp_path: Path) -> Iterator[None]:
 def test_create_job_writes_queued_status_and_ttl() -> None:
     redis = FakeRedisSync()
     job = JobEnvelope(job_id="job-1", metric="heavy_metric", input={"value": 1})
+    provenance = _provenance()
 
-    snapshot = job_store.create_job(job, client=redis)
+    snapshot = job_store.create_job(job, provenance, client=redis)
 
     assert snapshot.status == "queued"
     assert snapshot.metric == "heavy_metric"
@@ -205,6 +293,167 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     )
     assert (job_store.events_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
         redis.expirations
+    )
+    assert (job_store.provenance_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
+        redis.expirations
+    )
+    assert job_store.get_job_provenance("job-1", client=redis) == provenance
+    stored = json.loads(redis.values[job_store.provenance_key("job-1")])
+    assert stored == provenance.model_dump(mode="json", exclude_none=True)
+    assert "coordinates" not in json.dumps(stored)
+
+
+def test_idempotency_claim_is_atomic_scoped_and_conditionally_released() -> None:
+    redis = FakeRedisAsync()
+
+    first, acquired = asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-1",
+            "job-1",
+            client=redis,
+        )
+    )
+    replay, replay_acquired = asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-1",
+            "job-2",
+            client=redis,
+        )
+    )
+    other_scope, other_scope_acquired = asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-2",
+            "job-3",
+            agent_scope="other-agent",
+            client=redis,
+        )
+    )
+
+    assert acquired is True
+    assert first.job_id == "job-1"
+    assert replay_acquired is False
+    assert replay == first
+    assert other_scope_acquired is True
+    assert other_scope.job_id == "job-3"
+    assert job_store.idempotency_key("retry-key") != job_store.idempotency_key(
+        "retry-key",
+        agent_scope="other-agent",
+    )
+    assert (
+        asyncio.run(
+            job_store.release_idempotency_key_async(
+                "retry-key",
+                job_store.IdempotencyRecord(
+                    request_digest="different",
+                    job_id="job-1",
+                ),
+                client=redis,
+            )
+        )
+        is False
+    )
+    assert (
+        asyncio.run(
+            job_store.release_idempotency_key_async(
+                "retry-key",
+                first,
+                client=redis,
+            )
+        )
+        is True
+    )
+    assert redis.values.get(job_store.idempotency_key("retry-key")) is None
+
+
+def test_agent_submission_limit_is_atomic_expires_and_resets_at_boundary() -> None:
+    redis = FakeRedisAsync()
+
+    async def consume() -> job_store.AgentSubmissionLimitDecision:
+        return await job_store.consume_agent_submission_limit_async(
+            limit=2,
+            window_seconds=60,
+            client=redis,
+        )
+
+    first = asyncio.run(consume())
+    second = asyncio.run(consume())
+    rejected = asyncio.run(consume())
+
+    assert (first.accepted, first.count) == (True, 1)
+    assert (second.accepted, second.count) == (True, 2)
+    assert rejected.model_dump() == {
+        "accepted": False,
+        "count": 2,
+        "retry_after_seconds": 60,
+    }
+    key = job_store.agent_submission_limit_key()
+    assert key == "jobs:submission-limit:shared-agent"
+    assert "secret" not in key
+    assert redis.expirations.count((key, 60)) == 1
+    assert redis.values[key] == "2"
+
+    redis.values.pop(key)
+    redis.ttl_values.pop(key)
+    after_boundary = asyncio.run(consume())
+
+    assert (after_boundary.accepted, after_boundary.count) == (True, 1)
+    assert redis.expirations.count((key, 60)) == 2
+
+    assert asyncio.run(job_store.release_agent_submission_limit_async(client=redis))
+    assert key not in redis.values
+
+
+def test_job_updates_refresh_idempotency_ttl() -> None:
+    redis = FakeRedisAsync()
+    asyncio.run(
+        job_store.claim_idempotency_key_async(
+            "retry-key",
+            "digest-1",
+            "job-1",
+            client=redis,
+        )
+    )
+    redis.expirations.clear()
+
+    asyncio.run(
+        job_store.set_job_status_async(
+            "job-1",
+            "progress",
+            client=redis,
+        )
+    )
+
+    assert (
+        job_store.idempotency_key("retry-key"),
+        job_store.JOB_STORE_TTL_SECONDS,
+    ) in redis.expirations
+    assert (
+        job_store.job_idempotency_key("job-1"),
+        job_store.JOB_STORE_TTL_SECONDS,
+    ) in redis.expirations
+
+
+def test_job_provenance_is_immutable_and_supports_async_reads() -> None:
+    redis = FakeRedisAsync()
+    job = JobEnvelope(job_id="job-1", metric="heavy_metric", input={"value": 1})
+    original = _provenance()
+    changed = original.model_copy(update={"catalog_fingerprint": "catalog-2"})
+
+    asyncio.run(job_store.create_job_async(job, original, client=redis))
+    asyncio.run(job_store.create_job_async(job, changed, client=redis))
+
+    assert (
+        asyncio.run(job_store.get_job_provenance_async("job-1", client=redis))
+        == original
+    )
+    assert (
+        asyncio.run(job_store.get_job_provenance_async("missing", client=redis)) is None
+    )
+    assert json.loads(redis.values[job_store.provenance_key("job-1")]) == (
+        original.model_dump(mode="json", exclude_none=True)
     )
 
 
@@ -298,6 +547,143 @@ def test_table_result_descriptor_builds_preview_and_numeric_summary() -> None:
     assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
 
 
+def test_table_descriptor_captures_static_and_batched_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisSync()
+    completed_at = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
+    read_at = datetime(2026, 7, 9, 13, 0, tzinfo=UTC)
+    monkeypatch.setattr(job_store, "_now", lambda: completed_at)
+    provenance_payload = _provenance().model_dump()
+    provenance_payload.update(
+        {
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "sector_filters": [
+                    {
+                        "key": "retail",
+                        "value": "^46.*",
+                        "label": "Retail jobs",
+                    },
+                    {"key": "health", "value": "^62.*"},
+                ],
+            },
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "population",
+                        "type": "integer",
+                        "unit": "people",
+                        "description": "Resident population.",
+                    }
+                ],
+                "batched_columns": [
+                    {
+                        "source": "sector_filters",
+                        "name": "accessibility_{key}",
+                        "type": "number",
+                        "unit": "jobs",
+                        "description": "Accessibility for {label}.",
+                        "nullable": True,
+                    }
+                ],
+            },
+        }
+    )
+    provenance = JobRunProvenance.model_validate(provenance_payload)
+    job = JobEnvelope(job_id="job-1", metric=provenance.metric, input={})
+    job_store.create_job(job, provenance, client=redis)
+    job_store.save_job_result(
+        TableJobResult(
+            job_id="job-1",
+            index=["area-1"],
+            columns=[
+                "population",
+                "accessibility_retail",
+                "accessibility_health",
+            ],
+            data=[[100, 8.5, None]],
+        ),
+        client=redis,
+    )
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+    monkeypatch.setattr(job_store, "_now", lambda: read_at)
+    reread = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert reread is not None
+    assert descriptor.schema_version == 1
+    assert descriptor.provenance == provenance
+    assert descriptor.completed_at == completed_at
+    assert reread.completed_at == completed_at
+    assert descriptor.table is not None
+    assert descriptor.table.row_identity == provenance.row_identity
+    assert [column.model_dump() for column in descriptor.table.column_contracts] == [
+        {
+            "name": "population",
+            "type": "integer",
+            "unit": "people",
+            "description": "Resident population.",
+            "nullable": False,
+        },
+        {
+            "name": "accessibility_retail",
+            "type": "number",
+            "unit": "jobs",
+            "description": "Accessibility for Retail jobs.",
+            "nullable": True,
+        },
+        {
+            "name": "accessibility_health",
+            "type": "number",
+            "unit": "jobs",
+            "description": "Accessibility for health.",
+            "nullable": True,
+        },
+    ]
+
+
+def test_file_descriptor_retains_run_provenance_without_table_columns(
+    tmp_path: Path,
+) -> None:
+    redis = FakeRedisSync()
+    provenance_payload = _provenance().model_dump()
+    provenance_payload.update(
+        {
+            "output": {
+                "kind": "file",
+                "media_type": "image/tiff",
+                "extensions": [".tif"],
+            },
+            "row_identity": None,
+        }
+    )
+    provenance = JobRunProvenance.model_validate(provenance_payload)
+    job_store.create_job(
+        JobEnvelope(job_id="job-1", metric=provenance.metric, input={}),
+        provenance,
+        client=redis,
+    )
+    job_store.save_job_result(
+        FileJobResult(
+            job_id="job-1",
+            file_path=str(tmp_path / "result.tif"),
+            media_type="image/tiff",
+        ),
+        client=redis,
+    )
+
+    descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
+
+    assert descriptor is not None
+    assert descriptor.provenance == provenance
+    assert descriptor.table is None
+    assert descriptor.file is not None
+    assert descriptor.file.media_type == "image/tiff"
+
+
 def test_table_preview_uses_collision_free_named_index_field() -> None:
     redis = FakeRedisSync()
     job_store.save_job_result(
@@ -358,6 +744,7 @@ def test_result_descriptor_uses_ttl_seconds_without_guessing_expiry(
 ) -> None:
     redis = FakeRedisSync()
     monkeypatch.setattr(redis, "pttl", None)
+    job_store.set_job_status("job-1", "succeeded", client=redis)
     redis.ttl_values[job_store.result_key("job-1")] = 90
     redis.values[job_store.result_key("job-1")] = json.dumps(
         TableJobResult(
@@ -400,6 +787,12 @@ def test_descriptor_reports_failed_and_cancelled_terminal_results(
     expected_error: dict[str, Any] | None,
 ) -> None:
     redis = FakeRedisSync()
+    provenance = _provenance()
+    job_store.create_job(
+        JobEnvelope(job_id="job-1", metric=provenance.metric, input={}),
+        provenance,
+        client=redis,
+    )
     payload = job_store.save_job_result(result, client=redis)
 
     descriptor = job_store.get_job_result_descriptor("job-1", client=redis)
@@ -412,6 +805,8 @@ def test_descriptor_reports_failed_and_cancelled_terminal_results(
     assert descriptor.summary.kind == result.kind
     assert descriptor.summary.error == expected_error
     assert descriptor.error == expected_error
+    assert descriptor.provenance == provenance
+    assert descriptor.table is None
     assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
 
 
@@ -426,6 +821,7 @@ def test_async_result_descriptor_reads_stored_result_and_lifetime() -> None:
             ).model_dump(mode="json", exclude_none=True)
         )
     )
+    asyncio.run(job_store.set_job_status_async("job-1", "succeeded", client=redis))
     redis.pttl_values[job_store.result_key("job-1")] = 1_500
 
     descriptor = asyncio.run(

@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, cast
 
 import pytest
 from lyra.api import parse_result_ref
@@ -47,11 +47,12 @@ class FakeSyncResponse:
         yield from self._chunks
 
 
-def _job_response() -> dict[str, Any]:
+def _job_response(*, reused: bool = False) -> dict[str, Any]:
     return {
         "job_id": "job-1",
         "metric": "heavy_metric",
         "status": "queued",
+        "reused": reused,
         "links": {
             "self": "/jobs/job-1",
             "events": "/jobs/job-1/events",
@@ -357,10 +358,40 @@ def _result_response() -> dict[str, Any]:
 
 def _result_descriptor_response() -> dict[str, Any]:
     return {
+        "schema_version": 1,
         "job_id": "job-1",
         "status": "succeeded",
         "result_kind": "table",
         "result_ref": "lyra://results/job-1",
+        "provenance": {
+            "metric": "heavy_metric",
+            "catalog_fingerprint": "catalog-1",
+            "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "value": 3,
+            },
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "value",
+                        "type": "integer",
+                        "unit": "count",
+                        "description": "Example output value.",
+                        "nullable": False,
+                    }
+                ],
+                "batched_columns": [],
+            },
+            "created_at": "2026-07-09T12:00:00Z",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
+        },
+        "completed_at": "2026-07-09T12:05:00Z",
         "lifetime": {"expires_in_seconds": 3600, "expires_at": None},
         "raw": {
             "result_ref": "lyra://results/job-1",
@@ -372,7 +403,21 @@ def _result_descriptor_response() -> dict[str, Any]:
             "row_count": 1,
             "column_count": 1,
             "columns": ["value"],
+            "column_contracts": [
+                {
+                    "name": "value",
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Example output value.",
+                    "nullable": False,
+                }
+            ],
             "index_field": "_result_index",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
         },
         "preview": {
             "index_field": "_result_index",
@@ -517,7 +562,12 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
 
     monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    client = LyraAPIClient("example.test", secure=False, timeout=12.0)
+    client = LyraAPIClient(
+        "example.test",
+        secure=False,
+        timeout=12.0,
+        agent_api_key="agent-secret",
+    )
 
     job = client.create_job("heavy_metric", {"value": 3}, idempotency_key="key-1")
     status = client.get_job(job.job_id)
@@ -531,7 +581,9 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
         "input": {"value": 3},
         "idempotency_key": "key-1",
     }
+    assert posted[0]["headers"] == {"Authorization": "Bearer agent-secret"}
     assert job.job_id == "job-1"
+    assert job.reused is False
     assert status.status == "started"
     assert [event.event for event in events] == ["succeeded"]
     assert result.kind == "table"
@@ -571,7 +623,8 @@ def test_sync_client_uses_admin_job_operations(
         "example.test",
         secure=False,
         timeout=12.0,
-        headers={"Authorization": "Bearer admin-secret"},
+        agent_api_key="agent-secret",
+        admin_api_key="admin-secret",
     )
 
     jobs = client.list_admin_jobs(limit=10, status="started", metric="heavy_metric")
@@ -716,7 +769,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
             "params": {"name": "Valle de Mexico"},
             "json": None,
             "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
+            "headers": {},
         },
         {
             "method": "GET",
@@ -1003,21 +1056,27 @@ def test_sync_client_fetches_result_descriptor_from_ref(
         params: dict[str, Any] | None,  # noqa: ARG001
         json: dict[str, Any] | None,  # noqa: ARG001
         timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        headers: dict[str, str],
     ) -> FakeSyncResponse:
         seen.append(f"{method} {url}")
+        assert headers == {"Authorization": "Bearer agent-secret"}
         return FakeSyncResponse(payload=_result_descriptor_response())
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
 
-    descriptor = LyraAPIClient("example.test", secure=False).get_result_descriptor(
-        "lyra://results/job-1"
-    )
+    descriptor = LyraAPIClient(
+        "example.test",
+        secure=False,
+        agent_api_key="agent-secret",
+    ).get_result_descriptor("lyra://results/job-1")
 
     assert seen == ["GET http://example.test/jobs/job-1/result/descriptor"]
     assert descriptor.result_ref == "lyra://results/job-1"
     assert descriptor.table is not None
     assert descriptor.table.columns == ["value"]
+    assert descriptor.table.column_contracts[0].unit == "count"
+    assert descriptor.provenance is not None
+    assert descriptor.provenance.plugin.version == "1.0.0"
     assert descriptor.preview.rows == [{"_result_index": "area-1", "value": 6}]
 
 
@@ -1029,10 +1088,11 @@ def test_sync_client_downloads_jsonl_result_from_raw_job_id(
         url: str,
         *,
         timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        headers: dict[str, str],
         stream: bool,
     ) -> FakeSyncResponse:
         assert url == "http://example.test/jobs/job-1/result/table.jsonl"
+        assert headers == {"Authorization": "Bearer agent-secret"}
         assert stream is True
         return FakeSyncResponse(
             headers={"content-type": "application/x-ndjson"},
@@ -1042,7 +1102,11 @@ def test_sync_client_downloads_jsonl_result_from_raw_job_id(
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
     output = tmp_path / "result.jsonl"
 
-    LyraAPIClient("example.test", secure=False).download_result("job-1", output)
+    LyraAPIClient(
+        "example.test",
+        secure=False,
+        agent_api_key="agent-secret",
+    ).download_result("job-1", output)
 
     assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
 
@@ -1236,6 +1300,42 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.data == [[6]]
 
 
+def test_async_client_exposes_idempotent_replay_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession(FakeSession):
+        posted_json: ClassVar[dict[str, Any] | None] = None
+
+        def post(self, *_: object, **kwargs: object) -> FakeAsyncResponse:
+            posted_json = kwargs.get("json")
+            assert isinstance(posted_json, dict)
+            type(self).posted_json = cast("dict[str, Any]", posted_json)
+            return super().post()
+
+    RecordingSession.responses = [
+        FakeAsyncResponse(status=202, payload=_job_response(reused=True))
+    ]
+    monkeypatch.setattr(
+        "lyra.api.client.async_.aiohttp.ClientSession",
+        RecordingSession,
+    )
+
+    response = asyncio.run(
+        AsyncLyraAPIClient("example.test", secure=False).create_job(
+            "heavy_metric",
+            {"value": 3},
+            idempotency_key="retry-key",
+        )
+    )
+
+    assert response.reused is True
+    assert RecordingSession.posted_json == {
+        "metric": "heavy_metric",
+        "input": {"value": 3},
+        "idempotency_key": "retry-key",
+    }
+
+
 def test_async_client_uses_admin_job_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1264,7 +1364,8 @@ def test_async_client_uses_admin_job_operations(
         "example.test",
         secure=False,
         timeout=12.0,
-        headers={"Authorization": "Bearer admin-secret"},
+        agent_api_key="agent-secret",
+        admin_api_key="admin-secret",
     )
 
     jobs = asyncio.run(
@@ -1428,7 +1529,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
             "kwargs": {
                 "params": {"name": "Valle de Mexico"},
                 "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
+                "headers": {},
             },
         },
         {
@@ -1709,7 +1810,7 @@ def test_async_client_fetches_result_descriptor_from_raw_job_id(
     client = AsyncLyraAPIClient(
         "example.test",
         secure=False,
-        headers={"Authorization": "Bearer token"},
+        agent_api_key="agent-secret",
     )
 
     descriptor = asyncio.run(client.get_result_descriptor("job-1"))
@@ -1720,12 +1821,13 @@ def test_async_client_fetches_result_descriptor_from_raw_job_id(
             "kwargs": {
                 "params": None,
                 "json": None,
-                "headers": {"Authorization": "Bearer token"},
+                "headers": {"Authorization": "Bearer agent-secret"},
             },
         }
     ]
     assert descriptor.result_ref == "lyra://results/job-1"
     assert descriptor.summary.row_count == 1
+    assert descriptor.completed_at.isoformat() == "2026-07-09T12:05:00+00:00"
 
 
 def test_async_client_downloads_jsonl_result_from_ref(
@@ -1733,10 +1835,10 @@ def test_async_client_downloads_jsonl_result_from_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingSession(FakeSession):
-        urls: ClassVar[list[str]] = []
+        requests_seen: ClassVar[list[dict[str, Any]]] = []
 
         def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
-            self.urls.append(str(args[0]))
+            self.requests_seen.append({"args": args, "kwargs": kwargs})
             return super().get(*args, **kwargs)
 
     def fake_aiofiles_open(path: Path, mode: str) -> FakeAsyncFile:
@@ -1754,14 +1856,21 @@ def test_async_client_downloads_jsonl_result_from_ref(
     output = tmp_path / "result.jsonl"
 
     asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).download_result(
+        AsyncLyraAPIClient(
+            "example.test",
+            secure=False,
+            agent_api_key="agent-secret",
+        ).download_result(
             "lyra://results/job-1",
             output,
         )
     )
 
-    assert RecordingSession.urls == [
-        "http://example.test/jobs/job-1/result/table.jsonl",
+    assert RecordingSession.requests_seen == [
+        {
+            "args": ("http://example.test/jobs/job-1/result/table.jsonl",),
+            "kwargs": {"headers": {"Authorization": "Bearer agent-secret"}},
+        }
     ]
     assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
 

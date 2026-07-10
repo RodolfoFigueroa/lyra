@@ -43,14 +43,16 @@ cp .env.example .env
 ```
 
 The Compose stack mounts `lyra.toml` and the service account as read-only
-files, and passes Postgres/admin settings from `.env`. The `lyra_data` named
+files, and passes Postgres, agent, and admin settings from `.env`. The `lyra_data` named
 volume remains writable for Lyra-owned runtime state, including
 `/lyra_data/state/plugins.toml`, plugin checkouts, runner installs, cache
 files, and optional logs.
 
 The config file owns Redis, Earth Engine, worker pools, plugin queue policy,
-logging, job TTL, and API host/port settings. Postgres connection settings and
-the admin API key come from environment variables. Plugin repositories and
+logging, job TTL, public API base URL, submission limits, and API host/port
+settings. Postgres connection settings plus the separate agent and admin API
+keys come from environment variables. `LYRA_AGENT_API_KEY` authenticates MCP
+and every `/jobs` route; `LYRA_ADMIN_API_KEY` is only for `/admin` routes. Plugin repositories and
 metric queue assignments are managed through admin API endpoints and persisted
 by Lyra in `/lyra_data/state/plugins.toml`.
 
@@ -97,12 +99,23 @@ curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
 
 ## Job API
 
-Submit a metric job:
+Public discovery does not require a token. Resolve a metropolitan-zone name and
+choose a metric before submitting:
+
+```bash
+curl --get http://localhost:5219/lookups/met-zones \
+  --data-urlencode 'name=Valle de México'
+curl http://localhost:5219/metrics
+```
+
+Every job lifecycle route requires the agent Bearer token. Use an idempotency
+key so retrying the same validated request returns the original `job_id`:
 
 ```bash
 curl -X POST http://localhost:5219/jobs \
+  -H "Authorization: Bearer ${LYRA_AGENT_API_KEY}" \
   -H 'Content-Type: application/json' \
-  -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"cvegeo_list","value":["090020001"]}}}'
+  -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"met_zone_code","value":"09.01"}},"idempotency_key":"client-generated-key"}'
 ```
 
 Choose `METRIC_NAME` from `GET /metrics`, and shape `input` according to that
@@ -111,9 +124,16 @@ wrapper field. Then use the returned `job_id` to stream events and fetch the
 terminal result:
 
 ```bash
-curl -N http://localhost:5219/jobs/{job_id}/events
-curl http://localhost:5219/jobs/{job_id}/result
+curl -N http://localhost:5219/jobs/{job_id}/events \
+  -H "Authorization: Bearer ${LYRA_AGENT_API_KEY}"
+curl http://localhost:5219/jobs/{job_id}/result/descriptor \
+  -H "Authorization: Bearer ${LYRA_AGENT_API_KEY}"
 ```
+
+New REST and MCP submissions share a configurable fixed-window limit (10 per
+60 seconds by default). Results expire with the configured job-store TTL.
+Download table JSONL while the descriptor is live and perform statistical
+analysis in the external client.
 
 See the Starlight docs for plugin manifests, runner entrypoints, deployment shape, and operations notes.
 For Codex and other agent runtimes, see the MCP bridge docs for the stable tool

@@ -103,7 +103,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                     self._http_url(path),
                     params=params,
                     json=json_body,
-                    headers=self.headers,
+                    headers=self._headers_for_path(path),
                 ) as response,
             ):
                 if response.status != expected_status:
@@ -161,7 +161,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 session.post(
                     self._http_url("jobs"),
                     json=body,
-                    headers=self.headers,
+                    headers=self._agent_headers,
                 ) as response,
             ):
                 if response.status != 202:
@@ -180,7 +180,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}"),
-                    headers=self.headers,
+                    headers=self._agent_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -211,7 +211,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 session.get(
                     self._http_url("admin/jobs"),
                     params=params,
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -230,7 +230,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.post(
                     self._http_url(f"admin/jobs/{job_id}/cancel"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -363,7 +363,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/status"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -384,7 +384,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/config-summary"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -406,7 +406,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/catalog"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -427,7 +427,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/workers"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -448,7 +448,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"admin/workers/{worker_name}"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -469,7 +469,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/queues"),
-                    headers=self.headers,
+                    headers=self._admin_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -489,7 +489,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         *,
         last_event_id: str | None = None,
     ) -> AsyncIterator[JobEvent]:
-        headers = dict(self.headers)
+        headers = dict(self._agent_headers)
         if last_event_id is not None:
             headers["Last-Event-ID"] = last_event_id
 
@@ -520,7 +520,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}/result"),
-                    headers=self.headers,
+                    headers=self._agent_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -547,7 +547,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}/result/download"),
-                    headers=self.headers,
+                    headers=self._agent_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -603,7 +603,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}/result/table.jsonl"),
-                    headers=self.headers,
+                    headers=self._agent_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -720,8 +720,18 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         err = f"Job {job_id} event stream ended before a terminal event."
         raise DownloadError(err)
 
-    async def process(self, metric: str, payload: dict[str, Any]) -> TableJobResult:
-        job = await self.create_job(metric, payload)
+    async def process(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> TableJobResult:
+        job = await self.create_job(
+            metric,
+            payload,
+            idempotency_key=idempotency_key,
+        )
         await self._wait_for_terminal_event(job.job_id)
         result = await self.get_job_result(job.job_id)
         if result.status != "succeeded":
@@ -739,8 +749,14 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         metric: str,
         payload: dict[str, Any],
         path: str | os.PathLike[str],
+        *,
+        idempotency_key: str | None = None,
     ) -> None:
-        job = await self.create_job(metric, payload)
+        job = await self.create_job(
+            metric,
+            payload,
+            idempotency_key=idempotency_key,
+        )
         event = await self._wait_for_terminal_event(job.job_id)
         result = parse_job_result(event.data)
         if result.status != "succeeded":

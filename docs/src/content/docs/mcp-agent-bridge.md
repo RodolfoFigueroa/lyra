@@ -1,93 +1,115 @@
 ---
 title: MCP Agent Bridge
-description: Expose Lyra metrics to Codex and other MCP clients with stable tools, result references, and JSONL handoffs.
+description: Expose Lyra metrics to agents through authenticated, typed MCP tools and reproducible JSONL handoffs.
 ---
 
-Lyra's MCP bridge lets agents discover public metric contracts, run one metric
-for a metropolitan zone, poll job results, and hand raw result access back to
-developer tools. Lyra runs metrics and stores results; the MCP client or a local
-developer script performs arbitrary analysis.
+Lyra mounts a stateless Streamable HTTP server implemented with the official
+Python MCP SDK. An agent can resolve a metropolitan zone, search the public
+metric catalog, run a metric, poll one result reference, inspect provenance,
+and hand an authenticated JSONL download to external analysis code.
 
-The v1 MCP surface is intentionally small. It does not expose admin plugin,
-worker, queue, server-management, SQL, or statistical analysis tools.
+Lyra executes metrics and temporarily retains results. It does not expose admin
+operations, SQL, or statistical analysis through MCP.
 
 ## Operator Setup
 
-Enable the Lyra API with MCP mounted at `/mcp`, then configure a dedicated MCP
-Bearer token through `LYRA_MCP_API_KEY`. Keep this separate from
-`LYRA_ADMIN_API_KEY`; MCP clients should not need admin API credentials.
+Enable MCP and configure the absolute URL external clients use to reach Lyra:
 
-Codex can connect to the streamable HTTP MCP server with a `config.toml` entry:
+```toml
+[api]
+public_base_url = "https://lyra.example.com"
+
+[mcp]
+enabled = true
+mount_path = "/mcp"
+```
+
+`api.public_base_url` may include a public path prefix. It must use HTTPS in
+production and be reachable from the external analysis runtime. Lyra uses it to
+create absolute result-download URLs.
+
+Set independent secrets on the API process:
+
+```text
+LYRA_AGENT_API_KEY=replace-with-agent-secret
+LYRA_ADMIN_API_KEY=replace-with-admin-secret
+```
+
+`LYRA_AGENT_API_KEY` authenticates MCP and every `/jobs` route. Never give an
+agent `LYRA_ADMIN_API_KEY`.
+
+Codex connects to the official Streamable HTTP endpoint:
 
 ```toml
 [mcp_servers.lyra]
-url = "https://lyra.mydomain.com/mcp"
-bearer_token_env_var = "LYRA_MCP_API_KEY"
+url = "https://lyra.example.com/mcp"
+bearer_token_env_var = "LYRA_AGENT_API_KEY"
 ```
 
-Set `LYRA_MCP_API_KEY` in the environment that starts Codex. Codex sends it as
-an `Authorization: Bearer ...` header when calling `https://lyra.mydomain.com/mcp`.
+Set `LYRA_AGENT_API_KEY` in the environment that starts Codex. For local
+development use `http://localhost:5219/mcp`. Missing or malformed Bearer auth
+returns `401`; a wrong credential, including an admin-only credential, returns
+`403`.
 
-For local development, the same shape works with a local URL:
+## Strict Tools
 
-```toml
-[mcp_servers.lyra_local]
-url = "http://localhost:5219/mcp"
-bearer_token_env_var = "LYRA_MCP_API_KEY"
-```
-
-## Stable Tools
-
-Use the tools in this sequence:
+Tools publish MCP input and output JSON Schemas. Inputs reject unknown fields
+and wrong primitive types. Respect declared ranges: search `limit` is 1 through
+20, run wait time is 0 through 10 seconds, and poll wait time is 0 through 30.
 
 | Tool | Use |
 | --- | --- |
-| `lyra_search_metrics` | Search the public catalog by words from the user's request. |
-| `lyra_get_metric` | Inspect one metric's request schema, spatial inputs, and output declaration before running it. |
-| `lyra_run_metric` | Start one metric for a raw metropolitan zone code. |
-| `lyra_get_job_result` | Continue polling a returned `lyra://results/{job_id}` reference until the job is terminal. |
-| `lyra_get_result_metadata` | Read compact descriptor metadata, lifetime, table/file shape, summary, and errors. |
-| `lyra_get_result_preview` | Read preview rows and summary without raw table hydration. |
-| `lyra_download_result` | Get authenticated Lyra API handoff metadata for JSONL table export. |
+| `lyra_lookup_met_zone` | Resolve a natural-language name to canonical `cve_met` and `nom_met`. |
+| `lyra_search_metrics` | Search public catalog names, descriptions, inputs, outputs, and units. |
+| `lyra_get_metric` | Inspect one request schema, spatial mapping, and output declaration. |
+| `lyra_run_metric` | Submit one metric for a raw metropolitan-zone code. |
+| `lyra_get_job_result` | Poll the same `lyra://results/{job_id}` reference until terminal. |
+| `lyra_get_result_metadata` | Read provenance, lifetime, shape, columns, summary, and errors. |
+| `lyra_get_result_preview` | Read provenance, preview rows, and summary without hydrating a table. |
+| `lyra_download_result` | Obtain an absolute authenticated JSONL handoff for a table. |
 
-MCP v1 exposes stable tools rather than dynamic per-metric tools. Search first,
-inspect the selected metric, then run it.
+## One Agent Workflow
 
-## Agent Run Flow
-
-First search for a metric:
+Start with location lookup, then metric search:
 
 ```json
-{
-  "query": "clinic accessibility",
-  "limit": 5
-}
+{"name": "Valle de México"}
 ```
 
-Then inspect the chosen metric:
-
 ```json
-{
-  "metric": "smoke_accessibility_metric"
-}
+{"query": "clinic accessibility", "limit": 5}
 ```
 
-Run the metric with a raw metropolitan zone code. The MCP bridge owns the
-spatial wrapper and inserts the correct metric spatial field, so do not pass raw
-GeoJSON, census tract lists, or the metric's spatial field inside `parameters`.
+Use the lookup's `cve_met` as `met_zone_code`. Inspect the selected metric
+before running it:
+
+```json
+{"metric": "selected_metric_name"}
+```
+
+`lyra_get_metric` is authoritative for non-spatial parameters. MCP inserts the
+metric's sole spatial field, so do not include a spatial field, GeoJSON, or
+census-unit list in `parameters`.
+
+Submit with a caller-generated idempotency key:
 
 ```json
 {
-  "metric": "smoke_accessibility_metric",
+  "metric": "selected_metric_name",
   "met_zone_code": "09.01",
-  "parameters": {
-    "year": 2025
-  },
+  "parameters": {"year": 2025},
+  "idempotency_key": "analysis-run-2025-access",
   "wait_seconds": 2
 }
 ```
 
-If the job is still active, `lyra_run_metric` returns a continuation payload:
+The key binds to the validated metric and input for the result lifetime. A
+retry with the same key and request returns the original `job_id` and
+`reused: true`; it creates no job and consumes no submission capacity. Using
+the key with a different request returns `idempotency_conflict`. Keep the same
+key across network retries.
+
+Active work returns one continuation reference:
 
 ```json
 {
@@ -95,81 +117,145 @@ If the job is still active, `lyra_run_metric` returns a continuation payload:
   "job_id": "job-1",
   "result_ref": "lyra://results/job-1",
   "poll_after_seconds": 1,
-  "next_tool": "lyra_get_job_result"
+  "next_tool": "lyra_get_job_result",
+  "reused": false
 }
 ```
 
-Do not rerun the metric for a `running` response. Wait at least
-`poll_after_seconds`, then call the returned `next_tool`:
+Wait at least `poll_after_seconds`, then call the returned tool with the same
+reference:
+
+```json
+{"result_ref": "lyra://results/job-1", "wait_seconds": 30}
+```
+
+Do not resubmit because a poll is still running. Terminal responses are compact
+descriptors for succeeded, failed, or cancelled work.
+
+## Provenance And Expiry
+
+Before comparing or downloading results, inspect:
+
+- `provenance.metric`, `catalog_fingerprint`, plugin name/version, validated
+  public `input`, captured `output`, and `created_at`;
+- `provenance.row_identity` and `table.row_identity`, when available;
+- `table.index_field`, ordered `columns`, and concrete `column_contracts`;
+- `lifetime.expires_in_seconds` and `lifetime.expires_at`.
+
+Provenance is captured when Lyra accepts the job and survives catalog refreshes
+unchanged. Results and idempotency records expire with the job-store TTL.
+Download needed data before expiry. An expired reference must be rerun with a
+new key if the data is still needed.
+
+## Limit And Retry
+
+New REST and MCP submissions share a fixed-window quota. Defaults are 10
+accepted submissions per 60 seconds; operators can configure both values in
+`[agent_submission_limit]`. An MCP `rate_limited` error includes
+`retry_after_seconds`. Wait that long and retry with the same idempotency key.
+Idempotent replays consume no capacity.
+
+## Authenticated JSONL Handoff
+
+After a successful table result, call:
+
+```json
+{"result_ref": "lyra://results/job-1"}
+```
+
+`lyra_download_result` returns an absolute handoff, not raw rows or a relative
+path:
 
 ```json
 {
+  "job_id": "job-1",
   "result_ref": "lyra://results/job-1",
-  "wait_seconds": 30
+  "status": "succeeded",
+  "format": "jsonl",
+  "media_type": "application/x-ndjson",
+  "lyra_api": {
+    "method": "GET",
+    "url": "https://lyra.example.com/jobs/job-1/result/table.jsonl",
+    "authentication": {
+      "scheme": "Bearer",
+      "credential_env_var": "LYRA_AGENT_API_KEY"
+    }
+  },
+  "expires_in_seconds": 480
 }
 ```
 
-Terminal responses are compact result descriptors. They include status,
-`result_kind`, `result_ref`, lifetime information, summary, preview rows, and
-raw-access metadata. Result references are valid only while Redis retains the
-job result key; expired references must be rerun if the user still needs data.
+The external runtime sends `Authorization: Bearer $LYRA_AGENT_API_KEY` to that
+URL. JSONL is the table format. Python clients can instead call
+`download_result(result_ref, path, format="jsonl")` with `agent_api_key` set.
 
-## Raw Result Handoff
+## Safe Two-Metric Correlation
 
-Use `lyra_get_result_preview` when a small sample is enough for the agent's
-answer. Use `lyra_get_result_metadata` when the agent needs shape, lifetime, or
-summary metadata.
-
-For local analysis, call `lyra_download_result` on a table result reference. It
-does not inline raw rows in the MCP response. It returns the Lyra HTTP route and
-Python helper names for downloading JSONL:
-
-```json
-{
-  "result_ref": "lyra://results/job-1"
-}
-```
-
-The handoff points to `GET /jobs/{job_id}/result/table.jsonl` and the
-`LyraAPIClient.download_result(result_ref, path, format="jsonl")` helper. JSONL
-is the required v1 raw table export format.
-
-## Developer Correlation Example
-
-After an agent produces two table result references, download or hydrate both
-tables locally with `lyra-api` and compute the correlation in Python:
+This example selects descriptor-declared numeric columns and refuses to join
+results without the same authoritative row identity:
 
 ```python
+import os
+
 from lyra.api import LyraAPIClient
 
-client = LyraAPIClient("lyra.mydomain.com", secure=True)
+client = LyraAPIClient(
+    "lyra.example.com",
+    agent_api_key=os.environ["LYRA_AGENT_API_KEY"],
+)
+left_ref = "lyra://results/job-left"
+right_ref = "lyra://results/job-right"
+left_descriptor = client.get_result_descriptor(left_ref)
+right_descriptor = client.get_result_descriptor(right_ref)
 
-access_ref = "lyra://results/job-access"
-population_ref = "lyra://results/job-population"
 
-access = client.result_dataframe(access_ref)
-population = client.result_dataframe(population_ref)
+def analysis_contract(descriptor):
+    if descriptor.status != "succeeded" or descriptor.table is None:
+        raise ValueError("correlation requires a successful table result")
+    if descriptor.provenance is None or descriptor.table.row_identity is None:
+        raise ValueError("result lacks provenance or authoritative row identity")
+    numeric = [
+        column.name
+        for column in descriptor.table.column_contracts
+        if column.type in {"number", "integer"}
+    ]
+    if len(numeric) != 1:
+        raise ValueError(f"select one declared numeric column from {numeric}")
+    return descriptor.table.row_identity, descriptor.table.index_field, numeric[0]
 
-joined = access.merge(population, on="_result_index", suffixes=("_access", "_pop"))
-correlation = joined["accessibility_score"].corr(joined["population_count"])
 
-print(correlation)
+left_identity, left_index, left_value = analysis_contract(left_descriptor)
+right_identity, right_index, right_value = analysis_contract(right_descriptor)
+if left_identity != right_identity:
+    raise ValueError("results do not share field, namespace, and version identity")
+
+for descriptor in (left_descriptor, right_descriptor):
+    provenance = descriptor.provenance
+    print(
+        provenance.metric,
+        provenance.plugin.name,
+        provenance.plugin.version,
+        provenance.catalog_fingerprint,
+        provenance.created_at,
+    )
+
+left = client.result_dataframe(left_ref)[[left_index, left_value]].rename(
+    columns={left_index: "row_id", left_value: "left_value"}
+)
+right = client.result_dataframe(right_ref)[[right_index, right_value]].rename(
+    columns={right_index: "row_id", right_value: "right_value"}
+)
+joined = left.merge(right, on="row_id", how="inner", validate="one_to_one")
+print(joined["left_value"].corr(joined["right_value"]))
 ```
 
-The column names above are examples. Use columns declared by the selected
-metrics and returned in each descriptor's table metadata. The correlation runs
-in your Python process after the raw JSONL tables are retrieved; Lyra does not
-provide SQL execution or statistical analysis tools for this feature.
+If several numeric columns exist, select using their names, descriptions,
+units, and nullability; consult `provenance.output` for batch source metadata.
+The merge and correlation execute in the external Python process.
 
-If pandas is not available, download JSONL files directly:
+## Related Documentation
 
-```python
-client.download_result(access_ref, "access.jsonl", format="jsonl")
-client.download_result(population_ref, "population.jsonl", format="jsonl")
-```
-
-## Related HTTP And Client Docs
-
-- [Job API](../job-api/) describes descriptor, JSONL, and download routes.
-- [Python Client](../python-client/) shows the common client workflow.
-- [lyra-api](../lyra-api/) lists result-reference helper methods.
+- [Job API](../job-api/) documents authentication and descriptor routes.
+- [Metrics Catalog](../metrics-catalog/) explains output declarations.
+- [lyra-api](../lyra-api/) lists Python client methods.
+- [Deployment](../deployment/) covers public URL and limit configuration.

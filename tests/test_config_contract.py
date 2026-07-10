@@ -7,6 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from lyra_app.config import (
+    DEFAULT_AGENT_SUBMISSION_LIMIT,
+    DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
@@ -16,8 +18,8 @@ from lyra_app.config import (
     DEFAULT_PLUGIN_CATALOG_DIR,
     DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     LYRA_ADMIN_API_KEY_ENV,
+    LYRA_AGENT_API_KEY_ENV,
     LYRA_DATA_DIR,
-    LYRA_MCP_API_KEY_ENV,
     LYRA_POSTGRES_DB_ENV,
     LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -48,6 +50,7 @@ def _valid_config(base: Path) -> dict[str, Any]:
         "api": {
             "host": "0.0.0.0",
             "port": 5219,
+            "public_base_url": "https://lyra.example.test/",
         },
         "redis": {
             "url": "redis://redis:6379/0",
@@ -62,6 +65,10 @@ def _valid_config(base: Path) -> dict[str, Any]:
         },
         "job_store": {
             "ttl_seconds": 600,
+        },
+        "agent_submission_limit": {
+            "limit": 10,
+            "window_seconds": 60,
         },
         "plugins": {
             "catalog_dir": str(base / "plugins" / "catalog"),
@@ -99,6 +106,7 @@ def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, " lyra ")
     monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "  postgres-secret\n")
     monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "\nadmin-secret  ")
+    monkeypatch.setenv(LYRA_AGENT_API_KEY_ENV, "\nagent-secret  ")
 
 
 def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
@@ -107,6 +115,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.schema_version == 1
     assert config.api.host == "0.0.0.0"
     assert config.api.port == 5219
+    assert config.api.public_base_url == "https://lyra.example.test"
     assert config.redis.url == "redis://redis:6379/0"
     assert config.database.host == "postgres"
     assert config.database.port == 5432
@@ -117,21 +126,25 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
         tmp_path / "secrets" / "service-account.json"
     )
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.agent.read_api_key() == "agent-secret"
     assert config.mcp.enabled is False
     assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
     assert config.job_store.ttl_seconds == 600
+    assert config.agent_submission_limit.limit == 10
+    assert config.agent_submission_limit.window_seconds == 60
     assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.get_worker("interactive").concurrency == 32
 
 
 def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
-    raw["api"] = {}
+    raw["api"] = {"public_base_url": "http://localhost:5219"}
     del raw["earth_engine"]["service_account_file"]
     raw["logging"] = {}
     raw["job_store"] = {}
+    raw["agent_submission_limit"] = {}
     del raw["plugins"]["catalog_dir"]
     del raw["plugins"]["runner_base_dir"]
     raw["workers"]["interactive"] = {"queues": ["interactive"]}
@@ -140,6 +153,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
 
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == DEFAULT_API_PORT
+    assert config.api.public_base_url == "http://localhost:5219"
     assert config.database.host == "postgres"
     assert config.database.port == 5432
     assert config.database.name == "lyra"
@@ -149,11 +163,17 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
     )
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.agent.read_api_key() == "agent-secret"
     assert config.mcp.enabled is False
     assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
     assert config.job_store.ttl_seconds == DEFAULT_JOB_STORE_TTL_SECONDS
+    assert config.agent_submission_limit.limit == DEFAULT_AGENT_SUBMISSION_LIMIT
+    assert (
+        config.agent_submission_limit.window_seconds
+        == DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS
+    )
     assert config.plugins.catalog_dir == DEFAULT_PLUGIN_CATALOG_DIR
     assert config.plugins.runner_base_dir == DEFAULT_PLUGIN_RUNNER_BASE_DIR
     assert config.get_worker("interactive").concurrency == 1
@@ -179,7 +199,7 @@ def test_config_contract_rejects_unknown_nested_fields(tmp_path: Path) -> None:
     _assert_invalid(raw, "Extra inputs are not permitted")
 
 
-def test_config_contract_accepts_mcp_section_with_dedicated_secret(
+def test_config_contract_accepts_mcp_section_with_agent_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -188,24 +208,23 @@ def test_config_contract_accepts_mcp_section_with_dedicated_secret(
         "enabled": True,
         "mount_path": "/agent-mcp",
     }
-    monkeypatch.setenv(LYRA_MCP_API_KEY_ENV, " mcp-secret ")
+    monkeypatch.setenv(LYRA_AGENT_API_KEY_ENV, " agent-secret ")
 
     config = LyraConfig.model_validate(raw)
 
     assert config.mcp.enabled is True
     assert config.mcp.mount_path == "/agent-mcp"
-    assert config.mcp.read_api_key() == "mcp-secret"
+    assert config.agent.read_api_key() == "agent-secret"
 
 
-def test_config_contract_rejects_mcp_enabled_without_secret(
+def test_config_contract_rejects_job_access_without_agent_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw = _valid_config(tmp_path)
-    raw["mcp"] = {"enabled": True}
-    monkeypatch.delenv(LYRA_MCP_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(LYRA_AGENT_API_KEY_ENV, raising=False)
 
-    with pytest.raises(ConfigSecretError, match=LYRA_MCP_API_KEY_ENV):
+    with pytest.raises(ConfigSecretError, match=LYRA_AGENT_API_KEY_ENV):
         LyraConfig.model_validate(raw)
 
 
@@ -214,6 +233,13 @@ def test_config_contract_rejects_mcp_secret_in_toml(tmp_path: Path) -> None:
     raw["mcp"] = {"api_key": "not-here"}
 
     _assert_invalid(raw, "Extra inputs are not permitted")
+
+
+def test_config_contract_rejects_agent_secret_in_toml(tmp_path: Path) -> None:
+    raw = _valid_config(tmp_path)
+    raw["agent"] = {"api_key": "not-here"}
+
+    _assert_invalid(raw, r"\[agent\].*environment variables")
 
 
 @pytest.mark.parametrize("mount_path", ["mcp", "/mcp/"])
@@ -241,6 +267,12 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
         ("redis", "url", "postgres://db:5432/lyra", "redis.url"),
         ("logging", "level", "NOPE", "logging.level"),
         ("job_store", "ttl_seconds", 0, "greater than 0"),
+        ("agent_submission_limit", "limit", 0, "greater than 0"),
+        ("agent_submission_limit", "limit", -1, "greater than 0"),
+        ("agent_submission_limit", "window_seconds", 0, "greater than 0"),
+        ("agent_submission_limit", "window_seconds", -1, "greater than 0"),
+        ("agent_submission_limit", "limit", True, "valid integer"),
+        ("agent_submission_limit", "window_seconds", False, "valid integer"),
     ],
 )
 def test_config_contract_rejects_invalid_values(
@@ -254,6 +286,48 @@ def test_config_contract_rejects_invalid_values(
     raw[section][field] = value
 
     _assert_invalid(raw, match)
+
+
+@pytest.mark.parametrize(
+    ("public_base_url", "match"),
+    [
+        ("http://lyra.example.test", "must use https"),
+        ("https://agent:secret@lyra.example.test", "must not contain credentials"),
+        ("https://lyra.example.test?token=secret", "query or fragment"),
+        ("https://lyra.example.test/#secret", "query or fragment"),
+        ("https://lyra-api:5219", "single-label internal hostname"),
+        ("/api", "absolute http:// or https:// URL"),
+    ],
+)
+def test_config_contract_rejects_unsafe_public_base_urls(
+    tmp_path: Path,
+    public_base_url: str,
+    match: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["api"]["public_base_url"] = public_base_url
+
+    _assert_invalid(raw, match)
+
+
+@pytest.mark.parametrize(
+    "public_base_url",
+    [
+        "http://localhost:5219/",
+        "http://127.0.0.1:5219/api/",
+        "http://[::1]:5219/",
+    ],
+)
+def test_config_contract_accepts_explicit_loopback_http(
+    tmp_path: Path,
+    public_base_url: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["api"]["public_base_url"] = public_base_url
+
+    config = LyraConfig.model_validate(raw)
+
+    assert config.api.public_base_url == public_base_url.rstrip("/")
 
 
 @pytest.mark.parametrize(
@@ -337,6 +411,8 @@ def test_config_contract_reads_scalar_secret_references(tmp_path: Path) -> None:
 
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
+    assert config.agent.read_api_key() == "agent-secret"
+    assert "agent-secret" not in repr(config)
 
 
 def test_config_contract_reports_missing_admin_api_key_env(
@@ -347,6 +423,17 @@ def test_config_contract_reports_missing_admin_api_key_env(
     monkeypatch.delenv(LYRA_ADMIN_API_KEY_ENV)
 
     with pytest.raises(ConfigSecretError, match=LYRA_ADMIN_API_KEY_ENV):
+        LyraConfig.model_validate(raw)
+
+
+def test_config_contract_reports_missing_agent_api_key_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _valid_config(tmp_path)
+    monkeypatch.delenv(LYRA_AGENT_API_KEY_ENV)
+
+    with pytest.raises(ConfigSecretError, match=LYRA_AGENT_API_KEY_ENV):
         LyraConfig.model_validate(raw)
 
 

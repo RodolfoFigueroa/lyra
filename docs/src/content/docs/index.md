@@ -13,7 +13,8 @@ queue-specific Celery workers.
 - API processes read schema v3 plugin manifests and validate job requests.
 - Worker processes install plugin code and run the generic `lyra.run_metric` task.
 - Redis stores queued, progress, terminal event, status, and result records.
-- Public execution uses `/jobs`, `/jobs/{job_id}`, `/jobs/{job_id}/events`, `/jobs/{job_id}/result`, and `/jobs/{job_id}/result/download`.
+- Public discovery uses health, catalog, and lookup routes. MCP and every
+  `/jobs` lifecycle route require `LYRA_AGENT_API_KEY`.
 
 ## Choose A Path
 

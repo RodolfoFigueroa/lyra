@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 from datetime import UTC, datetime, timedelta
@@ -6,6 +7,7 @@ from typing import Any, Literal, TypeAlias
 from lyra.sdk.models import (
     JobEnvelope,
     JobEvent,
+    JobRunProvenance,
     ResultDescriptor,
     ResultLifetime,
     TerminalJobResult,
@@ -39,6 +41,57 @@ STREAM_LATEST = "$"
 DEFAULT_STREAM_BLOCK_MS = 5000
 JOB_INDEX_KEY = "jobs:index"
 TERMINAL_STATUSES: set[TerminalJobStatus] = {"succeeded", "failed", "cancelled"}
+DEFAULT_AGENT_SCOPE = "shared-agent"
+AGENT_SUBMISSION_LIMIT_KEY = "jobs:submission-limit:shared-agent"
+
+_CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT = """
+local limit = tonumber(ARGV[1])
+local window_seconds = tonumber(ARGV[2])
+local current = tonumber(redis.call('get', KEYS[1]) or '0')
+
+if current >= limit then
+    local retry_after_seconds = redis.call('ttl', KEYS[1])
+    if retry_after_seconds < 0 then
+        redis.call('expire', KEYS[1], window_seconds)
+        retry_after_seconds = window_seconds
+    elseif retry_after_seconds < 1 then
+        retry_after_seconds = 1
+    end
+    return {0, current, retry_after_seconds}
+end
+
+current = redis.call('incr', KEYS[1])
+if current == 1 then
+    redis.call('expire', KEYS[1], window_seconds)
+end
+
+local retry_after_seconds = redis.call('ttl', KEYS[1])
+if retry_after_seconds < 0 then
+    redis.call('expire', KEYS[1], window_seconds)
+    retry_after_seconds = window_seconds
+end
+return {1, current, retry_after_seconds}
+""".strip()
+
+_RELEASE_AGENT_SUBMISSION_LIMIT_SCRIPT = """
+local current = tonumber(redis.call('get', KEYS[1]) or '0')
+if current <= 0 then
+    return 0
+end
+if current == 1 then
+    redis.call('del', KEYS[1])
+    return 1
+end
+redis.call('decr', KEYS[1])
+return 1
+""".strip()
+
+_RELEASE_IDEMPOTENCY_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+""".strip()
 
 
 class JobStatusSnapshot(StrictBaseModel):
@@ -52,6 +105,17 @@ class JobStatusSnapshot(StrictBaseModel):
 class StoredJobEvent(StrictBaseModel):
     stream_id: str
     event: JobEvent
+
+
+class IdempotencyRecord(StrictBaseModel):
+    request_digest: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+
+
+class AgentSubmissionLimitDecision(StrictBaseModel):
+    accepted: bool
+    count: int = Field(ge=0)
+    retry_after_seconds: int = Field(ge=1)
 
 
 class JobCancelledError(RuntimeError):
@@ -72,8 +136,72 @@ def events_key(job_id: str) -> str:
     return f"job:{job_id}:events"
 
 
+def provenance_key(job_id: str) -> str:
+    return f"job:{job_id}:provenance"
+
+
+def idempotency_key(
+    caller_key: str,
+    *,
+    agent_scope: str = DEFAULT_AGENT_SCOPE,
+) -> str:
+    digest = hashlib.sha256(
+        f"{agent_scope}\0{caller_key}".encode(),
+    ).hexdigest()
+    return f"jobs:idempotency:{digest}"
+
+
+def job_idempotency_key(job_id: str) -> str:
+    return f"job:{job_id}:idempotency"
+
+
 def job_index_key() -> str:
     return JOB_INDEX_KEY
+
+
+def agent_submission_limit_key() -> str:
+    """Return the non-secret Redis key shared by all agent submissions."""
+
+    return AGENT_SUBMISSION_LIMIT_KEY
+
+
+async def consume_agent_submission_limit_async(
+    *,
+    limit: int,
+    window_seconds: int,
+    client: Any | None = None,
+) -> AgentSubmissionLimitDecision:
+    """Atomically consume capacity from the shared agent fixed window."""
+
+    client = redis_client if client is None else client
+    raw_decision = await client.eval(
+        _CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT,
+        1,
+        agent_submission_limit_key(),
+        limit,
+        window_seconds,
+    )
+    accepted, count, retry_after_seconds = (int(value) for value in raw_decision)
+    return AgentSubmissionLimitDecision(
+        accepted=bool(accepted),
+        count=count,
+        retry_after_seconds=max(1, retry_after_seconds),
+    )
+
+
+async def release_agent_submission_limit_async(
+    *,
+    client: Any | None = None,
+) -> bool:
+    """Return capacity when a consumed submission fails before dispatch."""
+
+    client = redis_client if client is None else client
+    released = await client.eval(
+        _RELEASE_AGENT_SUBMISSION_LIMIT_SCRIPT,
+        1,
+        agent_submission_limit_key(),
+    )
+    return bool(released)
 
 
 def _now() -> datetime:
@@ -152,6 +280,16 @@ def _apply_ttl_sync(client: Any, job_id: str) -> None:
     client.expire(status_key(job_id), ttl)
     client.expire(result_key(job_id), ttl)
     client.expire(events_key(job_id), ttl)
+    client.expire(provenance_key(job_id), ttl)
+    get = getattr(client, "get", None)
+    if not callable(get):
+        return
+    reservation_key = get(job_idempotency_key(job_id))
+    if reservation_key is not None:
+        if isinstance(reservation_key, bytes):
+            reservation_key = reservation_key.decode()
+        client.expire(str(reservation_key), ttl)
+        client.expire(job_idempotency_key(job_id), ttl)
 
 
 async def _apply_ttl_async(client: Any, job_id: str) -> None:
@@ -159,6 +297,71 @@ async def _apply_ttl_async(client: Any, job_id: str) -> None:
     await client.expire(status_key(job_id), ttl)
     await client.expire(result_key(job_id), ttl)
     await client.expire(events_key(job_id), ttl)
+    await client.expire(provenance_key(job_id), ttl)
+    get = getattr(client, "get", None)
+    if not callable(get):
+        return
+    reservation_key = await get(job_idempotency_key(job_id))
+    if reservation_key is not None:
+        if isinstance(reservation_key, bytes):
+            reservation_key = reservation_key.decode()
+        await client.expire(str(reservation_key), ttl)
+        await client.expire(job_idempotency_key(job_id), ttl)
+
+
+async def claim_idempotency_key_async(
+    caller_key: str,
+    request_digest: str,
+    job_id: str,
+    *,
+    agent_scope: str = DEFAULT_AGENT_SCOPE,
+    client: Any | None = None,
+) -> tuple[IdempotencyRecord, bool]:
+    """Atomically bind one caller key to a request digest and job identity."""
+
+    client = redis_client if client is None else client
+    key = idempotency_key(caller_key, agent_scope=agent_scope)
+    record = IdempotencyRecord(request_digest=request_digest, job_id=job_id)
+    encoded = _dump_json(record.model_dump(mode="json"))
+    ttl = _job_store_ttl_seconds()
+    acquired = await client.set(key, encoded, ex=ttl, nx=True)
+    if acquired:
+        try:
+            await client.set(job_idempotency_key(job_id), key, ex=ttl)
+        except BaseException:
+            await client.eval(_RELEASE_IDEMPOTENCY_SCRIPT, 1, key, encoded)
+            raise
+        return record, True
+
+    existing = await client.get(key)
+    if existing is None:
+        # The prior record expired between SET and GET. Retry the atomic claim.
+        return await claim_idempotency_key_async(
+            caller_key,
+            request_digest,
+            job_id,
+            agent_scope=agent_scope,
+            client=client,
+        )
+    return IdempotencyRecord.model_validate(_loads_json(existing)), False
+
+
+async def release_idempotency_key_async(
+    caller_key: str,
+    record: IdempotencyRecord,
+    *,
+    agent_scope: str = DEFAULT_AGENT_SCOPE,
+    client: Any | None = None,
+) -> bool:
+    """Release only the exact reservation owned by ``record``."""
+
+    client = redis_client if client is None else client
+    key = idempotency_key(caller_key, agent_scope=agent_scope)
+    encoded = _dump_json(record.model_dump(mode="json"))
+    released = await client.eval(_RELEASE_IDEMPOTENCY_SCRIPT, 1, key, encoded)
+    if released:
+        await client.delete(job_idempotency_key(record.job_id))
+    return bool(released)
 
 
 def _prune_job_index_sync(client: Any, *, now: datetime | None = None) -> None:
@@ -255,7 +458,44 @@ def _status_payload(
     ).model_dump(mode="json", exclude_none=True)
 
 
-def create_job(job: JobEnvelope, client: Any | None = None) -> JobStatusSnapshot:
+def _save_job_provenance_sync(
+    job_id: str,
+    provenance: JobRunProvenance,
+    *,
+    client: Any,
+) -> None:
+    payload = provenance.model_dump(mode="json", exclude_none=True)
+    client.set(
+        provenance_key(job_id),
+        _dump_json(payload),
+        ex=_job_store_ttl_seconds(),
+        nx=True,
+    )
+
+
+async def _save_job_provenance_async(
+    job_id: str,
+    provenance: JobRunProvenance,
+    *,
+    client: Any,
+) -> None:
+    payload = provenance.model_dump(mode="json", exclude_none=True)
+    await client.set(
+        provenance_key(job_id),
+        _dump_json(payload),
+        ex=_job_store_ttl_seconds(),
+        nx=True,
+    )
+
+
+def create_job(
+    job: JobEnvelope,
+    provenance: JobRunProvenance | None = None,
+    client: Any | None = None,
+) -> JobStatusSnapshot:
+    client = redis_client_sync if client is None else client
+    if provenance is not None:
+        _save_job_provenance_sync(job.job_id, provenance, client=client)
     return set_job_status(job.job_id, "queued", metric=job.metric, client=client)
 
 
@@ -327,6 +567,17 @@ def get_job_result(
     return _loads_json(payload)
 
 
+def get_job_provenance(
+    job_id: str,
+    client: Any | None = None,
+) -> JobRunProvenance | None:
+    client = redis_client_sync if client is None else client
+    payload = client.get(provenance_key(job_id))
+    if payload is None:
+        return None
+    return JobRunProvenance.model_validate(_loads_json(payload))
+
+
 def get_job_result_descriptor(
     job_id: str,
     *,
@@ -336,8 +587,13 @@ def get_job_result_descriptor(
     payload = get_job_result(job_id, client=client)
     if payload is None:
         return None
+    snapshot = get_job_status(job_id, client=client)
+    if snapshot is None or not is_terminal_status(snapshot.status):
+        return None
     return build_result_descriptor(
         parse_job_result(payload),
+        completed_at=snapshot.updated_at,
+        provenance=get_job_provenance(job_id, client=client),
         lifetime=get_result_lifetime(job_id, client=client),
     )
 
@@ -465,8 +721,12 @@ def read_job_events(
 
 async def create_job_async(
     job: JobEnvelope,
+    provenance: JobRunProvenance | None = None,
     client: Any | None = None,
 ) -> JobStatusSnapshot:
+    client = redis_client if client is None else client
+    if provenance is not None:
+        await _save_job_provenance_async(job.job_id, provenance, client=client)
     return await set_job_status_async(
         job.job_id,
         "queued",
@@ -527,6 +787,17 @@ async def get_job_result_async(
     return _loads_json(payload)
 
 
+async def get_job_provenance_async(
+    job_id: str,
+    client: Any | None = None,
+) -> JobRunProvenance | None:
+    client = redis_client if client is None else client
+    payload = await client.get(provenance_key(job_id))
+    if payload is None:
+        return None
+    return JobRunProvenance.model_validate(_loads_json(payload))
+
+
 async def get_job_result_descriptor_async(
     job_id: str,
     *,
@@ -536,8 +807,13 @@ async def get_job_result_descriptor_async(
     payload = await get_job_result_async(job_id, client=client)
     if payload is None:
         return None
+    snapshot = await get_job_status_async(job_id, client=client)
+    if snapshot is None or not is_terminal_status(snapshot.status):
+        return None
     return build_result_descriptor(
         parse_job_result(payload),
+        completed_at=snapshot.updated_at,
+        provenance=await get_job_provenance_async(job_id, client=client),
         lifetime=await get_result_lifetime_async(job_id, client=client),
     )
 
@@ -600,11 +876,13 @@ def _stored_event_from_record(record: Any) -> StoredJobEvent:
 
 
 __all__ = [
+    "DEFAULT_AGENT_SCOPE",
     "JOB_INDEX_KEY",
     "JOB_STORE_TTL_SECONDS",
     "STREAM_LATEST",
     "STREAM_START",
     "TERMINAL_STATUSES",
+    "IdempotencyRecord",
     "JobCancelledError",
     "JobStatus",
     "JobStatusSnapshot",
@@ -612,10 +890,13 @@ __all__ = [
     "TerminalJobStatus",
     "append_job_event",
     "cancel_job",
+    "claim_idempotency_key_async",
     "create_job",
     "create_job_async",
     "delete_job_result_async",
     "events_key",
+    "get_job_provenance",
+    "get_job_provenance_async",
     "get_job_result",
     "get_job_result_async",
     "get_job_result_descriptor",
@@ -624,14 +905,18 @@ __all__ = [
     "get_job_status_async",
     "get_result_lifetime",
     "get_result_lifetime_async",
+    "idempotency_key",
     "is_job_cancelled",
     "is_terminal_status",
+    "job_idempotency_key",
     "job_index_key",
     "list_job_statuses",
+    "provenance_key",
     "raise_if_cancelled",
     "read_job_events",
     "read_job_events_async",
     "read_new_job_events_async",
+    "release_idempotency_key_async",
     "result_key",
     "save_job_result",
     "set_job_status",

@@ -1,5 +1,5 @@
 import logging
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from types import AsyncGeneratorType
 
 import uvicorn
@@ -20,10 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGeneratorType:  # noqa: ARG001
+async def lifespan(app: FastAPI) -> AsyncGeneratorType:
     await start_worker_inspect_collector()
     try:
-        yield
+        async with AsyncExitStack() as stack:
+            mcp_app = getattr(app.state, "mcp_app", None)
+            if mcp_app is not None:
+                await stack.enter_async_context(
+                    mcp_app.router.lifespan_context(mcp_app)
+                )
+            yield
     finally:
         await stop_worker_inspect_collector()
         logger.info("Shutting down worker inspect collector.")
@@ -65,10 +71,12 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     if config.mcp.enabled:
         from lyra.mcp import create_mcp_app  # noqa: PLC0415
 
-        app.mount(
-            config.mcp.mount_path,
-            create_mcp_app(api_key=config.mcp.read_api_key()),
+        mcp_app = create_mcp_app(
+            agent_api_key=config.agent.read_api_key(),
+            public_api_base_url=config.api.public_base_url,
         )
+        app.state.mcp_app = mcp_app
+        app.mount(config.mcp.mount_path, mcp_app)
     return app
 
 

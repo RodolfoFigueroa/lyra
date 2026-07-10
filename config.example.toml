@@ -1,12 +1,17 @@
 # Copy this file to /lyra_data/config/lyra.toml and adjust values for your
-# deployment. PostgreSQL connection settings and the admin API key are supplied
-# through environment variables, not this TOML file.
+# deployment. PostgreSQL connection settings plus the separate admin and agent
+# API keys are supplied through environment variables, not this TOML file.
+# LYRA_AGENT_API_KEY authenticates MCP and every /jobs lifecycle route.
 
 schema_version = 1
 
 [api]
 host = "0.0.0.0"
 port = 5219
+# Agents use this operator-controlled URL for authenticated result downloads.
+# Production deployments must use HTTPS. Explicit loopback HTTP is accepted for
+# local development, for example http://127.0.0.1:5219.
+public_base_url = "https://lyra.example.com"
 
 [redis]
 # For docker/docker-compose-dev.yml, use lyra-redis-dev.
@@ -25,6 +30,12 @@ level = "INFO"
 
 [job_store]
 ttl_seconds = 600
+
+[agent_submission_limit]
+# New REST and MCP jobs share this fixed-window quota. Idempotent replays do not
+# consume capacity.
+limit = 10
+window_seconds = 60
 
 [plugins]
 default_queue = "interactive"

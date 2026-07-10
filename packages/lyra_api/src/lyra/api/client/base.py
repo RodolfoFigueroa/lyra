@@ -57,6 +57,7 @@ class _BaseLyraAPIClient:
         timeout: float = 30.0,
         headers: dict[str, str] | None = None,
         *,
+        agent_api_key: str | None = None,
         admin_api_key: str | None = None,
         secure: bool = True,
         log_level: int = logging.INFO,
@@ -68,15 +69,20 @@ class _BaseLyraAPIClient:
             timeout: Request timeout in seconds. Defaults to 30.0.
             headers: Default HTTP headers to include in HTTP requests. If None,
                 defaults to an empty dict.
-            admin_api_key: Admin bearer token to include in HTTP requests.
+            agent_api_key: Bearer token for job and result requests.
+            admin_api_key: Bearer token for admin requests.
             secure: Whether to use HTTPS. Defaults to True.
             log_level: Logging level for status messages. Defaults to logging.INFO.
         """
         self.host = host.rstrip("/")
         self.timeout = timeout
         self.headers = dict(headers or {})
+        self._agent_headers = dict(self.headers)
+        self._admin_headers = dict(self.headers)
+        if agent_api_key is not None:
+            self._agent_headers["Authorization"] = f"Bearer {agent_api_key}"
         if admin_api_key is not None:
-            self.headers["Authorization"] = f"Bearer {admin_api_key}"
+            self._admin_headers["Authorization"] = f"Bearer {admin_api_key}"
         self.secure = secure
         self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self._logger.setLevel(log_level)
@@ -84,6 +90,14 @@ class _BaseLyraAPIClient:
     def _http_url(self, path: str) -> str:
         protocol = "https" if self.secure else "http"
         return f"{protocol}://{self.host}/{path.lstrip('/')}"
+
+    def _headers_for_path(self, path: str) -> dict[str, str]:
+        normalized_path = path.lstrip("/")
+        if normalized_path == "jobs" or normalized_path.startswith("jobs/"):
+            return self._agent_headers
+        if normalized_path == "admin" or normalized_path.startswith("admin/"):
+            return self._admin_headers
+        return self.headers
 
     def _job_id_from_result_ref(self, result_ref_or_job_id: str) -> str:
         return parse_result_ref(result_ref_or_job_id)

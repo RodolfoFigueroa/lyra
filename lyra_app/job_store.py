@@ -6,6 +6,7 @@ from typing import Any, Literal, TypeAlias
 from lyra.sdk.models import (
     JobEnvelope,
     JobEvent,
+    JobRunProvenance,
     ResultDescriptor,
     ResultLifetime,
     TerminalJobResult,
@@ -70,6 +71,10 @@ def result_key(job_id: str) -> str:
 
 def events_key(job_id: str) -> str:
     return f"job:{job_id}:events"
+
+
+def provenance_key(job_id: str) -> str:
+    return f"job:{job_id}:provenance"
 
 
 def job_index_key() -> str:
@@ -152,6 +157,7 @@ def _apply_ttl_sync(client: Any, job_id: str) -> None:
     client.expire(status_key(job_id), ttl)
     client.expire(result_key(job_id), ttl)
     client.expire(events_key(job_id), ttl)
+    client.expire(provenance_key(job_id), ttl)
 
 
 async def _apply_ttl_async(client: Any, job_id: str) -> None:
@@ -159,6 +165,7 @@ async def _apply_ttl_async(client: Any, job_id: str) -> None:
     await client.expire(status_key(job_id), ttl)
     await client.expire(result_key(job_id), ttl)
     await client.expire(events_key(job_id), ttl)
+    await client.expire(provenance_key(job_id), ttl)
 
 
 def _prune_job_index_sync(client: Any, *, now: datetime | None = None) -> None:
@@ -255,7 +262,44 @@ def _status_payload(
     ).model_dump(mode="json", exclude_none=True)
 
 
-def create_job(job: JobEnvelope, client: Any | None = None) -> JobStatusSnapshot:
+def _save_job_provenance_sync(
+    job_id: str,
+    provenance: JobRunProvenance,
+    *,
+    client: Any,
+) -> None:
+    payload = provenance.model_dump(mode="json", exclude_none=True)
+    client.set(
+        provenance_key(job_id),
+        _dump_json(payload),
+        ex=_job_store_ttl_seconds(),
+        nx=True,
+    )
+
+
+async def _save_job_provenance_async(
+    job_id: str,
+    provenance: JobRunProvenance,
+    *,
+    client: Any,
+) -> None:
+    payload = provenance.model_dump(mode="json", exclude_none=True)
+    await client.set(
+        provenance_key(job_id),
+        _dump_json(payload),
+        ex=_job_store_ttl_seconds(),
+        nx=True,
+    )
+
+
+def create_job(
+    job: JobEnvelope,
+    provenance: JobRunProvenance | None = None,
+    client: Any | None = None,
+) -> JobStatusSnapshot:
+    client = redis_client_sync if client is None else client
+    if provenance is not None:
+        _save_job_provenance_sync(job.job_id, provenance, client=client)
     return set_job_status(job.job_id, "queued", metric=job.metric, client=client)
 
 
@@ -325,6 +369,17 @@ def get_job_result(
     if payload is None:
         return None
     return _loads_json(payload)
+
+
+def get_job_provenance(
+    job_id: str,
+    client: Any | None = None,
+) -> JobRunProvenance | None:
+    client = redis_client_sync if client is None else client
+    payload = client.get(provenance_key(job_id))
+    if payload is None:
+        return None
+    return JobRunProvenance.model_validate(_loads_json(payload))
 
 
 def get_job_result_descriptor(
@@ -465,8 +520,12 @@ def read_job_events(
 
 async def create_job_async(
     job: JobEnvelope,
+    provenance: JobRunProvenance | None = None,
     client: Any | None = None,
 ) -> JobStatusSnapshot:
+    client = redis_client if client is None else client
+    if provenance is not None:
+        await _save_job_provenance_async(job.job_id, provenance, client=client)
     return await set_job_status_async(
         job.job_id,
         "queued",
@@ -525,6 +584,17 @@ async def get_job_result_async(
     if payload is None:
         return None
     return _loads_json(payload)
+
+
+async def get_job_provenance_async(
+    job_id: str,
+    client: Any | None = None,
+) -> JobRunProvenance | None:
+    client = redis_client if client is None else client
+    payload = await client.get(provenance_key(job_id))
+    if payload is None:
+        return None
+    return JobRunProvenance.model_validate(_loads_json(payload))
 
 
 async def get_job_result_descriptor_async(
@@ -616,6 +686,8 @@ __all__ = [
     "create_job_async",
     "delete_job_result_async",
     "events_key",
+    "get_job_provenance",
+    "get_job_provenance_async",
     "get_job_result",
     "get_job_result_async",
     "get_job_result_descriptor",
@@ -628,6 +700,7 @@ __all__ = [
     "is_terminal_status",
     "job_index_key",
     "list_job_statuses",
+    "provenance_key",
     "raise_if_cancelled",
     "read_job_events",
     "read_job_events_async",

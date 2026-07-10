@@ -183,9 +183,19 @@ class FakeRedisAsync:
     async def ping(self) -> bool:
         return self.available
 
-    async def set(self, key: str, value: str, *, ex: int) -> None:
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         self.expirations.append((key, ex))
+        return True
 
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
@@ -588,6 +598,8 @@ def test_create_job_dispatches_generic_task_to_state_queue(
         "queued"
     )
     assert len(redis.streams[job_store.events_key("job-1")]) == 1
+    provenance = json.loads(redis.values[job_store.provenance_key("job-1")])
+    assert provenance["row_identity"] == {"field": "id"}
 
 
 def test_create_job_rejects_unknown_metric(
@@ -737,6 +749,65 @@ def test_create_job_resolves_met_zone_code_spatial_input(
 
     dispatched_input = celery.sent[0]["args"][0]["input"]
     assert dispatched_input["location"] == _feature_collection("met-09.01")
+    provenance = json.loads(redis.values[job_store.provenance_key("job-1")])
+    entry = registry.get_metric_entry("heavy_metric")
+    assert entry is not None
+    assert provenance == {
+        "metric": "heavy_metric",
+        "catalog_fingerprint": registry.get_public_catalog_fingerprint(),
+        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+        "input": _spatial_payload(data_type="met_zone_code", value="09.01"),
+        "output": entry.metric.output.model_dump(mode="json"),
+        "created_at": provenance["created_at"],
+        "row_identity": {
+            "field": "cvegeo",
+            "namespace": "inegi:cvegeo:ageb",
+            "version": "2020",
+        },
+    }
+    assert "coordinates" not in json.dumps(provenance)
+
+
+def test_stored_provenance_survives_catalog_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", FakeCelery())
+    monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
+
+    asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(
+                metric="heavy_metric",
+                input=_spatial_payload(
+                    data_type="met_zone_code",
+                    value="09.01",
+                ),
+            )
+        )
+    )
+    stored = redis.values[job_store.provenance_key("job-1")]
+    old_entry = registry.get_metric_entry("heavy_metric")
+    assert old_entry is not None
+
+    changed_manifest = _manifest()
+    changed_manifest["plugin"]["version"] = "2.0.0"
+    changed_manifest["metrics"][0]["description"] = "A changed heavy metric."
+    (tmp_path / "repo" / MANIFEST_FILENAME).write_text(
+        json.dumps(changed_manifest),
+        encoding="utf-8",
+    )
+    registry.refresh_catalog()
+
+    new_entry = registry.get_metric_entry("heavy_metric")
+    assert new_entry is not None
+    assert new_entry.catalog_fingerprint != old_entry.catalog_fingerprint
+    assert new_entry.plugin_version == "2.0.0"
+    assert redis.values[job_store.provenance_key("job-1")] == stored
 
 
 def test_create_job_rejects_invalid_cvegeo_list(

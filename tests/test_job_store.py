@@ -10,6 +10,7 @@ from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
     JobEnvelope,
+    JobRunProvenance,
     ResultReference,
     TableJobResult,
 )
@@ -28,9 +29,19 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         self.expirations.append((key, ex))
+        return True
 
     def get(self, key: str) -> str | None:
         return self.values.get(key)
@@ -101,9 +112,19 @@ class FakeRedisAsync:
         if payload is not None:
             self.values[job_store.result_key("job-1")] = payload
 
-    async def set(self, key: str, value: str, *, ex: int) -> None:
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         self.expirations.append((key, ex))
+        return True
 
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
@@ -179,6 +200,37 @@ def _load_status(redis: FakeRedisSync, job_id: str) -> dict[str, Any]:
     return json.loads(redis.values[job_store.status_key(job_id)])
 
 
+def _provenance() -> JobRunProvenance:
+    return JobRunProvenance.model_validate(
+        {
+            "metric": "heavy_metric",
+            "catalog_fingerprint": "catalog-1",
+            "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+            "input": {
+                "location": {"data_type": "met_zone_code", "value": "09.01"},
+                "value": 1,
+            },
+            "output": {
+                "kind": "table",
+                "columns": [
+                    {
+                        "name": "value",
+                        "type": "integer",
+                        "unit": "count",
+                        "description": "Example output value.",
+                    }
+                ],
+            },
+            "created_at": "2026-07-09T12:00:00Z",
+            "row_identity": {
+                "field": "cvegeo",
+                "namespace": "inegi:cvegeo:ageb",
+                "version": "2020",
+            },
+        }
+    )
+
+
 @pytest.fixture(autouse=True)
 def _load_config(tmp_path: Path) -> Iterator[None]:
     load_test_config(tmp_path)
@@ -189,8 +241,9 @@ def _load_config(tmp_path: Path) -> Iterator[None]:
 def test_create_job_writes_queued_status_and_ttl() -> None:
     redis = FakeRedisSync()
     job = JobEnvelope(job_id="job-1", metric="heavy_metric", input={"value": 1})
+    provenance = _provenance()
 
-    snapshot = job_store.create_job(job, client=redis)
+    snapshot = job_store.create_job(job, provenance, client=redis)
 
     assert snapshot.status == "queued"
     assert snapshot.metric == "heavy_metric"
@@ -205,6 +258,34 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     )
     assert (job_store.events_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
         redis.expirations
+    )
+    assert (job_store.provenance_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
+        redis.expirations
+    )
+    assert job_store.get_job_provenance("job-1", client=redis) == provenance
+    stored = json.loads(redis.values[job_store.provenance_key("job-1")])
+    assert stored == provenance.model_dump(mode="json", exclude_none=True)
+    assert "coordinates" not in json.dumps(stored)
+
+
+def test_job_provenance_is_immutable_and_supports_async_reads() -> None:
+    redis = FakeRedisAsync()
+    job = JobEnvelope(job_id="job-1", metric="heavy_metric", input={"value": 1})
+    original = _provenance()
+    changed = original.model_copy(update={"catalog_fingerprint": "catalog-2"})
+
+    asyncio.run(job_store.create_job_async(job, original, client=redis))
+    asyncio.run(job_store.create_job_async(job, changed, client=redis))
+
+    assert (
+        asyncio.run(job_store.get_job_provenance_async("job-1", client=redis))
+        == original
+    )
+    assert (
+        asyncio.run(job_store.get_job_provenance_async("missing", client=redis)) is None
+    )
+    assert json.loads(redis.values[job_store.provenance_key("job-1")]) == (
+        original.model_dump(mode="json", exclude_none=True)
     )
 
 

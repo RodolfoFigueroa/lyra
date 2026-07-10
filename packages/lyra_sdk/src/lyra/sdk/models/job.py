@@ -3,6 +3,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
+from lyra.sdk.models.plugin_v3 import OutputSpecV3, PluginInfoV3
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field, TypeAdapter, model_validator
 
@@ -20,6 +21,47 @@ RawResultFormat = Literal["terminal_json", "jsonl"]
 
 DEFAULT_RESULT_PREVIEW_ROWS = 20
 DEFAULT_RESULT_INDEX_FIELD = "_result_index"
+
+
+class RowIdentityMetadata(StrictBaseModel):
+    """Identity contract for rows produced from an authoritative spatial source."""
+
+    field: str = Field(
+        min_length=1,
+        description="Source field represented by each terminal result row index.",
+    )
+    namespace: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Authoritative identifier namespace, when known.",
+    )
+    version: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Authoritative source version or vintage, when known.",
+    )
+
+
+class JobRunProvenance(StrictBaseModel):
+    """Immutable public contract captured when Lyra accepts a job."""
+
+    metric: str = Field(min_length=1, description="Submitted public metric name.")
+    catalog_fingerprint: str = Field(
+        min_length=1,
+        description="Public catalog fingerprint used to validate the submission.",
+    )
+    plugin: PluginInfoV3 = Field(description="Plugin identity used for the run.")
+    input: dict[str, Any] = Field(
+        description="Validated unresolved public request submitted by the client.",
+    )
+    output: OutputSpecV3 = Field(
+        description="Metric output declaration used to validate the run.",
+    )
+    created_at: datetime = Field(description="UTC timestamp when the job was created.")
+    row_identity: RowIdentityMetadata | None = Field(
+        default=None,
+        description="Authoritative identity for result rows, when known.",
+    )
 
 
 def _string_axis_values(values: Iterable[Any], *, axis: str) -> list[str]:
@@ -699,6 +741,7 @@ __all__ = [
     "JobLifecycleStatus",
     "JobLinks",
     "JobListResponse",
+    "JobRunProvenance",
     "JobStatusInfo",
     "NumericColumnSummary",
     "RawResultFormat",
@@ -712,6 +755,7 @@ __all__ = [
     "ResultSummary",
     "ResultTableMetadata",
     "ResultTablePreview",
+    "RowIdentityMetadata",
     "TableJobResult",
     "TerminalJobResult",
     "TerminalJobStatus",

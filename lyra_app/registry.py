@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ class MetricRegistryEntry:
     queue: str
     repo_id: str
     entrypoint: str
+    catalog_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,13 @@ def _build_registry(
     manifests: list[tuple[CompiledPluginManifestV3, Path, str]],
     metric_queues: dict[str, str],
 ) -> dict[str, MetricRegistryEntry]:
+    catalog_fingerprint = public_catalog_fingerprint(
+        [
+            _metric_info_from_manifest(metric)
+            for manifest, _path, _repo_id in manifests
+            for metric in manifest.metrics
+        ]
+    )
     registry: dict[str, MetricRegistryEntry] = {}
     for manifest, _path, repo_id in manifests:
         for metric in manifest.metrics:
@@ -146,6 +155,7 @@ def _build_registry(
                 queue=queue,
                 repo_id=repo_id,
                 entrypoint=metric.entrypoint,
+                catalog_fingerprint=catalog_fingerprint,
             )
     return registry
 
@@ -323,6 +333,15 @@ def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
     if entry is None:
         msg = f"Unknown metric: {metric_name!r}"
         raise KeyError(msg)
+    return validate_metric_entry_payload(entry, payload)
+
+
+def validate_metric_entry_payload(
+    entry: MetricRegistryEntry,
+    payload: Any,
+) -> dict[str, Any]:
+    """Validate a payload against one captured registry contract."""
+
     if not isinstance(payload, dict):
         raise MetricPayloadValidationError(
             [{"loc": [], "msg": "Input must be a JSON object.", "type": "type"}],
@@ -339,7 +358,7 @@ def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
     batch_errors = _validate_unique_batch_keys(entry.metric, payload)
     if batch_errors:
         raise MetricPayloadValidationError(batch_errors)
-    return payload
+    return deepcopy(payload)
 
 
 def _validate_unique_batch_keys(
@@ -378,12 +397,16 @@ def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]
 
 
 def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV3:
+    return _metric_info_from_manifest(entry.metric)
+
+
+def _metric_info_from_manifest(metric: CompiledMetricManifestV3) -> MetricInfoV3:
     return MetricInfoV3(
-        name=entry.metric.name,
-        description=entry.metric.description.strip(),
-        request_schema=entry.request_schema,
-        spatial_inputs=entry.metric.spatial_inputs,
-        output=entry.metric.output,
+        name=metric.name,
+        description=metric.description.strip(),
+        request_schema=metric.request_schema,
+        spatial_inputs=metric.spatial_inputs,
+        output=metric.output,
     )
 
 

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
 
@@ -13,7 +14,9 @@ from lyra.sdk.models import (
     JobCreateResponse,
     JobEnvelope,
     JobLinks,
+    JobRunProvenance,
     JobStatusInfo,
+    PluginInfoV3,
     TableJobResult,
     build_table_preview,
     parse_job_result,
@@ -28,12 +31,12 @@ from lyra_app.db.redis import redis_client
 from lyra_app.registry import (
     MetricPayloadValidationError,
     get_metric_entry,
-    validate_metric_payload,
+    validate_metric_entry_payload,
 )
 from lyra_app.spatial_inputs import (
     SpatialInputResolutionUnavailableError,
     SpatialInputValidationError,
-    resolve_spatial_inputs,
+    resolve_spatial_inputs_with_metadata,
 )
 
 router = APIRouter(dependencies=[Depends(require_agent_key)])
@@ -151,12 +154,13 @@ async def create_job(request: JobCreateRequest) -> JobCreateResponse:
         )
 
     try:
-        validated_input = validate_metric_payload(request.metric, request.input)
+        validated_input = validate_metric_entry_payload(entry, request.input)
     except MetricPayloadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
+    created_at = datetime.now(UTC)
     try:
-        resolved_input = await asyncio.to_thread(
-            resolve_spatial_inputs,
+        resolution = await asyncio.to_thread(
+            resolve_spatial_inputs_with_metadata,
             validated_input,
             entry.metric.spatial_inputs,
         )
@@ -170,10 +174,19 @@ async def create_job(request: JobCreateRequest) -> JobCreateResponse:
     envelope = JobEnvelope(
         job_id=job_id,
         metric=request.metric,
-        input=resolved_input,
+        input=resolution.input,
         idempotency_key=request.idempotency_key,
     )
-    await job_store.create_job_async(envelope)
+    provenance = JobRunProvenance(
+        metric=request.metric,
+        catalog_fingerprint=entry.catalog_fingerprint,
+        plugin=PluginInfoV3(name=entry.plugin_name, version=entry.plugin_version),
+        input=validated_input,
+        output=entry.metric.output,
+        created_at=created_at,
+        row_identity=resolution.row_identity,
+    )
+    await job_store.create_job_async(envelope, provenance)
     celery_app.send_task(
         GENERIC_TASK_NAME,
         args=[envelope.model_dump(mode="json")],

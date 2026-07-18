@@ -8,7 +8,7 @@ repos:
     hooks:
       - id: generate-sdk-interface
         name: Generate SDK Interface
-        entry: uv run python build_scripts/generate_sdk.py
+        entry: bash build_scripts/generate_sdk.sh
         language: system
         files: ^lyra_app/db/client\.py$
         pass_filenames: false

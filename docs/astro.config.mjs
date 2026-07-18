@@ -96,6 +96,7 @@ export default defineConfig({
             { label: 'Contributor Guide', slug: 'contributor-guide' },
             { label: 'Local Development', slug: 'local-development' },
             { label: 'Testing And Quality', slug: 'testing-and-quality' },
+            { label: 'Releases', slug: 'releases' },
           ],
         },
         {

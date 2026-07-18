@@ -13,6 +13,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 - Contributor Guide: https://rodolfofigueroa.github.io/lyra/contributor-guide/
 - Local Development: https://rodolfofigueroa.github.io/lyra/local-development/
 - Testing And Quality: https://rodolfofigueroa.github.io/lyra/testing-and-quality/
+- Releases: https://rodolfofigueroa.github.io/lyra/releases/
 - Plugin Quickstart: https://rodolfofigueroa.github.io/lyra/plugin-quickstart/
 - Plugin Author Checklist: https://rodolfofigueroa.github.io/lyra/plugin-author-checklist/
 - Plugin Manifests: https://rodolfofigueroa.github.io/lyra/plugin-manifests/

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "python",
+  "include-component-in-tag": true,
+  "separate-pull-requests": false,
+  "bump-minor-pre-major": true,
+  "bootstrap-sha": "27a317afe02a17f5d43da664a5c2b21803b04132",
+  "packages": {
+    ".": {
+      "component": "lyra-app",
+      "package-name": "lyra-app",
+      "exclude-paths": [
+        "docs/**",
+        "packages/lyra_api/**",
+        "packages/lyra_tui/**"
+      ]
+    },
+    "packages/lyra_sdk": {
+      "component": "lyra-sdk",
+      "package-name": "lyra-sdk"
+    },
+    "packages/lyra_api": {
+      "component": "lyra-api",
+      "package-name": "lyra-api"
+    },
+    "packages/lyra_utils": {
+      "component": "lyra-utils",
+      "package-name": "lyra-utils"
+    },
+    "packages/lyra_mcp": {
+      "component": "lyra-mcp",
+      "package-name": "lyra-mcp"
+    },
+    "packages/lyra_tui": {
+      "component": "lyra-tui",
+      "package-name": "lyra-tui"
+    }
+  }
+}

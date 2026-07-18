@@ -10,8 +10,14 @@ Run focused checks while developing, then run the broader suite before handing o
 Run the full Python test suite:
 
 ```bash
-uv run pytest
+uv run pytest \
+  --cov=lyra_app \
+  --cov=lyra \
+  --cov-report=term-missing \
+  --cov-report=xml
 ```
+
+The full suite writes machine-readable coverage results to `coverage.xml`.
 
 Run a focused test file:
 

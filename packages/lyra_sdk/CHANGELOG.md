@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.1.0...lyra-sdk-v0.1.1) (2026-07-18)
+
+
+### Bug Fixes
+
+* Fix SDK CI integration ([53ac1b5](https://github.com/RodolfoFigueroa/lyra/commit/53ac1b5abb13c906f274d410360a9c6808d5962b))
+
 ## 0.1.0 (2026-07-18)
 
 

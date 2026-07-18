@@ -1,4 +1,5 @@
 import ast
+import copy
 import logging
 from pathlib import Path
 
@@ -19,7 +20,11 @@ def _extract_names(node: ast.AST | None) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
-def _make_method_abstract(item: ast.FunctionDef, required_names: set[str]) -> None:
+def _make_method_abstract(
+    item: ast.FunctionDef,
+    annotation_names: set[str],
+    runtime_names: set[str],
+) -> None:
     """Makes a public method abstract and harvests type names from its signature.
 
     Adds the ``@abstractmethod`` decorator, collects all type names used in
@@ -28,16 +33,16 @@ def _make_method_abstract(item: ast.FunctionDef, required_names: set[str]) -> No
 
     Args:
         item: The function definition node to transform in-place.
-        required_names: Mutable set that is updated with every type name
-            found in the method signature.
+        annotation_names: Mutable set updated with names used in annotations.
+        runtime_names: Mutable set updated with names used in default values.
     """
     item.decorator_list.append(ast.Name(id="abstractmethod", ctx=ast.Load()))
 
     for arg in item.args.args + item.args.kwonlyargs:
-        required_names.update(_extract_names(arg.annotation))
+        annotation_names.update(_extract_names(arg.annotation))
     for default in item.args.defaults + item.args.kw_defaults:
-        required_names.update(_extract_names(default))
-    required_names.update(_extract_names(item.returns))
+        runtime_names.update(_extract_names(default))
+    annotation_names.update(_extract_names(item.returns))
 
     # Preserve docstring, strip execution logic
     if ast.get_docstring(item):
@@ -46,19 +51,22 @@ def _make_method_abstract(item: ast.FunctionDef, required_names: set[str]) -> No
         item.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
 
 
-def _transform_class(tree: ast.Module) -> tuple[ast.ClassDef | None, set[str]]:
+def _transform_class(
+    tree: ast.Module,
+) -> tuple[ast.ClassDef | None, set[str], set[str]]:
     """Finds ``LyraDBImplicit``, renames it to ``LyraDB``, and abstracts public methods.
 
     Args:
         tree: The parsed AST module to search and modify in-place.
 
     Returns:
-        A tuple of ``(class_node, required_names)`` where ``class_node`` is the
-        transformed ``ClassDef`` node (or ``None`` if the class was not found)
-        and ``required_names`` is the set of type names referenced in the
-        public method signatures.
+        A tuple of ``(class_node, annotation_names, runtime_names)`` where
+        ``class_node`` is the transformed ``ClassDef`` node (or ``None`` if the
+        class was not found), ``annotation_names`` contains names used only for
+        typing, and ``runtime_names`` contains names used in default values.
     """
-    required_names: set[str] = set()
+    annotation_names: set[str] = set()
+    runtime_names: set[str] = set()
     abstract_class_node = None
 
     for node in tree.body:
@@ -69,9 +77,9 @@ def _transform_class(tree: ast.Module) -> tuple[ast.ClassDef | None, set[str]]:
 
             for item in node.body:
                 if isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
-                    _make_method_abstract(item, required_names)
+                    _make_method_abstract(item, annotation_names, runtime_names)
 
-    return abstract_class_node, required_names
+    return abstract_class_node, annotation_names, runtime_names
 
 
 def _filter_import(
@@ -101,26 +109,45 @@ def _filter_import(
 def _build_module_body(
     tree: ast.Module,
     abstract_class_node: ast.ClassDef,
-    required_names: set[str],
+    annotation_names: set[str],
+    runtime_names: set[str],
 ) -> list[ast.stmt]:
     """Rebuilds the module body with only required imports and the abstract class.
 
     Args:
         tree: The parsed AST module whose body is used as the source of nodes.
         abstract_class_node: The transformed class node that must be included.
-        required_names: Type names used to decide which import aliases to keep.
+        annotation_names: Names whose imports are only needed by type checkers.
+        runtime_names: Names whose imports are needed while defining the class.
 
     Returns:
-        A list of AST statements containing the filtered imports followed by
-        the abstract class definition.
+        A list of AST statements containing runtime imports, annotation-only
+        imports guarded by ``TYPE_CHECKING``, and the abstract class definition.
     """
     new_body: list[ast.stmt] = []
+    type_checking_imports: list[ast.stmt] = []
+    annotation_only_names = annotation_names - runtime_names
+
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            filtered = _filter_import(node, required_names)
-            if filtered:
-                new_body.append(filtered)
+            runtime_import = _filter_import(copy.deepcopy(node), runtime_names)
+            if runtime_import:
+                new_body.append(runtime_import)
+
+            type_checking_import = _filter_import(
+                copy.deepcopy(node), annotation_only_names
+            )
+            if type_checking_import:
+                type_checking_imports.append(type_checking_import)
         elif node is abstract_class_node:
+            if type_checking_imports:
+                new_body.append(
+                    ast.If(
+                        test=ast.Name(id="TYPE_CHECKING", ctx=ast.Load()),
+                        body=type_checking_imports,
+                        orelse=[],
+                    )
+                )
             new_body.append(node)
     return new_body
 
@@ -150,19 +177,29 @@ def generate_sdk_interface(source: str, dest: str) -> None:
 
     tree = ast.parse(source_code)
 
-    abstract_class_node, required_names = _transform_class(tree)
+    abstract_class_node, annotation_names, runtime_names = _transform_class(tree)
     if not abstract_class_node:
         msg = f"Class 'LyraDBImplicit' not found in {source_path_str}"
         raise ValueError(msg)
 
-    tree.body = _build_module_body(tree, abstract_class_node, required_names)
+    tree.body = _build_module_body(
+        tree,
+        abstract_class_node,
+        annotation_names,
+        runtime_names,
+    )
 
     header = (
         f"# This file is automatically generated from {source_path_str}.\n"
         "# Do not edit it directly, make changes in the source file instead.\n"
         "\n"
     )
-    new_source = header + "from abc import ABC, abstractmethod\n\n" + ast.unparse(tree)
+    generated_imports = (
+        "from __future__ import annotations\n\n"
+        "from abc import ABC, abstractmethod\n"
+        "from typing import TYPE_CHECKING\n\n"
+    )
+    new_source = header + generated_imports + ast.unparse(tree)
 
     with dest_path.open("w", encoding="utf8") as f:
         f.write(new_source)

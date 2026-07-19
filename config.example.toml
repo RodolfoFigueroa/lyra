@@ -15,12 +15,14 @@ public_base_url = "https://lyra.example.com"
 
 [redis]
 # For docker/docker-compose-dev.yml, use lyra-redis-dev.
-# For a production Compose service named redis, use redis://redis:6379/0.
+# For a production Compose service named lyra-redis, use redis://lyra-redis:6379/0.
 # For direct local processes, use redis://localhost:6379/0.
-url = "redis://lyra-redis-dev:6379/0"
+url = "redis://lyra-redis:6379/0"
 
 [earth_engine]
 project = "your-gee-project-id"
+# Not needed for docker deployments, which use the service account file 
+# mounted at /lyra_data/secrets/service-account.json.
 # service_account_file = "/lyra_data/secrets/service-account.json"
 
 [logging]

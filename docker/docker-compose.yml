@@ -13,7 +13,7 @@ x-lyra-app-environment: &lyra-app-environment
 
 services:
   lyra:
-    image: rodolfofigueroa/lyra:latest
+    image: ghcr.io/rodolfofigueroa/lyra:latest
     restart: unless-stopped
     ports:
       - 5219:5219
@@ -22,7 +22,7 @@ services:
     networks:
       - lyra_net
     depends_on:
-      - redis
+      - lyra-redis
     healthcheck:
       test:
         - CMD
@@ -34,14 +34,15 @@ services:
       retries: 20
       start_period: 5s
 
-  redis:
+  lyra-redis:
     image: redis:alpine
+    container_name: lyra-redis
     restart: unless-stopped
     networks:
       - lyra_net
 
   celery_worker_interactive:
-    image: rodolfofigueroa/lyra:latest
+    image: ghcr.io/rodolfofigueroa/lyra:latest
     restart: unless-stopped
     command: python -m lyra_app.worker_launcher interactive
     volumes: *lyra-app-volumes
@@ -49,13 +50,13 @@ services:
     networks:
       - lyra_net
     depends_on:
-      redis:
+      lyra-redis:
         condition: service_started
       lyra:
         condition: service_healthy
 
   celery_worker_batch:
-    image: rodolfofigueroa/lyra:latest
+    image: ghcr.io/rodolfofigueroa/lyra:latest
     restart: unless-stopped
     command: python -m lyra_app.worker_launcher batch
     volumes: *lyra-app-volumes
@@ -63,7 +64,7 @@ services:
     networks:
       - lyra_net
     depends_on:
-      redis:
+      lyra-redis:
         condition: service_started
       lyra:
         condition: service_healthy

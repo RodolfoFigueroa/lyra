@@ -17,7 +17,7 @@ runtime settings:
 | `[job_store]` | Job status, result, and event TTL. |
 | `[agent_submission_limit]` | Shared REST/MCP fixed-window quota. |
 | `[mcp]` | Official Streamable HTTP MCP enablement and mount path. |
-| `[plugins]` | Plugin runtime paths, default queue, and allowed queues. |
+| `[plugins]` | Plugin runtime paths, first-run repos, default queue, and allowed queues. |
 | `[workers.<name>]` | Worker queues, concurrency, install directory, and temp directory. |
 
 PostgreSQL settings plus agent and admin keys are environment variables:
@@ -41,9 +41,11 @@ sources use `/lyra_data/plugins/catalog`, runner installs use
 `/lyra_data/plugins/runners/<worker>`, and worker temp files use
 `/lyra_data/cache/jobs/<worker>`.
 
-Plugin sources and metric routing live in
-`/lyra_data/state/plugins.toml`. Lyra owns that state file, and operators update
-it through the admin API rather than by editing `lyra.toml`.
+`plugins.initial_repos` accepts plugin source strings for a new data volume. The
+API validates and installs those sources before atomically creating
+`/lyra_data/state/plugins.toml`. The setting is ignored after that file exists.
+Lyra owns the state file, and operators make subsequent repository and routing
+changes through the admin API.
 
 ## Local Commands
 

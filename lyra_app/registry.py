@@ -1,11 +1,13 @@
 import hashlib
 import json
 import logging
+import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from filelock import FileLock
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
@@ -26,6 +28,7 @@ from lyra_app.config import LyraConfig, get_config
 from lyra_app.plugin_state import (
     PluginState,
     PluginStateStore,
+    make_repo_record,
     metric_queue_mapping,
     repo_record_to_source,
 )
@@ -185,11 +188,13 @@ def _synced_repo_id(raw_source: str, repo_ids_by_source: dict[str, str]) -> str:
 
 def refresh_catalog(
     store: PluginStateStore | None = None,
+    *,
+    config: LyraConfig | None = None,
 ) -> CatalogRefreshResult:
     global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
 
     previous_fingerprint = _CATALOG_FINGERPRINT
-    config = get_config()
+    config = get_config() if config is None else config
     state_store = store or PluginStateStore(
         allowed_queues=config.plugins.allowed_queues,
     )
@@ -251,9 +256,51 @@ def refresh_catalog_from_state(
     return refresh_catalog(store)
 
 
+def initialize_catalog(
+    config: LyraConfig | None = None,
+    *,
+    store: PluginStateStore | None = None,
+) -> CatalogRefreshResult:
+    config = get_config() if config is None else config
+    state_store = store or PluginStateStore(
+        allowed_queues=config.plugins.allowed_queues,
+    )
+    state_path = state_store.path
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with FileLock(f"{state_path}.lock"):
+        if state_path.exists():
+            return refresh_catalog(state_store, config=config)
+
+        initial_state = PluginState(
+            repos=[make_repo_record(source) for source in config.plugins.initial_repos]
+        )
+        with tempfile.NamedTemporaryFile(
+            dir=state_path.parent,
+            prefix=f".{state_path.name}.",
+            suffix=".initial",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+        temp_path.unlink()
+        temp_store = type(state_store)(
+            temp_path,
+            allowed_queues=state_store.allowed_queues,
+        )
+
+        try:
+            temp_store.save(initial_state)
+            result = refresh_catalog(temp_store, config=config)
+            temp_path.replace(state_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        return result
+
+
 def ensure_catalog_loaded() -> None:
     if not _CATALOG_LOADED:
-        refresh_catalog()
+        initialize_catalog()
 
 
 def get_catalog_fingerprint() -> str:

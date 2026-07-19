@@ -199,16 +199,16 @@ class PluginRepoRecord(StrictPluginStateModel):
             msg = "repos.source must not include an inline ref"
             raise ValueError(msg)
 
-        if normalized.source != self.source:
-            msg = "repos.source must be normalized before it is stored"
-            raise ValueError(msg)
-
         if normalized.source_kind == "local" and self.ref is not None:
             msg = "local plugin repo sources cannot include refs"
             raise ValueError(msg)
 
         if normalized.source_kind == "directory" and self.ref is not None:
             msg = "directory plugin sources cannot include refs"
+            raise ValueError(msg)
+
+        if normalized.source != self.source:
+            msg = "repos.source must be normalized before it is stored"
             raise ValueError(msg)
 
         return self

@@ -9,7 +9,7 @@ import pytest
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
-from lyra_app.plugin_state import PluginState, make_repo_record
+from lyra_app.plugin_state import PluginState, PluginStateStore, make_repo_record
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
     PluginRepoEntry,
@@ -150,6 +150,94 @@ def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
     assert entry.queue == "lightweight"
     assert entry.repo_id == "owner__repo"
     assert entry.entrypoint == "fake_plugin.runner:run"
+
+
+def test_initialize_catalog_commits_first_run_state(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "initial-plugin"
+    _write_manifest(source, _manifest())
+    config = get_config()
+    config = config.model_copy(
+        update={
+            "plugins": config.plugins.model_copy(
+                update={"initial_repos": [directory_uri(source)]}
+            )
+        }
+    )
+    store = PluginStateStore(
+        tmp_path / "fresh-state" / "plugins.toml",
+        allowed_queues=config.plugins.allowed_queues,
+    )
+
+    result = registry.initialize_catalog(config, store=store)
+
+    state = store.load()
+    assert store.path.is_file()
+    assert [repo.source for repo in state.repos] == [directory_uri(source)]
+    assert state.metric_queues["light_metric"].repo_id == state.repos[0].id
+    assert result.assigned_metric_queues == ["light_metric"]
+
+
+def test_initialize_catalog_commits_empty_first_run_state(tmp_path: Path) -> None:
+    config = get_config()
+    store = PluginStateStore(
+        tmp_path / "empty-state" / "plugins.toml",
+        allowed_queues=config.plugins.allowed_queues,
+    )
+
+    result = registry.initialize_catalog(config, store=store)
+
+    assert store.path.is_file()
+    assert store.load() == PluginState.empty()
+    assert result.assigned_metric_queues == []
+
+
+def test_initialize_catalog_ignores_initial_repos_when_state_exists(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "existing-plugin"
+    _write_manifest(source, _manifest())
+    config = get_config()
+    config = config.model_copy(
+        update={
+            "plugins": config.plugins.model_copy(
+                update={"initial_repos": [directory_uri(tmp_path / "ignored")]}
+            )
+        }
+    )
+    store = PluginStateStore(
+        tmp_path / "existing-state" / "plugins.toml",
+        allowed_queues=config.plugins.allowed_queues,
+    )
+    store.save(PluginState(repos=[make_repo_record(directory_uri(source))]))
+
+    registry.initialize_catalog(config, store=store)
+
+    assert [repo.source for repo in store.load().repos] == [directory_uri(source)]
+
+
+def test_initialize_catalog_failure_leaves_state_uninitialized(
+    tmp_path: Path,
+) -> None:
+    config = get_config()
+    config = config.model_copy(
+        update={
+            "plugins": config.plugins.model_copy(
+                update={"initial_repos": [directory_uri(tmp_path / "missing")]}
+            )
+        }
+    )
+    store = PluginStateStore(
+        tmp_path / "failed-state" / "plugins.toml",
+        allowed_queues=config.plugins.allowed_queues,
+    )
+
+    with pytest.raises(PluginSyncError, match="does not exist"):
+        registry.initialize_catalog(config, store=store)
+
+    assert not store.path.exists()
+    assert not list(store.path.parent.glob(".plugins.toml.*.initial"))
 
 
 def test_metric_search_text_is_derived_from_public_catalog_fields(

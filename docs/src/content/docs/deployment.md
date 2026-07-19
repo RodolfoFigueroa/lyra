@@ -15,6 +15,7 @@ API containers:
 
 - Read `/lyra_data/config/lyra.toml`.
 - Create non-secret runtime directories under `/lyra_data`.
+- Seed `plugins.initial_repos` when plugin state does not yet exist.
 - Read plugin sources and metric routing from
   `/lyra_data/state/plugins.toml`.
 - Sync plugin manifests into `plugins.catalog_dir`.
@@ -135,8 +136,16 @@ The job-store TTL covers status, events, provenance, results, and associated
 idempotency records. Descriptors expose remaining lifetime. Downstream systems
 must download needed results before expiry; Lyra is not durable result storage.
 
-`/lyra_data/state/plugins.toml` is not mounted from the host. Lyra creates and
-writes it inside the named volume.
+`/lyra_data/state/plugins.toml` is not mounted from the host. On a new volume,
+the API builds temporary state from `plugins.initial_repos`, validates repository
+access and manifests, assigns default metric queues, and atomically commits the
+state file. Initialization failure prevents the API from starting and leaves the
+state absent so corrected configuration can be retried. Once the file exists,
+later `initial_repos` changes are ignored.
+
+Compose health-gates workers on the API so they cannot install plugins before
+initial state and routing are ready. For other process supervisors, start the
+API first and wait for `/health` before starting workers.
 
 The checked-in examples include two worker pools:
 

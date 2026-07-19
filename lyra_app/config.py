@@ -418,11 +418,23 @@ class PluginsConfig(StrictConfigModel):
     runner_base_dir: Path = DEFAULT_PLUGIN_RUNNER_BASE_DIR
     default_queue: str = Field(min_length=1)
     allowed_queues: list[str] = Field(min_length=1)
+    initial_repos: list[str] = Field(default_factory=list)
 
-    @field_validator("allowed_queues", mode="before")
+    @field_validator("allowed_queues", "initial_repos", mode="before")
     @classmethod
     def normalize_string_lists(cls, value: Any) -> Any:
         return _strip_string_list(value)
+
+    @field_validator("initial_repos")
+    @classmethod
+    def validate_initial_repos(cls, value: list[str]) -> list[str]:
+        from lyra_app.plugin_state import (  # noqa: PLC0415
+            PluginState,
+            make_repo_record,
+        )
+
+        PluginState(repos=[make_repo_record(source) for source in value])
+        return value
 
     @field_validator("catalog_dir", "runner_base_dir", mode="before")
     @classmethod
@@ -745,6 +757,8 @@ def _append_plugins_section(lines: list[str], plugins: PluginsConfig) -> None:
     lines.append("[plugins]")
     _append_key(lines, "default_queue", plugins.default_queue)
     _append_key(lines, "allowed_queues", plugins.allowed_queues)
+    if plugins.initial_repos:
+        _append_key(lines, "initial_repos", plugins.initial_repos)
     if plugins.catalog_dir != DEFAULT_PLUGIN_CATALOG_DIR:
         _append_key(lines, "catalog_dir", plugins.catalog_dir)
     if plugins.runner_base_dir != DEFAULT_PLUGIN_RUNNER_BASE_DIR:

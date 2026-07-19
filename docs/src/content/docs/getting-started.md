@@ -64,6 +64,7 @@ ttl_seconds = 600
 [plugins]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
+# initial_repos = ["owner/plugin-repo@main"]
 # catalog_dir = "/lyra_data/plugins/catalog"
 # runner_base_dir = "/lyra_data/plugins/runners"
 
@@ -125,24 +126,30 @@ Start Redis locally:
 docker run -d -p 6379:6379 redis:alpine
 ```
 
-Start a worker by name:
-
-```bash
-uv run python -m lyra_app.worker_launcher interactive
-```
-
-Start the API:
+Start the API and wait for its health endpoint. The API initializes plugin state
+and metric routes before it begins serving requests:
 
 ```bash
 uv run python -m lyra_app.main
+curl http://localhost:5219/health
+```
+
+Then start a worker by name:
+
+```bash
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
 The API listens on the host and port configured in `[api]`.
 
 ## Plugins And Queues
 
-Plugin sources and metric routing are managed through the admin API, not by
-editing `lyra.toml`. Add a plugin source after the API is running:
+On a new data volume, `plugins.initial_repos` seeds enabled plugin sources before
+the API catalog is loaded. Lyra generates their repo IDs, validates all sources
+and manifests, assigns missing routes to `plugins.default_queue`, and only then
+creates `/lyra_data/state/plugins.toml`. Once that file exists, later
+`initial_repos` edits are ignored and plugin sources are managed through the
+admin API. Add a plugin source after the API is running:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \

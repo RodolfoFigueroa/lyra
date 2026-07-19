@@ -44,6 +44,9 @@ mount_path = "/mcp"
 [plugins]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
+# Applied only when /lyra_data/state/plugins.toml does not exist. IDs are
+# generated from each source and all initial repositories are enabled.
+# initial_repos = ["owner/plugin-repo@main"]
 # catalog_dir = "/lyra_data/plugins/catalog"
 # runner_base_dir = "/lyra_data/plugins/runners"
 

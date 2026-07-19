@@ -70,6 +70,15 @@ def test_compose_passes_worker_names_instead_of_queue_env() -> None:
         assert "env_file:" not in contents
 
 
+def test_compose_waits_for_api_catalog_initialization() -> None:
+    for compose_file in COMPOSE_FILES:
+        contents = _read(compose_file)
+
+        assert "healthcheck:" in contents
+        assert "condition: service_healthy" in contents
+        assert "urllib.request.urlopen" in contents
+
+
 def test_env_example_defines_host_mount_paths_and_runtime_env() -> None:
     contents = _read(ROOT / ".env.example")
 

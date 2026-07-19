@@ -23,6 +23,16 @@ services:
       - lyra_net
     depends_on:
       - redis
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:5219/health', timeout=2).read()"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   redis:
     image: redis:alpine
@@ -39,8 +49,10 @@ services:
     networks:
       - lyra_net
     depends_on:
-      - redis
-      - lyra
+      redis:
+        condition: service_started
+      lyra:
+        condition: service_healthy
 
   celery_worker_batch:
     image: rodolfofigueroa/lyra:latest
@@ -51,8 +63,10 @@ services:
     networks:
       - lyra_net
     depends_on:
-      - redis
-      - lyra
+      redis:
+        condition: service_started
+      lyra:
+        condition: service_healthy
 
 
 networks:

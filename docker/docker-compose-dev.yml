@@ -25,6 +25,16 @@ services:
       - lyra_net
     depends_on:
       - lyra-redis-dev
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:5219/health', timeout=2).read()"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     build: ..
     develop:
       watch:
@@ -56,8 +66,10 @@ services:
     networks:
       - lyra_net
     depends_on:
-      - lyra-redis-dev
-      - lyra-dev
+      lyra-redis-dev:
+        condition: service_started
+      lyra-dev:
+        condition: service_healthy
     build: ..
     develop:
       watch:
@@ -82,8 +94,10 @@ services:
     networks:
       - lyra_net
     depends_on:
-      - lyra-redis-dev
-      - lyra-dev
+      lyra-redis-dev:
+        condition: service_started
+      lyra-dev:
+        condition: service_healthy
     build: ..
     develop:
       watch:

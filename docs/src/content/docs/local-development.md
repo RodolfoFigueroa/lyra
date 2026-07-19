@@ -44,16 +44,16 @@ staging tree when copying files into the Docker volume.
 Use direct processes when you are iterating on application or worker code and
 want fast restarts. Start Redis, make sure `/lyra_data/config/lyra.toml` points
 at `redis://localhost:6379/0`, export the `LYRA_POSTGRES_*` and
-`LYRA_ADMIN_API_KEY` variables, then start one named worker:
-
-```bash
-uv run python -m lyra_app.worker_launcher interactive
-```
-
-Start the API:
+`LYRA_ADMIN_API_KEY` variables, then start the API:
 
 ```bash
 uv run python -m lyra_app.main
+```
+
+After `/health` responds, start one named worker:
+
+```bash
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
 The API host and port come from `[api]`.
@@ -87,7 +87,8 @@ for options and troubleshooting.
 
 ## Plugin Catalog During Development
 
-Configure plugin repositories through the admin API:
+Seed repositories on a new data volume with `plugins.initial_repos`, or configure
+them after initialization through the admin API:
 
 ```bash
 curl -X POST http://localhost:5219/admin/plugin-repos \

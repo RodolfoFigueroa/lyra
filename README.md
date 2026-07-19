@@ -52,9 +52,10 @@ The config file owns Redis, Earth Engine, worker pools, plugin queue policy,
 logging, job TTL, public API base URL, submission limits, and API host/port
 settings. Postgres connection settings plus the separate agent and admin API
 keys come from environment variables. `LYRA_AGENT_API_KEY` authenticates MCP
-and every `/jobs` route; `LYRA_ADMIN_API_KEY` is only for `/admin` routes. Plugin repositories and
-metric queue assignments are managed through admin API endpoints and persisted
-by Lyra in `/lyra_data/state/plugins.toml`.
+and every `/jobs` route; `LYRA_ADMIN_API_KEY` is only for `/admin` routes. Plugin
+repositories can be seeded on first startup with `plugins.initial_repos`, then
+are managed through admin API endpoints and persisted with metric queue
+assignments in `/lyra_data/state/plugins.toml`.
 
 Run the development Compose stack:
 
@@ -71,13 +72,13 @@ LYRA_ADMIN_API_KEY=... uv run lyra-tui --host localhost:5219 --no-secure
 The TUI connects to the running API; it does not start Redis, the API, or
 workers itself. Without an admin key it can show public health only.
 
-For direct local processes, start Redis, then launch a configured worker and the
-API:
+For direct local processes, start Redis and the API, wait for `/health`, then
+launch a configured worker:
 
 ```bash
 docker run -d -p 6379:6379 redis:alpine
-uv run python -m lyra_app.worker_launcher interactive
 uv run python -m lyra_app.main
+uv run python -m lyra_app.worker_launcher interactive
 ```
 
 Both commands read `/lyra_data/config/lyra.toml`.

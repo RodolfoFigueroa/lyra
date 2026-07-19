@@ -131,6 +131,42 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.agent_submission_limit.window_seconds == 60
     assert config.earth_engine.service_account_file.exists()
     assert config.plugins.allowed_queues == ["interactive", "batch"]
+    assert config.plugins.initial_repos == []
+
+
+def test_load_and_render_config_preserves_initial_plugin_repos(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config" / "lyra.toml"
+    contents = _valid_toml(tmp_path).replace(
+        'allowed_queues = ["interactive", "batch"]',
+        'allowed_queues = ["interactive", "batch"]\n'
+        'initial_repos = ["owner/plugin@main", "owner/other-plugin"]',
+    )
+    _write_config(config_path, contents)
+
+    config = load_config(config_path)
+    rendered = render_config_toml(config)
+    reparsed = LyraConfig.model_validate(config_module.tomllib.loads(rendered))
+
+    assert config.plugins.initial_repos == [
+        "owner/plugin@main",
+        "owner/other-plugin",
+    ]
+    assert reparsed.plugins.initial_repos == config.plugins.initial_repos
+
+
+def test_config_rejects_duplicate_initial_plugin_repos(tmp_path: Path) -> None:
+    config_path = tmp_path / "config" / "lyra.toml"
+    contents = _valid_toml(tmp_path).replace(
+        'allowed_queues = ["interactive", "batch"]',
+        'allowed_queues = ["interactive", "batch"]\n'
+        'initial_repos = ["owner/plugin", "owner/plugin@main"]',
+    )
+    _write_config(config_path, contents)
+
+    with pytest.raises(ConfigLoadError, match="duplicate plugin repo IDs"):
+        load_config(config_path)
 
 
 def test_load_config_reads_read_only_config_file_mount_shape(

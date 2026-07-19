@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.1.1...lyra-app-v0.2.0) (2026-07-19)
+
+
+### Features
+
+* Add initial plugin seeding ([da1a89a](https://github.com/RodolfoFigueroa/lyra/commit/da1a89a7e8a4df791e0787bafdfb1f11bd49d533))
+
 ## [0.1.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.1.0...lyra-app-v0.1.1) (2026-07-18)
 
 

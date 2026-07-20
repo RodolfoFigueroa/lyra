@@ -17,7 +17,7 @@ cp .env.example .env
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
-See the [quickstart](https://rodolfofigueroa.github.io/lyra/dev/quickstart/)
+See the [quickstart](https://rodolfofigueroa.github.io/lyra/quickstart/)
 for prerequisites, configuration, authentication, and a complete smoke test.
 
 ## Documentation

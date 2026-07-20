@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.5.0...lyra-app-v0.6.0) (2026-07-20)
+
+
+### Features
+
+* Derive metric schema from function definitions ([348be93](https://github.com/RodolfoFigueroa/lyra/commit/348be932511f5d62086484c2433c48440e230850))
+
 ## [0.5.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.4.1...lyra-app-v0.5.0) (2026-07-20)
 
 

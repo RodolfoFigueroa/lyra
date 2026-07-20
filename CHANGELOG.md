@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.4.0...lyra-app-v0.4.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* Fix underspecified MCP contract ([6fd8798](https://github.com/RodolfoFigueroa/lyra/commit/6fd8798c71e332ccbe8638632940928b3c9b7994))
+* Fix worker EarthEngine init ([c58c78a](https://github.com/RodolfoFigueroa/lyra/commit/c58c78a5f35253fd497748de36ffb14a5568cb47))
+
 ## [0.4.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.3.0...lyra-app-v0.4.0) (2026-07-20)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.4.0...lyra-sdk-v0.5.0) (2026-07-20)
+
+
+### Features
+
+* Narrow user-supplied arg hints ([33f869b](https://github.com/RodolfoFigueroa/lyra/commit/33f869b479f7415cc53fb238313a1d9c9743dcf9))
+
 ## [0.4.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.3.0...lyra-sdk-v0.4.0) (2026-07-20)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.6.0...lyra-app-v0.7.0) (2026-07-20)
+
+
+### Features
+
+* Narrow user-supplied arg hints ([33f869b](https://github.com/RodolfoFigueroa/lyra/commit/33f869b479f7415cc53fb238313a1d9c9743dcf9))
+
 ## [0.6.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.5.0...lyra-app-v0.6.0) (2026-07-20)
 
 

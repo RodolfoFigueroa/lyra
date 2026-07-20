@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.2.0...lyra-app-v0.2.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* Fix header auth forwarding ([535bd33](https://github.com/RodolfoFigueroa/lyra/commit/535bd33b45eea075bc70eb15d09fed5c03eb5064))
+
 ## [0.2.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.1.1...lyra-app-v0.2.0) (2026-07-19)
 
 

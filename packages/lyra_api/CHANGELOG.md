@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.1.0...lyra-api-v0.2.0) (2026-07-20)
+
+
+### Features
+
+* Improve database connection handling ([2336e6b](https://github.com/RodolfoFigueroa/lyra/commit/2336e6b6bcc9f6ffbf4cec6f6cf8926a53040615))
+
 ## 0.1.0 (2026-07-18)
 
 

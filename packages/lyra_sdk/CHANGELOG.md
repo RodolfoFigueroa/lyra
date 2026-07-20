@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.1.3...lyra-sdk-v0.2.0) (2026-07-20)
+
+
+### Features
+
+* Improve database connection handling ([2336e6b](https://github.com/RodolfoFigueroa/lyra/commit/2336e6b6bcc9f6ffbf4cec6f6cf8926a53040615))
+
+
+### Bug Fixes
+
+* Fix wrong generated SDK ([2ac7509](https://github.com/RodolfoFigueroa/lyra/commit/2ac7509794d1096532592adcd71e03179ad49872))
+
 ## [0.1.3](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.1.2...lyra-sdk-v0.1.3) (2026-07-20)
 
 

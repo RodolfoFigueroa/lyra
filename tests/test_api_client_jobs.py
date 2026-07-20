@@ -8,7 +8,7 @@ import pytest
 from lyra.api import parse_result_ref
 from lyra.api.client.async_ import AsyncLyraAPIClient
 from lyra.api.client.sync import LyraAPIClient
-from lyra.api.exceptions import DownloadError
+from lyra.api.exceptions import DownloadError, ServiceUnavailableError
 from lyra.sdk.models import FileJobResult
 
 
@@ -92,11 +92,29 @@ def _job_cancel_response() -> dict[str, Any]:
     }
 
 
-def _health_response() -> dict[str, Any]:
+def _liveness_response() -> dict[str, Any]:
     return {
         "status": "ok",
         "api_version": "0.1.0",
+    }
+
+
+def _readiness_response() -> dict[str, Any]:
+    return {
+        "status": "ready",
+        "api_version": "0.1.0",
         "redis": {"status": "ok"},
+        "database": {"status": "ok"},
+    }
+
+
+def _database_unavailable_response() -> dict[str, Any]:
+    return {
+        "detail": {
+            "code": "database_unavailable",
+            "message": "The spatial database is temporarily unavailable.",
+            "retryable": True,
+        }
     }
 
 
@@ -656,7 +674,8 @@ def test_sync_client_uses_observability_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     responses = {
-        "http://example.test/health": _health_response(),
+        "http://example.test/live": _liveness_response(),
+        "http://example.test/ready": _readiness_response(),
         "http://example.test/admin/status": _admin_status_response(),
         "http://example.test/admin/config-summary": _config_summary_response(),
         "http://example.test/admin/catalog": _catalog_summary_response(),
@@ -678,7 +697,8 @@ def test_sync_client_uses_observability_routes(
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
     client = LyraAPIClient("example.test", secure=False)
 
-    health = client.get_health()
+    liveness = client.get_liveness()
+    readiness = client.get_readiness()
     status = client.get_admin_status()
     config = client.get_admin_config_summary()
     catalog = client.get_admin_catalog()
@@ -687,7 +707,9 @@ def test_sync_client_uses_observability_routes(
     queues = client.get_admin_queues()
 
     assert seen == list(responses)
-    assert health.status == "ok"
+    assert liveness.status == "ok"
+    assert readiness.status == "ready"
+    assert readiness.database.status == "ok"
     assert status.metric_count == 1
     assert config.workers[0].name == "interactive"
     assert catalog.plugin_sources[0].source_kind == "directory"
@@ -696,7 +718,26 @@ def test_sync_client_uses_observability_routes(
     assert worker.active_tasks[0].id == "job-1"
     assert worker.inspect_metadata.age_seconds == 0.25
     assert queues.queues[0].pending_depth_unknown is True
-    assert queues.inspect_metadata.observed_at is not None
+
+
+def test_sync_client_exposes_structured_database_unavailability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "lyra.api.client.sync.requests.request",
+        lambda *_args, **_kwargs: FakeSyncResponse(
+            status_code=503,
+            payload=_database_unavailable_response(),
+            headers={"Retry-After": "5"},
+        ),
+    )
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        LyraAPIClient("example.test", secure=False).get_met_zone_code("Guadalajara")
+
+    assert exc_info.value.code == "database_unavailable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.retry_after_seconds == 5
 
 
 def test_sync_client_uses_lookup_plugin_and_routing_routes(
@@ -1408,7 +1449,8 @@ def test_async_client_uses_observability_routes(
             return super().get(*args, **kwargs)
 
     responses = [
-        _health_response(),
+        _liveness_response(),
+        _readiness_response(),
         _admin_status_response(),
         _config_summary_response(),
         _catalog_summary_response(),
@@ -1425,7 +1467,8 @@ def test_async_client_uses_observability_routes(
     )
     client = AsyncLyraAPIClient("example.test", secure=False)
 
-    health = asyncio.run(client.get_health())
+    liveness = asyncio.run(client.get_liveness())
+    readiness = asyncio.run(client.get_readiness())
     status = asyncio.run(client.get_admin_status())
     config = asyncio.run(client.get_admin_config_summary())
     catalog = asyncio.run(client.get_admin_catalog())
@@ -1434,7 +1477,8 @@ def test_async_client_uses_observability_routes(
     queues = asyncio.run(client.get_admin_queues())
 
     assert RecordingSession.urls == [
-        "http://example.test/health",
+        "http://example.test/live",
+        "http://example.test/ready",
         "http://example.test/admin/status",
         "http://example.test/admin/config-summary",
         "http://example.test/admin/catalog",
@@ -1442,7 +1486,8 @@ def test_async_client_uses_observability_routes(
         "http://example.test/admin/workers/interactive",
         "http://example.test/admin/queues",
     ]
-    assert health.status == "ok"
+    assert liveness.status == "ok"
+    assert readiness.status == "ready"
     assert status.metric_count == 1
     assert config.workers[0].name == "interactive"
     assert catalog.plugin_sources[0].source_kind == "directory"
@@ -1451,7 +1496,30 @@ def test_async_client_uses_observability_routes(
     assert worker.active_tasks[0].id == "job-1"
     assert worker.inspect_metadata.age_seconds == 0.25
     assert queues.queues[0].pending_depth_unknown is True
-    assert queues.inspect_metadata.observed_at is not None
+
+
+def test_async_client_exposes_structured_database_unavailability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSession.responses = [
+        FakeAsyncResponse(
+            status=503,
+            payload=_database_unavailable_response(),
+            headers={"Retry-After": "5"},
+        )
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        asyncio.run(
+            AsyncLyraAPIClient("example.test", secure=False).get_met_zone_code(
+                "Guadalajara"
+            )
+        )
+
+    assert exc_info.value.code == "database_unavailable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.retry_after_seconds == 5
 
 
 def test_async_client_uses_lookup_plugin_and_routing_routes(

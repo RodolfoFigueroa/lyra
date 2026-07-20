@@ -9,9 +9,9 @@ from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     CreatePluginRepoResponse,
+    DatabaseHealth,
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
-    HealthResponse,
     JobCancelResponse,
     JobListResponse,
     JobStatusInfo,
@@ -22,6 +22,7 @@ from lyra.sdk.models import (
     PluginRepoResponse,
     PluginRoutingResponse,
     QueuesResponse,
+    ReadinessResponse,
     RedisHealth,
     SyncPluginRepoResponse,
     UpdatePluginRepoResponse,
@@ -57,11 +58,12 @@ class FakeActionClient:
         self.set_routes: list[tuple[str, str]] = []
         self.deleted_routes: list[str] = []
 
-    async def get_health(self) -> HealthResponse:
-        return HealthResponse(
-            status="ok",
+    async def get_readiness(self) -> ReadinessResponse:
+        return ReadinessResponse(
+            status="ready",
             api_version="0.1.0",
             redis=RedisHealth(status="ok"),
+            database=DatabaseHealth(status="ok"),
         )
 
     async def get_admin_status(self) -> AdminStatusResponse:
@@ -657,10 +659,11 @@ def _footer_actions(app: LyraTuiApp) -> set[str]:
 def _snapshot(*, jobs: list[JobStatusInfo]) -> TuiSnapshot:
     return TuiSnapshot(
         phase="ready",
-        health=HealthResponse(
-            status="ok",
+        readiness=ReadinessResponse(
+            status="ready",
             api_version="0.1.0",
             redis=RedisHealth(status="ok"),
+            database=DatabaseHealth(status="ok"),
         ),
         admin_status=_admin_status_response(),
         catalog=CatalogSummaryResponse(

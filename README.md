@@ -70,9 +70,9 @@ LYRA_ADMIN_API_KEY=... uv run lyra-tui --host localhost:5219 --no-secure
 ```
 
 The TUI connects to the running API; it does not start Redis, the API, or
-workers itself. Without an admin key it can show public health only.
+workers itself. Without an admin key it can show public readiness only.
 
-For direct local processes, start Redis and the API, wait for `/health`, then
+For direct local processes, start Redis and the API, wait for `/ready`, then
 launch a configured worker:
 
 ```bash

@@ -131,7 +131,7 @@ and metric routes before it begins serving requests:
 
 ```bash
 uv run python -m lyra_app.main
-curl http://localhost:5219/health
+curl http://localhost:5219/ready
 ```
 
 Then start a worker by name:

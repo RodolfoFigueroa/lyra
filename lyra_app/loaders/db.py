@@ -5,6 +5,16 @@ from collections.abc import Sequence
 import geopandas as gpd
 import sqlalchemy
 from sqlalchemy import Connection, quoted_name, text
+from sqlalchemy.ext.asyncio import AsyncConnection
+
+_MET_ZONE_LOOKUP_QUERY = text(
+    """
+    SELECT cve_met, nom_met FROM metropoli_2020
+    WHERE similarity(nom_met, :name) > 0.3
+    ORDER BY similarity(nom_met, :name) DESC
+    LIMIT 1
+    """
+)
 
 
 def load_geometries_from_bounds(
@@ -239,17 +249,20 @@ def get_met_zone_code_from_name(
     Returns:
         A tuple of (cve_met, nom_met) for the best match, or None.
     """
-    result = conn.execute(
-        text(
-            """
-            SELECT cve_met, nom_met FROM metropoli_2020
-            WHERE similarity(nom_met, :name) > 0.3
-            ORDER BY similarity(nom_met, :name) DESC
-            LIMIT 1
-            """,
-        ),
-        {"name": name},
-    )
+    result = conn.execute(_MET_ZONE_LOOKUP_QUERY, {"name": name})
+    row = result.fetchone()
+    if row is None:
+        return None
+    return row.cve_met, row.nom_met
+
+
+async def get_met_zone_code_from_name_async(
+    name: str,
+    *,
+    conn: AsyncConnection,
+) -> tuple[str, str] | None:
+    """Return the closest metropolitan-zone match using an async connection."""
+    result = await conn.execute(_MET_ZONE_LOOKUP_QUERY, {"name": name})
     row = result.fetchone()
     if row is None:
         return None

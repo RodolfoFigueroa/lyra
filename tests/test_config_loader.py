@@ -212,7 +212,7 @@ def test_load_config_rejects_env_backed_toml_sections(tmp_path: Path) -> None:
     )
     _write_config(config_path, contents)
 
-    with pytest.raises(ConfigLoadError, match=r"\[database\]"):
+    with pytest.raises(ConfigLoadError, match=r"database\.host"):
         load_config(config_path)
 
 

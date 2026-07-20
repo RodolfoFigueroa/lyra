@@ -237,10 +237,11 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
 def _build_db_context() -> Any | None:
     try:
         from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
+        from lyra_app.db.connection import get_worker_engine  # noqa: PLC0415
     except (ConfigLoadError, KeyError) as exc:
         logger.info("DB context unavailable: %s.", exc)
         return None
-    return LyraDBImplicit()
+    return LyraDBImplicit(get_worker_engine())
 
 
 def _job_id_from_payload(payload: Any, fallback: str) -> str:

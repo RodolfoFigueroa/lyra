@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from lyra_app.auth import initialize_earth_engine
 from lyra_app.celery_app import configure_celery
 from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
+from lyra_app.db.connection import ApplicationDatabaseRuntime
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 from lyra_app.version import APP_VERSION
@@ -21,18 +22,25 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGeneratorType:
-    await start_worker_inspect_collector()
+    database = getattr(app.state, "database", None)
+    if database is not None:
+        await database.start()
     try:
-        async with AsyncExitStack() as stack:
-            mcp_app = getattr(app.state, "mcp_app", None)
-            if mcp_app is not None:
-                await stack.enter_async_context(
-                    mcp_app.router.lifespan_context(mcp_app)
-                )
-            yield
+        await start_worker_inspect_collector()
+        try:
+            async with AsyncExitStack() as stack:
+                mcp_app = getattr(app.state, "mcp_app", None)
+                if mcp_app is not None:
+                    await stack.enter_async_context(
+                        mcp_app.router.lifespan_context(mcp_app)
+                    )
+                yield
+        finally:
+            await stop_worker_inspect_collector()
+            logger.info("Shutting down worker inspect collector.")
     finally:
-        await stop_worker_inspect_collector()
-        logger.info("Shutting down worker inspect collector.")
+        if database is not None:
+            await database.close()
 
 
 def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:
@@ -62,6 +70,7 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     )
 
     app = FastAPI(title="Lyra API", version=APP_VERSION, lifespan=lifespan)
+    app.state.database = ApplicationDatabaseRuntime(config)
     app.include_router(admin.router)
     app.include_router(health.router)
     app.include_router(jobs.router)
@@ -74,6 +83,7 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
         mcp_app = create_mcp_app(
             agent_api_key=config.agent.read_api_key(),
             public_api_base_url=config.api.public_base_url,
+            database=app.state.database,
         )
         app.state.mcp_app = mcp_app
         app.mount(config.mcp.mount_path, mcp_app)

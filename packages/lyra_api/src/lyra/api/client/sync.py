@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import requests
-from lyra.api.client.base import _BaseLyraAPIClient, _load_pandas
+from lyra.api.client.base import (
+    _BaseLyraAPIClient,
+    _load_pandas,
+    service_unavailable_error,
+)
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     AdminStatusResponse,
@@ -18,19 +22,20 @@ from lyra.sdk.models import (
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
     FileJobResult,
-    HealthResponse,
     JobCancelResponse,
     JobCreateResponse,
     JobEvent,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    LivenessResponse,
     MetricQueueAssignmentResponse,
     MetZoneCodeResponse,
     PluginCatalogRefreshResponse,
     PluginRepoListResponse,
     PluginRoutingResponse,
     QueuesResponse,
+    ReadinessResponse,
     ResultDescriptor,
     SetMetricQueueRequest,
     SyncPluginRepoResponse,
@@ -101,6 +106,13 @@ class LyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err) from exc
 
         if response.status_code != expected_status:
+            if response.status_code == 503:
+                unavailable = service_unavailable_error(
+                    response.json(),
+                    response.headers.get("Retry-After"),
+                )
+                if unavailable is not None:
+                    raise unavailable
             err = (
                 f"Failed to {error_context}. HTTP {response.status_code}: "
                 f"{response.text}"
@@ -108,23 +120,43 @@ class LyraAPIClient(_BaseLyraAPIClient):
             raise DownloadError(err)
         return response_model.model_validate(response.json())
 
-    def get_health(self) -> HealthResponse:
+    def get_liveness(self) -> LivenessResponse:
         try:
             response = requests.get(
-                self._http_url("health"),
+                self._http_url("live"),
                 timeout=self.timeout,
                 headers=self.headers,
             )
         except requests.RequestException as exc:
-            err = f"Health request error: {exc}"
+            err = f"Liveness request error: {exc}"
             raise DownloadError(err) from exc
 
         if response.status_code != 200:
             err = (
-                f"Failed to fetch health. HTTP {response.status_code}: {response.text}"
+                "Failed to fetch liveness. "
+                f"HTTP {response.status_code}: {response.text}"
             )
             raise DownloadError(err)
-        return HealthResponse.model_validate(response.json())
+        return LivenessResponse.model_validate(response.json())
+
+    def get_readiness(self) -> ReadinessResponse:
+        try:
+            response = requests.get(
+                self._http_url("ready"),
+                timeout=self.timeout,
+                headers=self.headers,
+            )
+        except requests.RequestException as exc:
+            err = f"Readiness request error: {exc}"
+            raise DownloadError(err) from exc
+
+        if response.status_code not in {200, 503}:
+            err = (
+                "Failed to fetch readiness. "
+                f"HTTP {response.status_code}: {response.text}"
+            )
+            raise DownloadError(err)
+        return ReadinessResponse.model_validate(response.json())
 
     def get_met_zone_code(self, name: str) -> MetZoneCodeResponse:
         return self._request_model(

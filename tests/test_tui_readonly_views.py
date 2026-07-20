@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
-    HealthResponse,
+    DatabaseHealth,
     JobListResponse,
     JobStatusInfo,
     PluginRepoListResponse,
@@ -15,6 +15,7 @@ from lyra.sdk.models import (
     PluginRoutingResponse,
     QueuesResponse,
     QueueSummary,
+    ReadinessResponse,
     RedisHealth,
     WorkersResponse,
     WorkerSummary,
@@ -42,13 +43,14 @@ class NoopClient:
 def test_dashboard_rows_keep_public_health_without_admin() -> None:
     snapshot = TuiSnapshot(
         phase="auth-required",
-        health=_health_response(),
+        readiness=_health_response(),
     )
 
     rows = dict(dashboard_rows(snapshot))
 
-    assert rows["API status"] == "ok"
+    assert rows["API status"] == "ready"
     assert rows["Redis status"] == "ok"
+    assert rows["Database status"] == "ok"
     assert rows["Admin"] == "locked"
 
 
@@ -121,7 +123,7 @@ def test_jobs_empty_state_message() -> None:
         snapshot = _ready_snapshot()
         snapshot = TuiSnapshot(
             phase=snapshot.phase,
-            health=snapshot.health,
+            readiness=snapshot.readiness,
             admin_status=snapshot.admin_status,
             catalog=snapshot.catalog,
             workers=snapshot.workers,
@@ -191,7 +193,7 @@ def _app_with_snapshot(snapshot: TuiSnapshot) -> LyraTuiApp:
 def _ready_snapshot() -> TuiSnapshot:
     return TuiSnapshot(
         phase="ready",
-        health=_health_response(),
+        readiness=_health_response(),
         admin_status=_admin_status_response(),
         catalog=_catalog_summary_response(),
         workers=_workers_response(),
@@ -203,11 +205,12 @@ def _ready_snapshot() -> TuiSnapshot:
     )
 
 
-def _health_response() -> HealthResponse:
-    return HealthResponse(
-        status="ok",
+def _health_response() -> ReadinessResponse:
+    return ReadinessResponse(
+        status="ready",
         api_version="0.1.0",
         redis=RedisHealth(status="ok"),
+        database=DatabaseHealth(status="ok"),
     )
 
 

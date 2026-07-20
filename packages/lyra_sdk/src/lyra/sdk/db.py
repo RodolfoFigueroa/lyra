@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
 
 class LyraDB(ABC):
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
     @abstractmethod
     def load_denue_from_bounds(
         self,

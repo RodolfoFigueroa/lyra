@@ -3,7 +3,35 @@ import logging
 from types import ModuleType
 from urllib.parse import urlparse
 
-from lyra.api.exceptions import DownloadError
+from lyra.api.exceptions import DownloadError, ServiceUnavailableError
+
+
+def service_unavailable_error(
+    payload: object,
+    retry_after: str | None,
+) -> ServiceUnavailableError | None:
+    if not isinstance(payload, dict):
+        return None
+    detail = payload.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    code = detail.get("code")
+    message = detail.get("message")
+    retryable = detail.get("retryable")
+    if not isinstance(code, str) or not isinstance(message, str):
+        return None
+    if not isinstance(retryable, bool):
+        return None
+    try:
+        retry_after_seconds = int(retry_after) if retry_after is not None else None
+    except ValueError:
+        retry_after_seconds = None
+    return ServiceUnavailableError(
+        message,
+        code=code,
+        retryable=retryable,
+        retry_after_seconds=retry_after_seconds,
+    )
 
 
 def parse_result_ref(result_ref_or_job_id: str) -> str:

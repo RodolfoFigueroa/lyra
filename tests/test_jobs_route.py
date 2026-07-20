@@ -3,7 +3,6 @@ import importlib
 import json
 import sys
 from collections.abc import Iterator, MutableMapping
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -552,23 +551,37 @@ def test_discovery_and_lookup_routes_remain_public(
         "get_metric_catalog",
         lambda: MetricCatalogResponse(catalog_fingerprint="catalog-1", metrics=[]),
     )
-    monkeypatch.setattr(
-        met_zone,
-        "engine",
-        SimpleNamespace(connect=lambda: nullcontext(object())),
-    )
 
-    def lookup_met_zone(_name: str, *, conn: object) -> tuple[str, str]:
+    async def lookup_met_zone(_name: str, *, conn: object) -> tuple[str, str]:
         assert conn is not None
         return "09.01", "Valle de México"
 
-    monkeypatch.setattr(met_zone, "get_met_zone_code_from_name", lookup_met_zone)
+    monkeypatch.setattr(
+        met_zone,
+        "get_met_zone_code_from_name_async",
+        lookup_met_zone,
+    )
 
-    async def run_inline(func: Any, /, *args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
+    class FakeConnection:
+        async def execute(self, *_: object) -> None:
+            return None
 
-    monkeypatch.setattr(met_zone.asyncio, "to_thread", run_inline)
+    class FakeConnectionContext:
+        async def __aenter__(self) -> FakeConnection:
+            return FakeConnection()
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    class FakeEngine:
+        def connect(self) -> FakeConnectionContext:
+            return FakeConnectionContext()
+
     app = FastAPI()
+    app.state.database = SimpleNamespace(
+        config=get_config(),
+        require_async_engine=FakeEngine,
+    )
     app.include_router(health.router)
     app.include_router(data_types.router)
     app.include_router(metrics.router)
@@ -577,14 +590,15 @@ def test_discovery_and_lookup_routes_remain_public(
     responses = [
         asyncio.run(_request_app(app, "GET", path, authorization=authorization))
         for path in (
-            "/health",
+            "/live",
+            "/ready",
             "/data-types",
             "/metrics",
             "/lookups/met-zones?name=Valle%20de%20México",
         )
     ]
 
-    assert [response.status_code for response in responses] == [200, 200, 200, 200]
+    assert [response.status_code for response in responses] == [200, 200, 200, 200, 200]
 
 
 async def _body(response: StreamingResponse) -> str:

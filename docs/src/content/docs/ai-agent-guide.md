@@ -9,7 +9,7 @@ This page is optimized for agents that need to inspect, edit, or reason about Ly
 
 | Access | Routes | Authentication |
 | --- | --- | --- |
-| Public discovery | `GET /health`, `GET /data-types`, `GET /metrics`, `GET /metrics/{metric_name}`, `GET /lookups/met-zones` | None |
+| Public discovery | `GET /live`, `GET /ready`, `GET /data-types`, `GET /metrics`, `GET /metrics/{metric_name}`, `GET /lookups/met-zones` | None |
 | Agent execution | `POST /jobs`; every status, event, terminal JSON, descriptor, JSONL, and file route under `/jobs/{job_id}`; configured MCP mount | `Authorization: Bearer $LYRA_AGENT_API_KEY` |
 | Administration | Every `/admin/*` plugin, catalog, worker, queue, job-list, cancellation, and routing route | `Authorization: Bearer $LYRA_ADMIN_API_KEY` |
 

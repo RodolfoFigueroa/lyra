@@ -72,7 +72,8 @@ validation, or worker shutdown handling. File bytes are served separately from
 
 ## Observability
 
-`GET /health` is public and reports API liveness plus Redis readiness. Admin
+`GET /live` reports dependency-free API liveness. `GET /ready` checks Redis and
+PostgreSQL concurrently and returns `503` while either is unavailable. Admin
 observability routes require Bearer auth:
 
 - `GET /admin/status`

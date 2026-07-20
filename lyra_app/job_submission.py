@@ -28,6 +28,11 @@ GENERIC_TASK_NAME = "lyra.run_metric"
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from lyra.sdk.models.plugin_v3 import SpatialInputKindV3
+
+    from lyra_app.db.connection import ApplicationDatabaseRuntime
+    from lyra_app.spatial_inputs import SpatialInputResolution
+
 
 class TaskDispatcher(Protocol):
     def send_task(
@@ -130,6 +135,29 @@ async def _release_failed_submission(
             )
 
 
+async def _resolve_spatial_input(
+    validated_input: dict[str, Any],
+    spatial_inputs: dict[str, SpatialInputKindV3],
+    database: ApplicationDatabaseRuntime | None,
+) -> SpatialInputResolution:
+    if database is None:
+        return await asyncio.to_thread(
+            resolve_spatial_inputs_with_metadata,
+            validated_input,
+            spatial_inputs,
+        )
+
+    from lyra_app.converters import build_converter_map  # noqa: PLC0415
+
+    converter_map = build_converter_map(database.require_spatial_engine())
+    return await database.run_spatial(
+        resolve_spatial_inputs_with_metadata,
+        validated_input,
+        spatial_inputs,
+        converter_map,
+    )
+
+
 async def submit_job(
     request: JobCreateRequest,
     *,
@@ -137,6 +165,7 @@ async def submit_job(
     dispatcher: TaskDispatcher | None = None,
     agent_scope: str = job_store.DEFAULT_AGENT_SCOPE,
     job_id_factory: Callable[[], str] | None = None,
+    database: ApplicationDatabaseRuntime | None = None,
 ) -> JobCreateResponse:
     """Validate, deduplicate, persist, and dispatch one public job request."""
 
@@ -184,10 +213,10 @@ async def submit_job(
     limit_consumed = False
     try:
         created_at = datetime.now(UTC)
-        resolution = await asyncio.to_thread(
-            resolve_spatial_inputs_with_metadata,
+        resolution = await _resolve_spatial_input(
             validated_input,
             entry.metric.spatial_inputs,
+            database,
         )
         submission_limit = get_config().agent_submission_limit
         try:

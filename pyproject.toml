@@ -10,11 +10,11 @@ dependencies = [
     "lyra-sdk",
     "earthengine-api>=1.7.26",
     "lyra-utils",
-    "psycopg2>=2.9.12",
-    "asyncpg>=0.31.0",
     "jsonschema>=4.26.0",
     "mcp>=1,<2",
     "filelock>=3.29.4",
+    "psycopg[binary]>=3.3.2",
+    "sqlalchemy>=2.0.51",
 ]
 
 [tool.uv.workspace]

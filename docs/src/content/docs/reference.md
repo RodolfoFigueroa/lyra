@@ -12,6 +12,10 @@ runtime settings:
 | --- | --- |
 | `[api]` | Bind host/port, externally reachable `public_base_url`, and trusted `forwarded_allow_ips`. |
 | `[redis]` | Redis URL used by Celery and the Redis clients. |
+| `[database]` | Readiness and retry timing for PostgreSQL failures. |
+| `[database.api]` | Async API pool, connection, statement, and recycle limits. |
+| `[database.spatial]` | Bounded API GeoPandas pool and statement limits. |
+| `[database.worker]` | Per-worker-process pool and statement limits. |
 | `[earth_engine]` | Earth Engine project and service account file reference. |
 | `[logging]` | Application log level and optional log file. |
 | `[job_store]` | Job status, result, and event TTL. |
@@ -107,7 +111,7 @@ npm run preview --prefix docs
 
 | Access | Routes | Credential |
 | --- | --- | --- |
-| Public | `/health`, `/data-types`, `/metrics`, `/metrics/{metric_name}`, `/lookups/met-zones` | None |
+| Public | `/live`, `/ready`, `/data-types`, `/metrics`, `/metrics/{metric_name}`, `/lookups/met-zones` | None |
 | Agent | `/jobs` lifecycle routes and configured MCP mount | `LYRA_AGENT_API_KEY` |
 | Admin | Every `/admin/*` route | `LYRA_ADMIN_API_KEY` |
 
@@ -115,7 +119,8 @@ The following table lists the concrete HTTP routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Return API liveness and Redis readiness. |
+| `GET` | `/live` | Return dependency-free API process liveness. |
+| `GET` | `/ready` | Return Redis and PostgreSQL readiness; unavailable dependencies produce HTTP `503`. |
 | `GET` | `/data-types` | Return grouped `location` and `bounds` wrapper schemas for explicit spatial inputs. |
 | `GET` | `/metrics` | Return the public catalog fingerprint and metric schema metadata. |
 | `GET` | `/metrics/{metric_name}` | Fetch one metric schema metadata record. |

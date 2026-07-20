@@ -50,7 +50,7 @@ at `redis://localhost:6379/0`, export the `LYRA_POSTGRES_*` and
 uv run python -m lyra_app.main
 ```
 
-After `/health` responds, start one named worker:
+After `/ready` responds, start one named worker:
 
 ```bash
 uv run python -m lyra_app.worker_launcher interactive
@@ -81,7 +81,7 @@ LYRA_ADMIN_API_KEY=... uv run lyra-tui --host localhost:5219 --no-secure
 ```
 
 The TUI connects to the running API and does not start Redis, the API, or
-workers. Without `LYRA_ADMIN_API_KEY`, it can show public health only; admin
+workers. Without `LYRA_ADMIN_API_KEY`, it can show public readiness only; admin
 views and mutating actions require Bearer auth. See the [TUI guide](../tui/)
 for options and troubleshooting.
 

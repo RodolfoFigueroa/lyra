@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import json
-from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import uuid4
 
 from anyio import Path
@@ -21,6 +22,9 @@ from redis.exceptions import RedisError
 from lyra_app import job_store
 from lyra_app.agent_auth import require_agent_key
 from lyra_app.celery_app import celery_app
+from lyra_app.config import get_config
+from lyra_app.db.connection import DatabaseUnavailableError
+from lyra_app.db.dependencies import get_database_runtime
 from lyra_app.db.redis import redis_client
 from lyra_app.job_submission import (
     IdempotencyConflictError,
@@ -30,10 +34,16 @@ from lyra_app.job_submission import (
     submit_job,
 )
 from lyra_app.registry import MetricPayloadValidationError
+from lyra_app.routes.errors import database_unavailable_http_exception
 from lyra_app.spatial_inputs import (
     SpatialInputResolutionUnavailableError,
     SpatialInputValidationError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from lyra_app.db.connection import ApplicationDatabaseRuntime
 
 router = APIRouter(dependencies=[Depends(require_agent_key)])
 
@@ -129,17 +139,17 @@ async def _job_event_stream(
                 return
 
 
-@router.post(
-    "/jobs",
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def create_job(request: JobCreateRequest) -> JobCreateResponse:
+async def create_job(
+    request: JobCreateRequest,
+    database: ApplicationDatabaseRuntime | None = None,
+) -> JobCreateResponse:
     try:
         return await submit_job(
             request,
             client=redis_client,
             dispatcher=celery_app,
             job_id_factory=lambda: uuid4().hex,
+            database=database,
         )
     except UnknownMetricError as exc:
         raise HTTPException(
@@ -150,9 +160,9 @@ async def create_job(request: JobCreateRequest) -> JobCreateResponse:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
     except SpatialInputValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
-    except SpatialInputResolutionUnavailableError as exc:
-        err = "Cannot resolve spatial input. Please try again later."
-        raise HTTPException(status_code=503, detail=err) from exc
+    except (DatabaseUnavailableError, SpatialInputResolutionUnavailableError) as exc:
+        runtime_config = database.config if database is not None else get_config()
+        raise database_unavailable_http_exception(runtime_config) from exc
     except IdempotencyConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -174,6 +184,17 @@ async def create_job(request: JobCreateRequest) -> JobCreateResponse:
         ) from exc
     except SubmissionUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/jobs",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_job_route(
+    request: JobCreateRequest,
+    database: Annotated[Any, Depends(get_database_runtime)],
+) -> JobCreateResponse:
+    return await create_job(request, database)
 
 
 @router.get("/jobs/{job_id}")

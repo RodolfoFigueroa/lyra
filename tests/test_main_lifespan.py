@@ -82,6 +82,49 @@ def test_lifespan_owns_mounted_mcp_session_manager(
     assert calls == ["worker-start", "mcp-start", "mcp-stop", "worker-stop"]
 
 
+def test_lifespan_owns_database_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class FakeDatabaseRuntime:
+        async def start(self) -> None:
+            calls.append("database-start")
+
+        async def close(self) -> None:
+            calls.append("database-close")
+
+    async def start_worker_inspect_collector() -> None:
+        calls.append("worker-start")
+
+    async def stop_worker_inspect_collector() -> None:
+        calls.append("worker-stop")
+
+    app = FastAPI()
+    app.state.database = FakeDatabaseRuntime()
+    monkeypatch.setattr(
+        main,
+        "start_worker_inspect_collector",
+        start_worker_inspect_collector,
+    )
+    monkeypatch.setattr(
+        main,
+        "stop_worker_inspect_collector",
+        stop_worker_inspect_collector,
+    )
+
+    async def run_lifespan() -> None:
+        async with main.lifespan(app):
+            assert calls == ["database-start", "worker-start"]
+
+    asyncio.run(run_lifespan())
+
+    assert calls == [
+        "database-start",
+        "worker-start",
+        "worker-stop",
+        "database-close",
+    ]
+
+
 def test_run_server_configures_trusted_proxy_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

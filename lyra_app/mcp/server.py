@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 
     from starlette.types import Receive, Scope, Send
 
+    from lyra_app.db.connection import ApplicationDatabaseRuntime
+
 SERVER_INSTRUCTIONS = (
     "Lyra MCP exposes stable tools for metric discovery, inspection, met-zone "
     "metric runs, and result polling. Use lyra_search_metrics with meaningful "
@@ -73,9 +75,10 @@ def create_mcp_app(
     public_api_base_url: str,
     name: str = "lyra",
     backend: LyraMCPBackend | None = None,
+    database: ApplicationDatabaseRuntime | None = None,
 ) -> Starlette:
     public_api_base_url = ApiConfig(public_base_url=public_api_base_url).public_base_url
-    tool_backend = backend or InProcessLyraBackend()
+    tool_backend = backend or InProcessLyraBackend(database)
     server = Server(
         name=name,
         version="0.1.0",

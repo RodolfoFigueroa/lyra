@@ -44,7 +44,7 @@ def launch_worker(
     if not state_store.path.is_file():
         msg = (
             "Plugin state is not initialized. Start the Lyra API and wait for "
-            "it to become healthy before starting workers."
+            "it to become ready before starting workers."
         )
         raise RuntimeError(msg)
 

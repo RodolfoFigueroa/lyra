@@ -40,12 +40,13 @@ class DashboardView(Vertical):
 
 def dashboard_rows(snapshot: TuiSnapshot) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = [("Snapshot", snapshot.phase)]
-    if snapshot.health is not None:
+    if snapshot.readiness is not None:
         rows.extend(
             [
-                ("API status", snapshot.health.status),
-                ("API version", snapshot.health.api_version),
-                ("Redis status", snapshot.health.redis.status),
+                ("API status", snapshot.readiness.status),
+                ("API version", snapshot.readiness.api_version),
+                ("Redis status", snapshot.readiness.redis.status),
+                ("Database status", snapshot.readiness.database.status),
             ]
         )
     else:
@@ -93,10 +94,10 @@ def dashboard_rows(snapshot: TuiSnapshot) -> list[tuple[str, str]]:
 
 
 def _summary_text(snapshot: TuiSnapshot) -> str:
-    if snapshot.health is None:
-        return "Health pending."
+    if snapshot.readiness is None:
+        return "Readiness pending."
     if snapshot.admin_status is None:
-        return "Public health available; admin data locked or unavailable."
+        return "Public readiness available; admin data locked or unavailable."
     return (
         f"{snapshot.admin_status.metric_count} metrics | "
         f"{snapshot.admin_status.configured_worker_count} workers | "

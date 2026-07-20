@@ -11,7 +11,7 @@ idempotency key, follow one `job_id`, and download data before it expires.
 
 | Access | Routes | Credential |
 | --- | --- | --- |
-| Public | `GET /health`, `GET /data-types`, `GET /metrics`, `GET /metrics/{metric_name}`, `GET /lookups/met-zones` | None |
+| Public | `GET /live`, `GET /ready`, `GET /data-types`, `GET /metrics`, `GET /metrics/{metric_name}`, `GET /lookups/met-zones` | None |
 | Agent | `POST /jobs` and every `GET /jobs/{job_id}...` status, event, terminal JSON, descriptor, JSONL, and file-download route; configured MCP mount | `Authorization: Bearer $LYRA_AGENT_API_KEY` |
 | Admin | Every `/admin/*` route | `Authorization: Bearer $LYRA_ADMIN_API_KEY` |
 

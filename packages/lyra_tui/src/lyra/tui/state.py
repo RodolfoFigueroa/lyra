@@ -13,11 +13,11 @@ if TYPE_CHECKING:
         AdminStatusResponse,
         CatalogSummaryResponse,
         ConfigSummaryResponse,
-        HealthResponse,
         JobListResponse,
         PluginRepoListResponse,
         PluginRoutingResponse,
         QueuesResponse,
+        ReadinessResponse,
         WorkersResponse,
     )
     from lyra.tui.client import LyraTuiReadClient
@@ -51,7 +51,7 @@ class TuiError:
 @dataclass(frozen=True, slots=True)
 class TuiSnapshot:
     phase: SnapshotPhase = "idle"
-    health: HealthResponse | None = None
+    readiness: ReadinessResponse | None = None
     admin_status: AdminStatusResponse | None = None
     config_summary: ConfigSummaryResponse | None = None
     catalog: CatalogSummaryResponse | None = None
@@ -92,18 +92,21 @@ async def refresh_snapshot(
     has_admin_key: bool,
 ) -> TuiSnapshot:
     refreshed_at = datetime.now(UTC)
-    health, health_error = await _capture(client.get_health(), context="Fetch health")
-    if health_error is not None:
+    readiness, readiness_error = await _capture(
+        client.get_readiness(),
+        context="Fetch readiness",
+    )
+    if readiness_error is not None:
         return TuiSnapshot(
             phase="error",
-            errors=(health_error,),
+            errors=(readiness_error,),
             last_updated=refreshed_at,
         )
 
     if not has_admin_key:
         return TuiSnapshot(
             phase="auth-required",
-            health=health,
+            readiness=readiness,
             errors=(
                 TuiError(
                     kind="auth",
@@ -120,7 +123,7 @@ async def refresh_snapshot(
     if admin_status_error is not None:
         return TuiSnapshot(
             phase=("auth-required" if admin_status_error.kind == "auth" else "partial"),
-            health=health,
+            readiness=readiness,
             errors=(admin_status_error,),
             last_updated=refreshed_at,
         )
@@ -169,7 +172,7 @@ async def refresh_snapshot(
 
     return TuiSnapshot(
         phase="partial" if errors else "ready",
-        health=health,
+        readiness=readiness,
         admin_status=admin_status,
         config_summary=config_summary,
         catalog=catalog,

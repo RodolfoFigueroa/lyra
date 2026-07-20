@@ -5,7 +5,7 @@ from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
 
 ReadinessStatus = Literal["ok", "unavailable", "unknown"]
-InstanceStatus = Literal["ok", "degraded"]
+ServiceReadinessStatus = Literal["ready", "not_ready"]
 WorkerObservedStatus = Literal["online", "offline", "unknown"]
 
 
@@ -13,10 +13,20 @@ class RedisHealth(StrictBaseModel):
     status: ReadinessStatus = Field(description="Redis readiness state.")
 
 
-class HealthResponse(StrictBaseModel):
-    status: InstanceStatus = Field(description="Overall API readiness state.")
+class DatabaseHealth(StrictBaseModel):
+    status: ReadinessStatus = Field(description="PostgreSQL readiness state.")
+
+
+class LivenessResponse(StrictBaseModel):
+    status: Literal["ok"] = Field(description="API process liveness state.")
+    api_version: str = Field(min_length=1, description="Running Lyra API version.")
+
+
+class ReadinessResponse(StrictBaseModel):
+    status: ServiceReadinessStatus = Field(description="Overall API readiness state.")
     api_version: str = Field(min_length=1, description="Running Lyra API version.")
     redis: RedisHealth = Field(description="Redis readiness details.")
+    database: DatabaseHealth = Field(description="PostgreSQL readiness details.")
 
 
 class WorkerConfigSummary(StrictBaseModel):
@@ -133,13 +143,15 @@ __all__ = [
     "AdminStatusResponse",
     "CatalogSummaryResponse",
     "ConfigSummaryResponse",
-    "HealthResponse",
-    "InstanceStatus",
+    "DatabaseHealth",
+    "LivenessResponse",
     "PluginSourceSummary",
     "QueueSummary",
     "QueuesResponse",
+    "ReadinessResponse",
     "ReadinessStatus",
     "RedisHealth",
+    "ServiceReadinessStatus",
     "WorkerConfigSummary",
     "WorkerDetail",
     "WorkerInspectMetadata",

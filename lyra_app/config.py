@@ -48,7 +48,8 @@ DEFAULT_MCP_MOUNT_PATH = "/mcp"
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
 _ALLOWED_LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "agent", "database"})
+_ENV_BACKED_CONFIG_SECTIONS = frozenset({"admin", "agent"})
+_DATABASE_ENV_BACKED_FIELDS = frozenset({"host", "port", "name", "user", "password"})
 
 
 class ConfigSecretError(RuntimeError):
@@ -248,6 +249,45 @@ class RedisConfig(StrictConfigModel):
         return value
 
 
+class DatabasePoolConfig(StrictConfigModel):
+    pool_size: int = Field(ge=1)
+    max_overflow: int = Field(default=0, ge=0)
+    pool_timeout_seconds: float = Field(gt=0)
+    connect_timeout_seconds: int = Field(gt=0)
+    statement_timeout_ms: int = Field(gt=0)
+    pool_recycle_seconds: int = Field(gt=0)
+
+
+def _api_database_pool() -> DatabasePoolConfig:
+    return DatabasePoolConfig(
+        pool_size=5,
+        pool_timeout_seconds=2.0,
+        connect_timeout_seconds=5,
+        statement_timeout_ms=10_000,
+        pool_recycle_seconds=900,
+    )
+
+
+def _spatial_database_pool() -> DatabasePoolConfig:
+    return DatabasePoolConfig(
+        pool_size=2,
+        pool_timeout_seconds=2.0,
+        connect_timeout_seconds=5,
+        statement_timeout_ms=25_000,
+        pool_recycle_seconds=900,
+    )
+
+
+def _worker_database_pool() -> DatabasePoolConfig:
+    return DatabasePoolConfig(
+        pool_size=1,
+        pool_timeout_seconds=5.0,
+        connect_timeout_seconds=5,
+        statement_timeout_ms=300_000,
+        pool_recycle_seconds=900,
+    )
+
+
 class DatabaseConfig(StrictConfigModel):
     host: str = Field(
         default_factory=lambda: read_scalar_env_var(
@@ -286,6 +326,11 @@ class DatabaseConfig(StrictConfigModel):
         min_length=1,
         repr=False,
     )
+    readiness_timeout_seconds: float = Field(default=1.0, gt=0)
+    retry_after_seconds: int = Field(default=5, gt=0)
+    api: DatabasePoolConfig = Field(default_factory=_api_database_pool)
+    spatial: DatabasePoolConfig = Field(default_factory=_spatial_database_pool)
+    worker: DatabasePoolConfig = Field(default_factory=_worker_database_pool)
 
     @field_validator("host", "name", "user", "password", mode="before")
     @classmethod
@@ -527,6 +572,15 @@ class LyraConfig(StrictConfigModel):
                     "variables, not lyra.toml"
                 )
                 raise ValueError(msg)
+            database = value.get("database")
+            if isinstance(database, dict):
+                configured_fields = sorted(set(database) & _DATABASE_ENV_BACKED_FIELDS)
+                if configured_fields:
+                    fields = ", ".join(
+                        f"database.{field}" for field in configured_fields
+                    )
+                    msg = f"{fields} are configured through environment variables"
+                    raise ValueError(msg)
         return value
 
     @field_validator("workers", mode="before")
@@ -690,9 +744,9 @@ def _toml_string_array(values: list[str]) -> str:
 def _append_key(
     lines: list[str],
     key: str,
-    value: str | Path | int | list[str],
+    value: str | Path | float | list[str],
 ) -> None:
-    if isinstance(value, int):
+    if isinstance(value, int | float):
         rendered = str(value)
     elif isinstance(value, list):
         rendered = _toml_string_array(value)
@@ -714,6 +768,35 @@ def _append_redis_section(lines: list[str], redis: RedisConfig) -> None:
     lines.append("[redis]")
     _append_key(lines, "url", redis.url)
     lines.append("")
+
+
+def _append_database_pool_section(
+    lines: list[str],
+    name: str,
+    pool: DatabasePoolConfig,
+) -> None:
+    lines.append(f"[database.{name}]")
+    _append_key(lines, "pool_size", pool.pool_size)
+    _append_key(lines, "max_overflow", pool.max_overflow)
+    _append_key(lines, "pool_timeout_seconds", pool.pool_timeout_seconds)
+    _append_key(lines, "connect_timeout_seconds", pool.connect_timeout_seconds)
+    _append_key(lines, "statement_timeout_ms", pool.statement_timeout_ms)
+    _append_key(lines, "pool_recycle_seconds", pool.pool_recycle_seconds)
+    lines.append("")
+
+
+def _append_database_section(lines: list[str], database: DatabaseConfig) -> None:
+    lines.append("[database]")
+    _append_key(
+        lines,
+        "readiness_timeout_seconds",
+        database.readiness_timeout_seconds,
+    )
+    _append_key(lines, "retry_after_seconds", database.retry_after_seconds)
+    lines.append("")
+    _append_database_pool_section(lines, "api", database.api)
+    _append_database_pool_section(lines, "spatial", database.spatial)
+    _append_database_pool_section(lines, "worker", database.worker)
 
 
 def _append_earth_engine_section(
@@ -795,6 +878,7 @@ def render_config_toml(config: LyraConfig) -> str:
     lines: list[str] = ["schema_version = 1", ""]
     _append_api_section(lines, config.api)
     _append_redis_section(lines, config.redis)
+    _append_database_section(lines, config.database)
     _append_earth_engine_section(lines, config.earth_engine)
     _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)

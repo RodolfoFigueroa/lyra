@@ -280,7 +280,8 @@ these models are also available for tests, clients, and manifest tooling:
 | `JobStatusInfo` | Agent-authenticated `/jobs/{job_id}` status response. |
 | `JobListResponse` | Admin `/admin/jobs` response. |
 | `JobCancelResponse` | Admin `/admin/jobs/{job_id}/cancel` response. |
-| `HealthResponse` | Public `/health` response. |
+| `LivenessResponse` | Public dependency-free `/live` response. |
+| `ReadinessResponse` | Public Redis and PostgreSQL `/ready` response. |
 | `MetZoneCodeResponse` | Public `/lookups/met-zones` response. |
 | `PluginRepoListResponse` and `PluginRepoResponse` | Admin plugin source list and repo records. |
 | `CreatePluginRepoRequest` and `UpdatePluginRepoRequest` | Admin plugin source request bodies. |

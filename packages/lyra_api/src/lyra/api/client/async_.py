@@ -9,7 +9,11 @@ from typing import Any, TypeVar
 import aiofiles
 import aiofiles.os
 import aiohttp
-from lyra.api.client.base import _BaseLyraAPIClient, _load_pandas
+from lyra.api.client.base import (
+    _BaseLyraAPIClient,
+    _load_pandas,
+    service_unavailable_error,
+)
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models import (
     AdminStatusResponse,
@@ -21,19 +25,20 @@ from lyra.sdk.models import (
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
     FileJobResult,
-    HealthResponse,
     JobCancelResponse,
     JobCreateResponse,
     JobEvent,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
+    LivenessResponse,
     MetricQueueAssignmentResponse,
     MetZoneCodeResponse,
     PluginCatalogRefreshResponse,
     PluginRepoListResponse,
     PluginRoutingResponse,
     QueuesResponse,
+    ReadinessResponse,
     ResultDescriptor,
     SetMetricQueueRequest,
     SyncPluginRepoResponse,
@@ -107,6 +112,13 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
                 ) as response,
             ):
                 if response.status != expected_status:
+                    if response.status == 503:
+                        unavailable = service_unavailable_error(
+                            await response.json(),
+                            response.headers.get("Retry-After"),
+                        )
+                        if unavailable is not None:
+                            raise unavailable
                     text = await response.text()
                     err = f"Failed to {error_context}. HTTP {response.status}: {text}"
                     raise DownloadError(err)
@@ -115,23 +127,42 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"{error_context} request error: {exc}"
             raise DownloadError(err) from exc
 
-    async def get_health(self) -> HealthResponse:
+    async def get_liveness(self) -> LivenessResponse:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
-                    self._http_url("health"),
+                    self._http_url("live"),
                     headers=self.headers,
                 ) as response,
             ):
                 if response.status != 200:
                     text = await response.text()
-                    err = f"Failed to fetch health. HTTP {response.status}: {text}"
+                    err = f"Failed to fetch liveness. HTTP {response.status}: {text}"
                     raise DownloadError(err)
-                return HealthResponse.model_validate(await response.json())
+                return LivenessResponse.model_validate(await response.json())
         except aiohttp.ClientError as exc:
-            err = f"Health request error: {exc}"
+            err = f"Liveness request error: {exc}"
+            raise DownloadError(err) from exc
+
+    async def get_readiness(self) -> ReadinessResponse:
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(
+                    self._http_url("ready"),
+                    headers=self.headers,
+                ) as response,
+            ):
+                if response.status not in {200, 503}:
+                    text = await response.text()
+                    err = f"Failed to fetch readiness. HTTP {response.status}: {text}"
+                    raise DownloadError(err)
+                return ReadinessResponse.model_validate(await response.json())
+        except aiohttp.ClientError as exc:
+            err = f"Readiness request error: {exc}"
             raise DownloadError(err) from exc
 
     async def get_met_zone_code(self, name: str) -> MetZoneCodeResponse:

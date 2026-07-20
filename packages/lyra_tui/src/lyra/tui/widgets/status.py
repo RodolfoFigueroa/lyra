@@ -10,11 +10,13 @@ def format_snapshot_status(snapshot: TuiSnapshot) -> str:
     if snapshot.phase == "loading":
         return "Refreshing Lyra status."
 
-    health_text = "API unavailable"
-    if snapshot.health is not None:
-        health_text = (
-            f"API {snapshot.health.status} "
-            f"v{snapshot.health.api_version}; Redis {snapshot.health.redis.status}"
+    readiness_text = "API unavailable"
+    if snapshot.readiness is not None:
+        readiness_text = (
+            f"API {snapshot.readiness.status} "
+            f"v{snapshot.readiness.api_version}; "
+            f"Redis {snapshot.readiness.redis.status}; "
+            f"database {snapshot.readiness.database.status}"
         )
 
     if snapshot.admin_status is not None:
@@ -27,7 +29,7 @@ def format_snapshot_status(snapshot: TuiSnapshot) -> str:
     else:
         admin_text = "admin unavailable"
 
-    pieces = [health_text, admin_text]
+    pieces = [readiness_text, admin_text]
     if snapshot.errors:
         pieces.append(snapshot.errors[0].message)
     return " | ".join(pieces)

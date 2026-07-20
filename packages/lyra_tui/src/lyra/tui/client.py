@@ -12,7 +12,6 @@ if TYPE_CHECKING:
         CreatePluginRepoResponse,
         DeleteMetricQueueResponse,
         DeletePluginRepoResponse,
-        HealthResponse,
         JobCancelResponse,
         JobListResponse,
         MetricQueueAssignmentResponse,
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
         PluginRepoListResponse,
         PluginRoutingResponse,
         QueuesResponse,
+        ReadinessResponse,
         SyncPluginRepoResponse,
         UpdatePluginRepoResponse,
         WorkerRestartResponse,
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 class LyraTuiReadClient(Protocol):
-    async def get_health(self) -> HealthResponse: ...
+    async def get_readiness(self) -> ReadinessResponse: ...
 
     async def get_admin_status(self) -> AdminStatusResponse: ...
 
@@ -100,8 +100,8 @@ class LyraApiClientAdapter:
             secure=config.secure,
         )
 
-    async def get_health(self) -> HealthResponse:
-        return await self._client.get_health()
+    async def get_readiness(self) -> ReadinessResponse:
+        return await self._client.get_readiness()
 
     async def get_admin_status(self) -> AdminStatusResponse:
         return await self._client.get_admin_status()

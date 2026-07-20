@@ -14,6 +14,7 @@ from lyra.sdk.models.metric import normalize_metric_search_tokens
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
+    from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.mcp.models import (
         GetJobResultInput,
         GetMetricInput,
@@ -33,6 +34,7 @@ _INVALID_PARAMETERS_ERROR = "invalid_parameters"
 _IDEMPOTENCY_CONFLICT_ERROR = "idempotency_conflict"
 _RATE_LIMITED_ERROR = "rate_limited"
 _BACKEND_ERROR = "backend_error"
+_DATABASE_UNAVAILABLE_ERROR = "database_unavailable"
 _METRIC_CURSOR_VERSION = 1
 _MAX_COMPACT_DESCRIPTION_LENGTH = 240
 
@@ -75,23 +77,46 @@ class ToolCallError(Exception):
 
 
 class InProcessLyraBackend:
+    def __init__(self, database: ApplicationDatabaseRuntime | None = None) -> None:
+        self.database = database
+
     async def get_metrics(self) -> Any:
         from lyra_app.registry import get_metric_catalog  # noqa: PLC0415
 
         return await asyncio.to_thread(get_metric_catalog)
 
     async def lookup_met_zone(self, name: str) -> Any | None:
-        from lyra_app.db.connection import engine  # noqa: PLC0415
+        from sqlalchemy.exc import SQLAlchemyError  # noqa: PLC0415
+
+        from lyra_app.db.connection import (  # noqa: PLC0415
+            is_database_unavailable_error,
+        )
         from lyra_app.loaders.db import (  # noqa: PLC0415
-            get_met_zone_code_from_name,
+            get_met_zone_code_from_name_async,
         )
 
-        with engine.connect() as conn:
-            result = await asyncio.to_thread(
-                get_met_zone_code_from_name,
-                name,
-                conn=conn,
-            )
+        if self.database is None:
+            msg = "Application database runtime is unavailable."
+            raise RuntimeError(msg)
+        try:
+            async with self.database.require_async_engine().connect() as connection:
+                result = await get_met_zone_code_from_name_async(
+                    name,
+                    conn=connection,
+                )
+        except SQLAlchemyError as exc:
+            if not is_database_unavailable_error(exc):
+                raise
+            raise ToolCallError(
+                _DATABASE_UNAVAILABLE_ERROR,
+                "The spatial database is temporarily unavailable.",
+                {
+                    "retryable": True,
+                    "retry_after_seconds": (
+                        self.database.config.database.retry_after_seconds
+                    ),
+                },
+            ) from exc
         if result is None:
             return None
         cve_met, nom_met = result
@@ -111,6 +136,7 @@ class InProcessLyraBackend:
     ) -> Any:
         from lyra.sdk.models import JobCreateRequest  # noqa: PLC0415
 
+        from lyra_app.db.connection import DatabaseUnavailableError  # noqa: PLC0415
         from lyra_app.job_submission import (  # noqa: PLC0415
             IdempotencyConflictError,
             SubmissionRateLimitedError,
@@ -130,7 +156,8 @@ class InProcessLyraBackend:
                     metric=metric,
                     input=payload,
                     idempotency_key=idempotency_key,
-                )
+                ),
+                database=self.database,
             )
         except UnknownMetricError as exc:
             raise ToolCallError(_UNKNOWN_METRIC_ERROR, str(exc)) from exc
@@ -153,13 +180,26 @@ class InProcessLyraBackend:
                 exc.details,
             ) from exc
         except (
+            DatabaseUnavailableError,
             SpatialInputResolutionUnavailableError,
             SubmissionUnavailableError,
         ) as exc:
+            if isinstance(
+                exc,
+                DatabaseUnavailableError | SpatialInputResolutionUnavailableError,
+            ):
+                retry_after = (
+                    self.database.config.database.retry_after_seconds
+                    if self.database is not None
+                    else 5
+                )
+                raise ToolCallError(
+                    _DATABASE_UNAVAILABLE_ERROR,
+                    "The spatial database is temporarily unavailable.",
+                    {"retryable": True, "retry_after_seconds": retry_after},
+                ) from exc
             raise ToolCallError(
-                _BACKEND_ERROR,
-                "Failed to create job.",
-                str(exc),
+                _BACKEND_ERROR, "Failed to create job.", str(exc)
             ) from exc
 
     async def get_job(self, job_id: str) -> Any | None:

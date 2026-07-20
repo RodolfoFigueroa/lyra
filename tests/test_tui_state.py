@@ -9,7 +9,7 @@ from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
-    HealthResponse,
+    DatabaseHealth,
     JobListResponse,
     JobStatusInfo,
     PluginRepoListResponse,
@@ -17,6 +17,7 @@ from lyra.sdk.models import (
     PluginRoutingResponse,
     QueuesResponse,
     QueueSummary,
+    ReadinessResponse,
     RedisHealth,
     WorkerConfigSummary,
     WorkersResponse,
@@ -34,8 +35,8 @@ class FakeClient:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def get_health(self) -> HealthResponse:
-        self.calls.append("get_health")
+    async def get_readiness(self) -> ReadinessResponse:
+        self.calls.append("get_readiness")
         return _health_response()
 
     async def get_admin_status(self) -> AdminStatusResponse:
@@ -83,8 +84,8 @@ class RecoveringClient(FakeClient):
         super().__init__()
         self.fail_next_health = True
 
-    async def get_health(self) -> HealthResponse:
-        self.calls.append("get_health")
+    async def get_readiness(self) -> ReadinessResponse:
+        self.calls.append("get_readiness")
         if self.fail_next_health:
             self.fail_next_health = False
             message = "Health request error: connection refused"
@@ -97,8 +98,8 @@ class BlockingHealthClient(FakeClient):
         super().__init__()
         self.release = release
 
-    async def get_health(self) -> HealthResponse:
-        self.calls.append("get_health")
+    async def get_readiness(self) -> ReadinessResponse:
+        self.calls.append("get_readiness")
         await self.release.wait()
         return _health_response()
 
@@ -109,7 +110,7 @@ def test_successful_snapshot_refresh_fetches_admin_data() -> None:
     snapshot = asyncio.run(refresh_snapshot(client, has_admin_key=True))
 
     assert snapshot.phase == "ready"
-    assert snapshot.health is not None
+    assert snapshot.readiness is not None
     assert snapshot.admin_status is not None
     assert snapshot.config_summary is not None
     assert snapshot.catalog is not None
@@ -120,7 +121,7 @@ def test_successful_snapshot_refresh_fetches_admin_data() -> None:
     assert snapshot.plugin_routing is not None
     assert not snapshot.errors
     assert client.calls == [
-        "get_health",
+        "get_readiness",
         "get_admin_status",
         "get_admin_config_summary",
         "get_admin_catalog",
@@ -138,10 +139,10 @@ def test_missing_admin_key_fetches_only_public_health() -> None:
     snapshot = asyncio.run(refresh_snapshot(client, has_admin_key=False))
 
     assert snapshot.phase == "auth-required"
-    assert snapshot.health is not None
+    assert snapshot.readiness is not None
     assert snapshot.admin_status is None
     assert snapshot.errors[0].kind == "auth"
-    assert client.calls == ["get_health"]
+    assert client.calls == ["get_readiness"]
 
 
 def test_admin_auth_failure_keeps_public_health() -> None:
@@ -150,10 +151,10 @@ def test_admin_auth_failure_keeps_public_health() -> None:
     snapshot = asyncio.run(refresh_snapshot(client, has_admin_key=True))
 
     assert snapshot.phase == "auth-required"
-    assert snapshot.health is not None
+    assert snapshot.readiness is not None
     assert snapshot.admin_status is None
     assert snapshot.errors[0].kind == "auth"
-    assert client.calls == ["get_health", "get_admin_status"]
+    assert client.calls == ["get_readiness", "get_admin_status"]
 
 
 def test_failed_refresh_does_not_poison_later_success() -> None:
@@ -185,7 +186,7 @@ def test_app_shows_injected_state_in_status_area() -> None:
         state = LyraTuiState(FakeClient(), has_admin_key=True)
         state.snapshot = TuiSnapshot(
             phase="ready",
-            health=_health_response(),
+            readiness=_health_response(),
             admin_status=_admin_status_response(),
         )
         app = LyraTuiApp(
@@ -195,7 +196,7 @@ def test_app_shows_injected_state_in_status_area() -> None:
         )
         async with app.run_test():
             status = app.query_one(ConnectionStatus)
-            assert "API ok v0.1.0" in status.message
+            assert "API ready v0.1.0" in status.message
             assert "metrics 1" in status.message
 
     asyncio.run(run())
@@ -218,24 +219,25 @@ def test_app_skips_overlapping_refresh_requests() -> None:
             app.request_refresh()
             await pilot.pause()
 
-            assert client.calls.count("get_health") == 1
+            assert client.calls.count("get_readiness") == 1
 
             release.set()
             await app.workers.wait_for_complete()
             await pilot.pause()
 
             status = app.query_one(ConnectionStatus)
-            assert "API ok v0.1.0" in status.message
-            assert client.calls.count("get_health") == 1
+            assert "API ready v0.1.0" in status.message
+            assert client.calls.count("get_readiness") == 1
 
     asyncio.run(run())
 
 
-def _health_response() -> HealthResponse:
-    return HealthResponse(
-        status="ok",
+def _health_response() -> ReadinessResponse:
+    return ReadinessResponse(
+        status="ready",
         api_version="0.1.0",
         redis=RedisHealth(status="ok"),
+        database=DatabaseHealth(status="ok"),
     )
 
 

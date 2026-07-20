@@ -59,7 +59,7 @@ optional port, without `http://` or `https://`; choose the scheme with
 
 ## Auth And Actions
 
-`GET /health` is public, so the TUI can still show API and Redis health without
+`GET /ready` is public, so the TUI can still show API, Redis, and database readiness without
 an admin key. All admin views and all mutating actions require the same Bearer
 token as Lyra's `/admin/*` routes. The TUI reads that token from
 `LYRA_ADMIN_API_KEY` unless `--admin-api-key` is provided.
@@ -87,15 +87,15 @@ Destructive or disruptive actions ask for confirmation before they call the API.
 
 ## Troubleshooting
 
-If the API is offline, the TUI reports the health request failure. Start the API
-or check `--host`, `--secure`, and `--no-secure`.
+If the API is offline, the TUI reports the readiness request failure. Start the
+API or check `--host`, `--secure`, and `--no-secure`.
 
-If the admin key is missing, the TUI shows public health only and labels admin
+If the admin key is missing, the TUI shows public readiness only and labels admin
 data as locked. Export `LYRA_ADMIN_API_KEY` or pass `--admin-api-key`.
 
-If Redis is unavailable, `/health` reports Redis as unavailable and job, queue,
-and worker data may be stale or missing. Start Redis and confirm the server's
-`[redis].url` setting.
+If Redis or PostgreSQL is unavailable, `/ready` returns `503` with the affected
+dependency marked unavailable. Job, queue, and worker data may be stale or
+missing. Check `[redis].url` and the `LYRA_POSTGRES_*` environment variables.
 
 If worker inspect is unavailable, workers may appear as `unknown`. This usually
 means workers are offline, restarting, or not responding to Celery inspect.

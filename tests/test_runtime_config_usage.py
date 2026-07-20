@@ -71,9 +71,9 @@ def test_database_url_uses_env_backed_config(tmp_path: Path) -> None:
 
     from lyra_app.db.connection import database_url  # noqa: PLC0415
 
-    url = database_url("postgresql+psycopg2", config)
+    url = database_url(config=config)
 
-    assert url.drivername == "postgresql+psycopg2"
+    assert url.drivername == "postgresql+psycopg"
     assert url.username == "lyra"
     assert url.password == config.database.password
     assert url.host == "postgres"

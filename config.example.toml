@@ -23,6 +23,34 @@ forwarded_allow_ips = ["127.0.0.1"]
 # For direct local processes, use redis://localhost:6379/0.
 url = "redis://lyra-redis:6379/0"
 
+[database]
+readiness_timeout_seconds = 1.0
+retry_after_seconds = 5
+
+[database.api]
+pool_size = 5
+max_overflow = 0
+pool_timeout_seconds = 2.0
+connect_timeout_seconds = 5
+statement_timeout_ms = 10000
+pool_recycle_seconds = 900
+
+[database.spatial]
+pool_size = 2
+max_overflow = 0
+pool_timeout_seconds = 2.0
+connect_timeout_seconds = 5
+statement_timeout_ms = 25000
+pool_recycle_seconds = 900
+
+[database.worker]
+pool_size = 1
+max_overflow = 0
+pool_timeout_seconds = 5.0
+connect_timeout_seconds = 5
+statement_timeout_ms = 300000
+pool_recycle_seconds = 900
+
 [earth_engine]
 project = "your-gee-project-id"
 # Not needed for docker deployments, which use the service account file 

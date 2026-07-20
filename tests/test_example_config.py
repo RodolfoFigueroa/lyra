@@ -37,7 +37,9 @@ def test_example_config_matches_config_contract(
     assert "repos" not in raw_config["plugins"]
     assert "metric_queues" not in raw_config["plugins"]
     assert config.plugins.default_queue in config.plugins.allowed_queues
-    assert "database" not in raw_config
+    assert "password" not in raw_config["database"]
+    assert "host" not in raw_config["database"]
+    assert config.database.api.pool_size == 5
     assert "admin" not in raw_config
     assert "agent" not in raw_config
     assert config.database.read_password() == "postgres-secret"
@@ -54,7 +56,13 @@ def test_example_config_matches_config_contract(
 
     rendered = render_config_toml(config)
 
-    assert "[database]" not in rendered
+    assert "[database]" in rendered
+    assert "[database.api]" in rendered
+    assert "[database.spatial]" in rendered
+    assert "[database.worker]" in rendered
+    rendered_config = tomllib.loads(rendered)
+    assert "host" not in rendered_config["database"]
+    assert "password" not in rendered_config["database"]
     assert "[admin]" not in rendered
     assert "[agent]" not in rendered
     assert "password_file" not in rendered

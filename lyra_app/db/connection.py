@@ -1,10 +1,32 @@
-from sqlalchemy.engine import URL, create_engine
-from sqlalchemy.ext.asyncio import create_async_engine
+from __future__ import annotations
 
-from lyra_app.config import LyraConfig, get_config
+import asyncio
+import os
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from typing import TYPE_CHECKING, Any, TypeVar
+
+from sqlalchemy.engine import URL, Engine, create_engine
+from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+from lyra_app.config import DatabasePoolConfig, LyraConfig, get_config
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+ResultT = TypeVar("ResultT")
 
 
-def database_url(drivername: str, config: LyraConfig | None = None) -> URL:
+class DatabaseUnavailableError(RuntimeError):
+    """Raised when database work cannot start within its service deadline."""
+
+
+def database_url(
+    drivername: str = "postgresql+psycopg",
+    config: LyraConfig | None = None,
+) -> URL:
     config = get_config() if config is None else config
     return URL.create(
         drivername,
@@ -16,6 +38,172 @@ def database_url(drivername: str, config: LyraConfig | None = None) -> URL:
     )
 
 
-engine = create_engine(database_url("postgresql+psycopg2"))
+def _engine_options(pool: DatabasePoolConfig) -> dict[str, Any]:
+    return {
+        "pool_size": pool.pool_size,
+        "max_overflow": pool.max_overflow,
+        "pool_timeout": pool.pool_timeout_seconds,
+        "pool_recycle": pool.pool_recycle_seconds,
+        "pool_pre_ping": True,
+        "connect_args": {
+            "connect_timeout": pool.connect_timeout_seconds,
+            "options": f"-c statement_timeout={pool.statement_timeout_ms}",
+        },
+    }
 
-async_engine = create_async_engine(database_url("postgresql+asyncpg"))
+
+def create_sync_database_engine(
+    pool: DatabasePoolConfig,
+    config: LyraConfig | None = None,
+) -> Engine:
+    return create_engine(database_url(config=config), **_engine_options(pool))
+
+
+def create_async_database_engine(
+    pool: DatabasePoolConfig,
+    config: LyraConfig | None = None,
+) -> AsyncEngine:
+    return create_async_engine(database_url(config=config), **_engine_options(pool))
+
+
+class ApplicationDatabaseRuntime:
+    """Own the API process database engines and bounded spatial executor."""
+
+    def __init__(self, config: LyraConfig) -> None:
+        self.config = config
+        self.async_engine: AsyncEngine | None = None
+        self.spatial_engine: Engine | None = None
+        self._spatial_executor: ThreadPoolExecutor | None = None
+        self._spatial_capacity: asyncio.Semaphore | None = None
+
+    async def start(self) -> None:
+        if self.async_engine is not None:
+            return
+        self.async_engine = create_async_database_engine(
+            self.config.database.api,
+            self.config,
+        )
+        self.spatial_engine = create_sync_database_engine(
+            self.config.database.spatial,
+            self.config,
+        )
+        worker_count = self.config.database.spatial.pool_size
+        self._spatial_executor = ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="lyra-spatial",
+        )
+        self._spatial_capacity = asyncio.Semaphore(worker_count)
+
+    async def close(self) -> None:
+        async_engine = self.async_engine
+        spatial_engine = self.spatial_engine
+        executor = self._spatial_executor
+        self.async_engine = None
+        self.spatial_engine = None
+        self._spatial_executor = None
+        self._spatial_capacity = None
+        if executor is not None:
+            await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
+        if spatial_engine is not None:
+            await asyncio.to_thread(spatial_engine.dispose)
+        if async_engine is not None:
+            await async_engine.dispose()
+
+    def require_async_engine(self) -> AsyncEngine:
+        if self.async_engine is None:
+            msg = "Application database runtime has not been started."
+            raise RuntimeError(msg)
+        return self.async_engine
+
+    def require_spatial_engine(self) -> Engine:
+        if self.spatial_engine is None:
+            msg = "Application database runtime has not been started."
+            raise RuntimeError(msg)
+        return self.spatial_engine
+
+    async def run_spatial(
+        self,
+        function: Callable[..., ResultT],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> ResultT:
+        capacity = self._spatial_capacity
+        executor = self._spatial_executor
+        if capacity is None or executor is None:
+            msg = "Application database runtime has not been started."
+            raise RuntimeError(msg)
+
+        try:
+            async with asyncio.timeout(
+                self.config.database.spatial.pool_timeout_seconds
+            ):
+                await capacity.acquire()
+        except TimeoutError as exc:
+            msg = "Spatial database capacity is temporarily unavailable."
+            raise DatabaseUnavailableError(msg) from exc
+
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                executor,
+                partial(function, *args, **kwargs),
+            )
+        finally:
+            capacity.release()
+
+
+_worker_engine: Engine | None = None
+_worker_engine_pid: int | None = None
+
+
+def get_worker_engine(config: LyraConfig | None = None) -> Engine:
+    global _worker_engine, _worker_engine_pid  # noqa: PLW0603
+
+    process_id = os.getpid()
+    if _worker_engine is not None and _worker_engine_pid != process_id:
+        _worker_engine.dispose(close=False)
+        _worker_engine = None
+    if _worker_engine is None:
+        runtime_config = get_config() if config is None else config
+        _worker_engine = create_sync_database_engine(
+            runtime_config.database.worker,
+            runtime_config,
+        )
+        _worker_engine_pid = process_id
+    return _worker_engine
+
+
+def dispose_worker_engine() -> None:
+    global _worker_engine, _worker_engine_pid  # noqa: PLW0603
+
+    if _worker_engine is not None:
+        _worker_engine.dispose()
+    _worker_engine = None
+    _worker_engine_pid = None
+
+
+def is_database_unavailable_error(exc: BaseException) -> bool:
+    if isinstance(
+        exc,
+        DatabaseUnavailableError | OperationalError | SQLAlchemyTimeoutError,
+    ):
+        return True
+    if isinstance(exc, DBAPIError):
+        if exc.connection_invalidated:
+            return True
+        sqlstate = getattr(exc.orig, "sqlstate", None)
+        return sqlstate == "57014"
+    return False
+
+
+__all__ = [
+    "ApplicationDatabaseRuntime",
+    "DatabaseUnavailableError",
+    "create_async_database_engine",
+    "create_sync_database_engine",
+    "database_url",
+    "dispose_worker_engine",
+    "get_worker_engine",
+    "is_database_unavailable_error",
+]

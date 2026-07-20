@@ -3,12 +3,15 @@ from typing import Literal
 
 import geopandas as gpd
 from sqlalchemy import quoted_name
+from sqlalchemy.engine import Engine
 
-from lyra_app.db.connection import engine
 from lyra_app.loaders.db import load_geometries_from_bounds
 
 
 class LyraDBImplicit:
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
     def load_denue_from_bounds(
         self,
         xmin: float,
@@ -40,7 +43,7 @@ class LyraDBImplicit:
         """
         table_name = quoted_name(f"denue_{year}_{month:02d}", quote=True)
 
-        with engine.connect() as conn:
+        with self._engine.connect() as conn:
             return load_geometries_from_bounds(
                 xmin,
                 ymin,
@@ -77,7 +80,7 @@ class LyraDBImplicit:
         Returns:
             A GeoDataFrame with columns ``["codigo", "geometry"]``.
         """
-        with engine.connect() as conn:
+        with self._engine.connect() as conn:
             return load_geometries_from_bounds(
                 xmin,
                 ymin,
@@ -117,7 +120,7 @@ class LyraDBImplicit:
         Returns:
             A GeoDataFrame of census records intersecting the bounding box.
         """
-        with engine.connect() as conn:
+        with self._engine.connect() as conn:
             return load_geometries_from_bounds(
                 xmin,
                 ymin,

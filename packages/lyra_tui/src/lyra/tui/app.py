@@ -600,7 +600,7 @@ def _loading_snapshot(snapshot: TuiSnapshot) -> TuiSnapshot:
     phase: SnapshotPhase = "loading"
     return TuiSnapshot(
         phase=phase,
-        health=snapshot.health,
+        readiness=snapshot.readiness,
         admin_status=snapshot.admin_status,
         config_summary=snapshot.config_summary,
         catalog=snapshot.catalog,

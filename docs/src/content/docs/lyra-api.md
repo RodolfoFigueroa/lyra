@@ -10,7 +10,13 @@ development scripts that submit jobs against a running API server.
 ## Common Imports
 
 ```python
-from lyra.api import AsyncLyraAPIClient, DownloadError, LyraAPIClient, parse_result_ref
+from lyra.api import (
+    AsyncLyraAPIClient,
+    DownloadError,
+    LyraAPIClient,
+    ServiceUnavailableError,
+    parse_result_ref,
+)
 ```
 
 Both clients return models from `lyra-sdk`, such as `DataTypesResponse`,
@@ -88,7 +94,8 @@ submit, wait, and result workflow, see [Python Client](../python-client/).
 
 | Method | Returns | Use when |
 | --- | --- | --- |
-| `get_health()` | `HealthResponse` | You need public API and Redis readiness from `/health`. |
+| `get_liveness()` | `LivenessResponse` | You need dependency-free API process liveness from `/live`. |
+| `get_readiness()` | `ReadinessResponse` | You need Redis and PostgreSQL readiness from `/ready`; both `200` and `503` responses are parsed. |
 | `get_data_types()` | `DataTypesResponse` | You need grouped `location` and `bounds` wrapper schemas from `/data-types`. |
 | `get_metrics()` | `MetricCatalogResponse` | You need the public catalog fingerprint plus all metric names, descriptions, request schemas, and output declarations. |
 | `get_metric(metric_name)` | `MetricInfoV3` | You need one metric's schema metadata. |
@@ -250,14 +257,15 @@ or returns the wrong result type.
 
 ## Exceptions
 
-`LyraAPIError` is the base exception for client errors. `DownloadError` is the
-current concrete exception raised for HTTP, streaming, job failure, and result
-download problems.
+`LyraAPIError` is the base exception for client errors. `DownloadError` covers
+general HTTP, streaming, job failure, and result download problems.
+`ServiceUnavailableError` represents a structured retryable `503`; inspect its
+`code`, `retryable`, and `retry_after_seconds` attributes before retrying.
 
 ```python
 import os
 
-from lyra.api import DownloadError, LyraAPIClient
+from lyra.api import DownloadError, LyraAPIClient, ServiceUnavailableError
 
 client = LyraAPIClient(
     "localhost:5219",
@@ -267,6 +275,8 @@ client = LyraAPIClient(
 
 try:
     result = client.process(metric_name, payload)
+except ServiceUnavailableError as exc:
+    print(f"Retry after {exc.retry_after_seconds} seconds: {exc}")
 except DownloadError as exc:
     print(f"Lyra request failed: {exc}")
 ```

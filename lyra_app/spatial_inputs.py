@@ -64,9 +64,12 @@ def _format_pydantic_errors(
 def resolve_spatial_inputs(
     payload: dict[str, Any],
     spatial_inputs: dict[str, SpatialInputKindV3],
+    converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    from lyra_app.converters import converter_map  # noqa: PLC0415
+    if converter_map is None:
+        from lyra_app import converters  # noqa: PLC0415
 
+        converter_map = vars(converters)["converter_map"]
     resolved = dict(payload)
     for field_name, kind in spatial_inputs.items():
         try:
@@ -102,10 +105,11 @@ def resolve_spatial_inputs(
 def resolve_spatial_inputs_with_metadata(
     payload: dict[str, Any],
     spatial_inputs: dict[str, SpatialInputKindV3],
+    converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> SpatialInputResolution:
     """Resolve spatial inputs while retaining no resolved geometry in metadata."""
 
-    resolved = resolve_spatial_inputs(payload, spatial_inputs)
+    resolved = resolve_spatial_inputs(payload, spatial_inputs, converter_map)
     row_identity: RowIdentityMetadata | None = None
     for field_name, kind in spatial_inputs.items():
         if kind != "location":

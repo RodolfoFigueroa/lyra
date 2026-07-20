@@ -389,7 +389,7 @@ def test_config_contract_rejects_plugin_repos_field(tmp_path: Path) -> None:
     _assert_invalid(raw, "Extra inputs are not permitted")
 
 
-@pytest.mark.parametrize("section", ["admin", "database"])
+@pytest.mark.parametrize("section", ["admin"])
 def test_config_contract_rejects_env_backed_toml_sections(
     tmp_path: Path,
     section: str,

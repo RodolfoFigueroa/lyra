@@ -169,7 +169,7 @@ later `initial_repos` changes are ignored.
 
 Compose health-gates workers on the API so they cannot install plugins before
 initial state and routing are ready. For other process supervisors, start the
-API first and wait for `/health` before starting workers.
+API first and wait for `/ready` before starting workers.
 
 The checked-in examples include two worker pools:
 
@@ -214,7 +214,8 @@ Workers do not hot-reload plugin code in-process.
 
 ## Observability
 
-Use `GET /health` for load balancers and local liveness checks. Use admin
+Use `GET /live` for process supervision and `GET /ready` for load balancers and
+worker startup gates. Use admin
 observability routes for operator dashboards:
 
 - `GET /admin/status`

@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Run the Lyra terminal operator console.\n\n"
             "The TUI connects to an already-running Lyra API. Without an admin "
-            "key it can only show public health information; admin views and "
+            "key it can only show public readiness information; admin views and "
             "mutating actions require Bearer auth."
         ),
         epilog=(

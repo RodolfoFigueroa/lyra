@@ -21,9 +21,49 @@ Ordinary parameters may use:
 - nested Pydantic models and typed JSON containers;
 - `Annotated[list[BatchItem[T]], Batch(...)]` for bounded repeated values.
 
-Use Python defaults for optional fields and `Annotated[..., Field(...)]` for
-descriptions, examples, and constraints. Put batch value metadata on `T`, not
-on the outer list. Spatial and batch containers remain required protocol fields.
+Use `Annotated[..., Field(...)]` for descriptions, examples, and constraints.
+Put batch value metadata on `T`, not on the outer list. Spatial and batch
+containers remain required protocol fields.
+
+### Defaults, omission, and null
+
+The function signature is authoritative for input defaults. A Python default
+makes an ordinary input omittable and is recorded as its manifest default. Put
+the default after the annotation; do not declare it in `Field` or repeat it in
+the description:
+
+```python
+limit: Annotated[
+    int,
+    Field(description="Maximum number of results.", ge=1),
+] = 100
+```
+
+Omission and nullability are independent. A union with `None` (written as
+`T | None` or `Optional[T]`) permits an explicit JSON `null`, but does not by
+itself make the input omittable. To permit both omission and `null`, annotate
+the value as nullable and give it a default:
+
+```python
+threshold: Annotated[
+    float | None,
+    Field(description="Threshold, or null to disable filtering."),
+] = None
+```
+
+The resulting contracts are:
+
+| Function parameter | May be omitted | Accepts `null` | Default |
+| --- | --- | --- | --- |
+| `value: int` | No | No | — |
+| `value: int = 1` | Yes | No | `1` |
+| `value: int \| None` | No | Yes | — |
+| `value: int \| None = None` | Yes | Yes | `null` |
+| `value: int \| None = 1` | Yes | Yes | `1` |
+
+An em dash means that no default exists; `null` is an actual default value.
+Defaults and examples must satisfy the annotated type and constraints or
+manifest generation fails.
 
 Clients submit spatial wrapper objects such as `geojson`, `cvegeo_list`, and
 `met_zone_code`. The API validates the compiled request schema and resolves

@@ -102,7 +102,7 @@ PAGE_SPECS = (
             sym("lyra.sdk.plugin", "Batch"),
             sym("lyra.sdk.plugin", "BatchItem"),
             sym("lyra.sdk.models.plugin_v3", "PluginInfoV3"),
-            sym("lyra.sdk.models.plugin_v3", "CommonInputMetadataV3"),
+            sym("lyra.sdk.models.plugin_v3", "PluginOwnedInputMetadataV3"),
             sym("lyra.sdk.models.plugin_v3", "SpatialInputKindV3"),
             sym("lyra.sdk.models.plugin_v3", "LocationInputV3"),
             sym("lyra.sdk.models.plugin_v3", "BoundsInputV3"),

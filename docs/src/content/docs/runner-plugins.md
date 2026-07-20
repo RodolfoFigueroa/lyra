@@ -81,6 +81,30 @@ the registry parses resolved job input into the annotated arguments, injects
 `context`, calls the function, and lets the worker validate the result against
 the generated output declaration.
 
+Lyra owns the metadata for `LocationInput`, `BoundsInput`, and batch containers;
+declare those protocol annotations without `Field`. For a batch, put
+descriptions, examples, and value constraints on its `BatchItem[T]` type:
+
+```python
+from typing import Annotated
+
+from lyra.sdk import Batch, BatchItem
+from pydantic import Field
+
+Category = Annotated[
+    str,
+    Field(description="Land-cover category code.", examples=["forest"]),
+]
+
+categories: Annotated[
+    list[BatchItem[Category]],
+    Batch(max_items=10, label=True),
+]
+```
+
+The compiler documents the outer array, `key`, and optional `label`
+consistently. The plugin-authored metadata documents only each item's `value`.
+
 Unknown metrics, plugin exceptions, invalid return payloads, and mismatched
 result `job_id` values become `FailedJobResult` payloads.
 

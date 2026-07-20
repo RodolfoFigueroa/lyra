@@ -9,6 +9,11 @@ parameters with `LocationInput` or `BoundsInput`; manifest generation emits
 Lyra compiles the declarations into the wrapper schemas that clients see in
 `/metrics`.
 
+Spatial metadata is owned by Lyra. Declare `location: LocationInput` or
+`bounds: BoundsInput` directly; the compiler adds canonical descriptions,
+examples, and wrapper constraints. `Field` metadata on a spatial parameter is
+rejected so every metric exposes the same spatial-input documentation.
+
 Clients submit spatial fields through a wrapper object so the API can validate
 and resolve them before a worker starts:
 

@@ -21,12 +21,27 @@ _BATCH_KEY_SCHEMA = {
     "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
     "minLength": 1,
     "maxLength": 64,
+    "description": "Stable identifier for this batch item.",
 }
 _BATCH_LABEL_SCHEMA = {
     "type": "string",
     "minLength": 1,
     "maxLength": 120,
+    "description": "Optional human-readable label for this batch item.",
 }
+_LOCATION_DESCRIPTION = (
+    "Locations to analyze, supplied through a supported spatial reference format."
+)
+_LOCATION_EXAMPLES = [
+    {"data_type": "cvegeo_list", "value": ["09002"]},
+]
+_BOUNDS_DESCRIPTION = (
+    "Area used to bound the analysis, supplied through a supported spatial "
+    "reference format."
+)
+_BOUNDS_EXAMPLES = [
+    {"data_type": "met_zone_code", "value": "ZMVM"},
+]
 _BATCHED_ITEM_FIELDS = {"key", "value", "label"}
 _BATCHED_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -99,8 +114,8 @@ class PluginInfoV3(StrictBaseModel):
     version: str = Field(min_length=1, description="Plugin package version.")
 
 
-class CommonInputMetadataV3(StrictBaseModel):
-    """Common metadata accepted by schema v3 input declarations."""
+class PluginOwnedInputMetadataV3(StrictBaseModel):
+    """Metadata accepted only by plugin-owned schema v3 input values."""
 
     description: str | None = Field(
         default=None,
@@ -125,48 +140,22 @@ class CommonInputMetadataV3(StrictBaseModel):
     )
 
 
-class LocationInputV3(CommonInputMetadataV3):
+class LocationInputV3(StrictBaseModel):
     """Lyra-owned location spatial input."""
 
     kind: Literal["location"] = Field(description="Input kind.")
 
-    @model_validator(mode="after")
-    def validate_lyra_owned_metadata(self) -> Self:
-        if "default" in self.model_fields_set:
-            msg = "location inputs must not define default"
-            raise ValueError(msg)
-        if self.nullable:
-            msg = "location inputs must not be nullable"
-            raise ValueError(msg)
-        if not self.required:
-            msg = "location inputs must be required"
-            raise ValueError(msg)
-        return self
 
-
-class BoundsInputV3(CommonInputMetadataV3):
+class BoundsInputV3(StrictBaseModel):
     """Lyra-owned bounds spatial input."""
 
     kind: Literal["bounds"] = Field(description="Input kind.")
-
-    @model_validator(mode="after")
-    def validate_lyra_owned_metadata(self) -> Self:
-        if "default" in self.model_fields_set:
-            msg = "bounds inputs must not define default"
-            raise ValueError(msg)
-        if self.nullable:
-            msg = "bounds inputs must not be nullable"
-            raise ValueError(msg)
-        if not self.required:
-            msg = "bounds inputs must be required"
-            raise ValueError(msg)
-        return self
 
 
 SpatialInputKindV3 = Literal["location", "bounds"]
 
 
-class StringInputV3(CommonInputMetadataV3):
+class StringInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned string input."""
 
     kind: Literal["string"] = Field(description="Input kind.")
@@ -186,7 +175,7 @@ class StringInputV3(CommonInputMetadataV3):
         return self
 
 
-class NumberInputV3(CommonInputMetadataV3):
+class NumberInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned numeric input."""
 
     kind: Literal["number"] = Field(description="Input kind.")
@@ -205,7 +194,7 @@ class NumberInputV3(CommonInputMetadataV3):
         return self
 
 
-class IntegerInputV3(CommonInputMetadataV3):
+class IntegerInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned integer input."""
 
     kind: Literal["integer"] = Field(description="Input kind.")
@@ -224,13 +213,13 @@ class IntegerInputV3(CommonInputMetadataV3):
         return self
 
 
-class BooleanInputV3(CommonInputMetadataV3):
+class BooleanInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned boolean input."""
 
     kind: Literal["boolean"] = Field(description="Input kind.")
 
 
-class EnumInputV3(CommonInputMetadataV3):
+class EnumInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned enum input."""
 
     kind: Literal["enum"] = Field(description="Input kind.")
@@ -264,7 +253,7 @@ class EnumInputV3(CommonInputMetadataV3):
         return values
 
 
-class JsonSchemaInputV3(CommonInputMetadataV3):
+class JsonSchemaInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned raw JSON Schema input."""
 
     kind: Literal["json_schema"] = Field(description="Input kind.")
@@ -295,7 +284,7 @@ PluginOwnedInputSpecV3 = Annotated[
 ]
 
 
-class BatchInputV3(CommonInputMetadataV3):
+class BatchInputV3(StrictBaseModel):
     """Metric-local batch input that can drive dynamic table columns."""
 
     kind: Literal["batch"] = Field(description="Input kind.")
@@ -307,19 +296,6 @@ class BatchInputV3(CommonInputMetadataV3):
         default=False,
         description="Whether clients may submit display labels for items.",
     )
-
-    @model_validator(mode="after")
-    def validate_batch_metadata(self) -> Self:
-        if "default" in self.model_fields_set:
-            msg = "batch inputs must not define default"
-            raise ValueError(msg)
-        if self.nullable:
-            msg = "batch inputs must not be nullable"
-            raise ValueError(msg)
-        if not self.required:
-            msg = "batch inputs must be required"
-            raise ValueError(msg)
-        return self
 
 
 InputSpecV3 = Annotated[
@@ -810,7 +786,7 @@ def _validate_value_against_schema(
 
 def _apply_common_metadata(
     schema: dict[str, Any],
-    input_spec: CommonInputMetadataV3,
+    input_spec: PluginOwnedInputMetadataV3,
 ) -> dict[str, Any]:
     compiled = deepcopy(schema)
     if input_spec.nullable:
@@ -828,7 +804,7 @@ def _apply_common_metadata(
 def _validate_common_values(
     schema: dict[str, Any],
     defs: dict[str, Any],
-    input_spec: CommonInputMetadataV3,
+    input_spec: PluginOwnedInputMetadataV3,
     path: str,
 ) -> None:
     validation_schema = _schema_with_defs(schema, defs)
@@ -943,18 +919,23 @@ def _hoist_json_schema_defs(
 
 def _compile_spatial_input(
     input_spec: LocationInputV3 | BoundsInputV3,
-    path: str,
 ) -> tuple[dict[str, Any], dict[str, Any], SpatialInputKindV3]:
     kind: SpatialInputKindV3 = input_spec.kind
     schema, defs = _wrapper_field_schema(kind)
-    compiled = _apply_common_metadata(schema, input_spec)
-    _validate_common_values(compiled, defs, input_spec, path)
+    compiled = deepcopy(schema)
+    if kind == "location":
+        compiled["description"] = _LOCATION_DESCRIPTION
+        compiled["examples"] = deepcopy(_LOCATION_EXAMPLES)
+    else:
+        compiled["description"] = _BOUNDS_DESCRIPTION
+        compiled["examples"] = deepcopy(_BOUNDS_EXAMPLES)
     return compiled, defs, kind
 
 
 def _compile_batch_input(
     input_spec: BatchInputV3,
     path: str,
+    field_name: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     value_schema, defs = _compile_plugin_owned_input(input_spec.value, f"{path}.value")
     properties = {
@@ -969,6 +950,10 @@ def _compile_batch_input(
         "minItems": 1,
         "maxItems": input_spec.max_items,
         "uniqueItems": True,
+        "description": (
+            f"Keyed batch values for {field_name!r}. Each item contains a stable "
+            "key, a plugin-defined value, and optionally a display label."
+        ),
         "items": {
             "type": "object",
             "required": ["key", "value"],
@@ -976,19 +961,18 @@ def _compile_batch_input(
             "properties": properties,
         },
     }
-    compiled = _apply_common_metadata(schema, input_spec)
-    _validate_common_values(compiled, defs, input_spec, path)
-    return compiled, defs
+    return schema, defs
 
 
 def _compile_input_property(
     input_spec: InputSpecV3,
     path: str,
+    field_name: str,
 ) -> tuple[dict[str, Any], dict[str, Any], SpatialInputKindV3 | None]:
     if isinstance(input_spec, LocationInputV3 | BoundsInputV3):
-        return _compile_spatial_input(input_spec, path)
+        return _compile_spatial_input(input_spec)
     if isinstance(input_spec, BatchInputV3):
-        schema, defs = _compile_batch_input(input_spec, path)
+        schema, defs = _compile_batch_input(input_spec, path, field_name)
         return schema, defs, None
 
     schema, defs = _compile_plugin_owned_input(input_spec, path)
@@ -1020,9 +1004,16 @@ def _compile_metric_request_schema(
 
     for field_name, input_spec in metric.inputs.items():
         path = f"metrics[{metric_index}].inputs.{field_name}"
-        property_schema, defs, spatial_kind = _compile_input_property(input_spec, path)
+        property_schema, defs, spatial_kind = _compile_input_property(
+            input_spec,
+            path,
+            field_name,
+        )
         properties[field_name] = property_schema
-        if input_spec.required:
+        if (
+            not isinstance(input_spec, PluginOwnedInputMetadataV3)
+            or input_spec.required
+        ):
             required.append(field_name)
         if spatial_kind is not None:
             spatial_inputs[field_name] = spatial_kind

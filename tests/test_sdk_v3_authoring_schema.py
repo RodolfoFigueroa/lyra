@@ -6,7 +6,12 @@ from typing import Any
 import lyra.sdk.models as sdk_models
 import pytest
 from lyra.sdk.models import PluginManifestV3
-from lyra.sdk.models.plugin_v3 import BatchInputV3, FileOutputV3, TableOutputV3
+from lyra.sdk.models.plugin_v3 import (
+    BatchInputV3,
+    FileOutputV3,
+    JsonSchemaInputV3,
+    TableOutputV3,
+)
 from pydantic import ValidationError
 
 
@@ -256,7 +261,9 @@ def test_manifest_v3_accepts_plugin_owned_json_schema_input() -> None:
         )
     )
 
-    assert manifest.metrics[0].inputs["advanced_filter"].required is False
+    advanced_filter = manifest.metrics[0].inputs["advanced_filter"]
+    assert isinstance(advanced_filter, JsonSchemaInputV3)
+    assert advanced_filter.required is False
 
 
 def test_manifest_v3_rejects_unknown_fields() -> None:
@@ -425,42 +432,32 @@ def test_manifest_v3_rejects_invalid_raw_json_schema_input() -> None:
     _assert_invalid(raw, "invalid json_schema.schema")
 
 
-def test_manifest_v3_rejects_lyra_owned_input_defaults() -> None:
-    raw = _manifest({"inputs": {"location": {"kind": "location", "default": {}}}})
-
-    _assert_invalid(raw, "location inputs must not define default")
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {"location": {"kind": "location", "description": "Custom."}},
+        {"location": {"kind": "location", "examples": []}},
+        {"location": {"kind": "location", "default": {}}},
+        {"location": {"kind": "location", "required": False}},
+        {"location": {"kind": "location", "nullable": False}},
+        {"bounds": {"kind": "bounds", "description": "Custom."}},
+    ],
+)
+def test_manifest_v3_rejects_spatial_input_metadata(
+    inputs: dict[str, Any],
+) -> None:
+    _assert_invalid(_manifest({"inputs": inputs}), "Extra inputs are not permitted")
 
 
 @pytest.mark.parametrize(
-    ("metric_overrides", "match"),
-    [
-        (
-            {"inputs": {"location": {"kind": "location", "required": False}}},
-            "location inputs must be required",
-        ),
-        (
-            {
-                "inputs": {"bounds": {"kind": "bounds", "required": False}},
-                "output": {
-                    "kind": "file",
-                    "media_type": "image/tiff",
-                    "extensions": [".tif"],
-                },
-            },
-            "bounds inputs must be required",
-        ),
-    ],
+    "field",
+    ["description", "examples", "default", "required", "nullable"],
 )
-def test_manifest_v3_rejects_optional_spatial_inputs(
-    metric_overrides: dict[str, Any],
-    match: str,
-) -> None:
-    _assert_invalid(_manifest(metric_overrides), match)
-
-
-def test_manifest_v3_rejects_optional_batch_inputs() -> None:
+def test_manifest_v3_rejects_batch_container_metadata(field: str) -> None:
     raw = _manifest()
     raw["metrics"][0] = _dynamic_metric()
-    raw["metrics"][0]["inputs"]["destination_categories"]["required"] = False
+    raw["metrics"][0]["inputs"]["destination_categories"][field] = (
+        [] if field == "examples" else False
+    )
 
-    _assert_invalid(raw, "batch inputs must be required")
+    _assert_invalid(raw, "Extra inputs are not permitted")

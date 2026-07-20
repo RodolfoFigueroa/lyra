@@ -100,27 +100,28 @@ Python annotations compile as follows:
 | nested Pydantic model or typed JSON container | `json_schema` |
 | `Annotated[list[BatchItem[T]], Batch(...)]` | `batch` |
 
-Use `T | None` for nullability, a Python default for optional/default behavior,
-and Pydantic `Field` metadata for descriptions, examples, and constraints.
-
-All inputs may include:
+For plugin-owned inputs, use `T | None` for nullability, a Python default for
+optional/default behavior, and Pydantic `Field` metadata for descriptions,
+examples, and constraints. Plugin-owned inputs may include:
 
 - `description`: human-readable input text copied into the compiled JSON Schema.
 - `examples`: example values checked against the compiled input schema.
-
-Plugin-owned inputs may also include:
-
 - `default`: default value checked against the compiled input schema.
 - `required: false`: omit this field from the compiled schema's root `required` list.
 - `nullable: true`: allow explicit `null` values.
 
-Spatial and batch inputs are Lyra-owned protocol fields. They must not define
-`default`, `nullable: true`, or `required: false`.
+Spatial inputs and batch containers are Lyra-owned protocol fields. Their
+descriptions, examples, required status, and wrapper constraints come from the
+SDK and cannot be overridden. For a batch, Pydantic `Field` metadata belongs on
+the `BatchItem` value type, not on the outer list.
 
 ### Spatial Inputs
 
 Use `kind: "location"` when the metric runs once per client-selected feature.
 Use `kind: "bounds"` when the metric needs one enclosing geometry.
+Declare these parameters directly as `LocationInput` or `BoundsInput`; do not
+wrap them in `Field`. Lyra adds the same canonical description and examples to
+every compiled spatial request schema.
 
 ```json
 {
@@ -178,6 +179,40 @@ Supported scalar kinds:
 Use `kind: "batch"` for a bounded metric-local list that can generate dynamic
 table columns. Batch inputs are ordinary metric arguments, not global Lyra
 configuration.
+
+In Python, describe only the plugin-owned item value. `Batch` configures the
+Lyra-owned collection:
+
+```python
+from typing import Annotated
+
+from lyra.sdk import Batch, BatchItem
+from pydantic import Field
+
+SectorFilter = Annotated[
+    str,
+    Field(
+        description="Regular expression matching one economic sector.",
+        examples=["^09[12].*", "^46.*"],
+        min_length=1,
+        max_length=128,
+    ),
+]
+
+
+def calculate(
+    sector_filters: Annotated[
+        list[BatchItem[SectorFilter]],
+        Batch(max_items=20, label=True),
+    ],
+) -> TableJobResult:
+    ...
+```
+
+Do not put `Field` metadata on the outer batch annotation. Lyra supplies the
+array, `key`, and `label` descriptions. The `SectorFilter` metadata is attached
+only to each item's `value` property, so its examples are individual strings
+rather than complete arrays of batch objects.
 
 ```json
 {
@@ -362,9 +397,9 @@ similar metric names.
 Batch outputs must reference an input whose `kind` is `batch`. Every batch
 input must be referenced by at least one table `batched_columns` entry.
 
-Input defaults and examples must validate against the compiled input schema.
-For a spatial field, keep the manifest declaration semantic and let Lyra inject
-the wrapper schema.
+Plugin-owned input defaults and examples must validate against their compiled
+schemas. Spatial examples and protocol-container documentation are supplied by
+Lyra.
 
 Table metrics must declare `inputs.location` as `kind: "location"`. File metrics
 declare the spatial inputs they need, often `kind: "bounds"` for one enclosing

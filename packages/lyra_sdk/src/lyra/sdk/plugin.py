@@ -383,23 +383,37 @@ def _input_spec(
     *,
     default: Any,
 ) -> tuple[InputSpecV3, Batch | None]:
+    _base, annotation_metadata = _unwrap_annotated(annotation)
+    has_field_metadata = any(
+        isinstance(value, FieldInfo) for value in annotation_metadata
+    )
     spatial = _spatial_marker(annotation)
     batch = _batch_marker(annotation)
     if spatial is not None and batch is not None:
         msg = "metric inputs cannot be both spatial and batch inputs"
         raise PluginDefinitionError(msg)
 
-    schema = TypeAdapter(annotation).json_schema()
-    common = _schema_metadata(annotation, schema)
     if spatial is not None:
+        if has_field_metadata:
+            msg = (
+                "spatial input metadata is owned by Lyra; remove Field metadata "
+                "from LocationInput and BoundsInput parameters"
+            )
+            raise PluginDefinitionError(msg)
         if default is not _MISSING:
             msg = "spatial metric inputs cannot define defaults"
             raise PluginDefinitionError(msg)
         if spatial.kind == "location":
-            return LocationInputV3(kind="location", **common), None
-        return BoundsInputV3(kind="bounds", **common), None
+            return LocationInputV3(kind="location"), None
+        return BoundsInputV3(kind="bounds"), None
 
     if batch is not None:
+        if has_field_metadata:
+            msg = (
+                "batch container metadata is owned by Lyra; put Field metadata "
+                "on the BatchItem value type instead"
+            )
+            raise PluginDefinitionError(msg)
         if default is not _MISSING:
             msg = "batch metric inputs cannot define defaults"
             raise PluginDefinitionError(msg)
@@ -411,7 +425,6 @@ def _input_spec(
                 max_items=batch.max_items,
                 value=value_spec,
                 label=batch.label,
-                **common,
             ),
             batch,
         )

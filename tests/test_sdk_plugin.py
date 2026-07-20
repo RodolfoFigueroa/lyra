@@ -234,7 +234,18 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
     def calculate(
         location: LocationInput,
         categories: Annotated[
-            list[BatchItem[Annotated[str, Field(min_length=2)]]],
+            list[
+                BatchItem[
+                    Annotated[
+                        str,
+                        Field(
+                            description="Category identifier.",
+                            examples=["park"],
+                            min_length=2,
+                        ),
+                    ]
+                ]
+            ],
             Batch(max_items=3, label=True),
         ],
         *,
@@ -257,6 +268,19 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
     assert batch.kind == "batch"
     assert batch.max_items == 3
     assert batch.label is True
+    assert batch.value.description == "Category identifier."
+    assert batch.value.examples == ["park"]
+
+    compiled = plugin.compiled_manifest(
+        plugin=PluginInfoV3(name="batch-plugin", version="1.0.0"),
+        entrypoint="batch.metrics:plugin",
+    )
+    batch_schema = compiled.metrics[0].request_schema["properties"]["categories"]
+    assert batch_schema["description"].startswith("Keyed batch values")
+    assert batch_schema["items"]["properties"]["value"]["description"] == (
+        "Category identifier."
+    )
+    assert batch_schema["items"]["properties"]["value"]["examples"] == ["park"]
 
     plugin(
         JobEnvelope(
@@ -275,6 +299,53 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
 
     assert [item.key for item in received] == ["parks", "food"]
     assert all(isinstance(item, BatchItem) for item in received)
+
+
+def test_protocol_owned_input_metadata_is_rejected() -> None:
+    plugin = PluginDefinition()
+
+    with pytest.raises(PluginDefinitionError, match="spatial input metadata"):
+
+        @plugin.metric(
+            name="spatial_metadata",
+            description="Invalid spatial metadata.",
+            output=_table_output(),
+        )
+        def spatial_metadata(
+            location: Annotated[
+                LocationInput,
+                Field(description="Plugin-owned location description."),
+            ],
+        ) -> TableJobResult:
+            raise AssertionError(location)
+
+    with pytest.raises(PluginDefinitionError, match="BatchItem value type"):
+
+        @plugin.metric(
+            name="batch_metadata",
+            description="Invalid batch metadata.",
+            output=TableOutputV3(
+                kind="table",
+                batched_columns=[
+                    BatchedTableOutputColumnV3(
+                        source="categories",
+                        name="value_{key}",
+                        type="integer",
+                        unit="count",
+                        description="Value for {label}.",
+                    )
+                ],
+            ),
+        )
+        def batch_metadata(
+            location: LocationInput,
+            categories: Annotated[
+                list[BatchItem[str]],
+                Batch(max_items=3),
+                Field(description="Ambiguous batch description."),
+            ],
+        ) -> TableJobResult:
+            raise AssertionError(location, categories)
 
 
 @pytest.mark.parametrize(

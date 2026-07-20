@@ -123,6 +123,12 @@ def test_compile_v3_static_table_metric_request_schema() -> None:
         "maximum": 2026,
     }
     assert "oneOf" in schema["properties"]["location"]
+    assert schema["properties"]["location"]["description"] == (
+        "Locations to analyze, supplied through a supported spatial reference format."
+    )
+    assert schema["properties"]["location"]["examples"] == [
+        {"data_type": "cvegeo_list", "value": ["09002"]}
+    ]
     assert "GeoJSONLocationWrapperV3" in schema["$defs"]
     assert metric["output"] == {
         "kind": "table",
@@ -251,6 +257,10 @@ def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
         "minItems": 1,
         "maxItems": 12,
         "uniqueItems": True,
+        "description": (
+            "Keyed batch values for 'destination_categories'. Each item contains "
+            "a stable key, a plugin-defined value, and optionally a display label."
+        ),
         "items": {
             "type": "object",
             "required": ["key", "value"],
@@ -261,6 +271,7 @@ def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
                     "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
                     "minLength": 1,
                     "maxLength": 64,
+                    "description": "Stable identifier for this batch item.",
                 },
                 "value": {
                     "type": "string",
@@ -271,6 +282,9 @@ def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 120,
+                    "description": (
+                        "Optional human-readable label for this batch item."
+                    ),
                 },
             },
         },
@@ -360,6 +374,13 @@ def test_compile_v3_file_metric_with_bounds_spatial_schema() -> None:
     assert metric["batch_inputs"] == []
     assert schema["required"] == ["bounds", "year"]
     assert "GeoJSONBoundsWrapperV3" in schema["$defs"]
+    assert schema["properties"]["bounds"]["description"] == (
+        "Area used to bound the analysis, supplied through a supported spatial "
+        "reference format."
+    )
+    assert schema["properties"]["bounds"]["examples"] == [
+        {"data_type": "met_zone_code", "value": "ZMVM"}
+    ]
     assert metric["output"] == {
         "kind": "file",
         "media_type": "image/tiff",

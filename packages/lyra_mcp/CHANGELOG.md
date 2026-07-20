@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-mcp-v0.1.0...lyra-mcp-v0.1.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* Fix header auth forwarding ([535bd33](https://github.com/RodolfoFigueroa/lyra/commit/535bd33b45eea075bc70eb15d09fed5c03eb5064))
+
 ## 0.1.0 (2026-07-18)
 
 

@@ -33,7 +33,7 @@ credential. Never configure an external agent with the admin key.
 | Runner context protocol | `packages/lyra_sdk/src/lyra/sdk/context.py` |
 | Sync Python client | `packages/lyra_api/src/lyra/api/client/sync.py` |
 | Async Python client | `packages/lyra_api/src/lyra/api/client/async_.py` |
-| MCP transport and strict tools | `packages/lyra_mcp/src/lyra/mcp/server.py`, `models.py`, and `tools.py` |
+| MCP transport and strict tools | `lyra_app/mcp/server.py`, `models.py`, and `tools.py` |
 | Compose deployment examples | `docker/docker-compose.yml` and `docker/docker-compose-dev.yml` |
 | Documentation site | `docs/` |
 

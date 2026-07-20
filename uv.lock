@@ -20,7 +20,6 @@ resolution-markers = [
 members = [
     "lyra-api",
     "lyra-app",
-    "lyra-mcp",
     "lyra-sdk",
     "lyra-tui",
     "lyra-utils",
@@ -1521,9 +1520,9 @@ dependencies = [
     { name = "fastapi" },
     { name = "filelock" },
     { name = "jsonschema" },
-    { name = "lyra-mcp" },
     { name = "lyra-sdk" },
     { name = "lyra-utils" },
+    { name = "mcp" },
     { name = "psycopg2" },
     { name = "redis" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1553,9 +1552,9 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "filelock", specifier = ">=3.29.4" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "lyra-mcp", editable = "packages/lyra_mcp" },
     { name = "lyra-sdk", editable = "packages/lyra_sdk" },
     { name = "lyra-utils", editable = "packages/lyra_utils" },
+    { name = "mcp", specifier = ">=1,<2" },
     { name = "psycopg2", specifier = ">=2.9.12" },
     { name = "redis", specifier = ">=7.4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.46.0" },
@@ -1575,23 +1574,6 @@ dev = [
     { name = "ruff", specifier = ">=0.15.22" },
     { name = "ty", specifier = ">=0.0.61" },
     { name = "types-geopandas", specifier = ">=1.1.3.20260508" },
-]
-
-[[package]]
-name = "lyra-mcp"
-version = "0.1.1"
-source = { editable = "packages/lyra_mcp" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "lyra-sdk" },
-    { name = "mcp" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.136.1" },
-    { name = "lyra-sdk", editable = "packages/lyra_sdk" },
-    { name = "mcp", specifier = ">=1,<2" },
 ]
 
 [[package]]

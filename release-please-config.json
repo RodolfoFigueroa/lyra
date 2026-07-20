@@ -27,10 +27,6 @@
       "component": "lyra-utils",
       "package-name": "lyra-utils"
     },
-    "packages/lyra_mcp": {
-      "component": "lyra-mcp",
-      "package-name": "lyra-mcp"
-    },
     "packages/lyra_tui": {
       "component": "lyra-tui",
       "package-name": "lyra-tui"

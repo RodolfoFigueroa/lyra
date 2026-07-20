@@ -12,7 +12,7 @@ RESULT_REF_PATTERN = r"^lyra://results/[^/?#\s]+$"
 
 
 class MCPContractModel(BaseModel):
-    """Strict base for agent-facing MCP contracts."""
+    """Strict base for the application's agent-facing MCP contracts."""
 
     model_config = ConfigDict(
         extra="forbid",

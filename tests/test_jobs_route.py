@@ -12,7 +12,6 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from lyra.mcp.tools import InProcessLyraBackend
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -27,6 +26,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, job_submission, registry
 from lyra_app.config import clear_config_cache, get_config
+from lyra_app.mcp.tools import InProcessLyraBackend
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.config_helpers import load_test_config, plugin_state_store

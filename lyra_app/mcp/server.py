@@ -5,27 +5,27 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from lyra.mcp.models import (
-    MAX_METRIC_PAGE_SIZE,
-    TOOL_CONTRACTS,
-    TOOL_CONTRACTS_BY_NAME,
-)
-from lyra.mcp.tools import (
-    InProcessLyraBackend,
-    LyraMCPBackend,
-    ToolCallError,
-    execute_tool,
-)
+from mcp.server.lowlevel import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.routing import Route
 
 from lyra_app.agent_auth import AgentBearerAuthMiddleware
 from lyra_app.config import ApiConfig
-from mcp.server.lowlevel import Server
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
+from lyra_app.mcp.models import (
+    MAX_METRIC_PAGE_SIZE,
+    TOOL_CONTRACTS,
+    TOOL_CONTRACTS_BY_NAME,
+)
+from lyra_app.mcp.tools import (
+    InProcessLyraBackend,
+    LyraMCPBackend,
+    ToolCallError,
+    execute_tool,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

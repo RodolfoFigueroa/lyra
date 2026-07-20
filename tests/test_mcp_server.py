@@ -10,9 +10,6 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
-from lyra.mcp import SERVER_INSTRUCTIONS
-from lyra.mcp import create_mcp_app as _create_mcp_app
-from lyra.mcp.models import TOOL_CONTRACTS_BY_NAME
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -39,6 +36,9 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 
 from lyra_app import main
+from lyra_app.mcp import SERVER_INSTRUCTIONS
+from lyra_app.mcp import create_mcp_app as _create_mcp_app
+from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME
 from tests.config_helpers import load_test_config
 
 _COMPLETED_AT = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
@@ -336,7 +336,7 @@ class FakeMCPBackend:
 
     @staticmethod
     def _tool_error(code: str, message: str, details: Any) -> Exception:
-        from lyra.mcp.server import ToolCallError  # noqa: PLC0415
+        from lyra_app.mcp.server import ToolCallError  # noqa: PLC0415
 
         return ToolCallError(code, message, details)
 

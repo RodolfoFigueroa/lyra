@@ -13,7 +13,8 @@ from lyra.sdk.models.metric import normalize_metric_search_tokens
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
-    from lyra.mcp.models import (
+
+    from lyra_app.mcp.models import (
         GetJobResultInput,
         GetMetricInput,
         ListMetricsInput,

@@ -69,15 +69,6 @@ jobs:
           uv add "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_TAG}#subdirectory=packages/lyra_utils"
           uv run python -c "import lyra.utils"
 
-      - name: Smoke test the released MCP server
-        if: ${{ steps.release.outputs['packages/lyra_mcp--release_created'] == 'true' }}
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs['packages/lyra_mcp--tag_name'] }}
-        run: |
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
-          uv add "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_TAG}#subdirectory=packages/lyra_mcp"
-          uv run python -c "import lyra.mcp"
-
       - name: Smoke test the released TUI
         if: ${{ steps.release.outputs['packages/lyra_tui--release_created'] == 'true' }}
         env:

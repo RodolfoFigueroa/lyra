@@ -10,7 +10,7 @@ runtime settings:
 
 | Section | Purpose |
 | --- | --- |
-| `[api]` | Bind host/port and externally reachable `public_base_url`. |
+| `[api]` | Bind host/port, externally reachable `public_base_url`, and trusted `forwarded_allow_ips`. |
 | `[redis]` | Redis URL used by Celery and the Redis clients. |
 | `[earth_engine]` | Earth Engine project and service account file reference. |
 | `[logging]` | Application log level and optional log file. |

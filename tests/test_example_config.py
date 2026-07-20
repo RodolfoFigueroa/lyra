@@ -43,6 +43,7 @@ def test_example_config_matches_config_contract(
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
     assert config.agent.read_api_key() == "agent-secret"
+    assert config.api.forwarded_allow_ips == ["127.0.0.1"]
     assert config.earth_engine.service_account_file == (
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
     )
@@ -63,3 +64,4 @@ def test_example_config_matches_config_contract(
     assert "runner_base_dir" not in rendered
     assert "repos" not in rendered
     assert "metric_queues" not in rendered
+    assert 'forwarded_allow_ips = [\n  "127.0.0.1",\n]' in rendered

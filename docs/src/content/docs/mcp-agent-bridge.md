@@ -18,6 +18,7 @@ Enable MCP and configure the absolute URL external clients use to reach Lyra:
 ```toml
 [api]
 public_base_url = "https://lyra.example.com"
+forwarded_allow_ips = ["127.0.0.1"]
 
 [mcp]
 enabled = true
@@ -42,14 +43,22 @@ Codex connects to the official Streamable HTTP endpoint:
 
 ```toml
 [mcp_servers.lyra]
-url = "https://lyra.example.com/mcp"
+url = "https://lyra.example.com/mcp/"
 bearer_token_env_var = "LYRA_AGENT_API_KEY"
 ```
 
 Set `LYRA_AGENT_API_KEY` in the environment that starts Codex. For local
-development use `http://localhost:5219/mcp`. Missing or malformed Bearer auth
+development use `http://localhost:5219/mcp/`. The trailing slash is the
+canonical mounted endpoint and avoids an HTTP redirect during the authenticated
+MCP handshake. Missing or malformed Bearer auth
 returns `401`; a wrong credential, including an admin-only credential, returns
 `403`.
+
+`api.forwarded_allow_ips` lists only the reverse-proxy source IPs or CIDRs that
+Lyra trusts to supply forwarded scheme and client information. Keep the
+loopback default for a proxy on the same host. When the proxy runs in another
+container, replace it with that container network's narrow CIDR. Never use `*`
+unless the Lyra port is unreachable from every untrusted client.
 
 ## Strict Tools
 

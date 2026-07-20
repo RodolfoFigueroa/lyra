@@ -108,6 +108,7 @@ agents.
 host = "0.0.0.0"
 port = 5219
 public_base_url = "https://lyra.example.com"
+forwarded_allow_ips = ["127.0.0.1"]
 
 [mcp]
 enabled = true
@@ -124,7 +125,30 @@ window_seconds = 60
 `public_base_url` is an externally reachable base URL, not a bind address. It
 may contain a reverse-proxy path prefix. Use HTTPS in production; loopback HTTP
 is accepted for local development. Do not include credentials, a query, or a
-fragment. Preserve the `Authorization` header at the proxy.
+fragment. Its hostname is automatically accepted by the MCP transport's DNS
+rebinding protection.
+
+`forwarded_allow_ips` contains the source IPs or CIDRs of trusted reverse
+proxies. The loopback default fits a proxy on the same host. For a proxy in
+another container, use the narrow container-network CIDR instead. Do not use
+`*` when untrusted clients can reach the Lyra port.
+
+The proxy must preserve authentication and forward the original scheme and
+host. For OpenResty or Nginx, the relevant directives are:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:5219;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Authorization $http_authorization;
+}
+```
+
+Use `https://lyra.example.com/mcp/` as the external MCP URL. The trailing slash
+is canonical and avoids redirecting an authenticated MCP initialization
+request.
 
 The default fixed window accepts 10 new REST/MCP submissions every 60 seconds.
 Tune both positive integers to capacity. Replays of equivalent idempotent

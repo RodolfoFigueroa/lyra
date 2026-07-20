@@ -1,11 +1,13 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 
 from lyra_app import main
+from tests.config_helpers import load_test_config
 
 
 def test_lifespan_starts_and_stops_worker_inspect_collector(
@@ -78,3 +80,38 @@ def test_lifespan_owns_mounted_mcp_session_manager(
     asyncio.run(run_lifespan())
 
     assert calls == ["worker-start", "mcp-start", "mcp-stop", "worker-stop"]
+
+
+def test_run_server_configures_trusted_proxy_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    config.api.forwarded_allow_ips = ["127.0.0.1", "172.20.0.0/16"]
+    app = FastAPI()
+    calls: dict[str, object] = {}
+
+    def create_app(runtime_config: object) -> FastAPI:
+        calls["config"] = runtime_config
+        return app
+
+    def run(server_app: FastAPI, **kwargs: object) -> None:
+        calls["app"] = server_app
+        calls["kwargs"] = kwargs
+
+    monkeypatch.setattr(main, "create_app", create_app)
+    monkeypatch.setattr(main.uvicorn, "run", run)
+
+    main.run_server(config)
+
+    assert calls == {
+        "config": config,
+        "app": app,
+        "kwargs": {
+            "host": config.api.host,
+            "port": config.api.port,
+            "reload": False,
+            "proxy_headers": True,
+            "forwarded_allow_ips": ["127.0.0.1", "172.20.0.0/16"],
+        },
+    }

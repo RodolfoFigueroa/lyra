@@ -24,6 +24,7 @@ LYRA_DATA_DIR = Path("/lyra_data")
 DEFAULT_CONFIG_PATH = LYRA_DATA_DIR / "config" / "lyra.toml"
 DEFAULT_API_HOST = "0.0.0.0"
 DEFAULT_API_PORT = 5219
+DEFAULT_FORWARDED_ALLOW_IPS = ["127.0.0.1"]
 DEFAULT_JOB_STORE_TTL_SECONDS = 600
 DEFAULT_AGENT_SUBMISSION_LIMIT = 10
 DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = 60
@@ -167,11 +168,19 @@ class ApiConfig(StrictConfigModel):
     host: str = Field(default=DEFAULT_API_HOST)
     port: int = Field(default=DEFAULT_API_PORT, ge=1, le=65535)
     public_base_url: str = Field(min_length=1)
+    forwarded_allow_ips: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_FORWARDED_ALLOW_IPS)
+    )
 
     @field_validator("host", "public_base_url", mode="before")
     @classmethod
     def normalize_required_strings(cls, value: Any) -> Any:
         return _strip_required_string(value)
+
+    @field_validator("forwarded_allow_ips", mode="before")
+    @classmethod
+    def normalize_forwarded_allow_ips(cls, value: Any) -> Any:
+        return _strip_string_list(value)
 
     @field_validator("public_base_url")
     @classmethod
@@ -697,6 +706,7 @@ def _append_api_section(lines: list[str], api: ApiConfig) -> None:
     _append_key(lines, "host", api.host)
     _append_key(lines, "port", api.port)
     _append_key(lines, "public_base_url", api.public_base_url)
+    _append_key(lines, "forwarded_allow_ips", api.forwarded_allow_ips)
     lines.append("")
 
 

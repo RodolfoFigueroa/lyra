@@ -586,6 +586,35 @@ def test_streamable_http_transport_enforces_sdk_request_rules() -> None:
     assert invalid_get_accept.status_code == 406
 
 
+def test_streamable_http_transport_allows_public_api_host() -> None:
+    client = _ManagedTestClient(
+        _create_mcp_app(
+            agent_api_key="agent-secret",
+            public_api_base_url="https://lyra.example.test/api",
+        )
+    )
+
+    public_host = client.post(
+        "/",
+        json=_initialize_payload(),
+        headers={**_mcp_headers(), "Host": "lyra.example.test"},
+    )
+    public_host_with_port = client.post(
+        "/",
+        json=_initialize_payload(),
+        headers={**_mcp_headers(), "Host": "lyra.example.test:443"},
+    )
+    unexpected_host = client.post(
+        "/",
+        json=_initialize_payload(),
+        headers={**_mcp_headers(), "Host": "attacker.example"},
+    )
+
+    assert public_host.status_code == 200
+    assert public_host_with_port.status_code == 200
+    assert unexpected_host.status_code == 421
+
+
 def test_mcp_search_metrics_ranks_public_catalog_candidates() -> None:
     backend = FakeMCPBackend(
         [

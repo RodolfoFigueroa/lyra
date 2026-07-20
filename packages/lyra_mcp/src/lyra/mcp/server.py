@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from lyra.mcp.models import (
     MAX_METRIC_PAGE_SIZE,
@@ -51,6 +52,19 @@ _DEFAULT_ALLOWED_HOSTS = [
     "testserver",
     "testserver:*",
 ]
+
+
+def _allowed_hosts(public_api_base_url: str) -> list[str]:
+    hostname = urlsplit(public_api_base_url).hostname
+    if hostname is None:  # ApiConfig validation makes this unreachable.
+        return list(_DEFAULT_ALLOWED_HOSTS)
+
+    normalized_host = f"[{hostname}]" if ":" in hostname else hostname.lower()
+    allowed_hosts = list(_DEFAULT_ALLOWED_HOSTS)
+    for candidate in (normalized_host, f"{normalized_host}:*"):
+        if candidate not in allowed_hosts:
+            allowed_hosts.append(candidate)
+    return allowed_hosts
 
 
 def create_mcp_app(
@@ -125,7 +139,7 @@ def create_mcp_app(
         stateless=True,
         security_settings=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=_DEFAULT_ALLOWED_HOSTS,
+            allowed_hosts=_allowed_hosts(public_api_base_url),
             allowed_origins=[],
         ),
     )

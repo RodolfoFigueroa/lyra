@@ -80,8 +80,8 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     return app
 
 
-if __name__ == "__main__":
-    runtime_config = get_config()
+def run_server(config: LyraConfig | None = None) -> None:
+    runtime_config = get_config() if config is None else config
     app = create_app(runtime_config)
 
     uvicorn.run(
@@ -89,4 +89,10 @@ if __name__ == "__main__":
         host=runtime_config.api.host,
         port=runtime_config.api.port,
         reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips=runtime_config.api.forwarded_allow_ips,
     )
+
+
+if __name__ == "__main__":
+    run_server()

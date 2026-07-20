@@ -12,6 +12,7 @@ from lyra_app.config import (
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
+    DEFAULT_FORWARDED_ALLOW_IPS,
     DEFAULT_JOB_STORE_TTL_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MCP_MOUNT_PATH,
@@ -116,6 +117,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.api.host == "0.0.0.0"
     assert config.api.port == 5219
     assert config.api.public_base_url == "https://lyra.example.test"
+    assert config.api.forwarded_allow_ips == DEFAULT_FORWARDED_ALLOW_IPS
     assert config.redis.url == "redis://redis:6379/0"
     assert config.database.host == "postgres"
     assert config.database.port == 5432
@@ -154,6 +156,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == DEFAULT_API_PORT
     assert config.api.public_base_url == "http://localhost:5219"
+    assert config.api.forwarded_allow_ips == DEFAULT_FORWARDED_ALLOW_IPS
     assert config.database.host == "postgres"
     assert config.database.port == 5432
     assert config.database.name == "lyra"
@@ -328,6 +331,22 @@ def test_config_contract_accepts_explicit_loopback_http(
     config = LyraConfig.model_validate(raw)
 
     assert config.api.public_base_url == public_base_url.rstrip("/")
+
+
+def test_config_contract_normalizes_forwarded_allow_ips(tmp_path: Path) -> None:
+    raw = _valid_config(tmp_path)
+    raw["api"]["forwarded_allow_ips"] = [" 127.0.0.1 ", " 172.20.0.0/16 "]
+
+    config = LyraConfig.model_validate(raw)
+
+    assert config.api.forwarded_allow_ips == ["127.0.0.1", "172.20.0.0/16"]
+
+
+def test_config_contract_rejects_blank_forwarded_allow_ip(tmp_path: Path) -> None:
+    raw = _valid_config(tmp_path)
+    raw["api"]["forwarded_allow_ips"] = [" "]
+
+    _assert_invalid(raw, "non-empty string")
 
 
 @pytest.mark.parametrize(

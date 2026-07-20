@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.4.1...lyra-app-v0.5.0) (2026-07-20)
+
+
+### Features
+
+* Add fractional area metrics ([fb4277b](https://github.com/RodolfoFigueroa/lyra/commit/fb4277b236ae00d6ff4c4381f4bffbd68d28300c))
+
+
+### Bug Fixes
+
+* Fix bundled dist priority ([da2941b](https://github.com/RodolfoFigueroa/lyra/commit/da2941bf65f41b78f7c3afe32e5e0ed4db4295c3))
+
 ## [0.4.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.4.0...lyra-app-v0.4.1) (2026-07-20)
 
 

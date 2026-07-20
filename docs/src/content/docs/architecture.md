@@ -26,7 +26,7 @@ Redis is used for Celery transport and for job status, result, and event storage
    or development `dir://` directory snapshots.
 2. The API syncs enabled plugin sources into `plugins.catalog_dir`, usually
    `/lyra_data/plugins/catalog`.
-3. Each synced source must contain `lyra.plugin.json`.
+3. Each synced source contains a generated, committed `lyra.plugin.json`.
 4. `lyra_app.registry` parses each manifest as `PluginManifestV3`.
 5. The registry compiles each metric's semantic `inputs` into an effective
    `request_schema`, spatial runtime metadata, and batch runtime metadata.
@@ -44,7 +44,7 @@ The API catalog does not import plugin Python code.
 3. The API resolves each declared spatial wrapper into canonical GeoJSON.
 4. The API deduplicates equivalent keys, applies the shared submission limit,
    captures run provenance, creates a `JobEnvelope`, and dispatches the task.
-5. A worker consuming that queue validates the envelope, builds a `RunContext`, and calls the metric entrypoint.
+5. A worker consuming that queue validates the envelope, builds a `RunContext`, and asks the imported `PluginDefinition` to parse typed arguments and call the decorated metric.
 6. The worker stores progress events, terminal status, and a normalized terminal result.
 7. Clients read status, stream events, and fetch results through the `/jobs/{job_id}` routes.
 
@@ -73,8 +73,8 @@ The status key stores lifecycle state. The result key stores the terminal result
 
 The stable contracts to read first are:
 
-- `PluginManifestV3` for plugin metadata.
+- `PluginDefinition` for code-first metric authoring and `PluginManifestV3` for its generated deployment artifact.
 - `MetricCatalogResponse` and `MetricInfoV3` for `/metrics` responses.
 - `JobCreateRequest`, `JobCreateResponse`, `JobStatusInfo`, `JobEvent`, and
   descriptor models for agent-authenticated job APIs.
-- `JobEnvelope` and `RunContext` for runner plugins.
+- typed metric parameters and `RunContext` for runner plugins; `JobEnvelope` remains the worker transport.

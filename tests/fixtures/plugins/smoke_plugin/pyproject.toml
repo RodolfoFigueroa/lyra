@@ -6,6 +6,9 @@ dependencies = [
     "lyra-sdk",
 ]
 
+[tool.lyra]
+plugin = "smoke_plugin.runner:plugin"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

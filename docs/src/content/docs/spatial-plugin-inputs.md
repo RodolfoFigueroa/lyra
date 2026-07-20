@@ -4,7 +4,8 @@ description: Declare schema v3 spatial inputs and consume resolved GeoJSON in ru
 ---
 
 Every Lyra metric has at least one spatial input. Plugin authors declare those
-fields with `kind: "location"` or `kind: "bounds"` in `lyra.plugin.json`.
+parameters with `LocationInput` or `BoundsInput`; manifest generation emits
+`kind: "location"` or `kind: "bounds"`.
 Lyra compiles the declarations into the wrapper schemas that clients see in
 `/metrics`.
 
@@ -124,26 +125,28 @@ Invalid wrappers return `422`. Database resolution failures return `503`.
 
 ## Runner Code
 
-Runner plugins parse the resolved GeoJSON field with SDK models before using
-`lyra-utils`.
+Decorated metric functions receive parsed SDK geometry models and can pass them
+directly to `lyra-utils`.
 
 ```python
-from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, TableJobResult
-from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk import LocationInput, RunContext
+from lyra.sdk.models import TableJobResult
 from lyra.utils.geometry import convert_geojson_to_gdf
 
 
-def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
+def calculate(
+    location: LocationInput,
+    *,
+    context: RunContext,
+) -> TableJobResult:
     context.emit_event("progress", {"message": "Loading location"})
     context.check_cancelled()
 
-    geojson = GeoJSON.model_validate(job.input["location"])
-    gdf = convert_geojson_to_gdf(geojson)
+    gdf = convert_geojson_to_gdf(location)
 
     values = {feature_id: 1 for feature_id in gdf.index}
     return TableJobResult.from_mapping(
-        job_id=job.job_id,
+        job_id=context.job_id,
         input_index=gdf.index,
         columns=["feature_value"],
         values={"feature_value": values},

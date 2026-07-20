@@ -39,21 +39,30 @@ credential. Never configure an external agent with the admin key.
 
 ## Contracts
 
-Plugin manifests are `PluginManifestV3` with integer `schema_version: 3`.
-Plugin authors write semantic `inputs`; Lyra compiles them into effective JSON
-Schema for `/metrics` and `POST /jobs`.
+Plugin authors register typed functions on `PluginDefinition`. The SDK derives
+semantic inputs and generates a `PluginManifestV3` artifact with integer
+`schema_version: 3`; Lyra compiles it into effective JSON Schema for `/metrics`
+and `POST /jobs`.
 
 `GET /metrics` returns a `MetricCatalogResponse` with `catalog_fingerprint` and
 `metrics`. The fingerprint changes only when the public metric contract changes:
 metric names, descriptions, request schemas, or output declarations. It ignores
 worker queues, plugin repo ids, entrypoints, and job state.
 
-Metric entrypoints are sync functions shaped as:
+Metric functions are synchronous, decorated functions with typed parameters:
 
 ```python
-def run(job: JobEnvelope, context: RunContext) -> TableJobResult | FileJobResult:
+@plugin.metric(name="example", description="Example.", output=output)
+def calculate(
+    location: LocationInput,
+    *,
+    context: RunContext,
+) -> TableJobResult:
     ...
 ```
+
+The configured `PluginDefinition` is the worker entrypoint and adapts the
+internal `JobEnvelope` into those arguments.
 
 The only Celery task name for metric execution is `lyra.run_metric`.
 
@@ -68,8 +77,8 @@ synthetic index field, summary, preview, and remaining lifetime.
 Job lifecycle status can be `queued`, `started`, `progress`, `succeeded`, `failed`, or `cancelled`.
 
 For spatial plugins, read [Spatial Plugin Inputs](../spatial-plugin-inputs/).
-Every metric manifest declares required spatial inputs with `kind: "location"`
-or `kind: "bounds"`. The API exposes compiled wrapper schemas in `/metrics`,
+Every metric function declares spatial inputs with `LocationInput` or
+`BoundsInput`. The API exposes compiled wrapper schemas in `/metrics`,
 validates client wrappers, and resolves them to GeoJSON dictionaries before
 workers receive `JobEnvelope.input`.
 

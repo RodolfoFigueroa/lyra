@@ -31,7 +31,7 @@ def _metric(
         "description": f"{name} metric.",
         "inputs": {
             "location": {"kind": "location"},
-            "value": {"kind": "integer", "required": False},
+            "value": {"kind": "integer"},
         },
         "output": output
         or {
@@ -213,7 +213,37 @@ def worker_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def _write_module(tmp_path: Path, module_name: str, source: str) -> None:
+    sys.modules.pop(module_name, None)
     (tmp_path / f"{module_name}.py").write_text(source, encoding="utf-8")
+
+
+def _write_plugin_definition(
+    path: Path,
+    module_name: str,
+    metrics: list[dict[str, Any]],
+) -> None:
+    declarations = [
+        (metric["name"], metric["description"], metric["output"]) for metric in metrics
+    ]
+    _write_module(
+        path,
+        module_name,
+        "from lyra.sdk import LocationInput, PluginDefinition, RunContext\n"
+        "from lyra.sdk.models.plugin_v3 import OutputSpecV3\n"
+        "from pydantic import TypeAdapter\n"
+        f"declarations = {declarations!r}\n"
+        "plugin = PluginDefinition()\n"
+        "for metric_name, description, raw_output in declarations:\n"
+        "    @plugin.metric(\n"
+        "        name=metric_name,\n"
+        "        description=description,\n"
+        "        output=TypeAdapter(OutputSpecV3).validate_python(raw_output),\n"
+        "    )\n"
+        "    def metric(\n"
+        "        location: LocationInput, value: int, *, context: RunContext\n"
+        "    ):\n"
+        "        raise AssertionError('metric should only be imported')\n",
+    )
 
 
 def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
@@ -283,27 +313,12 @@ def test_runner_loads_only_configured_queue(
     worker_module: Any,
 ) -> None:
     repo = tmp_path / "repo"
-    _write_manifest(
-        repo,
-        _manifest(
-            [
-                _metric(
-                    name="light_metric",
-                    entrypoint="missing_light_plugin:run",
-                ),
-                _metric(
-                    name="heavy_metric",
-                    entrypoint="heavy_plugin:run",
-                ),
-            ]
-        ),
-    )
-    _write_module(
-        tmp_path,
-        "heavy_plugin",
-        "def run(job, context):\n"
-        "    raise AssertionError('entrypoint should only be imported')\n",
-    )
+    metrics = [
+        _metric(name="light_metric", entrypoint="heavy_plugin:plugin"),
+        _metric(name="heavy_metric", entrypoint="heavy_plugin:plugin"),
+    ]
+    _write_manifest(repo, _manifest(metrics))
+    _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
     monkeypatch.syspath_prepend(str(tmp_path))
     _configure_runner_repos(worker_module, monkeypatch, repo)
 
@@ -311,7 +326,7 @@ def test_runner_loads_only_configured_queue(
 
     assert list(entries) == ["heavy_metric"]
     assert entries["heavy_metric"].queue == "heavy"
-    assert entries["heavy_metric"].entrypoint == "heavy_plugin:run"
+    assert entries["heavy_metric"].entrypoint == "heavy_plugin:plugin"
 
 
 def test_runner_syncs_enabled_state_repos_only(
@@ -373,23 +388,9 @@ def test_runner_loads_repo_and_routing_from_plugin_state(
     )
     store.set_metric_queue("heavy_metric", "heavy", repo_id="runner-plugin")
     repo = tmp_path / "repo"
-    _write_manifest(
-        repo,
-        _manifest(
-            [
-                _metric(
-                    name="heavy_metric",
-                    entrypoint="heavy_plugin:run",
-                )
-            ]
-        ),
-    )
-    _write_module(
-        tmp_path,
-        "heavy_plugin",
-        "def run(job, context):\n"
-        "    raise AssertionError('entrypoint should only be imported')\n",
-    )
+    metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
+    _write_manifest(repo, _manifest(metrics))
+    _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(worker_module, "install_runner_plugins", list)
     calls: list[tuple[Path, list[str], bool]] = []
@@ -424,17 +425,9 @@ def test_runner_loads_directory_source_from_copied_snapshot(
     worker_module: Any,
 ) -> None:
     source = tmp_path / "directory-plugin"
-    _write_manifest(
-        source,
-        _manifest(
-            [
-                _metric(
-                    name="heavy_metric",
-                    entrypoint="heavy_plugin:run",
-                )
-            ]
-        ),
-    )
+    metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
+    _write_manifest(source, _manifest(metrics))
+    _write_plugin_definition(source, "heavy_plugin", metrics)
     store = plugin_state_store(tmp_path, get_config())
     store.delete_repo("owner__repo")
     store.add_repo(
@@ -445,6 +438,8 @@ def test_runner_loads_directory_source_from_copied_snapshot(
     installed: list[SyncedPluginRepo] = []
 
     def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+        for repo in repos:
+            monkeypatch.syspath_prepend(str(repo.path))
         installed.extend(repos)
         return repos
 
@@ -507,23 +502,9 @@ def test_runner_uses_configured_worker_temp_dir(
         update={"workers": {**config.workers, "heavy": heavy_worker}},
     )
     repo = tmp_path / "repo"
-    _write_manifest(
-        repo,
-        _manifest(
-            [
-                _metric(
-                    name="heavy_metric",
-                    entrypoint="heavy_plugin:run",
-                )
-            ]
-        ),
-    )
-    _write_module(
-        tmp_path,
-        "heavy_plugin",
-        "def run(job, context):\n"
-        "    raise AssertionError('entrypoint should only be imported')\n",
-    )
+    metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
+    _write_manifest(repo, _manifest(metrics))
+    _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
     monkeypatch.syspath_prepend(str(tmp_path))
     _configure_runner_repos(worker_module, monkeypatch, repo)
 
@@ -571,6 +552,44 @@ def test_runner_fails_when_metric_queue_assignment_is_missing(
         worker_module.refresh_runner_registry("heavy")
 
 
+def test_runner_rejects_raw_function_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    repo = tmp_path / "repo"
+    metrics = [_metric(name="heavy_metric", entrypoint="raw_plugin:run")]
+    _write_manifest(repo, _manifest(metrics))
+    _write_module(tmp_path, "raw_plugin", "def run(job, context):\n    return None\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _configure_runner_repos(worker_module, monkeypatch, repo)
+
+    with pytest.raises(TypeError, match="PluginDefinition"):
+        worker_module.refresh_runner_registry("heavy")
+
+
+def test_runner_rejects_stale_generated_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    repo = tmp_path / "repo"
+    live_metrics = [_metric(name="heavy_metric", entrypoint="stale_plugin:plugin")]
+    manifest_metrics = [
+        {
+            **live_metrics[0],
+            "description": "Description changed without regeneration.",
+        }
+    ]
+    _write_manifest(repo, _manifest(manifest_metrics))
+    _write_plugin_definition(tmp_path, "stale_plugin", live_metrics)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _configure_runner_repos(worker_module, monkeypatch, repo)
+
+    with pytest.raises(RuntimeError, match="build-manifest"):
+        worker_module.refresh_runner_registry("heavy")
+
+
 def test_generic_task_executes_entrypoint_and_persists_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -583,7 +602,7 @@ def test_generic_task_executes_entrypoint_and_persists_result(
             [
                 _metric(
                     name="heavy_metric",
-                    entrypoint="success_plugin:run",
+                    entrypoint="success_plugin:plugin",
                 )
             ]
         ),
@@ -591,17 +610,30 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     _write_module(
         tmp_path,
         "success_plugin",
+        "from lyra.sdk import LocationInput, PluginDefinition, RunContext\n"
         "from lyra.sdk.models import TableJobResult\n"
-        "def run(job, context):\n"
-        "    assert context.job_id == job.job_id\n"
-        "    assert context.metric == job.metric\n"
+        "from lyra.sdk.models.plugin_v3 import TableOutputColumnV3, TableOutputV3\n"
+        "plugin = PluginDefinition()\n"
+        "@plugin.metric(\n"
+        "    name='heavy_metric',\n"
+        "    description='heavy_metric metric.',\n"
+        "    output=TableOutputV3(\n"
+        "        kind='table',\n"
+        "        columns=[TableOutputColumnV3(\n"
+        "            name='value', type='integer', unit='count',\n"
+        "            description='Example output value.',\n"
+        "        )],\n"
+        "    ),\n"
+        ")\n"
+        "def run(location: LocationInput, value: int, *, context: RunContext):\n"
+        "    assert context.metric == 'heavy_metric'\n"
         "    assert hasattr(context, 'db')\n"
         "    context.emit_event('progress', {'percent': 50})\n"
         "    return TableJobResult(\n"
-        "        job_id=job.job_id,\n"
+        "        job_id=context.job_id,\n"
         "        index=['area-1'],\n"
         "        columns=['value'],\n"
-        "        data=[[job.input['value'] * 2]],\n"
+        "        data=[[value * 2]],\n"
         "    )\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))

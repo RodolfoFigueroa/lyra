@@ -1,6 +1,6 @@
 ---
 title: Runner Plugins
-description: Implement schema v3 runner entrypoints with JobEnvelope, RunContext, and terminal result models.
+description: Implement typed metric functions with PluginDefinition, RunContext, and terminal result models.
 ---
 
 Runner plugins are the code that workers actually execute. At startup, each
@@ -34,32 +34,52 @@ name, or import failure for a selected entrypoint prevents the worker registry
 from loading. Verify each selected entrypoint with the preflight import command
 before publishing the branch or tag that Lyra will run.
 
-## Entrypoint Contract
+## Typed Metric Contract
 
-Each metric entrypoint must expose a sync function. Return `TableJobResult` for
-value metrics and `FileJobResult` for file-producing metrics:
+Create one `PluginDefinition` and decorate synchronous Python functions. Return
+`TableJobResult` for value metrics and `FileJobResult` for file-producing
+metrics:
 
 ```python
-from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, TableJobResult
-from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk import LocationInput, PluginDefinition, RunContext
+from lyra.sdk.models import TableJobResult
+from lyra.sdk.models.plugin_v3 import TableOutputColumnV3, TableOutputV3
+
+plugin = PluginDefinition()
 
 
-def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
+@plugin.metric(
+    name="example_metric",
+    description="Return one value per feature.",
+    output=TableOutputV3(
+        kind="table",
+        columns=[TableOutputColumnV3(
+            name="value",
+            type="integer",
+            unit="count",
+            description="Example value.",
+        )],
+    ),
+)
+def calculate(
+    location: LocationInput,
+    *,
+    context: RunContext,
+) -> TableJobResult:
     context.emit_event("progress", {"message": "Starting"})
     context.check_cancelled()
-
-    location = GeoJSON.model_validate(job.input["location"])
     return TableJobResult.from_mapping(
-        job_id=job.job_id,
+        job_id=context.job_id,
         input_index=[feature.id for feature in location.features],
         columns=["value"],
         values={"value": [42 for _feature in location.features]},
     )
 ```
 
-The worker calls `run(job, context)` and validates the returned terminal result
-against the metric's manifest `output` declaration.
+The decorator returns `calculate` unchanged for direct unit testing. Internally,
+the registry parses resolved job input into the annotated arguments, injects
+`context`, calls the function, and lets the worker validate the result against
+the generated output declaration.
 
 Unknown metrics, plugin exceptions, invalid return payloads, and mismatched
 result `job_id` values become `FailedJobResult` payloads.
@@ -69,27 +89,19 @@ return `FailedJobResult`. Plugins should usually not return
 `CancelledJobResult`; call `context.check_cancelled()` and let the worker persist
 the cancelled result.
 
-## JobEnvelope
+## Runtime Adaptation
 
-`JobEnvelope` contains:
+The API validates unresolved client input using the generated manifest and
+resolves spatial wrappers before dispatch. The registry adapter then:
 
-- `job_id`
-- `metric`
-- `input`
-- optional `idempotency_key`
-- `metadata`
-- optional server-calculated `location_areas_m2`
+- rejects missing and unexpected fields;
+- validates each value against its Python annotation;
+- creates `GeoJSON`, `SingleGeoJSON`, nested Pydantic, and `BatchItem` objects;
+- leaves omitted optional arguments out so Python applies function defaults;
+- injects an optional keyword-only `context: RunContext`.
 
-The `input` payload has already passed API-side JSON Schema validation before
-dispatch. Spatial wrapper fields have also been resolved by the API, so
-`job.input` contains canonical GeoJSON dictionaries under the manifest's
-declared `inputs` field names. Parse those fields with
-`GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before using
-`lyra-utils`.
-
-`location_areas_m2` is execution metadata populated for metrics that declare
-fractional-area derivations. Plugins do not calculate or return those derived
-columns themselves.
+`JobEnvelope` remains an internal transport contract. Plugin functions consume
+typed arguments instead of indexing `job.input`.
 
 ## RunContext
 
@@ -129,7 +141,7 @@ Table result constructors:
 
 ```python
 TableJobResult.from_mapping(
-    job_id=job.job_id,
+    job_id=context.job_id,
     input_index=gdf.index,
     columns=["area_m2"],
     values={"area_m2": area_by_feature_id},
@@ -141,14 +153,14 @@ this runner result and then appends the derived fraction column.
 
 ```python
 TableJobResult.from_dataframe(
-    job_id=job.job_id,
+    job_id=context.job_id,
     dataframe=summary_dataframe,
 )
 ```
 
 ```python
 TableJobResult.from_series(
-    job_id=job.job_id,
+    job_id=context.job_id,
     series=area_by_feature,
     name="area_m2",
 )
@@ -166,7 +178,7 @@ File result example:
 from lyra.sdk.models import FileJobResult
 
 FileJobResult(
-    job_id=job.job_id,
+    job_id=context.job_id,
     file_path=str(output_path),
     media_type="image/tiff",
 )
@@ -178,7 +190,7 @@ Failed result example:
 from lyra.sdk.models import FailedJobResult
 
 FailedJobResult(
-    job_id=job.job_id,
+    job_id=context.job_id,
     error={"type": "validation", "message": "Input geometry is empty"},
 )
 ```

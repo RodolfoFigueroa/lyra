@@ -19,6 +19,7 @@ from lyra.sdk.models import (
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.plugin_v3 import (
     CompiledMetricManifestV3,
+    CompiledPluginManifestV3,
     FileOutputV3,
     OutputColumnTypeV3,
     OutputSpecV3,
@@ -27,6 +28,7 @@ from lyra.sdk.models.plugin_v3 import (
     expand_runner_table_output_columns,
     expand_table_output_columns,
 )
+from lyra.sdk.plugin import PluginDefinition
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app import job_store
@@ -39,6 +41,7 @@ from lyra_app.plugin_state import (
     repo_record_to_source,
 )
 from lyra_app.plugins import (
+    MANIFEST_FILENAME,
     install_runner_plugins,
     sync_plugin_repos,
 )
@@ -93,15 +96,15 @@ def set_runner_temp_base(path: Path | None) -> None:
     _RUNNER_TEMP_BASE = path
 
 
-def _load_entrypoint(spec: str) -> MetricRunCallable:
+def _load_entrypoint(spec: str) -> PluginDefinition:
     module_name, sep, function_name = spec.partition(":")
     if not sep or not module_name or not function_name:
         msg = f"Entrypoint must use 'module:function' format: {spec!r}"
         raise ValueError(msg)
 
     value = getattr(importlib.import_module(module_name), function_name)
-    if not callable(value):
-        msg = f"Entrypoint {spec!r} did not resolve to a callable."
+    if not isinstance(value, PluginDefinition):
+        msg = f"Entrypoint {spec!r} did not resolve to a PluginDefinition."
         raise TypeError(msg)
     return value
 
@@ -110,14 +113,37 @@ def _entry_from_metric(
     metric: CompiledMetricManifestV3,
     *,
     queue: str,
+    definition: PluginDefinition,
 ) -> RunnerMetricEntry:
     return RunnerMetricEntry(
         metric_name=metric.name,
         queue=queue,
         entrypoint=metric.entrypoint,
         output=metric.output,
-        run=_load_entrypoint(metric.entrypoint),
+        run=definition,
     )
+
+
+def _validated_plugin_definition(
+    manifest: CompiledPluginManifestV3,
+) -> PluginDefinition:
+    entrypoints = {metric.entrypoint for metric in manifest.metrics}
+    if len(entrypoints) != 1:
+        msg = "Generated plugin manifests must use one PluginDefinition entrypoint."
+        raise RuntimeError(msg)
+    entrypoint = next(iter(entrypoints))
+    definition = _load_entrypoint(entrypoint)
+    live_manifest = definition.compiled_manifest(
+        plugin=manifest.plugin,
+        entrypoint=entrypoint,
+    )
+    if live_manifest.model_dump(mode="json") != manifest.model_dump(mode="json"):
+        msg = (
+            f"Plugin definition {entrypoint!r} does not match {MANIFEST_FILENAME}. "
+            "Run 'lyra-plugin build-manifest' in the plugin project."
+        )
+        raise RuntimeError(msg)
+    return definition
 
 
 def _runner_sync_repos(
@@ -175,14 +201,24 @@ def load_runner_metric_entries(
 
     for repo in repos:
         manifest = load_plugin_manifest(repo.path)
+        selected_metrics: list[tuple[CompiledMetricManifestV3, str]] = []
         for metric in manifest.metrics:
             queue = _resolve_metric_queue(metric, metric_queues)
             if queues and queue not in queues:
                 continue
+            selected_metrics.append((metric, queue))
+        if not selected_metrics:
+            continue
+        definition = _validated_plugin_definition(manifest)
+        for metric, queue in selected_metrics:
             if metric.name in entries:
                 msg = f"Duplicate metric name in runner manifests: {metric.name!r}"
                 raise RuntimeError(msg)
-            entries[metric.name] = _entry_from_metric(metric, queue=queue)
+            entries[metric.name] = _entry_from_metric(
+                metric,
+                queue=queue,
+                definition=definition,
+            )
 
     return entries
 

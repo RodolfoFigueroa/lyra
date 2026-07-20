@@ -21,7 +21,7 @@ accounts scoped to what plugin code is allowed to use.
 
 ## Repository Checklist
 
-- Put `lyra.plugin.json` at the repository root.
+- Configure `[tool.lyra].plugin` and commit the generated root `lyra.plugin.json`.
 - Make the repository an installable Python package with `pyproject.toml`.
 - Depend on `lyra-sdk` for runner contracts.
 - Add `lyra-utils` only when plugin code uses GeoDataFrame, date, or Earth
@@ -29,8 +29,8 @@ accounts scoped to what plugin code is allowed to use.
 - Declare `geopandas`, `pandas`, or other libraries directly when plugin code
   imports them directly, even if another Lyra helper package also depends on
   them.
-- Keep runner entrypoints under the installed package, such as
-  `example_plugin.runner:run`.
+- Keep the configured `PluginDefinition` under the installed package, such as
+  `example_plugin.metrics:plugin`.
 - Import runtime contracts from `lyra-sdk` rather than from `lyra_app`.
 - Choose the table, file, static column, or generated column shape with
   [Metric Output Design](../metric-output-design/).
@@ -97,23 +97,20 @@ compatibility check:
 uv pip install --python "$(which python)" --dry-run .
 ```
 
-Install editable and verify the entrypoint imports:
+Install editable, verify the registry imports, and check the generated artifact:
 
 ```bash
 uv pip install --python "$(which python)" -e .
-uv run python -c "from example_plugin.runner import run; print(run)"
+uv run python -c "from example_plugin.metrics import plugin; print(plugin.metric_names)"
+uv run lyra-plugin check-manifest
 ```
 
-Parse the manifest with the public SDK model:
-
-```bash
-uv run python -c "import json; from pathlib import Path; from lyra.sdk.models import PluginManifestV3, compile_plugin_manifest; manifest = PluginManifestV3.model_validate(json.loads(Path('lyra.plugin.json').read_text())); compile_plugin_manifest(manifest); print('manifest ok')"
-```
-
-Add at least one local runner test before publishing. Construct a resolved
-`JobEnvelope`, pass a small fake `RunContext`, call the entrypoint directly, and
-assert that the returned `TableJobResult` or `FileJobResult` has the expected
-`job_id`, columns or media type, and serialized table index. For table metrics,
+Add direct tests for each decorated function using typed `GeoJSON`, scalar,
+nested model, and batch arguments plus a small fake `RunContext`. Add at least
+one adapter-level test that invokes the `PluginDefinition` with a resolved
+`JobEnvelope`, proving the worker boundary parses the same types. Assert that
+the returned result has the expected job ID, columns or media type, and table
+index. For table metrics,
 choose the `TableJobResult` constructor that matches the computation result:
 `from_mapping()` for dictionaries or aligned sequences, `from_dataframe()` for
 table-shaped Pandas or GeoPandas outputs, and `from_series()` for one-column
@@ -125,20 +122,15 @@ derivation, assert that the runner returns only the declared source column.
 Lyra owns the EPSG:6372 location-area calculation and appends the fraction
 after runner validation.
 
-The manifest is strict schema v3 JSON. Extra fields are rejected, metric names
-must be unique across the loaded catalog, each metric must declare at least one
-spatial input, and Lyra must be able to compile `inputs` into effective JSON
-Schema.
+Do not edit the manifest. Change the Python signature or decorator metadata,
+run `lyra-plugin build-manifest`, and commit both changes. Metric names must be
+unique, every metric needs a spatial input, and table metrics need a
+`location: LocationInput` parameter.
 
-Plugin authors should not write the compiled request JSON Schema by hand.
-Declare semantic `inputs` instead. Use `kind: "json_schema"` only for
-plugin-owned input fields that need a custom shape, and keep spatial fields as
-`kind: "location"` or `kind: "bounds"`.
-
-Workers import entrypoints only for metrics whose server-assigned queue belongs
+Workers import registries only for metrics whose server-assigned queue belongs
 to the worker's `[workers.<name>].queues` list. If a selected entrypoint cannot
-be imported after editable install, the worker registry will not load for that
-worker process.
+be imported, or its live contract differs from the manifest, the worker
+registry will not load.
 
 ## Connect And Smoke Test
 

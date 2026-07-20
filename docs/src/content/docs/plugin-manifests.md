@@ -1,24 +1,28 @@
 ---
-title: Plugin Manifests
-description: Define schema v3 plugin metadata, semantic inputs, outputs, and runner entrypoints.
+title: Generated Plugin Manifests
+description: Understand the generated schema v3 deployment artifact.
 ---
 
-Lyra reads plugin catalog metadata from `lyra.plugin.json` files. This page is
-the field-by-field reference for the schema v3 manifest format.
+Lyra reads plugin catalog metadata from root `lyra.plugin.json` files. These
+files are generated from typed Python definitions and committed as deployment
+artifacts; plugin authors do not edit them directly.
 
-In schema v3, plugin authors write semantic `inputs`. Lyra compiles those
-inputs into the effective JSON Schema used by `POST /jobs` and exposed by
-`/metrics`. That keeps manifests short while preserving a precise client-facing
-validation contract.
+Run `uv run lyra-plugin build-manifest` to update the artifact and
+`uv run lyra-plugin check-manifest` in CI. The builder reads plugin name and
+version from `[project]` and imports the `PluginDefinition` configured by
+`[tool.lyra].plugin`.
 
-Manifests are intentionally strict: extra fields are rejected, input defaults
+Schema v3 stores compact semantic `inputs`. Lyra compiles them into the
+effective JSON Schema used by `POST /jobs` and exposed by `/metrics`.
+
+Generated manifests are intentionally strict: extra fields are rejected, input defaults
 and examples are checked against their compiled schemas, and metric names must
 be unique.
 
 For end-to-end publishing checks, see
 [Plugin Author Checklist](../plugin-author-checklist/).
 
-## Manifest Shape
+## Generated Shape
 
 ```json
 {
@@ -70,7 +74,7 @@ Metric fields:
 
 - `name`: unique metric name within the manifest and across the loaded catalog.
 - `description`: client-facing summary.
-- `entrypoint`: Python `module:function` reference imported by worker processes.
+- `entrypoint`: Python `module:object` reference to the generated metric registry.
 - `inputs`: semantic request input declarations.
 - `output`: successful output declaration. Use `kind: "table"` for per-feature value metrics and `kind: "file"` for file-producing metrics.
 
@@ -81,9 +85,23 @@ location feature IDs.
 
 ## Inputs
 
-Each key in `inputs` becomes a top-level request field. Inputs default to
-required. Plugin-owned scalar, enum, and `json_schema` inputs may set
-`required: false`; spatial and batch inputs must remain required.
+Each decorated Python parameter becomes a top-level request field. Parameters
+without defaults are required. Plugin-owned scalar, enum, and `json_schema`
+inputs may be optional; spatial and batch inputs remain required.
+
+Python annotations compile as follows:
+
+| Python declaration | Generated kind |
+| --- | --- |
+| `LocationInput` | `location` |
+| `BoundsInput` | `bounds` |
+| `str`, `float`, `int`, `bool` | matching scalar kind |
+| `Literal[...]` | `enum` |
+| nested Pydantic model or typed JSON container | `json_schema` |
+| `Annotated[list[BatchItem[T]], Batch(...)]` | `batch` |
+
+Use `T | None` for nullability, a Python default for optional/default behavior,
+and Pydantic `Field` metadata for descriptions, examples, and constraints.
 
 All inputs may include:
 
@@ -374,7 +392,7 @@ long as each assignment in `/lyra_data/state/plugins.toml` appears in
 `plugins.allowed_queues`. Each assignment is stored with the repo id that exposed
 the metric and is removed when that repo is deleted.
 
-Plugin authors do not declare queues in `lyra.plugin.json`. During API catalog
+Plugin definitions do not declare queues. During API catalog
 refresh, newly discovered metrics without an assignment are added to Lyra-owned
 plugin state with `plugins.default_queue`. Workers read those assignments and
 import only metrics whose resolved queue appears in their `[workers.<name>].queues`

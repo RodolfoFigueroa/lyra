@@ -893,6 +893,7 @@ def _compile_plugin_owned_input(
         schema = {"enum": deepcopy(input_spec.values)}
     elif isinstance(input_spec, JsonSchemaInputV3):
         schema = deepcopy(input_spec.schema)
+        defs = _hoist_json_schema_defs(schema, path)
     else:
         msg = f"{path}.kind is not a plugin-owned input kind"
         raise TypeError(msg)
@@ -900,6 +901,44 @@ def _compile_plugin_owned_input(
     compiled = _apply_common_metadata(schema, input_spec)
     _validate_common_values(compiled, defs, input_spec, path)
     return compiled, defs
+
+
+def _rewrite_local_definition_refs(value: Any, names: dict[str, str]) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _rewrite_local_definition_refs(item, names)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_rewrite_local_definition_refs(item, names) for item in value]
+    if isinstance(value, str) and value.startswith("#/$defs/"):
+        name = value.removeprefix("#/$defs/")
+        renamed = names.get(name)
+        if renamed is not None:
+            return f"#/$defs/{renamed}"
+    return value
+
+
+def _hoist_json_schema_defs(
+    schema: dict[str, Any],
+    path: str,
+) -> dict[str, Any]:
+    raw_defs = schema.pop("$defs", None)
+    if raw_defs is None:
+        return {}
+    if not isinstance(raw_defs, dict):
+        msg = f"{path}.schema.$defs must be an object"
+        raise TypeError(msg)
+
+    prefix = re.sub(r"[^A-Za-z0-9_]+", "__", path).strip("_")
+    names = {name: f"{prefix}__{name}" for name in raw_defs}
+    rewritten_schema = _rewrite_local_definition_refs(schema, names)
+    schema.clear()
+    schema.update(rewritten_schema)
+    return {
+        names[name]: _rewrite_local_definition_refs(definition, names)
+        for name, definition in raw_defs.items()
+    }
 
 
 def _compile_spatial_input(

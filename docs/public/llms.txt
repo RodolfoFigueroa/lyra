@@ -33,7 +33,7 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 
 ## Current Contracts
 
-- Plugin manifests: `PluginManifestV3` in `packages/lyra_sdk/src/lyra/sdk/models/plugin_v3.py`
+- Plugin authoring: `PluginDefinition`, `LocationInput`, `BoundsInput`, `Batch`, and `BatchItem` in `packages/lyra_sdk/src/lyra/sdk/plugin.py`; `lyra-plugin build-manifest` generates `PluginManifestV3`
 - Job models: `JobCreateRequest`, `JobCreateResponse`, `JobEnvelope`, `JobEvent`, `TableJobResult`, `FileJobResult`, `FailedJobResult`, `CancelledJobResult`, `TerminalJobResult`, `JobStatusInfo`, `JobListResponse`, `JobCancelResponse` in `packages/lyra_sdk/src/lyra/sdk/models/job.py`
 - Runner context: `RunContext` in `packages/lyra_sdk/src/lyra/sdk/context.py`
 - Database context: `LyraDB` in `packages/lyra_sdk/src/lyra/sdk/db.py`, available as optional `RunContext.db`
@@ -88,6 +88,6 @@ Lyra is a FastAPI service for metric execution through schema v3 plugin manifest
 - Metrics are not built into the app. They come from plugin sources stored in `/lyra_data/state/plugins.toml` and managed through `/admin/plugin-repos`, including GitHub entries, explicit `file://` local git repositories, and development `dir://` directory snapshots. Metric queue assignments are stored with the repo that exposes each metric and are removed when that repo is deleted.
 - Use `/metrics` to discover metric names and JSON Schemas before submitting jobs.
 - Use the Python Client page for end-to-end `lyra-api` workflows, and the lyra-api page for constructor, method, and exception reference.
-- For spatial plugins, use the Spatial Plugin Inputs page. Every metric declares spatial fields in schema v3 `inputs`; the API validates wrapper payloads and resolves them to GeoJSON dictionaries before workers receive `JobEnvelope.input`.
+- For spatial plugins, use the Spatial Plugin Inputs page. Decorated functions declare `LocationInput` or `BoundsInput`; the API validates wrapper payloads, resolves them, and the registry passes parsed geometry models to the function.
 - Public metric execution uses the `lyra.run_metric` Celery task internally.
-- API containers read manifests. Worker containers install and import plugin code.
+- API containers read generated manifests. Worker containers install plugin code, import its `PluginDefinition`, and reject stale manifest artifacts.

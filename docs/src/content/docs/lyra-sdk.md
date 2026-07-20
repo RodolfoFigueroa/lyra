@@ -10,8 +10,8 @@ this package instead of importing from `lyra_app`.
 ## Common Imports
 
 ```python
-from lyra.sdk import LyraDB, RunContext
-from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
+from lyra.sdk import LocationInput, LyraDB, PluginDefinition, RunContext
+from lyra.sdk.models import FileJobResult, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 from lyra.sdk.types import ExplicitBoundsAPI, ExplicitLocationAPI
 ```
@@ -20,45 +20,53 @@ Use `lyra.sdk` for the most common runtime symbols, `lyra.sdk.models` for
 Pydantic models, `lyra.sdk.models.geometry` for GeoJSON models, and
 `lyra.sdk.types` for explicit spatial input aliases.
 
-## Runner Entry Points
+## Typed Metric Functions
 
-Every runner plugin metric is a synchronous function that accepts a
-`JobEnvelope` and a `RunContext`, then returns a terminal result model.
+Every plugin owns one `PluginDefinition`. Its decorator derives the request
+contract from a synchronous function's annotations and returns that function
+unchanged.
 
 ```python
-from lyra.sdk.context import RunContext
-from lyra.sdk.models import JobEnvelope, TableJobResult
-from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk import LocationInput, PluginDefinition, RunContext
+from lyra.sdk.models import TableJobResult
+from lyra.sdk.models.plugin_v3 import TableOutputColumnV3, TableOutputV3
+
+plugin = PluginDefinition()
 
 
-def run(job: JobEnvelope, context: RunContext) -> TableJobResult:
+@plugin.metric(
+    name="example_metric",
+    description="Return one value per input feature.",
+    output=TableOutputV3(
+        kind="table",
+        columns=[TableOutputColumnV3(
+            name="value",
+            type="integer",
+            unit="count",
+            description="Example value.",
+        )],
+    ),
+)
+def calculate(
+    location: LocationInput,
+    *,
+    context: RunContext,
+) -> TableJobResult:
     context.emit_event("progress", {"message": "Starting"})
     context.check_cancelled()
-
-    location = GeoJSON.model_validate(job.input["location"])
     return TableJobResult.from_mapping(
-        job_id=job.job_id,
+        job_id=context.job_id,
         input_index=[feature.id for feature in location.features],
         columns=["value"],
         values={"value": [42 for _feature in location.features]},
     )
 ```
 
-`JobEnvelope` contains the validated job request:
-
-| Field | Type | Purpose |
-| --- | --- | --- |
-| `job_id` | `str` | Stable job identifier assigned by Lyra. |
-| `metric` | `str` | Metric name selected from the plugin manifest. |
-| `input` | `dict[str, Any]` | Client payload after API-side JSON Schema validation. |
-| `idempotency_key` | `str | None` | Client key already used by the API to deduplicate equivalent submissions; it remains available to the runner. |
-| `metadata` | `dict[str, Any]` | Optional metadata carried with the job envelope. |
-
 `RunContext` exposes runtime services:
 
 | Member | Purpose |
 | --- | --- |
-| `job_id` | Same job identifier as `job.job_id`. |
+| `job_id` | Stable job identifier assigned by Lyra. |
 | `metric` | Current metric name. |
 | `logger` | Metric-scoped Python logger. |
 | `temp_dir` | Per-job directory for intermediate files and file outputs. |
@@ -91,7 +99,7 @@ Use `from_dataframe()` when your metric returns a table object:
 summary = compute_summary_dataframe(gdf)
 
 return TableJobResult.from_dataframe(
-    job_id=job.job_id,
+    job_id=context.job_id,
     dataframe=summary,
 )
 ```
@@ -103,7 +111,7 @@ Use `from_mapping()` when metric dictionaries are keyed by the original
 area_by_feature = compute_area(gdf)
 
 return TableJobResult.from_mapping(
-    job_id=job.job_id,
+    job_id=context.job_id,
     input_index=gdf.index,
     columns=["area_m2"],
     values={"area_m2": area_by_feature},
@@ -116,7 +124,7 @@ Use `from_series()` for one-column Pandas outputs:
 mean_temperature = compute_mean_temperature(gdf)
 
 return TableJobResult.from_series(
-    job_id=job.job_id,
+    job_id=context.job_id,
     series=mean_temperature,
     name="mean_temperature",
 )
@@ -129,7 +137,7 @@ output_path = context.temp_dir / "result.tif"
 # write output_path here
 
 return FileJobResult(
-    job_id=job.job_id,
+    job_id=context.job_id,
     file_path=str(output_path),
     media_type="image/tiff",
 )
@@ -141,7 +149,7 @@ Return expected plugin failures as `FailedJobResult`s:
 from lyra.sdk.models import FailedJobResult
 
 return FailedJobResult(
-    job_id=job.job_id,
+    job_id=context.job_id,
     error={"type": "validation", "message": "Input geometry is empty"},
 )
 ```
@@ -156,20 +164,22 @@ implementation when database settings are available.
 Always handle the optional case:
 
 ```python
-from lyra.sdk.context import RunContext
-from lyra.sdk.models import FailedJobResult, JobEnvelope, TableJobResult
-from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk import LocationInput, RunContext
+from lyra.sdk.models import FailedJobResult, TableJobResult
 from lyra.utils.geometry import convert_geojson_to_gdf
 
 
-def run(job: JobEnvelope, context: RunContext) -> TableJobResult | FailedJobResult:
+def calculate(
+    location: LocationInput,
+    *,
+    context: RunContext,
+) -> TableJobResult | FailedJobResult:
     if context.db is None:
         return FailedJobResult(
-            job_id=job.job_id,
+            job_id=context.job_id,
             error={"type": "configuration", "message": "Database is unavailable"},
         )
 
-    location = GeoJSON.model_validate(job.input["location"])
     gdf = convert_geojson_to_gdf(location)
     xmin, ymin, xmax, ymax = gdf.total_bounds
     census = context.db.load_census_from_bounds(
@@ -182,7 +192,7 @@ def run(job: JobEnvelope, context: RunContext) -> TableJobResult | FailedJobResu
     )
 
     return TableJobResult.from_mapping(
-        job_id=job.job_id,
+        job_id=context.job_id,
         input_index=gdf.index,
         columns=["census_rows"],
         values={"census_rows": [len(census) for _feature_id in gdf.index]},
@@ -209,7 +219,7 @@ client-selected features (`GeoJSON`) or one resolved enclosing geometry
 All metrics declare spatial fields in schema v3 `inputs` with
 `kind: "location"` or `kind: "bounds"`. Clients submit wrappers for those
 fields, and Lyra resolves them before the worker calls the runner. Runner code
-parses the resolved `job.input` field into `GeoJSON` or `SingleGeoJSON`.
+passes parsed `GeoJSON` or `SingleGeoJSON` objects to decorated functions.
 
 ```python
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
@@ -239,7 +249,7 @@ Underlying models:
 
 Client spatial payloads use wrapper objects with a `data_type` discriminator and
 a `value`. Lyra validates and resolves those wrappers before constructing the
-`JobEnvelope`. For the full wrapper lifecycle, request shapes, and sample jobs,
+typed metric arguments. For the full wrapper lifecycle, request shapes, and sample jobs,
 see [Spatial Plugin Inputs](../spatial-plugin-inputs/).
 
 `GET /data-types` and `client.get_data_types()` expose grouped wrapper schemas:
@@ -269,7 +279,7 @@ Use `lyra-utils` when you need to convert these models to GeoDataFrames.
 
 ## SDK Models
 
-Most plugin code only needs `JobEnvelope`, `RunContext`, `TableJobResult`, and
+Most plugin code only needs `PluginDefinition`, `LocationInput`, `RunContext`, `TableJobResult`, and
 `FileJobResult`, but
 these models are also available for tests, clients, and manifest tooling:
 
@@ -303,6 +313,6 @@ these models are also available for tests, clients, and manifest tooling:
 | `CancelledJobResult` | Terminal result persisted by the worker for cancelled jobs. |
 | `MetricCatalogResponse` | Public `/metrics` response with catalog fingerprint and metric items. |
 | `MetricInfoV3` | Public metric catalog item exposed by `/metrics` and `/metrics/{metric_name}`. |
-| `PluginManifestV3` | Strict schema v3 `lyra.plugin.json` authoring model. |
+| `PluginManifestV3` | Strict model for the generated schema v3 deployment artifact. |
 | `MetricManifestV3` | One metric entry inside a plugin manifest. |
 | `compile_plugin_manifest()` | Compiler from compact authoring manifests to Lyra's runtime contract. |

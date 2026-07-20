@@ -8,14 +8,14 @@
     {
       "name": "smoke_table_metric",
       "description": "Return the submitted value for each input feature.",
-      "entrypoint": "smoke_plugin.runner:run_table",
+      "entrypoint": "smoke_plugin.runner:plugin",
       "inputs": {
         "location": {
           "kind": "location"
         },
         "value": {
-          "kind": "integer",
-          "description": "Value copied into each output row."
+          "description": "Value copied into each output row.",
+          "kind": "integer"
         }
       },
       "output": {
@@ -33,7 +33,7 @@
     {
       "name": "smoke_file_metric",
       "description": "Write a small text artifact for the submitted features.",
-      "entrypoint": "smoke_plugin.runner:run_file",
+      "entrypoint": "smoke_plugin.runner:plugin",
       "inputs": {
         "location": {
           "kind": "location"
@@ -42,20 +42,22 @@
       "output": {
         "kind": "file",
         "media_type": "text/plain",
-        "extensions": [".txt"]
+        "extensions": [
+          ".txt"
+        ]
       }
     },
     {
       "name": "smoke_cancel_metric",
       "description": "Emit progress and observe cancellation before returning.",
-      "entrypoint": "smoke_plugin.runner:run_cancel",
+      "entrypoint": "smoke_plugin.runner:plugin",
       "inputs": {
         "location": {
           "kind": "location"
         },
         "value": {
-          "kind": "integer",
-          "description": "Value copied into each output row."
+          "description": "Value copied into each output row.",
+          "kind": "integer"
         }
       },
       "output": {

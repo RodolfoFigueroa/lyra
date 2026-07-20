@@ -92,10 +92,15 @@ PAGE_SPECS = (
         sidebar_label="lyra-sdk Plugins",
         order=4,
         intro=(
-            "Plugin models validate schema v3 authoring manifests and compile "
-            "them into Lyra runtime metadata."
+            "Plugin APIs define typed metric functions, generate schema v3 "
+            "manifests, and compile them into Lyra runtime metadata."
         ),
         symbols=(
+            sym("lyra.sdk.plugin", "PluginDefinition"),
+            sym("lyra.sdk.plugin", "MetricDefinition"),
+            sym("lyra.sdk.plugin", "PluginDefinitionError"),
+            sym("lyra.sdk.plugin", "Batch"),
+            sym("lyra.sdk.plugin", "BatchItem"),
             sym("lyra.sdk.models.plugin_v3", "PluginInfoV3"),
             sym("lyra.sdk.models.plugin_v3", "CommonInputMetadataV3"),
             sym("lyra.sdk.models.plugin_v3", "SpatialInputKindV3"),

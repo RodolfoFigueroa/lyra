@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.7.0...lyra-app-v0.8.0) (2026-07-20)
+
+
+### Features
+
+* Revamp documentation ([3877563](https://github.com/RodolfoFigueroa/lyra/commit/3877563a93c07d9c12cdfb0c051decd694c4ca24))
+
 ## [0.7.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.6.0...lyra-app-v0.7.0) (2026-07-20)
 
 

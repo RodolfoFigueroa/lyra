@@ -22,11 +22,11 @@ for prerequisites, configuration, authentication, and a complete smoke test.
 
 ## Documentation
 
-- [Use the REST API](https://rodolfofigueroa.github.io/lyra/dev/use/rest-api/)
-- [Use the Python client](https://rodolfofigueroa.github.io/lyra/dev/use/python-client/)
-- [Build a plugin](https://rodolfofigueroa.github.io/lyra/dev/plugins/quickstart/)
-- [Deploy and operate Lyra](https://rodolfofigueroa.github.io/lyra/dev/operate/deployment/)
-- [Generated reference](https://rodolfofigueroa.github.io/lyra/dev/reference/)
+- [Use the REST API](https://rodolfofigueroa.github.io/lyra/use/rest-api/)
+- [Use the Python client](https://rodolfofigueroa.github.io/lyra/use/python-client/)
+- [Build a plugin](https://rodolfofigueroa.github.io/lyra/plugins/quickstart/)
+- [Deploy and operate Lyra](https://rodolfofigueroa.github.io/lyra/operate/deployment/)
+- [Generated reference](https://rodolfofigueroa.github.io/lyra/reference/)
 - [Contribute to Lyra](CONTRIBUTING.md)
 
 When a server is running, its exact OpenAPI contract is also available at

@@ -31,11 +31,22 @@ jobs:
           enable-cache: true
           python-version: "3.11"
 
-      - name: Synchronize the project
-        run: uv sync --frozen
+      - name: Refresh the lockfile for a release PR
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          startsWith(github.head_ref, 'release-please--branches--main')
+        run: uv lock
 
       - name: Check the lockfile
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name != github.repository ||
+          !startsWith(github.head_ref, 'release-please--branches--main')
         run: uv lock --check
+
+      - name: Synchronize the project
+        run: uv sync --frozen
 
       - name: Check formatting
         run: uv run ruff format --check .

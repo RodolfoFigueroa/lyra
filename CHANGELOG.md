@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.2.1...lyra-app-v0.3.0) (2026-07-20)
+
+
+### Features
+
+* Couple MCP server with app dist ([1b413d9](https://github.com/RodolfoFigueroa/lyra/commit/1b413d94233dc8e8e89142ae4cf4ed310ae4f82f))
+
 ## [0.2.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.2.0...lyra-app-v0.2.1) (2026-07-20)
 
 

@@ -37,18 +37,32 @@ def _make_method_abstract(
         runtime_names: Mutable set updated with names used in default values.
     """
     item.decorator_list.append(ast.Name(id="abstractmethod", ctx=ast.Load()))
-
-    for arg in item.args.args + item.args.kwonlyargs:
-        annotation_names.update(_extract_names(arg.annotation))
-    for default in item.args.defaults + item.args.kw_defaults:
-        runtime_names.update(_extract_names(default))
-    annotation_names.update(_extract_names(item.returns))
+    _collect_signature_names(item, annotation_names, runtime_names)
 
     # Preserve docstring, strip execution logic
     if ast.get_docstring(item):
         item.body = [item.body[0], ast.Expr(value=ast.Constant(value=Ellipsis))]
     else:
         item.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
+
+
+def _collect_signature_names(
+    item: ast.FunctionDef,
+    annotation_names: set[str],
+    runtime_names: set[str],
+) -> None:
+    """Harvest names referenced by a method's annotations and defaults."""
+    arguments = item.args.posonlyargs + item.args.args + item.args.kwonlyargs
+    if item.args.vararg:
+        arguments.append(item.args.vararg)
+    if item.args.kwarg:
+        arguments.append(item.args.kwarg)
+
+    for arg in arguments:
+        annotation_names.update(_extract_names(arg.annotation))
+    for default in item.args.defaults + item.args.kw_defaults:
+        runtime_names.update(_extract_names(default))
+    annotation_names.update(_extract_names(item.returns))
 
 
 def _transform_class(
@@ -76,8 +90,11 @@ def _transform_class(
             node.bases = [ast.Name(id="ABC", ctx=ast.Load())]
 
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
-                    _make_method_abstract(item, annotation_names, runtime_names)
+                if isinstance(item, ast.FunctionDef):
+                    if item.name.startswith("_"):
+                        _collect_signature_names(item, annotation_names, runtime_names)
+                    else:
+                        _make_method_abstract(item, annotation_names, runtime_names)
 
     return abstract_class_node, annotation_names, runtime_names
 

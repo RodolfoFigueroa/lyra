@@ -15,9 +15,13 @@ from enum import auto
 from typing import Literal
 
 import unavailable_sdk_dependency as dependency
+from sqlalchemy.engine import Engine
 
 
 class LyraDBImplicit:
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
     def load(
         self,
         columns: Sequence[str],
@@ -43,4 +47,5 @@ class LyraDBImplicit:
     assert "if TYPE_CHECKING:" in generated_source
     assert "import unavailable_sdk_dependency as dependency" in generated_source
     assert "from collections.abc import Sequence\n" in generated_source
+    assert "from sqlalchemy.engine import Engine\n" in generated_source
     assert "from typing import Literal\n" in generated_source

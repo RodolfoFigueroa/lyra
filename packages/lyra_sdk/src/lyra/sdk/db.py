@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from typing import Literal
 
     import geopandas as gpd
+    from sqlalchemy.engine import Engine
 
 
 class LyraDB(ABC):

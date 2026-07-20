@@ -76,6 +76,7 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
     config = _local_worker_dirs(load_test_config(tmp_path), tmp_path)
     launched: list[list[str]] = []
     refreshed: list[tuple[str, LyraConfig]] = []
+    earth_engine_configs: list[LyraConfig] = []
 
     class FakeCelery:
         def __init__(self) -> None:
@@ -111,6 +112,11 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
         "lyra_app.worker",
         SimpleNamespace(refresh_runner_registry=refresh_runner_registry),
     )
+    monkeypatch.setattr(
+        worker_launcher,
+        "initialize_earth_engine",
+        earth_engine_configs.append,
+    )
 
     state_store = plugin_state_store(tmp_path, config)
     worker_launcher.launch_worker("interactive", config=config, store=state_store)
@@ -119,6 +125,7 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
         "broker_url": "redis://redis:6379/0",
         "result_backend": "redis://redis:6379/0",
     }
+    assert earth_engine_configs == [config]
     assert refreshed == [("interactive", config)]
     assert launched == [worker_launcher.build_celery_worker_args(config, "interactive")]
     assert (tmp_path / "plugins" / "catalog").is_dir()

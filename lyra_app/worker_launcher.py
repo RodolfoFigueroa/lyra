@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import TYPE_CHECKING
 
+from lyra_app.auth import initialize_earth_engine
 from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
@@ -47,6 +48,8 @@ def launch_worker(
             "it to become ready before starting workers."
         )
         raise RuntimeError(msg)
+
+    initialize_earth_engine(config)
 
     from lyra_app.celery_app import celery_app, configure_celery  # noqa: PLC0415
     from lyra_app.worker import refresh_runner_registry  # noqa: PLC0415

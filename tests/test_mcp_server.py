@@ -517,6 +517,35 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
     run_tool = next(tool for tool in tools.tools if tool.name == "lyra_run_metric")
     assert "do not rerun" in (run_tool.description or "")
     assert "lyra_get_job_result" in (run_tool.description or "")
+    wait_contracts = {
+        tool.name: tool.inputSchema["properties"]["wait_seconds"]
+        for tool in tools.tools
+        if tool.name in {"lyra_run_metric", "lyra_get_job_result"}
+    }
+    assert wait_contracts == {
+        "lyra_run_metric": {
+            "default": 2,
+            "description": (
+                "Maximum time to wait for a terminal result, in seconds. "
+                "Must be between 0 and 10 inclusive; defaults to 2."
+            ),
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number",
+        },
+        "lyra_get_job_result": {
+            "default": 30.0,
+            "description": (
+                "Maximum time to wait for a terminal result, in seconds. "
+                "Must be between 0 and 30 inclusive; defaults to 30."
+            ),
+            "maximum": 30.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number",
+        },
+    }
     for tool in tools.tools:
         assert tool.inputSchema["type"] == "object"
         assert tool.inputSchema["additionalProperties"] is False

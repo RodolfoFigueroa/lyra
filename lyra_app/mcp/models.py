@@ -88,7 +88,10 @@ class RunMetricInput(MCPContractModel):
         ge=0,
         le=MAX_RUN_WAIT_SECONDS,
         allow_inf_nan=False,
-        description="Maximum time to wait for a terminal result.",
+        description=(
+            "Maximum time to wait for a terminal result, in seconds. "
+            "Must be between 0 and 10 inclusive; defaults to 2."
+        ),
     )
 
 
@@ -105,7 +108,10 @@ class GetJobResultInput(ResultRefInput):
         ge=0,
         le=MAX_RESULT_WAIT_SECONDS,
         allow_inf_nan=False,
-        description="Maximum time to wait for a terminal result.",
+        description=(
+            "Maximum time to wait for a terminal result, in seconds. "
+            "Must be between 0 and 30 inclusive; defaults to 30."
+        ),
     )
 
 

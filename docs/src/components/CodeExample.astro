@@ -1,0 +1,38 @@
+---
+import { Code } from 'astro:components';
+import type { ComponentProps } from 'astro/types';
+import { readFile } from 'node:fs/promises';
+import { basename, relative, resolve } from 'node:path';
+
+interface Props {
+  path: string;
+  region?: string;
+  lang?: ComponentProps<typeof Code>['lang'];
+}
+
+const { path, region, lang = 'text' } = Astro.props;
+const workingDirectory = process.cwd();
+const repositoryRoot = basename(workingDirectory) === 'docs'
+  ? resolve(workingDirectory, '..')
+  : workingDirectory;
+const sourcePath = resolve(repositoryRoot, path);
+const relativePath = relative(repositoryRoot, sourcePath);
+
+if (relativePath.startsWith('..') || relativePath === '') {
+  throw new Error(`Code example must be a repository file: ${path}`);
+}
+
+let code = await readFile(sourcePath, 'utf8');
+if (region) {
+  const startMarker = `# docs:start ${region}`;
+  const endMarker = `# docs:end ${region}`;
+  const start = code.indexOf(startMarker);
+  const end = code.indexOf(endMarker);
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error(`Missing or invalid code region ${region} in ${path}`);
+  }
+  code = code.slice(code.indexOf('\n', start) + 1, end).trimEnd();
+}
+---
+
+<Code code={code.trimEnd()} lang={lang} />

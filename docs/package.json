@@ -4,19 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "generate:api": "uv run --frozen --group dev python scripts/generate_api_docs.py",
-    "predev": "npm run generate:api",
+    "generate": "uv run --frozen --group dev python -m scripts.generate_docs",
+    "generate:api": "npm run generate",
+    "predev": "npm run generate",
     "dev": "astro dev",
-    "prebuild": "npm run generate:api",
+    "prebuild": "npm run generate",
     "build": "astro build",
-    "precheck": "npm run generate:api",
+    "precheck": "npm run generate",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "check:links": "uv run --frozen --group dev python -m scripts.check_site --site dist"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.0",
-    "astro": "^7.0.2",
-    "starlight-versions": "^0.9.0"
+    "astro": "^7.0.2"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.2",

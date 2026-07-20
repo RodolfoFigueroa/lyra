@@ -59,11 +59,18 @@ def launch_worker(
     celery_app.worker_main(build_celery_worker_args(config, worker_name))
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the supported worker-launcher argument parser."""
     parser = argparse.ArgumentParser(
-        description="Launch a Lyra Celery worker from /lyra_data/config/lyra.toml."
+        prog="python -m lyra_app.worker_launcher",
+        description="Launch a Lyra Celery worker from /lyra_data/config/lyra.toml.",
     )
     parser.add_argument("worker_name", help="Name from the [workers.<name>] table.")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
         launch_worker(args.worker_name)

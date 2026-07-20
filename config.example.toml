@@ -9,19 +9,18 @@ schema_version = 1
 host = "0.0.0.0"
 port = 5219
 # Agents use this operator-controlled URL for authenticated result downloads.
-# Production deployments must use HTTPS. Explicit loopback HTTP is accepted for
-# local development, for example http://127.0.0.1:5219.
-public_base_url = "https://lyra.example.com"
+# Replace this loopback development value with the public HTTPS URL in production.
+public_base_url = "http://localhost:5219"
 # Trust forwarded scheme/client headers only from these reverse-proxy source
 # IPs or CIDRs. Keep the loopback default for a host-local proxy; use the exact
 # container-network CIDR when the proxy runs in another container.
 forwarded_allow_ips = ["127.0.0.1"]
 
 [redis]
-# For docker/docker-compose-dev.yml, use lyra-redis-dev.
+# The checked-in value targets docker/docker-compose-dev.yml.
 # For a production Compose service named lyra-redis, use redis://lyra-redis:6379/0.
 # For direct local processes, use redis://localhost:6379/0.
-url = "redis://lyra-redis:6379/0"
+url = "redis://lyra-redis-dev:6379/0"
 
 [database]
 readiness_timeout_seconds = 1.0

@@ -16,7 +16,9 @@ from griffe import DocstringSectionKind
 LOGGER = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = ROOT / "docs" / "src" / "content" / "docs" / "api-reference"
+OUTPUT_DIR = (
+    ROOT / "docs" / "src" / "content" / "docs" / "reference" / "generated" / "python"
+)
 SEARCH_PATHS = (
     ROOT / "packages" / "lyra_sdk" / "src",
     ROOT / "packages" / "lyra_api" / "src",

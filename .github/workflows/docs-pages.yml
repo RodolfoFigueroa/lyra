@@ -1,16 +1,11 @@
-name: Deploy Docs to GitHub Pages
+name: Deploy versioned documentation
 
 on:
   push:
     branches:
       - dev
-    paths:
-      - "docs/**"
-      - "packages/**"
-      - "README.md"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/docs-pages.yml"
+    tags:
+      - "lyra-app-v*"
   workflow_dispatch:
 
 permissions:
@@ -27,21 +22,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Check out the complete repository history
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-      - name: Set up uv
+      - name: Set up uv and Python
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
           python-version: "3.11"
 
-      - name: Install, build, and upload docs
-        uses: withastro/action@v6
+      - name: Set up Node
+        uses: actions/setup-node@v6
         with:
-          path: docs
           node-version: 24
-          package-manager: npm
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Assemble stable, development, and archived documentation
+        shell: bash
+        run: |
+          dev_ref=HEAD
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            dev_ref=origin/dev
+          fi
+          uv run --frozen --group dev python -m docs.scripts.versioned_site \
+            --output docs-site \
+            --dev-ref "$dev_ref"
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs-site
 
   deploy:
     needs: build

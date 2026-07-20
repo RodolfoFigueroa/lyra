@@ -83,7 +83,7 @@ from lyra_app.worker_control import (
     safe_task_summary,
 )
 
-_bearer = HTTPBearer()
+_bearer = HTTPBearer(scheme_name="AdminBearer")
 logger = logging.getLogger(__name__)
 
 
@@ -113,7 +113,11 @@ def require_admin_key(
         raise HTTPException(status_code=403, detail="Invalid admin API key.")
 
 
-router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_key)])
+router = APIRouter(
+    prefix="/admin",
+    tags=["Administration"],
+    dependencies=[Depends(require_admin_key)],
+)
 
 
 _TIMEOUT_QUERY = Query(

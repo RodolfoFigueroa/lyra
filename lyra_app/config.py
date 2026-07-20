@@ -166,11 +166,23 @@ def require_nonempty_file(path: Path, *, field_name: str) -> None:
 
 
 class ApiConfig(StrictConfigModel):
-    host: str = Field(default=DEFAULT_API_HOST)
-    port: int = Field(default=DEFAULT_API_PORT, ge=1, le=65535)
-    public_base_url: str = Field(min_length=1)
+    host: str = Field(
+        default=DEFAULT_API_HOST,
+        description="Interface address on which the API server listens.",
+    )
+    port: int = Field(
+        default=DEFAULT_API_PORT,
+        ge=1,
+        le=65535,
+        description="TCP port on which the API server listens.",
+    )
+    public_base_url: str = Field(
+        min_length=1,
+        description="Externally reachable base URL used in result handoffs.",
+    )
     forwarded_allow_ips: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_FORWARDED_ALLOW_IPS)
+        default_factory=lambda: list(DEFAULT_FORWARDED_ALLOW_IPS),
+        description="Proxy IP addresses or CIDRs trusted to set forwarded headers.",
     )
 
     @field_validator("host", "public_base_url", mode="before")
@@ -232,7 +244,10 @@ class ApiConfig(StrictConfigModel):
 
 
 class RedisConfig(StrictConfigModel):
-    url: str = Field(min_length=1)
+    url: str = Field(
+        min_length=1,
+        description="Redis URL used by Celery and the retained job store.",
+    )
 
     @field_validator("url", mode="before")
     @classmethod
@@ -250,12 +265,28 @@ class RedisConfig(StrictConfigModel):
 
 
 class DatabasePoolConfig(StrictConfigModel):
-    pool_size: int = Field(ge=1)
-    max_overflow: int = Field(default=0, ge=0)
-    pool_timeout_seconds: float = Field(gt=0)
-    connect_timeout_seconds: int = Field(gt=0)
-    statement_timeout_ms: int = Field(gt=0)
-    pool_recycle_seconds: int = Field(gt=0)
+    pool_size: int = Field(ge=1, description="Persistent connections per process.")
+    max_overflow: int = Field(
+        default=0,
+        ge=0,
+        description="Temporary connections allowed above the pool size.",
+    )
+    pool_timeout_seconds: float = Field(
+        gt=0,
+        description="Maximum wait for a pooled connection.",
+    )
+    connect_timeout_seconds: int = Field(
+        gt=0,
+        description="Maximum time allowed to establish a database connection.",
+    )
+    statement_timeout_ms: int = Field(
+        gt=0,
+        description="PostgreSQL statement timeout for this workload.",
+    )
+    pool_recycle_seconds: int = Field(
+        gt=0,
+        description="Age after which pooled connections are replaced.",
+    )
 
 
 def _api_database_pool() -> DatabasePoolConfig:
@@ -295,6 +326,7 @@ class DatabaseConfig(StrictConfigModel):
             field_name="database.host",
         ),
         min_length=1,
+        description="PostgreSQL host supplied by LYRA_POSTGRES_HOST.",
     )
     port: int = Field(
         default_factory=lambda: read_int_env_var(
@@ -303,6 +335,7 @@ class DatabaseConfig(StrictConfigModel):
         ),
         ge=1,
         le=65535,
+        description="PostgreSQL port supplied by LYRA_POSTGRES_PORT.",
     )
     name: str = Field(
         default_factory=lambda: read_scalar_env_var(
@@ -310,6 +343,7 @@ class DatabaseConfig(StrictConfigModel):
             field_name="database.name",
         ),
         min_length=1,
+        description="PostgreSQL database supplied by LYRA_POSTGRES_DB.",
     )
     user: str = Field(
         default_factory=lambda: read_scalar_env_var(
@@ -317,6 +351,7 @@ class DatabaseConfig(StrictConfigModel):
             field_name="database.user",
         ),
         min_length=1,
+        description="PostgreSQL user supplied by LYRA_POSTGRES_USER.",
     )
     password: str = Field(
         default_factory=lambda: read_scalar_env_var(
@@ -325,12 +360,30 @@ class DatabaseConfig(StrictConfigModel):
         ),
         min_length=1,
         repr=False,
+        description="PostgreSQL password supplied by LYRA_POSTGRES_PASSWORD.",
     )
-    readiness_timeout_seconds: float = Field(default=1.0, gt=0)
-    retry_after_seconds: int = Field(default=5, gt=0)
-    api: DatabasePoolConfig = Field(default_factory=_api_database_pool)
-    spatial: DatabasePoolConfig = Field(default_factory=_spatial_database_pool)
-    worker: DatabasePoolConfig = Field(default_factory=_worker_database_pool)
+    readiness_timeout_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description="Timeout for each database readiness probe.",
+    )
+    retry_after_seconds: int = Field(
+        default=5,
+        gt=0,
+        description="Retry delay advertised for temporary database failures.",
+    )
+    api: DatabasePoolConfig = Field(
+        default_factory=_api_database_pool,
+        description="Pool settings for ordinary asynchronous API queries.",
+    )
+    spatial: DatabasePoolConfig = Field(
+        default_factory=_spatial_database_pool,
+        description="Pool settings for API spatial-resolution queries.",
+    )
+    worker: DatabasePoolConfig = Field(
+        default_factory=_worker_database_pool,
+        description="Pool settings created inside each worker process.",
+    )
 
     @field_validator("host", "name", "user", "password", mode="before")
     @classmethod
@@ -342,8 +395,14 @@ class DatabaseConfig(StrictConfigModel):
 
 
 class EarthEngineConfig(StrictConfigModel):
-    project: str = Field(min_length=1)
-    service_account_file: Path = DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
+    project: str = Field(
+        min_length=1,
+        description="Google Earth Engine project identifier.",
+    )
+    service_account_file: Path = Field(
+        default=DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
+        description="Absolute path to the Earth Engine service-account JSON.",
+    )
 
     @field_validator("project", mode="before")
     @classmethod
@@ -373,6 +432,7 @@ class AdminConfig(StrictConfigModel):
         ),
         min_length=1,
         repr=False,
+        description="Admin Bearer key supplied by LYRA_ADMIN_API_KEY.",
     )
 
     @field_validator("api_key", mode="before")
@@ -392,6 +452,7 @@ class AgentConfig(StrictConfigModel):
         ),
         min_length=1,
         repr=False,
+        description="Agent Bearer key supplied by LYRA_AGENT_API_KEY.",
     )
 
     @field_validator("api_key", mode="before")
@@ -404,8 +465,14 @@ class AgentConfig(StrictConfigModel):
 
 
 class McpConfig(StrictConfigModel):
-    enabled: bool = False
-    mount_path: str = DEFAULT_MCP_MOUNT_PATH
+    enabled: bool = Field(
+        default=False,
+        description="Whether to mount the Streamable HTTP MCP server.",
+    )
+    mount_path: str = Field(
+        default=DEFAULT_MCP_MOUNT_PATH,
+        description="Absolute URL path at which the MCP server is mounted.",
+    )
 
     @field_validator("mount_path", mode="before")
     @classmethod
@@ -425,8 +492,14 @@ class McpConfig(StrictConfigModel):
 
 
 class LoggingConfig(StrictConfigModel):
-    level: str = Field(default=DEFAULT_LOG_LEVEL)
-    file: Path | None = None
+    level: str = Field(
+        default=DEFAULT_LOG_LEVEL,
+        description="Application logging level.",
+    )
+    file: Path | None = Field(
+        default=None,
+        description="Optional absolute log file; omit to log to standard output.",
+    )
 
     @field_validator("level", mode="before")
     @classmethod
@@ -455,24 +528,49 @@ class LoggingConfig(StrictConfigModel):
 
 
 class JobStoreConfig(StrictConfigModel):
-    ttl_seconds: int = Field(default=DEFAULT_JOB_STORE_TTL_SECONDS, gt=0)
+    ttl_seconds: int = Field(
+        default=DEFAULT_JOB_STORE_TTL_SECONDS,
+        gt=0,
+        description="Retention time for job state, events, results, and idempotency.",
+    )
 
 
 class AgentSubmissionLimitConfig(StrictConfigModel):
-    limit: int = Field(default=DEFAULT_AGENT_SUBMISSION_LIMIT, gt=0, strict=True)
+    limit: int = Field(
+        default=DEFAULT_AGENT_SUBMISSION_LIMIT,
+        gt=0,
+        strict=True,
+        description="New REST and MCP submissions allowed in one fixed window.",
+    )
     window_seconds: int = Field(
         default=DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
         gt=0,
         strict=True,
+        description="Length of the shared submission-limit window.",
     )
 
 
 class PluginsConfig(StrictConfigModel):
-    catalog_dir: Path = DEFAULT_PLUGIN_CATALOG_DIR
-    runner_base_dir: Path = DEFAULT_PLUGIN_RUNNER_BASE_DIR
-    default_queue: str = Field(min_length=1)
-    allowed_queues: list[str] = Field(min_length=1)
-    initial_repos: list[str] = Field(default_factory=list)
+    catalog_dir: Path = Field(
+        default=DEFAULT_PLUGIN_CATALOG_DIR,
+        description="Absolute directory for API-side plugin catalog snapshots.",
+    )
+    runner_base_dir: Path = Field(
+        default=DEFAULT_PLUGIN_RUNNER_BASE_DIR,
+        description="Absolute parent directory for worker plugin installs.",
+    )
+    default_queue: str = Field(
+        min_length=1,
+        description="Queue assigned to newly discovered metrics.",
+    )
+    allowed_queues: list[str] = Field(
+        min_length=1,
+        description="Complete set of queues permitted in metric routing.",
+    )
+    initial_repos: list[str] = Field(
+        default_factory=list,
+        description="Plugin sources seeded only when plugin state is absent.",
+    )
 
     @field_validator("allowed_queues", "initial_repos", mode="before")
     @classmethod
@@ -520,10 +618,23 @@ class PluginsConfig(StrictConfigModel):
 
 
 class WorkerConfig(StrictConfigModel):
-    queues: list[str] = Field(min_length=1)
-    concurrency: int = Field(default=DEFAULT_WORKER_CONCURRENCY, gt=0)
-    install_dir: Path | None = None
-    temp_dir: Path | None = None
+    queues: list[str] = Field(
+        min_length=1,
+        description="Queues imported and consumed by this worker pool.",
+    )
+    concurrency: int = Field(
+        default=DEFAULT_WORKER_CONCURRENCY,
+        gt=0,
+        description="Celery child processes in this worker pool.",
+    )
+    install_dir: Path | None = Field(
+        default=None,
+        description="Optional absolute plugin install directory for this worker.",
+    )
+    temp_dir: Path | None = Field(
+        default=None,
+        description="Optional absolute per-job temporary-file parent directory.",
+    )
 
     @field_validator("queues", mode="before")
     @classmethod
@@ -542,21 +653,41 @@ class WorkerConfig(StrictConfigModel):
 
 
 class LyraConfig(StrictConfigModel):
-    schema_version: Literal[1]
-    api: ApiConfig
-    redis: RedisConfig
-    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
-    earth_engine: EarthEngineConfig
-    admin: AdminConfig = Field(default_factory=AdminConfig)
-    agent: AgentConfig = Field(default_factory=AgentConfig)
-    mcp: McpConfig = Field(default_factory=McpConfig)
-    logging: LoggingConfig
-    job_store: JobStoreConfig
-    agent_submission_limit: AgentSubmissionLimitConfig = Field(
-        default_factory=AgentSubmissionLimitConfig
+    schema_version: Literal[1] = Field(
+        description="Server configuration schema version."
     )
-    plugins: PluginsConfig
-    workers: dict[str, WorkerConfig] = Field(min_length=1)
+    api: ApiConfig = Field(description="API bind and public URL settings.")
+    redis: RedisConfig = Field(description="Redis connection settings.")
+    database: DatabaseConfig = Field(
+        default_factory=DatabaseConfig,
+        description="PostgreSQL connection and pool settings.",
+    )
+    earth_engine: EarthEngineConfig = Field(
+        description="Google Earth Engine credentials and project settings."
+    )
+    admin: AdminConfig = Field(
+        default_factory=AdminConfig,
+        description="Environment-owned administrator credential.",
+    )
+    agent: AgentConfig = Field(
+        default_factory=AgentConfig,
+        description="Environment-owned agent credential.",
+    )
+    mcp: McpConfig = Field(
+        default_factory=McpConfig,
+        description="MCP transport settings.",
+    )
+    logging: LoggingConfig = Field(description="Application logging settings.")
+    job_store: JobStoreConfig = Field(description="Retained job-store settings.")
+    agent_submission_limit: AgentSubmissionLimitConfig = Field(
+        default_factory=AgentSubmissionLimitConfig,
+        description="Shared REST and MCP submission limit.",
+    )
+    plugins: PluginsConfig = Field(description="Plugin source and routing defaults.")
+    workers: dict[str, WorkerConfig] = Field(
+        min_length=1,
+        description="Named worker pool definitions.",
+    )
 
     @model_validator(mode="before")
     @classmethod

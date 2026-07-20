@@ -1,46 +1,32 @@
 ---
-title: Lyra Docs
-description: Documentation for Lyra's plugin runner, async job API, and warm-worker deployment model.
+title: Lyra
+description: Run typed spatial metrics through a schema-driven job API.
 ---
 
-Lyra is a REST API for computing accessibility and land-use metrics for spatial
-units in Mexico. It exposes metric schemas through a manifest catalog, accepts
-work through the `/jobs` HTTP API, and executes metric code in warm
-queue-specific Celery workers.
+Lyra turns independently maintained Python metric plugins into a discoverable,
+authenticated job API. A plugin declares typed inputs and outputs; Lyra exposes
+the resulting schema, resolves spatial inputs, dispatches work to warm Celery
+workers, and retains status, events, provenance, and results for a configured
+time.
 
-## Current Model
+## Choose a path
 
-- API processes read schema v3 plugin manifests and validate job requests.
-- Worker processes install plugin code and run the generic `lyra.run_metric` task.
-- Redis stores queued, progress, terminal event, status, and result records.
-- Public discovery uses health, catalog, and lookup routes. MCP and every
-  `/jobs` lifecycle route require `LYRA_AGENT_API_KEY`.
+- **Run Lyra:** follow the [quickstart](./quickstart/).
+- **Call Lyra:** use the [REST API](./use/rest-api/) or
+  [Python client](./use/python-client/).
+- **Publish a metric:** start with the [plugin quickstart](./plugins/quickstart/).
+- **Deploy Lyra:** read [deployment](./operate/deployment/) and the
+  [operator runbook](./operate/runbook/).
+- **Inspect exact contracts:** use the [generated reference](./reference/).
 
-## Choose A Path
+## Core model
 
-- Run Lyra locally: start with [Getting Started](getting-started/), then use
-  [Local Development](local-development/) for repository workflows.
-- Change Lyra itself: read [Contributor Guide](contributor-guide/),
-  [Architecture](architecture/), and
-  [Testing And Quality](testing-and-quality/).
-- Build a plugin: start with [Plugin Quickstart](plugin-quickstart/), follow
-  the [Plugin Author Checklist](plugin-author-checklist/), then read
-  [Metric Output Design](metric-output-design/),
-  [Plugin Manifests](plugin-manifests/),
-  [Spatial Plugin Inputs](spatial-plugin-inputs/),
-  [Runner Plugins](runner-plugins/), [lyra-sdk](lyra-sdk/), and
-  [lyra-utils](lyra-utils/).
-- Call Lyra from another application: use [Job API](job-api/) and
-  [Metrics Catalog](metrics-catalog/) for HTTP behavior, [Python Client](python-client/)
-  for client workflows, and [lyra-api](lyra-api/) for package reference.
-- Work as an AI agent: use [AI Agent Guide](ai-agent-guide/) as the stable crawl
-  entrypoint, and [MCP Agent Bridge](mcp-agent-bridge/) for Codex setup,
-  stable MCP tools, result references, and JSONL handoffs.
+API processes read generated plugin manifests without importing plugin code.
+Workers install trusted plugin packages, import their `PluginDefinition`, and
+execute typed functions through the single `lyra.run_metric` task. Redis carries
+Celery traffic and retained job state; PostGIS resolves database-backed spatial
+wrappers.
 
-## Live OpenAPI Docs
-
-When the API server is running, FastAPI also exposes generated OpenAPI
-references:
-
-- Swagger UI: `http://localhost:5219/docs`
-- ReDoc: `http://localhost:5219/redoc`
+Public routes expose health, metric schemas, and lookups. Every `/jobs` route
+and the MCP transport require the agent key. Every `/admin` route requires the
+separate admin key.

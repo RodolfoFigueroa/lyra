@@ -9,7 +9,7 @@ from lyra_app.db.dependencies import DatabaseRuntimeDependency
 from lyra_app.loaders.db import get_met_zone_code_from_name_async
 from lyra_app.routes.errors import database_unavailable_http_exception
 
-router = APIRouter()
+router = APIRouter(tags=["Lookups"])
 
 
 @router.get("/lookups/met-zones")

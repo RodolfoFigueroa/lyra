@@ -4,6 +4,18 @@ import { copyFile, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import navigation from './navigation.json' with { type: 'json' };
+
+const docsBase = (process.env.LYRA_DOCS_BASE ?? '/lyra/dev').replace(/\/$/, '');
+const docsRef = process.env.LYRA_DOCS_REF ?? 'dev';
+
+const sidebar = navigation.map((group) => ({
+  label: group.label,
+  items: group.items.map((item) => item === 'reference/generated'
+    ? { autogenerate: { directory: item } }
+    : item.replace(/\/index$/, '')),
+}));
+
 function ensureExpressiveCodeCssAsset() {
   return {
     name: 'ensure-expressive-code-css-asset',
@@ -60,7 +72,7 @@ async function findHtmlFiles(directory) {
 
 export default defineConfig({
   site: 'https://rodolfofigueroa.github.io',
-  base: '/lyra',
+  base: docsBase,
   integrations: [
     starlight({
       title: 'Lyra',
@@ -70,9 +82,9 @@ export default defineConfig({
           windowTitleBarHeight: '0px',
         }
       },
-      description: 'V2 plugin-runner and async job API documentation.',
+      description: 'Schema-driven spatial metric jobs and plugin execution.',
       editLink: {
-        baseUrl: 'https://github.com/RodolfoFigueroa/lyra/edit/dev/docs/',
+        baseUrl: `https://github.com/RodolfoFigueroa/lyra/edit/${docsRef}/docs/`,
       },
       social: [
         {
@@ -81,75 +93,7 @@ export default defineConfig({
           href: 'https://github.com/RodolfoFigueroa/lyra',
         },
       ],
-      sidebar: [
-        {
-          label: 'Start Here',
-          items: [
-            { label: 'Overview', link: '/' },
-            { label: 'Getting Started', slug: 'getting-started' },
-            { label: 'Architecture', slug: 'architecture' },
-          ],
-        },
-        {
-          label: 'Develop Lyra',
-          items: [
-            { label: 'Contributor Guide', slug: 'contributor-guide' },
-            { label: 'Local Development', slug: 'local-development' },
-            { label: 'Testing And Quality', slug: 'testing-and-quality' },
-            { label: 'Releases', slug: 'releases' },
-          ],
-        },
-        {
-          label: 'Build Plugins',
-          items: [
-            { label: 'Plugin Quickstart', slug: 'plugin-quickstart' },
-            { label: 'Plugin Author Checklist', slug: 'plugin-author-checklist' },
-            { label: 'Metric Output Design', slug: 'metric-output-design' },
-            { label: 'Plugin Manifests', slug: 'plugin-manifests' },
-            { label: 'Spatial Plugin Inputs', slug: 'spatial-plugin-inputs' },
-            { label: 'Runner Plugins', slug: 'runner-plugins' },
-          ],
-        },
-        {
-          label: 'Python Packages',
-          items: [
-            { label: 'lyra-sdk', slug: 'lyra-sdk' },
-            { label: 'lyra-api', slug: 'lyra-api' },
-            { label: 'lyra-utils', slug: 'lyra-utils' },
-          ],
-        },
-        {
-          label: 'API Reference',
-          items: [
-            { autogenerate: { directory: 'api-reference' } },
-          ],
-        },
-        {
-          label: 'Use The API',
-          items: [
-            { label: 'Job API', slug: 'job-api' },
-            { label: 'Metrics Catalog', slug: 'metrics-catalog' },
-            { label: 'Python Client', slug: 'python-client' },
-          ],
-        },
-        {
-          label: 'Operations',
-          items: [
-            { label: 'Deployment', slug: 'deployment' },
-            { label: 'Operations', slug: 'operations' },
-            { label: 'TUI', slug: 'tui' },
-            { label: 'Reference', slug: 'reference' },
-            { label: 'Docs Versions', slug: 'docs-versions' },
-          ],
-        },
-        {
-          label: 'Agent Guide',
-          items: [
-            { label: 'AI Agent Guide', slug: 'ai-agent-guide' },
-            { label: 'MCP Agent Bridge', slug: 'mcp-agent-bridge' },
-          ],
-        },
-      ],
+      sidebar,
     }),
     ensureExpressiveCodeCssAsset(),
   ],

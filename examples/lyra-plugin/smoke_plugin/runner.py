@@ -32,6 +32,7 @@ def _value_output() -> TableOutputV3:
     )
 
 
+# docs:start table-metric
 @plugin.metric(
     name="smoke_table_metric",
     description="Return the submitted value for each input feature.",
@@ -52,6 +53,9 @@ def run_table(
         columns=["value"],
         values={"value": [value for _feature_id in feature_ids]},
     )
+
+
+# docs:end table-metric
 
 
 @plugin.metric(

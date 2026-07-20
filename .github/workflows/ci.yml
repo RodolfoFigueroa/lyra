@@ -67,3 +67,39 @@ jobs:
           --cov=lyra
           --cov-report=term-missing
           --cov-report=xml
+
+  documentation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install documentation dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Validate documentation content and types
+        run: npm run check
+        working-directory: docs
+
+      - name: Build documentation
+        run: npm run build
+        working-directory: docs
+
+      - name: Check internal documentation links
+        run: npm run check:links
+        working-directory: docs

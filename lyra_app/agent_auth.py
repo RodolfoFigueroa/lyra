@@ -3,7 +3,8 @@ from __future__ import annotations
 import hmac
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.responses import JSONResponse
 
 from lyra_app.config import ConfigLoadError, ConfigSecretError, get_config
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
 
 _AUTHENTICATE_HEADERS = {"WWW-Authenticate": "Bearer"}
+_bearer = HTTPBearer(auto_error=False, scheme_name="AgentBearer")
 
 
 def validate_agent_authorization(authorization: str | None, expected_key: str) -> None:
@@ -38,7 +40,10 @@ def validate_agent_authorization(authorization: str | None, expected_key: str) -
 
 
 def require_agent_key(
-    authorization: Annotated[str | None, Header()] = None,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(_bearer),
+    ],
 ) -> None:
     """FastAPI dependency enforcing the shared Agent API credential."""
     try:
@@ -48,6 +53,11 @@ def require_agent_key(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Agent API key is not configured on the server.",
         ) from exc
+    authorization = (
+        None
+        if credentials is None
+        else f"{credentials.scheme} {credentials.credentials}"
+    )
     validate_agent_authorization(authorization, expected_key)
 
 

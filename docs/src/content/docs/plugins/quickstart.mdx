@@ -1,0 +1,70 @@
+---
+title: Plugin Quickstart
+description: Build a typed metric and generate its deployment manifest.
+---
+
+import CodeExample from '../../../components/CodeExample.astro';
+
+A plugin is an installable Python package with one `PluginDefinition`, decorated
+metric functions, and a generated root `lyra.plugin.json`. Python definitions
+are authoritative; never edit the manifest directly.
+
+## Start from the executable example
+
+The repository's `examples/lyra-plugin` package is used by this guide and by the
+test suite:
+
+```text
+examples/lyra-plugin/
+  pyproject.toml
+  lyra.plugin.json
+  smoke_plugin/
+    __init__.py
+    runner.py
+```
+
+Its project metadata declares the SDK and the one registry workers import:
+
+<CodeExample path="examples/lyra-plugin/pyproject.toml" lang="toml" />
+
+## Declare a metric
+
+The decorator compiles Python annotations and Pydantic metadata into manifest
+inputs. The output declaration describes the successful result:
+
+<CodeExample
+  path="examples/lyra-plugin/smoke_plugin/runner.py"
+  region="table-metric"
+  lang="python"
+/>
+
+The decorated function remains directly callable in unit tests. At runtime the
+registry validates resolved input, constructs typed arguments, injects
+`RunContext`, calls the function, and validates its result.
+
+## Generate the manifest
+
+From the plugin project:
+
+```bash
+uv run lyra-plugin build-manifest
+uv run lyra-plugin check-manifest
+```
+
+Commit `lyra.plugin.json`. The API reads it without importing plugin code;
+workers compare it with the imported registry and reject stale artifacts.
+
+## Test and connect
+
+Test the decorated function and manifest before publishing:
+
+```bash
+uv run lyra-plugin check-manifest
+uv run python -c "from smoke_plugin.runner import plugin; print(plugin.metric_names)"
+uv run pytest
+```
+
+Push the repository, add it through `/admin/plugin-repos`, refresh the catalog,
+and restart workers when the refresh response recommends it. The
+[publishing guide](../publish-and-debug/) covers source forms, queues, and
+failure diagnosis.

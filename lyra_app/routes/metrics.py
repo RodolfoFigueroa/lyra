@@ -3,7 +3,7 @@ from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 
 from lyra_app.registry import get_metric_catalog, get_metric_info
 
-router = APIRouter()
+router = APIRouter(tags=["Catalog"])
 
 
 @router.get("/metrics")

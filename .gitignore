@@ -218,7 +218,12 @@ __marimo__/
 # Extra
 *.ipynb
 .DS_Store
-docs/src/content/docs/api-reference/
+docs/src/content/docs/reference/generated/
+docs/public/openapi.json
+docs/public/config.schema.json
+docs/public/mcp-tools.json
+docs/public/llms.txt
+docs/public/llms-full.txt
 cache/
 node_modules/
 docs/.astro/

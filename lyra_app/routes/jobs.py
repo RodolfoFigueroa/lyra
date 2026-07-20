@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
 
-router = APIRouter(dependencies=[Depends(require_agent_key)])
+router = APIRouter(tags=["Jobs"], dependencies=[Depends(require_agent_key)])
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 SSE_KEEPALIVE = ": keepalive\n\n"

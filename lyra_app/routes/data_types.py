@@ -8,7 +8,7 @@ from lyra_app.models.cvegeo_list import CVEGEOListWrapper
 from lyra_app.models.geojson import GeoJSONWrapper, SingleGeoJSONWrapper
 from lyra_app.models.met_zone_code import MetZoneCodeWrapper
 
-router = APIRouter()
+router = APIRouter(tags=["Catalog"])
 
 
 def extract_data_type(model_class: type[StrictBaseModel]) -> str:

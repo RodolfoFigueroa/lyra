@@ -84,12 +84,13 @@ def test_env_example_defines_host_mount_paths_and_runtime_env() -> None:
 
     assert "LYRA_CONFIG_FILE=./lyra_data/config/lyra.toml" in contents
     assert "LYRA_SERVICE_ACCOUNT_FILE=./secrets/service-account.json" in contents
-    assert "LYRA_POSTGRES_HOST=postgres" in contents
+    assert "LYRA_POSTGRES_HOST=replace-with-reachable-postgis-host" in contents
     assert "LYRA_POSTGRES_PORT=5432" in contents
     assert "LYRA_POSTGRES_DB=lyra" in contents
     assert "LYRA_POSTGRES_USER=lyra" in contents
     assert "LYRA_POSTGRES_PASSWORD=change-me" in contents
-    assert "LYRA_ADMIN_API_KEY=change-me" in contents
+    assert "LYRA_AGENT_API_KEY=replace-with-a-random-agent-secret" in contents
+    assert "LYRA_ADMIN_API_KEY=replace-with-a-different-admin-secret" in contents
     assert "LYRA_PLUGIN_REPOS" not in contents
     assert "EARTHENGINE_PROJECT" not in contents
 

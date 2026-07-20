@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-SMOKE_PLUGIN_DIR = Path(__file__).parent / "fixtures" / "plugins" / "smoke_plugin"
+SMOKE_PLUGIN_DIR = Path(__file__).parents[1] / "examples" / "lyra-plugin"
 SMOKE_METRIC_QUEUES = {
     "smoke_table_metric": "interactive",
     "smoke_file_metric": "interactive",

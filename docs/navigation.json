@@ -1,0 +1,8 @@
+[
+  {"label": "Start", "items": ["index", "quickstart"]},
+  {"label": "Use Lyra", "items": ["use/rest-api", "use/python-client"]},
+  {"label": "Build Plugins", "items": ["plugins/quickstart", "plugins/authoring", "plugins/publish-and-debug"]},
+  {"label": "Operate", "items": ["operate/deployment", "operate/runbook", "operate/tui"]},
+  {"label": "Concepts", "items": ["concepts/architecture"]},
+  {"label": "Reference", "items": ["reference/index", "reference/generated"]}
+]

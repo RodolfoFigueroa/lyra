@@ -16,7 +16,7 @@ from lyra_app.db.dependencies import DatabaseRuntimeDependency
 from lyra_app.db.redis import redis_client
 from lyra_app.version import APP_VERSION
 
-router = APIRouter()
+router = APIRouter(tags=["Health"])
 
 
 async def redis_health(timeout_seconds: float) -> RedisHealth:

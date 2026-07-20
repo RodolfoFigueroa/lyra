@@ -29,8 +29,9 @@ Its project metadata declares the SDK and the one registry workers import:
 
 ## Declare a metric
 
-The decorator compiles Python annotations and Pydantic metadata into manifest
-inputs. The output declaration describes the successful result:
+The decorator combines clean Python annotations with its structured `inputs`
+mapping to produce manifest inputs. The output declaration describes the
+successful result:
 
 <CodeExample
   path="examples/lyra-plugin/smoke_plugin/runner.py"
@@ -60,6 +61,7 @@ Test the decorated function and manifest before publishing:
 
 ```bash
 uv run lyra-plugin check-manifest
+uv run lyra-plugin describe
 uv run python -c "from smoke_plugin.runner import plugin; print(plugin.metric_names)"
 uv run pytest
 ```

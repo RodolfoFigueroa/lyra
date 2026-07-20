@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from typing import Annotated
-
-from lyra.sdk import LocationInput, PluginDefinition, RunContext
+from lyra.sdk import Input, LocationInput, PluginDefinition, RunContext
 from lyra.sdk.models import FileJobResult, TableJobResult
 from lyra.sdk.models.plugin_v3 import (
     FileOutputV3,
     TableOutputColumnV3,
     TableOutputV3,
 )
-from pydantic import Field
 
 plugin = PluginDefinition()
 
@@ -36,11 +33,14 @@ def _value_output() -> TableOutputV3:
 @plugin.metric(
     name="smoke_table_metric",
     description="Return the submitted value for each input feature.",
+    inputs={
+        "value": Input(description="Value copied into each output row."),
+    },
     output=_value_output(),
 )
 def run_table(
     location: LocationInput,
-    value: Annotated[int, Field(description="Value copied into each output row.")],
+    value: int,
     *,
     context: RunContext,
 ) -> TableJobResult:
@@ -90,11 +90,14 @@ def run_file(
 @plugin.metric(
     name="smoke_cancel_metric",
     description="Emit progress and observe cancellation before returning.",
+    inputs={
+        "value": Input(description="Value copied into each output row."),
+    },
     output=_value_output(),
 )
 def run_cancel(
     location: LocationInput,
-    value: Annotated[int, Field(description="Value copied into each output row.")],
+    value: int,
     *,
     context: RunContext,
 ) -> TableJobResult:

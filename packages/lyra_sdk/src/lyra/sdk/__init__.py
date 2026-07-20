@@ -54,18 +54,20 @@ from lyra.sdk.models import (
     result_ref_for_job,
 )
 from lyra.sdk.plugin import (
-    Batch,
+    BatchInput,
     BatchItem,
     BoundsInput,
+    Input,
     LocationInput,
     MetricDefinition,
+    MetricDescription,
     PluginDefinition,
     PluginDefinitionError,
 )
 
 __all__ = [
     "AdminStatusResponse",
-    "Batch",
+    "BatchInput",
     "BatchItem",
     "BoundsInput",
     "CancelledJobResult",
@@ -77,6 +79,7 @@ __all__ = [
     "DeletePluginRepoResponse",
     "FailedJobResult",
     "FileJobResult",
+    "Input",
     "JobCancelResponse",
     "JobCreateRequest",
     "JobCreateResponse",
@@ -92,6 +95,7 @@ __all__ = [
     "MetZoneCodeResponse",
     "MetricCatalogResponse",
     "MetricDefinition",
+    "MetricDescription",
     "MetricQueueAssignmentResponse",
     "PluginCatalogRefreshResponse",
     "PluginCatalogRefreshStatus",

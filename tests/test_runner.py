@@ -31,7 +31,10 @@ def _metric(
         "description": f"{name} metric.",
         "inputs": {
             "location": {"kind": "location"},
-            "value": {"kind": "integer"},
+            "value": {
+                "kind": "integer",
+                "description": "Example input value.",
+            },
         },
         "output": output
         or {
@@ -228,7 +231,7 @@ def _write_plugin_definition(
     _write_module(
         path,
         module_name,
-        "from lyra.sdk import LocationInput, PluginDefinition, RunContext\n"
+        "from lyra.sdk import Input, LocationInput, PluginDefinition, RunContext\n"
         "from lyra.sdk.models.plugin_v3 import OutputSpecV3\n"
         "from pydantic import TypeAdapter\n"
         f"declarations = {declarations!r}\n"
@@ -237,6 +240,7 @@ def _write_plugin_definition(
         "    @plugin.metric(\n"
         "        name=metric_name,\n"
         "        description=description,\n"
+        "        inputs={'value': Input(description='Example input value.')},\n"
         "        output=TypeAdapter(OutputSpecV3).validate_python(raw_output),\n"
         "    )\n"
         "    def metric(\n"
@@ -610,13 +614,14 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     _write_module(
         tmp_path,
         "success_plugin",
-        "from lyra.sdk import LocationInput, PluginDefinition, RunContext\n"
+        "from lyra.sdk import Input, LocationInput, PluginDefinition, RunContext\n"
         "from lyra.sdk.models import TableJobResult\n"
         "from lyra.sdk.models.plugin_v3 import TableOutputColumnV3, TableOutputV3\n"
         "plugin = PluginDefinition()\n"
         "@plugin.metric(\n"
         "    name='heavy_metric',\n"
         "    description='heavy_metric metric.',\n"
+        "    inputs={'value': Input(description='Example input value.')},\n"
         "    output=TableOutputV3(\n"
         "        kind='table',\n"
         "        columns=[TableOutputColumnV3(\n"

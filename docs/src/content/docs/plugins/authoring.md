@@ -19,24 +19,62 @@ Ordinary parameters may use:
 - `str`, `float`, `int`, and `bool`;
 - `Literal[...]` enums;
 - nested Pydantic models and typed JSON containers;
-- `Annotated[list[BatchItem[T]], Batch(...)]` for bounded repeated values.
+- `list[BatchItem[T]]` for bounded repeated values.
 
-Use `Annotated[..., Field(...)]` for descriptions, examples, and constraints.
-Put batch value metadata on `T`, not on the outer list. Spatial and batch
-containers remain required protocol fields.
+Declare every plugin-owned parameter in the metric decorator's `inputs`
+mapping. `Input` owns its description, examples, validation constraints, and
+optional JSON Schema extensions. `BatchInput` adds the item limit and optional
+labels while its nested `items=Input(...)` describes each item value:
+
+```python
+@plugin.metric(
+    name="job_accessibility",
+    description="Calculate accessibility to matching jobs.",
+    inputs={
+        "limit": Input(
+            description="Maximum number of results.",
+            ge=1,
+        ),
+        "patterns": BatchInput(
+            max_items=20,
+            allow_labels=True,
+            items=Input(
+                description="Regex matched against the SCIAN/NAICS code.",
+                examples=[r"^31\d{4}$", r"^311\d{3}$"],
+            ),
+        ),
+    },
+    output=...,
+)
+def run(
+    location: LocationInput,
+    patterns: list[BatchItem[str]],
+    limit: int = 100,
+) -> TableJobResult:
+    ...
+```
+
+Function annotations remain authoritative for Python types and nullability;
+function defaults remain authoritative for omission and defaults. Do not put
+root input metadata in `Annotated[..., Field(...)]`. Other `Annotated`
+metadata, such as custom Pydantic validators, remains supported. Fields inside
+nested Pydantic models may continue using `Field` normally. Spatial inputs are
+omitted from `inputs` because Lyra owns their metadata. Batch containers remain
+required protocol fields and cannot define defaults.
 
 ### Defaults, omission, and null
 
 The function signature is authoritative for input defaults. A Python default
 makes an ordinary input omittable and is recorded as its manifest default. Put
-the default after the annotation; do not declare it in `Field` or repeat it in
-the description:
+the default after the annotation; `Input` deliberately has no default field:
 
 ```python
-limit: Annotated[
-    int,
-    Field(description="Maximum number of results.", ge=1),
-] = 100
+inputs={
+    "limit": Input(description="Maximum number of results.", ge=1),
+}
+
+def run(location: LocationInput, limit: int = 100) -> TableJobResult:
+    ...
 ```
 
 Omission and nullability are independent. A union with `None` (written as
@@ -45,10 +83,14 @@ itself make the input omittable. To permit both omission and `null`, annotate
 the value as nullable and give it a default:
 
 ```python
-threshold: Annotated[
-    float | None,
-    Field(description="Threshold, or null to disable filtering."),
-] = None
+inputs={
+    "threshold": Input(
+        description="Threshold, or null to disable filtering.",
+    ),
+}
+
+def run(location: LocationInput, threshold: float | None = None) -> TableJobResult:
+    ...
 ```
 
 The resulting contracts are:
@@ -64,6 +106,22 @@ The resulting contracts are:
 An em dash means that no default exists; `null` is an actual default value.
 Defaults and examples must satisfy the annotated type and constraints or
 manifest generation fails.
+
+## Inspect a definition
+
+Use `plugin.describe("metric_name")` for structured inspection in Python. The
+CLI renders the same information as a table for one metric or the whole plugin:
+
+```bash
+uv run lyra-plugin describe
+uv run lyra-plugin describe job_accessibility
+uv run lyra-plugin describe job_accessibility --json
+```
+
+Inspection includes the clean handler signature, required/default state,
+constraints, descriptions, and the output summary. Registration errors include
+the handler signature and identify missing, unknown, or Lyra-owned input
+declarations.
 
 Clients submit spatial wrapper objects such as `geojson`, `cvegeo_list`, and
 `met_zone_code`. The API validates the compiled request schema and resolves

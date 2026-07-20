@@ -7,9 +7,10 @@ from typing import Annotated, Any, Literal
 import pytest
 from jsonschema.validators import validator_for
 from lyra.sdk import (
-    Batch,
+    BatchInput,
     BatchItem,
     BoundsInput,
+    Input,
     LocationInput,
     PluginDefinition,
     PluginDefinitionError,
@@ -23,7 +24,7 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputColumnV3,
     TableOutputV3,
 )
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 
 def _feature_collection() -> dict[str, Any]:
@@ -91,6 +92,13 @@ class Options(BaseModel):
     year_range: YearRange
 
 
+def _require_even(value: int) -> int:
+    if value % 2:
+        msg = "value must be even"
+        raise ValueError(msg)
+    return value
+
+
 def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
     plugin = PluginDefinition()
     received: dict[str, Any] = {}
@@ -98,19 +106,33 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
     @plugin.metric(
         name="example",
         description="Example metric.",
+        inputs={
+            "value": Input(
+                description="Submitted value.",
+                examples=[3],
+                ge=1,
+                le=10,
+            ),
+            "mode": Input(description="Calculation mode."),
+            "threshold": Input(description="Optional score threshold."),
+        },
         output=_table_output(),
     )
     def calculate(
         location: LocationInput,
-        value: Annotated[
-            int,
-            Field(description="Submitted value.", ge=1, le=10, examples=[3]),
-        ] = 3,
+        value: int = 3,
         mode: Literal["fast", "accurate"] = "fast",
+        threshold: float | None = None,
         *,
         context: RunContext,
     ) -> TableJobResult:
-        received.update(location=location, value=value, mode=mode, context=context)
+        received.update(
+            location=location,
+            value=value,
+            mode=mode,
+            threshold=threshold,
+            context=context,
+        )
         return TableJobResult(
             job_id=context.job_id,
             index=[location.features[0].id],
@@ -137,6 +159,14 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
         "maximum": 10,
     }
     assert metric.inputs["mode"].kind == "enum"
+    assert metric.inputs["threshold"].model_dump(exclude_none=True) == {
+        "kind": "number",
+        "description": "Optional score threshold.",
+        "required": False,
+        "nullable": True,
+    }
+    assert "default" in metric.inputs["threshold"].model_fields_set
+    assert getattr(metric.inputs["threshold"], "default", "missing") is None
 
     context = FakeContext()
     result = plugin(
@@ -151,8 +181,18 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
     assert isinstance(received["location"], GeoJSON)
     assert received["value"] == 3
     assert received["mode"] == "fast"
+    assert received["threshold"] is None
     assert received["context"] is context
     assert result.data == [[3]]
+
+    description = plugin.describe("example")
+    assert description.name == "example"
+    assert description.inputs == metric.inputs
+    assert "Annotated" not in description.signature
+    assert "value: int = 3" in description.signature
+
+    with pytest.raises(PluginDefinitionError, match="available metrics: example"):
+        plugin.describe("missing")
 
 
 def test_bounds_and_nested_model_compile_and_parse() -> None:
@@ -162,6 +202,7 @@ def test_bounds_and_nested_model_compile_and_parse() -> None:
     @plugin.metric(
         name="file_like",
         description="Bounds metric.",
+        inputs={"options": Input(description="Calculation options.")},
         output=_table_output(),
     )
     def calculate(
@@ -229,25 +270,22 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
     @plugin.metric(
         name="batch_metric",
         description="Batch metric.",
+        inputs={
+            "categories": BatchInput(
+                max_items=3,
+                allow_labels=True,
+                items=Input(
+                    description="Category identifier.",
+                    examples=["park"],
+                    min_length=2,
+                ),
+            )
+        },
         output=output,
     )
     def calculate(
         location: LocationInput,
-        categories: Annotated[
-            list[
-                BatchItem[
-                    Annotated[
-                        str,
-                        Field(
-                            description="Category identifier.",
-                            examples=["park"],
-                            min_length=2,
-                        ),
-                    ]
-                ]
-            ],
-            Batch(max_items=3, label=True),
-        ],
+        categories: list[BatchItem[str]],
         *,
         context: RunContext,
     ) -> TableJobResult:
@@ -300,30 +338,109 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
     assert [item.key for item in received] == ["parks", "food"]
     assert all(isinstance(item, BatchItem) for item in received)
 
+    for categories, match in (
+        (
+            [
+                {"key": "same", "value": "park"},
+                {"key": "same", "value": "food"},
+            ],
+            "duplicate key",
+        ),
+        (
+            [
+                {"key": "one", "value": "park"},
+                {"key": "two", "value": "food"},
+                {"key": "three", "value": "shops"},
+                {"key": "four", "value": "schools"},
+            ],
+            "between 1 and 3",
+        ),
+    ):
+        with pytest.raises(PluginDefinitionError, match=match):
+            plugin(
+                JobEnvelope(
+                    job_id="job-1",
+                    metric="batch_metric",
+                    input={
+                        "location": _feature_collection(),
+                        "categories": categories,
+                    },
+                ),
+                FakeContext(metric="batch_metric"),
+            )
+
+
+def test_batch_input_rejects_labels_when_disabled() -> None:
+    plugin = PluginDefinition()
+    output = TableOutputV3(
+        kind="table",
+        batched_columns=[
+            BatchedTableOutputColumnV3(
+                source="categories",
+                name="value_{key}",
+                type="integer",
+                unit="count",
+                description="Value for {key}.",
+            )
+        ],
+    )
+
+    @plugin.metric(
+        name="unlabelled_batch",
+        description="Unlabelled batch metric.",
+        inputs={
+            "categories": BatchInput(
+                max_items=3,
+                items=Input(description="Category identifier."),
+            )
+        },
+        output=output,
+    )
+    def calculate(
+        location: LocationInput,
+        categories: list[BatchItem[str]],
+    ) -> TableJobResult:
+        raise AssertionError(location, categories)
+
+    with pytest.raises(PluginDefinitionError, match="does not accept labels"):
+        plugin(
+            JobEnvelope(
+                job_id="job-1",
+                metric="unlabelled_batch",
+                input={
+                    "location": _feature_collection(),
+                    "categories": [{"key": "parks", "value": "park", "label": "Parks"}],
+                },
+            ),
+            FakeContext(metric="unlabelled_batch"),
+        )
+
 
 def test_protocol_owned_input_metadata_is_rejected() -> None:
     plugin = PluginDefinition()
 
-    with pytest.raises(PluginDefinitionError, match="spatial input metadata"):
+    with pytest.raises(PluginDefinitionError, match="Lyra-owned input"):
 
         @plugin.metric(
             name="spatial_metadata",
             description="Invalid spatial metadata.",
+            inputs={"location": Input(description="Plugin-owned location.")},
             output=_table_output(),
         )
-        def spatial_metadata(
-            location: Annotated[
-                LocationInput,
-                Field(description="Plugin-owned location description."),
-            ],
-        ) -> TableJobResult:
+        def spatial_metadata(location: LocationInput) -> TableJobResult:
             raise AssertionError(location)
 
-    with pytest.raises(PluginDefinitionError, match="BatchItem value type"):
+    with pytest.raises(PluginDefinitionError, match="Field metadata"):
 
         @plugin.metric(
             name="batch_metadata",
             description="Invalid batch metadata.",
+            inputs={
+                "categories": BatchInput(
+                    max_items=3,
+                    items=Input(description="Category identifier."),
+                )
+            },
             output=TableOutputV3(
                 kind="table",
                 batched_columns=[
@@ -339,13 +456,117 @@ def test_protocol_owned_input_metadata_is_rejected() -> None:
         )
         def batch_metadata(
             location: LocationInput,
-            categories: Annotated[
-                list[BatchItem[str]],
-                Batch(max_items=3),
-                Field(description="Ambiguous batch description."),
+            categories: list[
+                BatchItem[
+                    Annotated[
+                        str,
+                        Field(description="Ambiguous category description."),
+                    ]
+                ]
             ],
         ) -> TableJobResult:
             raise AssertionError(location, categories)
+
+
+def test_input_declaration_names_are_checked_together() -> None:
+    plugin = PluginDefinition()
+
+    with pytest.raises(PluginDefinitionError) as error:
+
+        @plugin.metric(
+            name="invalid_declarations",
+            description="Invalid declarations.",
+            inputs={
+                "location": Input(description="Invalid spatial metadata."),
+                "unknown": Input(description="Unknown input."),
+            },
+            output=_table_output(),
+        )
+        def invalid_declarations(
+            location: LocationInput,
+            value: int,
+        ) -> TableJobResult:
+            raise AssertionError(location, value)
+
+    message = str(error.value)
+    assert "unknown declaration(s): unknown" in message
+    assert "Lyra-owned input(s) must not be declared: location" in message
+    assert "missing declaration(s): value" in message
+    assert "Handler: invalid_declarations(" in message
+
+
+def test_input_declaration_kind_must_match_batch_annotation() -> None:
+    plugin = PluginDefinition()
+
+    with pytest.raises(PluginDefinitionError, match="must use BatchInput"):
+
+        @plugin.metric(
+            name="wrong_batch_declaration",
+            description="Wrong batch declaration.",
+            inputs={"categories": Input(description="Category identifier.")},
+            output=_table_output(),
+        )
+        def wrong_batch_declaration(
+            location: LocationInput,
+            categories: list[BatchItem[str]],
+        ) -> TableJobResult:
+            raise AssertionError(location, categories)
+
+
+def test_input_supports_custom_validators_and_json_schema_metadata() -> None:
+    plugin = PluginDefinition()
+
+    @plugin.metric(
+        name="custom_input",
+        description="Custom input metadata.",
+        inputs={
+            "value": Input(
+                description="Even value.",
+                json_schema_extra={"x-lyra-ui": {"widget": "slider"}},
+            )
+        },
+        output=_table_output(),
+    )
+    def calculate(
+        location: LocationInput,
+        value: Annotated[int, AfterValidator(_require_even)],
+    ) -> TableJobResult:
+        return TableJobResult(
+            job_id="job-1",
+            index=[location.features[0].id],
+            columns=["value"],
+            data=[[value]],
+        )
+
+    compiled = plugin.compiled_manifest(
+        plugin=PluginInfoV3(name="custom-plugin", version="1.0.0"),
+        entrypoint="custom.metrics:plugin",
+    )
+    assert compiled.metrics[0].request_schema["properties"]["value"]["x-lyra-ui"] == {
+        "widget": "slider"
+    }
+
+    with pytest.raises(PluginDefinitionError, match="value must be even"):
+        plugin(
+            JobEnvelope(
+                job_id="job-1",
+                metric="custom_input",
+                input={"location": _feature_collection(), "value": 3},
+            ),
+            FakeContext(metric="custom_input"),
+        )
+
+
+def test_input_authoring_models_validate_configuration() -> None:
+    with pytest.raises(ValueError, match="non-empty string"):
+        Input(description="  ")
+    with pytest.raises(ValueError, match="at least one example"):
+        Input(description="Value.", examples=[])
+    with pytest.raises(ValueError, match="at least 1"):
+        BatchInput(
+            max_items=0,
+            items=Input(description="Batch value."),
+        )
 
 
 @pytest.mark.parametrize(

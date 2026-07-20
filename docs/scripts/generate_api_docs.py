@@ -100,8 +100,10 @@ PAGE_SPECS = (
         symbols=(
             sym("lyra.sdk.plugin", "PluginDefinition"),
             sym("lyra.sdk.plugin", "MetricDefinition"),
+            sym("lyra.sdk.plugin", "MetricDescription"),
             sym("lyra.sdk.plugin", "PluginDefinitionError"),
-            sym("lyra.sdk.plugin", "Batch"),
+            sym("lyra.sdk.plugin", "Input"),
+            sym("lyra.sdk.plugin", "BatchInput"),
             sym("lyra.sdk.plugin", "BatchItem"),
             sym("lyra.sdk.models.plugin_v3", "PluginInfoV3"),
             sym("lyra.sdk.models.plugin_v3", "PluginOwnedInputMetadataV3"),

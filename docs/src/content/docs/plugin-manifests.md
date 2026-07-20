@@ -262,13 +262,14 @@ entry:
         "type": "number",
         "unit": "m2",
         "description": "Urbanized area in square meters.",
-        "nullable": false
-      },
-      {
-        "name": "area_frac",
-        "type": "number",
-        "unit": "ratio",
-        "description": "Urbanized area fraction."
+        "nullable": false,
+        "derivations": [
+          {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Fraction of the location that is urbanized."
+          }
+        ]
       }
     ]
   }
@@ -278,6 +279,12 @@ entry:
 Table column types are `number`, `integer`, `string`, and `boolean`. Column
 names must be unique. `unit` and `description` are required; `nullable`
 defaults to `false`.
+
+A static numeric column with unit `m2` may declare one
+`fraction_of_location_area` derivation. The derivation requires its own unique
+name and description. Its generated contract has type `number`, unit `ratio`,
+and inherits source nullability. Derivations are not supported on
+`batched_columns`.
 
 Batched column groups declare columns generated from a batch input:
 

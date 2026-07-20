@@ -78,6 +78,7 @@ the cancelled result.
 - `input`
 - optional `idempotency_key`
 - `metadata`
+- optional server-calculated `location_areas_m2`
 
 The `input` payload has already passed API-side JSON Schema validation before
 dispatch. Spatial wrapper fields have also been resolved by the API, so
@@ -85,6 +86,10 @@ dispatch. Spatial wrapper fields have also been resolved by the API, so
 declared `inputs` field names. Parse those fields with
 `GeoJSON.model_validate()` or `SingleGeoJSON.model_validate()` before using
 `lyra-utils`.
+
+`location_areas_m2` is execution metadata populated for metrics that declare
+fractional-area derivations. Plugins do not calculate or return those derived
+columns themselves.
 
 ## RunContext
 
@@ -126,13 +131,13 @@ Table result constructors:
 TableJobResult.from_mapping(
     job_id=job.job_id,
     input_index=gdf.index,
-    columns=["area_m2", "area_frac"],
-    values={
-        "area_m2": area_by_feature_id,
-        "area_frac": fraction_by_feature_id,
-    },
+    columns=["area_m2"],
+    values={"area_m2": area_by_feature_id},
 )
 ```
+
+If `area_m2` declares a `fraction_of_location_area` derivation, Lyra validates
+this runner result and then appends the derived fraction column.
 
 ```python
 TableJobResult.from_dataframe(

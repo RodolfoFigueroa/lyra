@@ -111,6 +111,82 @@ def test_manifest_v3_accepts_minimal_static_table_metric() -> None:
     assert metric.output.columns[0].nullable is False
 
 
+def test_manifest_v3_accepts_fractional_area_derivation() -> None:
+    raw = _manifest()
+    raw["metrics"][0]["output"]["columns"][0]["derivations"] = [
+        {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Fraction of the location that is urbanized.",
+        }
+    ]
+
+    manifest = PluginManifestV3.model_validate(raw)
+    output = manifest.metrics[0].output
+    assert isinstance(output, TableOutputV3)
+    derivation = output.columns[0].derivations[0]
+
+    assert derivation.kind == "fraction_of_location_area"
+    assert derivation.name == "area_fraction"
+
+
+@pytest.mark.parametrize(
+    ("column_update", "match"),
+    [
+        ({"type": "string"}, "numeric source"),
+        ({"unit": "km2"}, "source unit 'm2'"),
+    ],
+)
+def test_manifest_v3_rejects_invalid_fractional_area_source(
+    column_update: dict[str, Any],
+    match: str,
+) -> None:
+    raw = _manifest()
+    column = raw["metrics"][0]["output"]["columns"][0]
+    column.update(column_update)
+    column["derivations"] = [
+        {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Urbanized fraction.",
+        }
+    ]
+
+    _assert_invalid(raw, match)
+
+
+def test_manifest_v3_rejects_fractional_area_name_collision() -> None:
+    raw = _manifest()
+    raw["metrics"][0]["output"]["columns"][0]["derivations"] = [
+        {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Urbanized fraction.",
+        }
+    ]
+    raw["metrics"][0]["output"]["columns"].append(
+        {
+            "name": "area_fraction",
+            "type": "number",
+            "unit": "ratio",
+            "description": "Conflicting column.",
+        }
+    )
+
+    _assert_invalid(raw, "duplicate")
+
+
+def test_manifest_v3_rejects_derivations_on_batched_columns() -> None:
+    raw = {
+        "schema_version": 3,
+        "plugin": {"name": "accessibility-metrics", "version": "0.1.0"},
+        "metrics": [_dynamic_metric()],
+    }
+    raw["metrics"][0]["output"]["batched_columns"][0]["derivations"] = []
+
+    _assert_invalid(raw, "Extra inputs")
+
+
 def test_manifest_v3_rejects_metric_queue_field() -> None:
     raw = _manifest({"queue": "interactive"})
 

@@ -330,6 +330,19 @@ InputSpecV3 = Annotated[
 OutputColumnTypeV3 = Literal["number", "integer", "string", "boolean"]
 
 
+class FractionOfLocationAreaDerivationV3(StrictBaseModel):
+    """Server-owned fraction derived from a square-metre result column."""
+
+    kind: Literal["fraction_of_location_area"] = Field(
+        description="Derived output operation.",
+    )
+    name: str = Field(min_length=1, description="Derived result column name.")
+    description: str = Field(
+        min_length=1,
+        description="Human-readable derived column description.",
+    )
+
+
 class TableOutputColumnV3(StrictBaseModel):
     """One scalar column produced by a schema v3 table metric."""
 
@@ -344,6 +357,24 @@ class TableOutputColumnV3(StrictBaseModel):
         default=False,
         description="Whether this column may contain null values.",
     )
+    derivations: list[FractionOfLocationAreaDerivationV3] = Field(
+        default_factory=list,
+        max_length=1,
+        description="Server-owned columns derived from this runner output column.",
+        exclude_if=lambda value: not value,
+    )
+
+    @model_validator(mode="after")
+    def validate_derivations(self) -> Self:
+        if not self.derivations:
+            return self
+        if self.type not in {"number", "integer"}:
+            msg = "fractional-area derivations require a numeric source column"
+            raise ValueError(msg)
+        if self.unit != "m2":
+            msg = "fractional-area derivations require source unit 'm2'"
+            raise ValueError(msg)
+        return self
 
 
 class BatchedTableOutputColumnV3(StrictBaseModel):
@@ -419,6 +450,10 @@ class TableOutputV3(StrictBaseModel):
             if column.name in seen:
                 duplicates.add(column.name)
             seen.add(column.name)
+            for derivation in column.derivations:
+                if derivation.name in seen:
+                    duplicates.add(derivation.name)
+                seen.add(derivation.name)
         if duplicates:
             names = ", ".join(sorted(duplicates))
             msg = f"duplicate table output column name(s): {names}"
@@ -464,11 +499,11 @@ def _expand_batched_template(template: str, context: dict[str, str]) -> str:
     return value
 
 
-def expand_table_output_columns(
+def expand_runner_table_output_columns(
     output: TableOutputV3,
     job_input: dict[str, Any],
 ) -> list[TableOutputColumnV3]:
-    """Expand a table output contract for one validated job input."""
+    """Expand only columns that a runner must return for one job input."""
 
     columns = [column.model_copy(deep=True) for column in output.columns]
 
@@ -500,6 +535,37 @@ def expand_table_output_columns(
                     nullable=column_group.nullable,
                 )
             )
+
+    names = [column.name for column in columns]
+    if len(names) != len(set(names)):
+        msg = "Expanded table output columns must be unique."
+        raise ValueError(msg)
+
+    return columns
+
+
+def expand_table_output_columns(
+    output: TableOutputV3,
+    job_input: dict[str, Any],
+) -> list[TableOutputColumnV3]:
+    """Expand the effective table output contract for one validated job input."""
+
+    runner_columns = expand_runner_table_output_columns(output, job_input)
+    columns: list[TableOutputColumnV3] = []
+    for column in runner_columns:
+        columns.append(column)
+        columns.extend(
+            [
+                TableOutputColumnV3(
+                    name=derivation.name,
+                    type="number",
+                    unit="ratio",
+                    description=derivation.description,
+                    nullable=column.nullable,
+                )
+                for derivation in column.derivations
+            ]
+        )
 
     names = [column.name for column in columns]
     if len(names) != len(set(names)):
@@ -975,6 +1041,7 @@ __all__ = [
     "CompiledPluginManifestV3",
     "EnumInputV3",
     "FileOutputV3",
+    "FractionOfLocationAreaDerivationV3",
     "InputSpecV3",
     "IntegerInputV3",
     "JsonSchemaInputV3",
@@ -991,5 +1058,6 @@ __all__ = [
     "TableOutputColumnV3",
     "TableOutputV3",
     "compile_plugin_manifest",
+    "expand_runner_table_output_columns",
     "expand_table_output_columns",
 ]

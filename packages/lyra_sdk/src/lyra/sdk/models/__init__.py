@@ -86,6 +86,7 @@ from lyra.sdk.models.plugin_v3 import (
     CompiledPluginManifestV3,
     EnumInputV3,
     FileOutputV3,
+    FractionOfLocationAreaDerivationV3,
     InputSpecV3,
     IntegerInputV3,
     JsonSchemaInputV3,
@@ -101,6 +102,7 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputColumnV3,
     TableOutputV3,
     compile_plugin_manifest,
+    expand_runner_table_output_columns,
     expand_table_output_columns,
 )
 
@@ -128,6 +130,7 @@ __all__ = [
     "FailedJobResult",
     "FileJobResult",
     "FileOutputV3",
+    "FractionOfLocationAreaDerivationV3",
     "InputSpecV3",
     "IntegerInputV3",
     "JobCancelResponse",
@@ -201,6 +204,7 @@ __all__ = [
     "build_table_preview",
     "build_table_summary",
     "compile_plugin_manifest",
+    "expand_runner_table_output_columns",
     "expand_table_output_columns",
     "parse_job_result",
     "result_ref_for_job",

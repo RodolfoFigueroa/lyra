@@ -15,13 +15,19 @@ from lyra.sdk.models import (
     JobRunProvenance,
     PluginInfoV3,
 )
+from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk.models.plugin_v3 import TableOutputV3
+from lyra.utils.geometry import calculate_feature_areas_m2
 from redis.exceptions import RedisError
 
 from lyra_app import job_store
 from lyra_app.config import get_config
 from lyra_app.db.redis import redis_client
 from lyra_app.registry import get_metric_entry, validate_metric_entry_payload
-from lyra_app.spatial_inputs import resolve_spatial_inputs_with_metadata
+from lyra_app.spatial_inputs import (
+    SpatialInputValidationError,
+    resolve_spatial_inputs_with_metadata,
+)
 
 GENERIC_TASK_NAME = "lyra.run_metric"
 
@@ -158,6 +164,24 @@ async def _resolve_spatial_input(
     )
 
 
+def _requires_location_areas(output: Any) -> bool:
+    return isinstance(output, TableOutputV3) and any(
+        column.derivations for column in output.columns
+    )
+
+
+async def _calculate_location_areas(
+    resolved_input: dict[str, Any],
+) -> dict[str, float]:
+    location = GeoJSON.model_validate(resolved_input["location"])
+    try:
+        return await asyncio.to_thread(calculate_feature_areas_m2, location)
+    except ValueError as exc:
+        raise SpatialInputValidationError(
+            [{"loc": ["location"], "msg": str(exc), "type": "value_error"}]
+        ) from exc
+
+
 async def submit_job(
     request: JobCreateRequest,
     *,
@@ -218,6 +242,9 @@ async def submit_job(
             entry.metric.spatial_inputs,
             database,
         )
+        location_areas_m2 = None
+        if _requires_location_areas(entry.metric.output):
+            location_areas_m2 = await _calculate_location_areas(resolution.input)
         submission_limit = get_config().agent_submission_limit
         try:
             limit_decision = await job_store.consume_agent_submission_limit_async(
@@ -235,6 +262,7 @@ async def submit_job(
             metric=request.metric,
             input=resolution.input,
             idempotency_key=request.idempotency_key,
+            location_areas_m2=location_areas_m2,
         )
         provenance = JobRunProvenance(
             metric=request.metric,

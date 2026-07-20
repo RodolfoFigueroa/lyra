@@ -132,6 +132,13 @@ class JobEnvelope(StrictBaseModel):
         default_factory=dict,
         description="Additional job metadata passed through the runtime.",
     )
+    location_areas_m2: dict[str, float] | None = Field(
+        default=None,
+        description=(
+            "Server-calculated feature areas used by fractional-area derivations."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 class JobEvent(StrictBaseModel):

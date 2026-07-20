@@ -120,6 +120,11 @@ table-shaped Pandas or GeoPandas outputs, and `from_series()` for one-column
 Pandas outputs. For batched table metrics, include at least two source items and
 assert the expanded column names and order.
 
+For a static square-metre column with a `fraction_of_location_area`
+derivation, assert that the runner returns only the declared source column.
+Lyra owns the EPSG:6372 location-area calculation and appends the fraction
+after runner validation.
+
 The manifest is strict schema v3 JSON. Extra fields are rejected, metric names
 must be unique across the loaded catalog, each metric must declare at least one
 spatial input, and Lyra must be able to compile `inputs` into effective JSON

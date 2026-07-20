@@ -38,7 +38,7 @@ should stay easy for clients to render, compare, and test.
 Static `columns` should be the default for table metrics. Use them when every
 job returns the same logical values, such as:
 
-- area and fraction columns.
+- area columns with server-derived fractions.
 - population count and density columns.
 - accessibility score and rank columns.
 - boolean flags or classification labels.
@@ -56,18 +56,24 @@ is submitted.
         "name": "area_m2",
         "type": "number",
         "unit": "m2",
-        "description": "Urbanized area in square meters."
-      },
-      {
-        "name": "area_frac",
-        "type": "number",
-        "unit": "ratio",
-        "description": "Urbanized area fraction."
+        "description": "Urbanized area in square meters.",
+        "derivations": [
+          {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Fraction of the location that is urbanized."
+          }
+        ]
       }
     ]
   }
 }
 ```
+
+For `fraction_of_location_area`, the runner returns only the square-metre
+source column. Lyra calculates each resolved location feature's area in
+EPSG:6372 and inserts the derived `ratio` column immediately after its source.
+This derivation is available only for static numeric columns with unit `m2`.
 
 ## Batched Columns
 

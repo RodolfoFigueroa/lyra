@@ -22,7 +22,9 @@ from lyra.sdk.models.plugin_v3 import (
     FileOutputV3,
     OutputColumnTypeV3,
     OutputSpecV3,
+    TableOutputColumnV3,
     TableOutputV3,
+    expand_runner_table_output_columns,
     expand_table_output_columns,
 )
 from pydantic import ValidationError as PydanticValidationError
@@ -45,6 +47,7 @@ from lyra_app.registry import load_plugin_manifest
 logger = logging.getLogger(__name__)
 
 GENERIC_TASK_NAME = "lyra.run_metric"
+FRACTION_RANGE_TOLERANCE = 1e-9
 
 MetricRunCallable = Callable[
     [JobEnvelope, "WorkerRunContext"], TerminalJobResult | dict[str, Any]
@@ -316,53 +319,172 @@ def _expected_table_index(
     return expected_index
 
 
-def _validate_table_result(
+def _validate_table_values(
     result: TableJobResult,
-    job: JobEnvelope,
-    output: TableOutputV3,
-) -> TableJobResult | FailedJobResult:
-    expected_index = _expected_table_index(job)
-    if isinstance(expected_index, FailedJobResult):
-        return expected_index
-
-    if result.index != expected_index:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Table result index must match the resolved location feature IDs.",
-        )
-
-    try:
-        expanded_columns = expand_table_output_columns(output, job.input)
-    except (TypeError, ValueError) as exc:
-        return _failed_result(job.job_id, "invalid_result", str(exc))
-
-    expected_columns = [column.name for column in expanded_columns]
-    if result.columns != expected_columns:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Table result columns must match the metric output declaration.",
-        )
-
+    columns: list[TableOutputColumnV3],
+) -> str | None:
     for row_position, row in enumerate(result.data):
-        for column_position, column in enumerate(expanded_columns):
+        for column_position, column in enumerate(columns):
             error = _cell_error(
                 row[column_position],
                 column.type,
                 nullable=column.nullable,
             )
             if error is not None:
-                return _failed_result(
-                    job.job_id,
-                    "invalid_result",
-                    (
-                        "Invalid table value at row "
-                        f"{row_position}, column {column.name!r}: {error}."
-                    ),
+                return (
+                    "Invalid table value at row "
+                    f"{row_position}, column {column.name!r}: {error}."
                 )
+    return None
 
-    return result
+
+def _derive_fractional_area_columns(
+    result: TableJobResult,
+    job: JobEnvelope,
+    runner_columns: list[TableOutputColumnV3],
+) -> TableJobResult | FailedJobResult:
+    if not any(column.derivations for column in runner_columns):
+        return result
+
+    areas = job.location_areas_m2
+    if areas is None:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Job envelope is missing server-calculated location areas.",
+        )
+    if list(areas) != result.index:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Location area feature IDs must match the table result index.",
+        )
+
+    derived_columns: list[str] = []
+    derived_data: list[list[Any]] = [[] for _ in result.data]
+    for column_position, column in enumerate(runner_columns):
+        derived_columns.append(column.name)
+        for row_position, row in enumerate(result.data):
+            derived_data[row_position].append(row[column_position])
+
+        for derivation in column.derivations:
+            derived_columns.append(derivation.name)
+            for row_position, (feature_id, row) in enumerate(
+                zip(result.index, result.data, strict=True)
+            ):
+                source_value = row[column_position]
+                if source_value is None:
+                    derived_data[row_position].append(None)
+                    continue
+
+                area = areas[feature_id]
+                if not math.isfinite(area) or area <= 0:
+                    return _failed_result(
+                        job.job_id,
+                        "invalid_result",
+                        f"Location area for feature {feature_id!r} must be positive.",
+                    )
+                fraction = float(source_value) / area
+                if (
+                    fraction < -FRACTION_RANGE_TOLERANCE
+                    or fraction > 1 + FRACTION_RANGE_TOLERANCE
+                ):
+                    return _failed_result(
+                        job.job_id,
+                        "invalid_result",
+                        (
+                            f"Derived fraction for feature {feature_id!r}, source "
+                            f"column {column.name!r} is outside [0, 1]: {fraction}."
+                        ),
+                    )
+                derived_data[row_position].append(min(1.0, max(0.0, fraction)))
+
+    return TableJobResult(
+        job_id=result.job_id,
+        index=result.index,
+        columns=derived_columns,
+        data=derived_data,
+    )
+
+
+def _validate_result_against_columns(
+    result: TableJobResult,
+    job: JobEnvelope,
+    columns: list[TableOutputColumnV3],
+    *,
+    mismatch_message: str,
+) -> FailedJobResult | None:
+    expected_columns = [column.name for column in columns]
+    if result.columns != expected_columns:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            mismatch_message,
+        )
+    error = _validate_table_values(result, columns)
+    if error is not None:
+        return _failed_result(job.job_id, "invalid_result", error)
+    return None
+
+
+def _validate_result_index(
+    result: TableJobResult,
+    job: JobEnvelope,
+) -> FailedJobResult | None:
+    expected_index = _expected_table_index(job)
+    if isinstance(expected_index, FailedJobResult):
+        return expected_index
+    if result.index != expected_index:
+        return _failed_result(
+            job.job_id,
+            "invalid_result",
+            "Table result index must match the resolved location feature IDs.",
+        )
+    return None
+
+
+def _validate_table_result(
+    result: TableJobResult,
+    job: JobEnvelope,
+    output: TableOutputV3,
+) -> TableJobResult | FailedJobResult:
+    index_error = _validate_result_index(result, job)
+    if index_error is not None:
+        return index_error
+
+    try:
+        runner_columns = expand_runner_table_output_columns(output, job.input)
+        expanded_columns = expand_table_output_columns(output, job.input)
+    except (TypeError, ValueError) as exc:
+        return _failed_result(job.job_id, "invalid_result", str(exc))
+
+    validation_error = _validate_result_against_columns(
+        result,
+        job,
+        runner_columns,
+        mismatch_message=(
+            "Table result columns must match the runner output declaration."
+        ),
+    )
+    if validation_error is not None:
+        return validation_error
+
+    derived_result = _derive_fractional_area_columns(result, job, runner_columns)
+    if isinstance(derived_result, FailedJobResult):
+        return derived_result
+
+    validation_error = _validate_result_against_columns(
+        derived_result,
+        job,
+        expanded_columns,
+        mismatch_message=(
+            "Derived table columns must match the effective output declaration."
+        ),
+    )
+    if validation_error is not None:
+        return validation_error
+
+    return derived_result
 
 
 def _validate_file_result(

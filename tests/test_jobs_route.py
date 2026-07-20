@@ -3,6 +3,7 @@ import importlib
 import json
 import sys
 from collections.abc import Iterator, MutableMapping
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -687,6 +688,98 @@ def test_create_job_dispatches_generic_task_to_state_queue(
     assert len(redis.streams[job_store.events_key("job-1")]) == 1
     provenance = json.loads(redis.values[job_store.provenance_key("job-1")])
     assert provenance["row_identity"] == {"field": "id"}
+
+
+def test_create_area_job_dispatches_server_calculated_location_areas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = deepcopy(_manifest())
+    column = manifest["metrics"][0]["output"]["columns"][0]
+    column.update(
+        {
+            "name": "covered_area_m2",
+            "type": "number",
+            "unit": "m2",
+            "derivations": [
+                {
+                    "kind": "fraction_of_location_area",
+                    "name": "covered_area_fraction",
+                    "description": "Fraction of the location covered.",
+                }
+            ],
+        }
+    )
+    _use_repo(tmp_path, monkeypatch, manifest=manifest)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-area"))
+    monkeypatch.setattr(
+        job_submission,
+        "calculate_feature_areas_m2",
+        lambda _location: {"area-1": 123.0},
+    )
+
+    response = asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+        )
+    )
+
+    assert response.job_id == "job-area"
+    assert celery.sent[0]["args"][0]["location_areas_m2"] == {"area-1": 123.0}
+
+
+def test_create_area_job_rejects_location_without_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_location(_location: GeoJSON) -> dict[str, float]:
+        error = "polygon required"
+        raise ValueError(error)
+
+    manifest = deepcopy(_manifest())
+    column = manifest["metrics"][0]["output"]["columns"][0]
+    column.update(
+        {
+            "name": "covered_area_m2",
+            "type": "number",
+            "unit": "m2",
+            "derivations": [
+                {
+                    "kind": "fraction_of_location_area",
+                    "name": "covered_area_fraction",
+                    "description": "Fraction of the location covered.",
+                }
+            ],
+        }
+    )
+    _use_repo(tmp_path, monkeypatch, manifest=manifest)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    _patch_converter_map(monkeypatch)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    monkeypatch.setattr(
+        job_submission,
+        "calculate_feature_areas_m2",
+        reject_location,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    detail = cast("list[dict[str, Any]]", exc_info.value.detail)
+    assert detail[0]["loc"] == ["location"]
+    assert celery.sent == []
 
 
 def test_canonical_request_fingerprint_ignores_nested_mapping_order() -> None:

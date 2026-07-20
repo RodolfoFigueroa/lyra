@@ -110,6 +110,30 @@ def _table_output() -> TableOutputV3:
     )
 
 
+def _area_output(*, nullable: bool = False) -> TableOutputV3:
+    return TableOutputV3.model_validate(
+        {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "covered_area_m2",
+                    "type": "number",
+                    "unit": "m2",
+                    "description": "Covered area in square metres.",
+                    "nullable": nullable,
+                    "derivations": [
+                        {
+                            "kind": "fraction_of_location_area",
+                            "name": "covered_area_fraction",
+                            "description": "Fraction of the location covered.",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+
 def _file_output() -> FileOutputV3:
     return FileOutputV3(
         kind="file",
@@ -838,6 +862,163 @@ def test_invalid_table_result_persists_failed_result(
     assert _decode_stored_result(worker_module, fake_redis, "job-invalid-table") == (
         result
     )
+
+
+def test_worker_appends_fractional_area_column(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["covered_area_m2"],
+            data=[[25.0]],
+        )
+
+    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="area_metric",
+        queue="heavy",
+        entrypoint="area_plugin:run",
+        output=_area_output(),
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-area",
+            "metric": "area_metric",
+            "input": {"location": _feature_collection()},
+            "location_areas_m2": {"area-1": 100.0},
+        },
+        task_id="task-id",
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["columns"] == ["covered_area_m2", "covered_area_fraction"]
+    assert result["data"] == [[25.0, 0.25]]
+
+
+def test_worker_normalizes_fraction_within_range_tolerance(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["covered_area_m2"],
+            data=[[100.00000005]],
+        )
+
+    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="area_metric",
+        queue="heavy",
+        entrypoint="area_plugin:run",
+        output=_area_output(),
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-area-tolerance",
+            "metric": "area_metric",
+            "input": {"location": _feature_collection()},
+            "location_areas_m2": {"area-1": 100.0},
+        },
+        task_id="task-id",
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == [[100.00000005, 1.0]]
+
+
+@pytest.mark.parametrize("source_value", [-1.0, 101.0])
+def test_worker_rejects_fraction_outside_unit_interval(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+    source_value: float,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["covered_area_m2"],
+            data=[[source_value]],
+        )
+
+    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="area_metric",
+        queue="heavy",
+        entrypoint="area_plugin:run",
+        output=_area_output(),
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-area-range",
+            "metric": "area_metric",
+            "input": {"location": _feature_collection()},
+            "location_areas_m2": {"area-1": 100.0},
+        },
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "invalid_result"
+    assert "outside [0, 1]" in result["error"]["message"]
+
+
+def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: Any,
+) -> None:
+    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["covered_area_m2"],
+            data=[[None]],
+        )
+
+    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="area_metric",
+        queue="heavy",
+        entrypoint="area_plugin:run",
+        output=_area_output(nullable=True),
+        run=run,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    missing = worker_module.execute_job(
+        {
+            "job_id": "job-area-missing",
+            "metric": "area_metric",
+            "input": {"location": _feature_collection()},
+        },
+        task_id="task-id",
+    )
+    succeeded = worker_module.execute_job(
+        {
+            "job_id": "job-area-null",
+            "metric": "area_metric",
+            "input": {"location": _feature_collection()},
+            "location_areas_m2": {"area-1": 100.0},
+        },
+        task_id="task-id",
+    )
+
+    assert missing["status"] == "failed"
+    assert "missing server-calculated" in missing["error"]["message"]
+    assert succeeded["data"] == [[None, None]]
 
 
 def test_duplicate_resolved_location_ids_persist_failed_result(

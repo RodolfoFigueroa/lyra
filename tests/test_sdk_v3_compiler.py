@@ -4,7 +4,13 @@ from typing import Any
 
 import pytest
 from jsonschema.validators import validator_for
-from lyra.sdk.models import PluginManifestV3, compile_plugin_manifest
+from lyra.sdk.models import (
+    PluginManifestV3,
+    TableOutputV3,
+    compile_plugin_manifest,
+    expand_runner_table_output_columns,
+    expand_table_output_columns,
+)
 
 
 def _static_metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -139,6 +145,37 @@ def test_compile_v3_static_table_metric_request_schema() -> None:
             "year": 2025,
         },
     )
+
+
+def test_compile_v3_fractional_area_derivation_and_column_expansion() -> None:
+    raw = _manifest()
+    raw["metrics"][0]["output"]["columns"][0]["derivations"] = [
+        {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Fraction of the location that is urbanized.",
+        }
+    ]
+    manifest = PluginManifestV3.model_validate(raw)
+    compiled = compile_plugin_manifest(manifest)
+    output = compiled.metrics[0].output
+    assert isinstance(output, TableOutputV3)
+
+    assert output.model_dump(mode="json")["columns"][0]["derivations"] == [
+        {
+            "kind": "fraction_of_location_area",
+            "name": "area_fraction",
+            "description": "Fraction of the location that is urbanized.",
+        }
+    ]
+    assert [
+        column.name for column in expand_runner_table_output_columns(output, {})
+    ] == ["area_m2"]
+    effective = expand_table_output_columns(output, {})
+    assert [column.name for column in effective] == ["area_m2", "area_fraction"]
+    assert effective[1].type == "number"
+    assert effective[1].unit == "ratio"
+    assert effective[1].nullable is False
 
 
 def test_compile_v3_optional_nullable_scalar_input() -> None:

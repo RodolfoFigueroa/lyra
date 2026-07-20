@@ -103,3 +103,11 @@ def test_dockerfile_declares_lyra_data_volume_only() -> None:
     assert "VOLUME /lyra_plugin_catalog" not in contents
     assert "VOLUME /lyra_plugins" not in contents
     assert "LYRA_PLUGIN_REPOS" not in contents
+
+
+def test_dockerfile_prioritizes_bundled_workspace_packages() -> None:
+    contents = _read(ROOT / "Dockerfile")
+
+    assert (
+        "PYTHONPATH=/app/packages/lyra_sdk/src:/app/packages/lyra_utils/src" in contents
+    )

@@ -27,7 +27,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_NO_CACHE=1 \
-    VIRTUAL_ENV=/app/.venv
+    VIRTUAL_ENV=/app/.venv \
+    PYTHONPATH=/app/packages/lyra_sdk/src:/app/packages/lyra_utils/src
 
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 

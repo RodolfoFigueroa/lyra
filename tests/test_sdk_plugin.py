@@ -16,14 +16,15 @@ from lyra.sdk import (
     PluginDefinition,
     PluginDefinitionError,
     RunContext,
+    metric,
 )
 from lyra.sdk.models import JobEnvelope, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
-from lyra.sdk.models.plugin_v3 import (
-    BatchedTableOutputColumnV3,
-    PluginInfoV3,
-    TableOutputColumnV3,
-    TableOutputV3,
+from lyra.sdk.models.plugin_v4 import (
+    BatchedTableOutputColumnV4,
+    PluginInfoV4,
+    TableOutputColumnV4,
+    TableOutputV4,
 )
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -64,11 +65,11 @@ def _feature_collection() -> dict[str, Any]:
     }
 
 
-def _table_output() -> TableOutputV3:
-    return TableOutputV3(
+def _table_output() -> TableOutputV4:
+    return TableOutputV4(
         kind="table",
         columns=[
-            TableOutputColumnV3(
+            TableOutputColumnV4(
                 name="value",
                 type="integer",
                 unit="count",
@@ -120,10 +121,9 @@ def test_run_context_database_is_non_nullable() -> None:
 
 
 def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
-    plugin = PluginDefinition()
     received: dict[str, Any] = {}
 
-    @plugin.metric(
+    @metric(
         name="example",
         description="Example metric.",
         inputs={
@@ -160,15 +160,15 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
             data=[[value]],
         )
 
+    plugin = PluginDefinition(metrics=[calculate])
     assert calculate.__name__ == "calculate"
     manifest = plugin.manifest(
-        plugin=PluginInfoV3(name="example-plugin", version="1.0.0"),
-        entrypoint="example.metrics:plugin",
+        plugin=PluginInfoV4(name="example-plugin", version="1.0.0"),
+        factory="example.metrics:create_plugin",
     )
-    metric = manifest.metrics[0]
-    assert metric.entrypoint == "example.metrics:plugin"
-    assert metric.inputs["location"].kind == "location"
-    assert metric.inputs["value"].model_dump(exclude_none=True) == {
+    metric_contract = manifest.metrics[0]
+    assert metric_contract.inputs["location"].kind == "location"
+    assert metric_contract.inputs["value"].model_dump(exclude_none=True) == {
         "kind": "integer",
         "description": "Submitted value.",
         "default": 3,
@@ -178,15 +178,15 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
         "minimum": 1,
         "maximum": 10,
     }
-    assert metric.inputs["mode"].kind == "enum"
-    assert metric.inputs["threshold"].model_dump(exclude_none=True) == {
+    assert metric_contract.inputs["mode"].kind == "enum"
+    assert metric_contract.inputs["threshold"].model_dump(exclude_none=True) == {
         "kind": "number",
         "description": "Optional score threshold.",
         "required": False,
         "nullable": True,
     }
-    assert "default" in metric.inputs["threshold"].model_fields_set
-    assert getattr(metric.inputs["threshold"], "default", "missing") is None
+    assert "default" in metric_contract.inputs["threshold"].model_fields_set
+    assert getattr(metric_contract.inputs["threshold"], "default", "missing") is None
 
     context = FakeContext()
     result = plugin(
@@ -208,7 +208,7 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
 
     description = plugin.describe("example")
     assert description.name == "example"
-    assert description.inputs == metric.inputs
+    assert description.inputs == metric_contract.inputs
     assert "Annotated" not in description.signature
     assert "value: int = 3" in description.signature
 
@@ -217,10 +217,9 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
 
 
 def test_bounds_and_nested_model_compile_and_parse() -> None:
-    plugin = PluginDefinition()
     received: dict[str, Any] = {}
 
-    @plugin.metric(
+    @metric(
         name="file_like",
         description="Bounds metric.",
         inputs={"options": Input(description="Calculation options.")},
@@ -242,9 +241,10 @@ def test_bounds_and_nested_model_compile_and_parse() -> None:
             data=[[len(options.years)]],
         )
 
+    plugin = PluginDefinition(metrics=[calculate])
     compiled = plugin.compiled_manifest(
-        plugin=PluginInfoV3(name="example-plugin", version="1.0.0"),
-        entrypoint="example.metrics:plugin",
+        plugin=PluginInfoV4(name="example-plugin", version="1.0.0"),
+        factory="example.metrics:create_plugin",
     )
     schema = compiled.metrics[0].request_schema
     assert any(name.endswith("__YearRange") for name in _json_object(schema["$defs"]))
@@ -274,12 +274,11 @@ def test_bounds_and_nested_model_compile_and_parse() -> None:
 
 
 def test_batch_inputs_generate_contract_and_parse_items() -> None:
-    plugin = PluginDefinition()
     received: list[BatchItem[str]] = []
-    output = TableOutputV3(
+    output = TableOutputV4(
         kind="table",
         batched_columns=[
-            BatchedTableOutputColumnV3(
+            BatchedTableOutputColumnV4(
                 source="categories",
                 name="value_{key}",
                 type="integer",
@@ -289,7 +288,7 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
         ],
     )
 
-    @plugin.metric(
+    @metric(
         name="batch_metric",
         description="Batch metric.",
         inputs={
@@ -320,9 +319,10 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
             data=[[1 for _item in categories]],
         )
 
+    plugin = PluginDefinition(metrics=[calculate])
     manifest = plugin.manifest(
-        plugin=PluginInfoV3(name="batch-plugin", version="1.0.0"),
-        entrypoint="batch.metrics:plugin",
+        plugin=PluginInfoV4(name="batch-plugin", version="1.0.0"),
+        factory="batch.metrics:create_plugin",
     )
     batch = manifest.metrics[0].inputs["categories"]
     assert batch.kind == "batch"
@@ -332,8 +332,8 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
     assert batch.value.examples == ["park"]
 
     compiled = plugin.compiled_manifest(
-        plugin=PluginInfoV3(name="batch-plugin", version="1.0.0"),
-        entrypoint="batch.metrics:plugin",
+        plugin=PluginInfoV4(name="batch-plugin", version="1.0.0"),
+        factory="batch.metrics:create_plugin",
     )
     properties = _json_object(compiled.metrics[0].request_schema["properties"])
     batch_schema = _json_object(properties["categories"])
@@ -397,11 +397,10 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
 
 
 def test_batch_input_rejects_labels_when_disabled() -> None:
-    plugin = PluginDefinition()
-    output = TableOutputV3(
+    output = TableOutputV4(
         kind="table",
         batched_columns=[
-            BatchedTableOutputColumnV3(
+            BatchedTableOutputColumnV4(
                 source="categories",
                 name="value_{key}",
                 type="integer",
@@ -411,7 +410,7 @@ def test_batch_input_rejects_labels_when_disabled() -> None:
         ],
     )
 
-    @plugin.metric(
+    @metric(
         name="unlabelled_batch",
         description="Unlabelled batch metric.",
         inputs={
@@ -428,6 +427,7 @@ def test_batch_input_rejects_labels_when_disabled() -> None:
     ) -> TableJobResult:
         raise AssertionError(location, categories)
 
+    plugin = PluginDefinition(metrics=[calculate])
     with pytest.raises(PluginDefinitionError, match="does not accept labels"):
         plugin(
             JobEnvelope(
@@ -443,11 +443,9 @@ def test_batch_input_rejects_labels_when_disabled() -> None:
 
 
 def test_protocol_owned_input_metadata_is_rejected() -> None:
-    plugin = PluginDefinition()
-
     with pytest.raises(PluginDefinitionError, match="Lyra-owned input"):
 
-        @plugin.metric(
+        @metric(
             name="spatial_metadata",
             description="Invalid spatial metadata.",
             inputs={"location": Input(description="Plugin-owned location.")},
@@ -458,7 +456,7 @@ def test_protocol_owned_input_metadata_is_rejected() -> None:
 
     with pytest.raises(PluginDefinitionError, match="Field metadata"):
 
-        @plugin.metric(
+        @metric(
             name="batch_metadata",
             description="Invalid batch metadata.",
             inputs={
@@ -467,10 +465,10 @@ def test_protocol_owned_input_metadata_is_rejected() -> None:
                     items=Input(description="Category identifier."),
                 )
             },
-            output=TableOutputV3(
+            output=TableOutputV4(
                 kind="table",
                 batched_columns=[
-                    BatchedTableOutputColumnV3(
+                    BatchedTableOutputColumnV4(
                         source="categories",
                         name="value_{key}",
                         type="integer",
@@ -495,11 +493,9 @@ def test_protocol_owned_input_metadata_is_rejected() -> None:
 
 
 def test_input_declaration_names_are_checked_together() -> None:
-    plugin = PluginDefinition()
-
     with pytest.raises(PluginDefinitionError) as error:
 
-        @plugin.metric(
+        @metric(
             name="invalid_declarations",
             description="Invalid declarations.",
             inputs={
@@ -522,11 +518,9 @@ def test_input_declaration_names_are_checked_together() -> None:
 
 
 def test_input_declaration_kind_must_match_batch_annotation() -> None:
-    plugin = PluginDefinition()
-
     with pytest.raises(PluginDefinitionError, match="must use BatchInput"):
 
-        @plugin.metric(
+        @metric(
             name="wrong_batch_declaration",
             description="Wrong batch declaration.",
             inputs={"categories": Input(description="Category identifier.")},
@@ -540,9 +534,7 @@ def test_input_declaration_kind_must_match_batch_annotation() -> None:
 
 
 def test_input_supports_custom_validators_and_json_schema_metadata() -> None:
-    plugin = PluginDefinition()
-
-    @plugin.metric(
+    @metric(
         name="custom_input",
         description="Custom input metadata.",
         inputs={
@@ -564,9 +556,10 @@ def test_input_supports_custom_validators_and_json_schema_metadata() -> None:
             data=[[value]],
         )
 
+    plugin = PluginDefinition(metrics=[calculate])
     compiled = plugin.compiled_manifest(
-        plugin=PluginInfoV3(name="custom-plugin", version="1.0.0"),
-        entrypoint="custom.metrics:plugin",
+        plugin=PluginInfoV4(name="custom-plugin", version="1.0.0"),
+        factory="custom.metrics:create_plugin",
     )
     properties = _json_object(compiled.metrics[0].request_schema["properties"])
     value_schema = _json_object(properties["value"])
@@ -606,9 +599,8 @@ def test_invalid_metric_signatures_fail_at_registration(
     function: Callable[..., JsonValue | tuple[JsonValue, ...]],
     match: str,
 ) -> None:
-    plugin = PluginDefinition()
     with pytest.raises(PluginDefinitionError, match=match):
-        plugin.metric(
+        metric(
             name="invalid",
             description="Invalid metric.",
             output=_table_output(),
@@ -616,9 +608,7 @@ def test_invalid_metric_signatures_fail_at_registration(
 
 
 def test_runtime_adapter_rejects_unknown_fields_and_duplicate_batch_keys() -> None:
-    plugin = PluginDefinition()
-
-    @plugin.metric(
+    @metric(
         name="example",
         description="Example metric.",
         output=_table_output(),
@@ -627,6 +617,7 @@ def test_runtime_adapter_rejects_unknown_fields_and_duplicate_batch_keys() -> No
         del location
         raise AssertionError
 
+    plugin = PluginDefinition(metrics=[calculate])
     with pytest.raises(PluginDefinitionError, match="unexpected input"):
         plugin(
             JobEnvelope(
@@ -636,3 +627,45 @@ def test_runtime_adapter_rejects_unknown_fields_and_duplicate_batch_keys() -> No
             ),
             FakeContext(),
         )
+
+
+def test_plugin_definition_requires_explicit_decorated_metrics() -> None:
+    def undecorated(location: LocationInput) -> TableJobResult:
+        raise AssertionError(location)
+
+    with pytest.raises(PluginDefinitionError, match="at least one decorated metric"):
+        PluginDefinition(metrics=[])
+    with pytest.raises(PluginDefinitionError, match="is not decorated"):
+        PluginDefinition(metrics=[undecorated])
+
+
+def test_plugin_definition_rejects_duplicate_names() -> None:
+    @metric(name="duplicate", description="First.", output=_table_output())
+    def first(location: LocationInput) -> TableJobResult:
+        raise AssertionError(location)
+
+    @metric(name="duplicate", description="Second.", output=_table_output())
+    def second(location: LocationInput) -> TableJobResult:
+        raise AssertionError(location)
+
+    with pytest.raises(PluginDefinitionError, match="Duplicate metric name"):
+        PluginDefinition(metrics=[first, second])
+
+
+def test_metric_handler_cannot_be_decorated_twice() -> None:
+    def calculate(location: LocationInput) -> TableJobResult:
+        raise AssertionError(location)
+
+    decorated = metric(
+        name="once",
+        description="Decorated once.",
+        output=_table_output(),
+    )(calculate)
+    assert decorated is calculate
+
+    with pytest.raises(PluginDefinitionError, match="already decorated"):
+        metric(
+            name="twice",
+            description="Decorated twice.",
+            output=_table_output(),
+        )(calculate)

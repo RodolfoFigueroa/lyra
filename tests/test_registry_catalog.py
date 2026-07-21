@@ -37,7 +37,6 @@ def _metric(
     description: str = "A metric.",
     inputs: dict[str, Any] | None = None,
     output: dict[str, Any] | None = None,
-    entrypoint: str = "fake_plugin.runner:run",
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -59,7 +58,6 @@ def _metric(
                 }
             ],
         },
-        "entrypoint": entrypoint,
     }
 
 
@@ -69,8 +67,9 @@ def _manifest(
     metric: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": plugin_name, "version": "1.0.0"},
+        "factory": "fake_plugin.plugin:create_plugin",
         "metrics": [metric or _metric()],
     }
 
@@ -118,7 +117,7 @@ def reset_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[N
     clear_config_cache()
 
 
-def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
+def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -151,11 +150,10 @@ def test_catalog_refresh_reads_v3_manifests_without_importing_plugin_code(
     assert info_payload["request_schema"]["required"] == ["location", "value"]
     assert info_payload["request_schema"]["properties"]["value"] == {"type": "integer"}
     assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
-    assert "GeoJSONLocationWrapperV3" in info_payload["request_schema"]["$defs"]
+    assert "GeoJSONLocationWrapperV4" in info_payload["request_schema"]["$defs"]
     assert entry is not None
     assert entry.queue == "lightweight"
     assert entry.repo_id == "owner__repo"
-    assert entry.entrypoint == "fake_plugin.runner:run"
 
 
 def test_initialize_catalog_commits_first_run_state(
@@ -363,7 +361,6 @@ def test_catalog_refresh_reads_directory_source_without_importing_plugin_code(
     assert entry is not None
     assert entry.queue == "interactive"
     assert entry.repo_id == "directory-plugin"
-    assert entry.entrypoint == "fake_plugin.runner:run"
 
 
 def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
@@ -388,7 +385,7 @@ def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
     ]
     assert table_entry is not None
     assert table_entry.queue == "interactive"
-    assert "GeoJSONLocationWrapperV3" in _json_object(
+    assert "GeoJSONLocationWrapperV4" in _json_object(
         table_entry.request_schema["$defs"]
     )
     assert table_info is not None
@@ -521,7 +518,7 @@ def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
         registry.refresh_catalog()
 
 
-def test_catalog_refresh_reads_v3_file_metric(
+def test_catalog_refresh_reads_v4_file_metric(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -538,7 +535,6 @@ def test_catalog_refresh_reads_v3_file_metric(
             "media_type": "image/tiff",
             "extensions": [".tif", ".tiff"],
         },
-        entrypoint="fake_plugin.runner:run_raster",
     )
     _write_manifest(repo, _manifest(metric=metric))
     monkeypatch.setattr(
@@ -558,7 +554,7 @@ def test_catalog_refresh_reads_v3_file_metric(
         "extensions": [".tif", ".tiff"],
     }
     assert info.request_schema["required"] == ["bounds", "year"]
-    assert "GeoJSONBoundsWrapperV3" in _json_object(info.request_schema["$defs"])
+    assert "GeoJSONBoundsWrapperV4" in _json_object(info.request_schema["$defs"])
     assert entry is not None
     assert entry.queue == "heavy"
 
@@ -756,6 +752,30 @@ def test_public_catalog_fingerprint_changes_when_public_contract_changes(
     registry.refresh_catalog()
 
     assert registry.get_public_catalog_fingerprint() != first
+
+
+def test_factory_change_only_updates_internal_catalog_fingerprint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo, _manifest())
+    monkeypatch.setattr(
+        registry,
+        "sync_catalog_state_repos",
+        lambda _config, _state: [_synced_repo(repo)],
+    )
+
+    first = registry.refresh_catalog()
+    public_fingerprint = registry.get_public_catalog_fingerprint()
+    changed = _manifest()
+    changed["factory"] = "fake_plugin.alternate:create_plugin"
+    (repo / MANIFEST_FILENAME).write_text(json.dumps(changed), encoding="utf-8")
+    second = registry.refresh_catalog()
+
+    assert second.catalog_changed is True
+    assert second.catalog_fingerprint != first.catalog_fingerprint
+    assert registry.get_public_catalog_fingerprint() == public_fingerprint
 
 
 def test_public_catalog_fingerprint_includes_spatial_inputs(
@@ -1158,5 +1178,5 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
     info = registry.get_metric_info("light_metric")
     assert info is not None
     schema_defs = _json_object(info.request_schema["$defs"])
-    assert "GeoJSONLocationWrapperV3" in schema_defs
-    assert "GeoJSONBoundsWrapperV3" in schema_defs
+    assert "GeoJSONLocationWrapperV4" in schema_defs
+    assert "GeoJSONBoundsWrapperV4" in schema_defs

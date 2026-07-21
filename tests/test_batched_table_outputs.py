@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from lyra.sdk.models import JobEnvelope, TableJobResult, expand_table_output_columns
-from lyra.sdk.models.plugin_v3 import TableOutputV3
+from lyra.sdk.models.plugin_v4 import TableOutputV4
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
@@ -21,15 +21,15 @@ if TYPE_CHECKING:
     from lyra_app.worker import WorkerRunContext
 
 
-def _v3_batched_manifest() -> dict[str, Any]:
+def _v4_batched_manifest() -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+        "factory": "fake_plugin.plugin:create_plugin",
         "metrics": [
             {
                 "name": "light_metric",
                 "description": "A lightweight metric.",
-                "entrypoint": "fake_plugin.runner:run",
                 "inputs": {
                     "location": {"kind": "location"},
                     "sector_filters": {
@@ -66,8 +66,8 @@ def _table_output(
     columns: list[dict[str, Any]] | None = None,
     name: str = "job_accessibility_{key}",
     description: str = "Job accessibility for {label}.",
-) -> TableOutputV3:
-    return TableOutputV3.model_validate(
+) -> TableOutputV4:
+    return TableOutputV4.model_validate(
         {
             "kind": "table",
             "columns": [] if columns is None else columns,
@@ -199,7 +199,7 @@ def test_catalog_refresh_preserves_batched_column_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
-    _write_manifest(repo, _v3_batched_manifest())
+    _write_manifest(repo, _v4_batched_manifest())
     monkeypatch.setattr(
         registry,
         "sync_catalog_state_repos",
@@ -263,7 +263,6 @@ def test_batched_table_result_expands_columns_from_key_order(
     worker_module.RUNNER_REGISTRY["batched_metric"] = worker_module.RunnerMetricEntry(
         metric_name="batched_metric",
         queue="heavy",
-        entrypoint="batched_plugin:run",
         output=_table_output(),
         run=run,
     )
@@ -319,7 +318,6 @@ def test_mixed_static_and_batched_table_result_persists_success(
         worker_module.RunnerMetricEntry(
             metric_name="mixed_batched_metric",
             queue="heavy",
-            entrypoint="mixed_batched_plugin:run",
             output=_table_output(
                 columns=[
                     {
@@ -389,7 +387,6 @@ def test_invalid_batched_table_columns_persist_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="invalid_batched_columns_metric",
             queue="heavy",
-            entrypoint="invalid_batched_columns_plugin:run",
             output=_table_output(),
             run=run,
         )
@@ -442,7 +439,6 @@ def test_invalid_batched_table_values_persist_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="invalid_batched_value_metric",
             queue="heavy",
-            entrypoint="invalid_batched_value_plugin:run",
             output=_table_output(),
             run=run,
         )
@@ -501,7 +497,6 @@ def test_invalid_batched_source_values_persist_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="invalid_batched_source_metric",
             queue="heavy",
-            entrypoint="invalid_batched_source_plugin:run",
             output=_table_output(),
             run=run,
         )
@@ -542,7 +537,6 @@ def test_batched_table_generated_column_collision_persists_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="batched_collision_metric",
             queue="heavy",
-            entrypoint="batched_collision_plugin:run",
             output=_table_output(),
             run=run,
         )

@@ -7,6 +7,22 @@ Every metric is a synchronous decorated function with at least one spatial
 input and a declared terminal output. Use public contracts from `lyra-sdk`; do
 not import application internals.
 
+Declare metrics with the standalone `@metric` decorator, then assemble them in
+one explicit, synchronous factory:
+
+```python
+from lyra.sdk import PluginDefinition
+
+from .metrics import job_accessibility
+
+
+def create_plugin() -> PluginDefinition:
+    return PluginDefinition(metrics=[job_accessibility])
+```
+
+Configure that parameterless factory under `[tool.lyra].factory`. Lyra imports
+only the configured module and never scans the package for metric modules.
+
 ## Inputs
 
 Declare `LocationInput` when output rows correspond to selected features and
@@ -27,7 +43,7 @@ optional JSON Schema extensions. `BatchInput` adds the item limit and optional
 labels while its nested `items=Input(...)` describes each item value:
 
 ```python
-@plugin.metric(
+@metric(
     name="job_accessibility",
     description="Calculate accessibility to matching jobs.",
     inputs={
@@ -129,7 +145,7 @@ those wrappers before the metric function receives SDK geometry models.
 
 ## Outputs
 
-Use `TableOutputV3` for one scalar row per resolved `location` feature. Static
+Use `TableOutputV4` for one scalar row per resolved `location` feature. Static
 columns are preferred when every job returns the same concepts. Each column has
 a name, type, unit, description, and nullability.
 
@@ -138,7 +154,7 @@ Each request item has a stable `key`, plugin-owned `value`, and optional label;
 Lyra expands `{key}` and `{label}` in the declared column contracts. The runner
 must return the resulting columns in source-array order.
 
-Use `FileOutputV3` for rasters, images, reports, archives, and other artifacts
+Use `FileOutputV4` for rasters, images, reports, archives, and other artifacts
 that should be downloaded rather than represented as per-feature scalars.
 Independent parameter sweeps should normally be separate jobs; outputs with
 different meaning, units, audiences, or runtime behavior should be separate
@@ -171,10 +187,10 @@ that do not use the database.
 
 ## Generated manifest
 
-Manifest schema v3 contains plugin identity, metric identity, compact semantic
-inputs, output declarations, and the registry entrypoint. Generation reads
-`[project]` and `[tool.lyra]` from `pyproject.toml` plus live decorated
-definitions.
+Manifest schema v4 contains plugin identity, metric identity, compact semantic
+inputs, output declarations, and the plugin factory. Generation reads
+`[project]` and `[tool.lyra].factory` from `pyproject.toml` plus the live
+definition returned by the factory.
 
 The compiler rejects extra fields, invalid defaults/examples, duplicate metric
 names, missing spatial inputs, invalid table contracts, and stale artifacts.

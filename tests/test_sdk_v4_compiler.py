@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 from jsonschema.validators import validator_for
 from lyra.sdk.models import (
-    PluginManifestV3,
-    TableOutputV3,
+    PluginManifestV4,
+    TableOutputV4,
     compile_plugin_manifest,
     expand_runner_table_output_columns,
     expand_table_output_columns,
@@ -17,7 +17,6 @@ def _static_metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     metric: dict[str, Any] = {
         "name": "urbanized_area",
         "description": "Compute urbanized area statistics.",
-        "entrypoint": "urban_metrics.runner:run",
         "inputs": {
             "location": {"kind": "location"},
             "year": {
@@ -47,8 +46,9 @@ def _manifest(
     metric_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "urban-metrics", "version": "0.1.0"},
+        "factory": "urban_metrics.plugin:create_plugin",
         "metrics": [_static_metric(metric_overrides)],
     }
 
@@ -93,7 +93,7 @@ def _dynamic_metric() -> dict[str, Any]:
 
 
 def _compile(raw: dict[str, Any]) -> dict[str, Any]:
-    manifest = PluginManifestV3.model_validate(raw)
+    manifest = PluginManifestV4.model_validate(raw)
     return compile_plugin_manifest(manifest).model_dump(mode="json")
 
 
@@ -106,7 +106,7 @@ def _assert_valid_payload(schema: dict[str, Any], payload: dict[str, Any]) -> No
     validator_cls(schema).validate(payload)
 
 
-def test_compile_v3_static_table_metric_request_schema() -> None:
+def test_compile_v4_static_table_metric_request_schema() -> None:
     compiled = _compile(_manifest())
     metric = compiled["metrics"][0]
     schema = metric["request_schema"]
@@ -129,7 +129,7 @@ def test_compile_v3_static_table_metric_request_schema() -> None:
     assert schema["properties"]["location"]["examples"] == [
         {"data_type": "cvegeo_list", "value": ["09002"]}
     ]
-    assert "GeoJSONLocationWrapperV3" in schema["$defs"]
+    assert "GeoJSONLocationWrapperV4" in schema["$defs"]
     assert metric["output"] == {
         "kind": "table",
         "columns": [
@@ -153,7 +153,7 @@ def test_compile_v3_static_table_metric_request_schema() -> None:
     )
 
 
-def test_compile_v3_fractional_area_derivation_and_column_expansion() -> None:
+def test_compile_v4_fractional_area_derivation_and_column_expansion() -> None:
     raw = _manifest()
     raw["metrics"][0]["output"]["columns"][0]["derivations"] = [
         {
@@ -162,10 +162,10 @@ def test_compile_v3_fractional_area_derivation_and_column_expansion() -> None:
             "description": "Fraction of the location that is urbanized.",
         }
     ]
-    manifest = PluginManifestV3.model_validate(raw)
+    manifest = PluginManifestV4.model_validate(raw)
     compiled = compile_plugin_manifest(manifest)
     output = compiled.metrics[0].output
-    assert isinstance(output, TableOutputV3)
+    assert isinstance(output, TableOutputV4)
 
     assert output.model_dump(mode="json")["columns"][0]["derivations"] == [
         {
@@ -184,7 +184,7 @@ def test_compile_v3_fractional_area_derivation_and_column_expansion() -> None:
     assert effective[1].nullable is False
 
 
-def test_compile_v3_optional_nullable_scalar_input() -> None:
+def test_compile_v4_optional_nullable_scalar_input() -> None:
     compiled = _compile(
         _manifest(
             {
@@ -214,8 +214,8 @@ def test_compile_v3_optional_nullable_scalar_input() -> None:
     _assert_valid_json_schema(schema)
 
 
-def test_compile_v3_rejects_invalid_default_against_compiled_schema() -> None:
-    manifest = PluginManifestV3.model_validate(
+def test_compile_v4_rejects_invalid_default_against_compiled_schema() -> None:
+    manifest = PluginManifestV4.model_validate(
         _manifest(
             {
                 "inputs": {
@@ -235,11 +235,12 @@ def test_compile_v3_rejects_invalid_default_against_compiled_schema() -> None:
         compile_plugin_manifest(manifest)
 
 
-def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
+def test_compile_v4_dynamic_table_metric_batch_schema() -> None:
     compiled = _compile(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "plugin": {"name": "accessibility-metrics", "version": "0.1.0"},
+            "factory": "accessibility_metrics.plugin:create_plugin",
             "metrics": [_dynamic_metric()],
         }
     )
@@ -306,7 +307,7 @@ def test_compile_v3_dynamic_table_metric_batch_schema() -> None:
     _assert_valid_json_schema(metric["request_schema"])
 
 
-def test_compile_v3_mixed_static_and_dynamic_table_output() -> None:
+def test_compile_v4_mixed_static_and_dynamic_table_output() -> None:
     metric = _dynamic_metric()
     metric["output"]["columns"] = [
         {
@@ -318,8 +319,9 @@ def test_compile_v3_mixed_static_and_dynamic_table_output() -> None:
     ]
     compiled = _compile(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "plugin": {"name": "accessibility-metrics", "version": "0.1.0"},
+            "factory": "accessibility_metrics.plugin:create_plugin",
             "metrics": [metric],
         }
     )
@@ -349,7 +351,7 @@ def test_compile_v3_mixed_static_and_dynamic_table_output() -> None:
     }
 
 
-def test_compile_v3_file_metric_with_bounds_spatial_schema() -> None:
+def test_compile_v4_file_metric_with_bounds_spatial_schema() -> None:
     compiled = _compile(
         _manifest(
             {
@@ -373,7 +375,7 @@ def test_compile_v3_file_metric_with_bounds_spatial_schema() -> None:
     assert metric["spatial_inputs"] == {"bounds": "bounds"}
     assert metric["batch_inputs"] == []
     assert schema["required"] == ["bounds", "year"]
-    assert "GeoJSONBoundsWrapperV3" in schema["$defs"]
+    assert "GeoJSONBoundsWrapperV4" in schema["$defs"]
     assert schema["properties"]["bounds"]["description"] == (
         "Area used to bound the analysis, supplied through a supported spatial "
         "reference format."
@@ -389,7 +391,7 @@ def test_compile_v3_file_metric_with_bounds_spatial_schema() -> None:
     _assert_valid_json_schema(schema)
 
 
-def test_compile_v3_json_schema_escape_hatch_copies_schema() -> None:
+def test_compile_v4_json_schema_escape_hatch_copies_schema() -> None:
     compiled = _compile(
         _manifest(
             {
@@ -429,8 +431,8 @@ def test_compile_v3_json_schema_escape_hatch_copies_schema() -> None:
     }
 
 
-def test_compile_v3_is_deterministic() -> None:
-    manifest = PluginManifestV3.model_validate(_manifest())
+def test_compile_v4_is_deterministic() -> None:
+    manifest = PluginManifestV4.model_validate(_manifest())
 
     first = compile_plugin_manifest(manifest).model_dump(mode="json")
     second = compile_plugin_manifest(manifest).model_dump(mode="json")

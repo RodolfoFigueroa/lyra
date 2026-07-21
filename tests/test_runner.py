@@ -13,7 +13,7 @@ from lyra.sdk.models import (
     TableJobResult,
     TerminalJobResult,
 )
-from lyra.sdk.models.plugin_v3 import FileOutputV3, TableOutputV3
+from lyra.sdk.models.plugin_v4 import FileOutputV4, TableOutputV4
 from sqlalchemy.exc import OperationalError
 
 from lyra_app.config import clear_config_cache, get_config
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 def _metric(
     *,
     name: str,
-    entrypoint: str,
+    factory: str,
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -65,15 +65,21 @@ def _metric(
                 }
             ],
         },
-        "entrypoint": entrypoint,
+        "_factory": factory,
     }
 
 
 def _manifest(metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    factories = {metric["_factory"] for metric in metrics}
+    assert len(factories) == 1
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "metrics": metrics,
+        "factory": next(iter(factories)),
+        "metrics": [
+            {key: value for key, value in metric.items() if key != "_factory"}
+            for metric in metrics
+        ],
     }
 
 
@@ -114,8 +120,8 @@ def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
     }
 
 
-def _table_output() -> TableOutputV3:
-    return TableOutputV3.model_validate(
+def _table_output() -> TableOutputV4:
+    return TableOutputV4.model_validate(
         {
             "kind": "table",
             "columns": [
@@ -130,8 +136,8 @@ def _table_output() -> TableOutputV3:
     )
 
 
-def _area_output(*, nullable: bool = False) -> TableOutputV3:
-    return TableOutputV3.model_validate(
+def _area_output(*, nullable: bool = False) -> TableOutputV4:
+    return TableOutputV4.model_validate(
         {
             "kind": "table",
             "columns": [
@@ -154,8 +160,8 @@ def _area_output(*, nullable: bool = False) -> TableOutputV3:
     )
 
 
-def _file_output() -> FileOutputV3:
-    return FileOutputV3(
+def _file_output() -> FileOutputV4:
+    return FileOutputV4(
         kind="file",
         media_type="image/tiff",
         extensions=[".tif", ".tiff"],
@@ -253,22 +259,28 @@ def _write_plugin_definition(
     _write_module(
         path,
         module_name,
-        "from lyra.sdk import Input, LocationInput, PluginDefinition, RunContext\n"
-        "from lyra.sdk.models.plugin_v3 import OutputSpecV3\n"
+        "from lyra.sdk import (\n"
+        "    Input, LocationInput, PluginDefinition, RunContext,\n"
+        "    metric as declare_metric,\n"
+        ")\n"
+        "from lyra.sdk.models.plugin_v4 import OutputSpecV4\n"
         "from pydantic import TypeAdapter\n"
         f"declarations = {declarations!r}\n"
-        "plugin = PluginDefinition()\n"
+        "handlers = []\n"
         "for metric_name, description, raw_output in declarations:\n"
-        "    @plugin.metric(\n"
+        "    @declare_metric(\n"
         "        name=metric_name,\n"
         "        description=description,\n"
         "        inputs={'value': Input(description='Example input value.')},\n"
-        "        output=TypeAdapter(OutputSpecV3).validate_python(raw_output),\n"
+        "        output=TypeAdapter(OutputSpecV4).validate_python(raw_output),\n"
         "    )\n"
         "    def metric(\n"
         "        location: LocationInput, value: int, *, context: RunContext\n"
         "    ):\n"
-        "        raise AssertionError('metric should only be imported')\n",
+        "        raise AssertionError('metric should only be imported')\n"
+        "    handlers.append(metric)\n"
+        "def create_plugin():\n"
+        "    return PluginDefinition(metrics=handlers)\n",
     )
 
 
@@ -303,7 +315,8 @@ def _load_smoke_runner_registry(
     installed: list[SyncedPluginRepo] = []
 
     def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
-        sys.modules.pop("smoke_plugin.runner", None)
+        sys.modules.pop("smoke_plugin.metrics", None)
+        sys.modules.pop("smoke_plugin.plugin", None)
         sys.modules.pop("smoke_plugin", None)
         for repo in repos:
             monkeypatch.syspath_prepend(str(repo.path))
@@ -342,8 +355,8 @@ def test_runner_loads_only_configured_queue(
 ) -> None:
     repo = tmp_path / "repo"
     metrics = [
-        _metric(name="light_metric", entrypoint="heavy_plugin:plugin"),
-        _metric(name="heavy_metric", entrypoint="heavy_plugin:plugin"),
+        _metric(name="light_metric", factory="heavy_plugin:create_plugin"),
+        _metric(name="heavy_metric", factory="heavy_plugin:create_plugin"),
     ]
     _write_manifest(repo, _manifest(metrics))
     _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
@@ -354,7 +367,6 @@ def test_runner_loads_only_configured_queue(
 
     assert list(entries) == ["heavy_metric"]
     assert entries["heavy_metric"].queue == "heavy"
-    assert entries["heavy_metric"].entrypoint == "heavy_plugin:plugin"
 
 
 def test_runner_syncs_enabled_state_repos_only(
@@ -416,7 +428,7 @@ def test_runner_loads_repo_and_routing_from_plugin_state(
     )
     store.set_metric_queue("heavy_metric", "heavy", repo_id="runner-plugin")
     repo = tmp_path / "repo"
-    metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
+    metrics = [_metric(name="heavy_metric", factory="heavy_plugin:create_plugin")]
     _write_manifest(repo, _manifest(metrics))
     _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -453,7 +465,7 @@ def test_runner_loads_directory_source_from_copied_snapshot(
     worker_module: ModuleType,
 ) -> None:
     source = tmp_path / "directory-plugin"
-    metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
+    metrics = [_metric(name="heavy_metric", factory="heavy_plugin:create_plugin")]
     _write_manifest(source, _manifest(metrics))
     _write_plugin_definition(source, "heavy_plugin", metrics)
     store = plugin_state_store(tmp_path, get_config())
@@ -504,11 +516,11 @@ def test_runner_loads_smoke_directory_fixture_from_copied_snapshot(
         "smoke_file_metric",
         "smoke_table_metric",
     ]
-    runner_file = sys.modules["smoke_plugin.runner"].__file__
-    assert runner_file is not None
-    runner_path = Path(runner_file).resolve()
-    assert runner_path.is_relative_to(synced.path.resolve())
-    assert not runner_path.is_relative_to(SMOKE_PLUGIN_DIR.resolve())
+    plugin_file = sys.modules["smoke_plugin.plugin"].__file__
+    assert plugin_file is not None
+    plugin_path = Path(plugin_file).resolve()
+    assert plugin_path.is_relative_to(synced.path.resolve())
+    assert not plugin_path.is_relative_to(SMOKE_PLUGIN_DIR.resolve())
 
 
 def test_runner_uses_configured_worker_temp_dir(
@@ -530,7 +542,7 @@ def test_runner_uses_configured_worker_temp_dir(
         update={"workers": {**config.workers, "heavy": heavy_worker}},
     )
     repo = tmp_path / "repo"
-    metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
+    metrics = [_metric(name="heavy_metric", factory="heavy_plugin:create_plugin")]
     _write_manifest(repo, _manifest(metrics))
     _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -583,7 +595,7 @@ def test_runner_fails_when_metric_queue_assignment_is_missing(
             [
                 _metric(
                     name="heavy_metric",
-                    entrypoint="heavy_plugin:run",
+                    factory="heavy_plugin:run",
                 )
             ]
         ),
@@ -592,7 +604,7 @@ def test_runner_fails_when_metric_queue_assignment_is_missing(
         tmp_path,
         "heavy_plugin",
         "def run(job, context):\n"
-        "    raise AssertionError('entrypoint should only be imported')\n",
+        "    raise AssertionError('factory should only be imported')\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     _configure_runner_repos(worker_module, monkeypatch, repo)
@@ -601,19 +613,19 @@ def test_runner_fails_when_metric_queue_assignment_is_missing(
         worker_module.refresh_runner_registry("heavy")
 
 
-def test_runner_rejects_raw_function_entrypoint(
+def test_runner_rejects_raw_function_factory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
     repo = tmp_path / "repo"
-    metrics = [_metric(name="heavy_metric", entrypoint="raw_plugin:run")]
+    metrics = [_metric(name="heavy_metric", factory="raw_plugin:run")]
     _write_manifest(repo, _manifest(metrics))
     _write_module(tmp_path, "raw_plugin", "def run(job, context):\n    return None\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     _configure_runner_repos(worker_module, monkeypatch, repo)
 
-    with pytest.raises(TypeError, match="PluginDefinition"):
+    with pytest.raises(RuntimeError, match="must declare no parameters"):
         worker_module.refresh_runner_registry("heavy")
 
 
@@ -623,7 +635,7 @@ def test_runner_rejects_stale_generated_manifest(
     worker_module: ModuleType,
 ) -> None:
     repo = tmp_path / "repo"
-    live_metrics = [_metric(name="heavy_metric", entrypoint="stale_plugin:plugin")]
+    live_metrics = [_metric(name="heavy_metric", factory="stale_plugin:create_plugin")]
     manifest_metrics = [
         {
             **live_metrics[0],
@@ -639,7 +651,7 @@ def test_runner_rejects_stale_generated_manifest(
         worker_module.refresh_runner_registry("heavy")
 
 
-def test_generic_task_executes_entrypoint_and_persists_result(
+def test_generic_task_executes_factory_and_persists_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
@@ -651,7 +663,7 @@ def test_generic_task_executes_entrypoint_and_persists_result(
             [
                 _metric(
                     name="heavy_metric",
-                    entrypoint="success_plugin:plugin",
+                    factory="success_plugin:create_plugin",
                 )
             ]
         ),
@@ -659,17 +671,18 @@ def test_generic_task_executes_entrypoint_and_persists_result(
     _write_module(
         tmp_path,
         "success_plugin",
-        "from lyra.sdk import Input, LocationInput, PluginDefinition, RunContext\n"
+        "from lyra.sdk import (\n"
+        "    Input, LocationInput, PluginDefinition, RunContext, metric,\n"
+        ")\n"
         "from lyra.sdk.models import TableJobResult\n"
-        "from lyra.sdk.models.plugin_v3 import TableOutputColumnV3, TableOutputV3\n"
-        "plugin = PluginDefinition()\n"
-        "@plugin.metric(\n"
+        "from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4\n"
+        "@metric(\n"
         "    name='heavy_metric',\n"
         "    description='heavy_metric metric.',\n"
         "    inputs={'value': Input(description='Example input value.')},\n"
-        "    output=TableOutputV3(\n"
+        "    output=TableOutputV4(\n"
         "        kind='table',\n"
-        "        columns=[TableOutputColumnV3(\n"
+        "        columns=[TableOutputColumnV4(\n"
         "            name='value', type='integer', unit='count',\n"
         "            description='Example output value.',\n"
         "        )],\n"
@@ -684,7 +697,9 @@ def test_generic_task_executes_entrypoint_and_persists_result(
         "        index=['area-1'],\n"
         "        columns=['value'],\n"
         "        data=[[value * 2]],\n"
-        "    )\n",
+        "    )\n"
+        "def create_plugin():\n"
+        "    return PluginDefinition(metrics=[run])\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     _configure_runner_repos(worker_module, monkeypatch, repo)
@@ -823,7 +838,6 @@ def test_plugin_exception_persists_failed_result(
     worker_module.RUNNER_REGISTRY["bad_metric"] = worker_module.RunnerMetricEntry(
         metric_name="bad_metric",
         queue="heavy",
-        entrypoint="bad_plugin:run",
         output=_table_output(),
         run=fail,
     )
@@ -852,7 +866,6 @@ def test_database_exception_persists_retryable_failed_result(
     worker_module.RUNNER_REGISTRY["database_metric"] = worker_module.RunnerMetricEntry(
         metric_name="database_metric",
         queue="heavy",
-        entrypoint="database_plugin:run",
         output=_table_output(),
         run=fail,
     )
@@ -899,7 +912,6 @@ def test_invalid_plugin_result_persists_failed_result(
     worker_module.RUNNER_REGISTRY["invalid_metric"] = worker_module.RunnerMetricEntry(
         metric_name="invalid_metric",
         queue="heavy",
-        entrypoint="invalid_plugin:run",
         output=_table_output(),
         run=run,
     )
@@ -958,7 +970,6 @@ def test_invalid_table_result_persists_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="invalid_table_metric",
             queue="heavy",
-            entrypoint="invalid_table_plugin:run",
             output=_table_output(),
             run=run,
         )
@@ -997,7 +1008,6 @@ def test_worker_appends_fractional_area_column(
     worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
         metric_name="area_metric",
         queue="heavy",
-        entrypoint="area_plugin:run",
         output=_area_output(),
         run=run,
     )
@@ -1034,7 +1044,6 @@ def test_worker_normalizes_fraction_within_range_tolerance(
     worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
         metric_name="area_metric",
         queue="heavy",
-        entrypoint="area_plugin:run",
         output=_area_output(),
         run=run,
     )
@@ -1072,7 +1081,6 @@ def test_worker_rejects_fraction_outside_unit_interval(
     worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
         metric_name="area_metric",
         queue="heavy",
-        entrypoint="area_plugin:run",
         output=_area_output(),
         run=run,
     )
@@ -1109,7 +1117,6 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
         metric_name="area_metric",
         queue="heavy",
-        entrypoint="area_plugin:run",
         output=_area_output(nullable=True),
         run=run,
     )
@@ -1158,7 +1165,6 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="duplicate_location_metric",
             queue="heavy",
-            entrypoint="duplicate_location_plugin:run",
             output=_table_output(),
             run=run,
         )
@@ -1210,7 +1216,6 @@ def test_file_result_persists_through_generic_result_path(
     worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntry(
         metric_name="file_metric",
         queue="heavy",
-        entrypoint="file_plugin:run",
         output=_file_output(),
         run=run,
     )
@@ -1293,7 +1298,6 @@ def test_invalid_file_result_persists_failed_result(
         worker_module.RunnerMetricEntry(
             metric_name="invalid_file_metric",
             queue="heavy",
-            entrypoint="invalid_file_plugin:run",
             output=_file_output(),
             run=run,
         )
@@ -1330,7 +1334,6 @@ def test_check_cancelled_persists_cancelled_result(
     worker_module.RUNNER_REGISTRY["cancel_metric"] = worker_module.RunnerMetricEntry(
         metric_name="cancel_metric",
         queue="heavy",
-        entrypoint="cancel_plugin:run",
         output=_table_output(),
         run=run,
     )

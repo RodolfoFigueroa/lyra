@@ -13,7 +13,7 @@ Before publishing:
 
 - make the repository an installable Python package;
 - declare every directly imported dependency;
-- configure `[tool.lyra].plugin` inside the installed package;
+- configure `[tool.lyra].factory` inside the installed package;
 - generate and commit `lyra.plugin.json`;
 - unit-test decorated functions with typed arguments and a fake `RunContext`;
 - test at least one registry-adapter call with a resolved envelope;

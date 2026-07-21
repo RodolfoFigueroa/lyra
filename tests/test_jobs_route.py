@@ -38,8 +38,9 @@ ReturnT = TypeVar("ReturnT")
 
 def _manifest() -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+        "factory": "fake_plugin.plugin:create_plugin",
         "metrics": [
             {
                 "name": "heavy_metric",
@@ -59,7 +60,6 @@ def _manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "entrypoint": "fake_plugin.runner:run",
             }
         ],
     }
@@ -67,8 +67,9 @@ def _manifest() -> dict[str, Any]:
 
 def _batched_manifest() -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
+        "factory": "fake_plugin.plugin:create_plugin",
         "metrics": [
             {
                 "name": "batched_metric",
@@ -93,7 +94,6 @@ def _batched_manifest() -> dict[str, Any]:
                         }
                     ],
                 },
-                "entrypoint": "fake_plugin.runner:run",
             }
         ],
     }

@@ -3,8 +3,9 @@ from __future__ import annotations
 import inspect
 import json
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -24,23 +25,23 @@ from typing import (
 
 from lyra.sdk.context import RunContext
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
-from lyra.sdk.models.plugin_v3 import (
-    BatchInputV3,
-    BooleanInputV3,
-    BoundsInputV3,
-    CompiledPluginManifestV3,
-    EnumInputV3,
-    InputSpecV3,
-    IntegerInputV3,
-    JsonSchemaInputV3,
-    LocationInputV3,
-    MetricManifestV3,
-    NumberInputV3,
-    OutputSpecV3,
-    PluginInfoV3,
-    PluginManifestV3,
-    PluginOwnedInputSpecV3,
-    StringInputV3,
+from lyra.sdk.models.plugin_v4 import (
+    BatchInputV4,
+    BooleanInputV4,
+    BoundsInputV4,
+    CompiledPluginManifestV4,
+    EnumInputV4,
+    InputSpecV4,
+    IntegerInputV4,
+    JsonSchemaInputV4,
+    LocationInputV4,
+    MetricManifestV4,
+    NumberInputV4,
+    OutputSpecV4,
+    PluginInfoV4,
+    PluginManifestV4,
+    PluginOwnedInputSpecV4,
+    StringInputV4,
     compile_plugin_manifest,
 )
 from lyra.sdk.models.strict import StrictBaseModel
@@ -139,8 +140,8 @@ class MetricDescription(StrictBaseModel):
     description: str
     handler: str
     signature: str
-    inputs: dict[str, InputSpecV3]
-    output: OutputSpecV3
+    inputs: dict[str, InputSpecV4]
+    output: OutputSpecV4
 
 
 @dataclass(frozen=True)
@@ -152,14 +153,14 @@ class _MetricParameter:
 
 
 @dataclass(frozen=True)
-class MetricDefinition(Generic[ResultT]):
+class _MetricDefinition(Generic[ResultT]):
     """One registered metric and its resolved-input runtime adapter."""
 
     name: str
     description: str
-    output: OutputSpecV3
+    output: OutputSpecV4
     function: Callable[..., ResultT]
-    inputs: dict[str, InputSpecV3]
+    inputs: dict[str, InputSpecV4]
     parameters: tuple[_MetricParameter, ...]
     accepts_context: bool
 
@@ -179,11 +180,10 @@ class MetricDefinition(Generic[ResultT]):
             output=self.output,
         )
 
-    def manifest_metric(self, entrypoint: str) -> MetricManifestV3:
-        return MetricManifestV3(
+    def manifest_metric(self) -> MetricManifestV4:
+        return MetricManifestV4(
             name=self.name,
             description=self.description,
-            entrypoint=entrypoint,
             inputs=self.inputs,
             output=self.output,
         )
@@ -229,42 +229,65 @@ class MetricDefinition(Generic[ResultT]):
         return self.function(**kwargs)
 
 
-class PluginDefinition:
-    """Registry for typed metric functions and worker-side job dispatch."""
+_METRIC_DEFINITION_ATTRIBUTE = "__lyra_metric_definition__"
 
-    def __init__(self) -> None:
-        self._metrics: dict[str, MetricDefinition[Any]] = {}
+
+def metric(
+    *,
+    name: str,
+    description: str,
+    output: OutputSpecV4,
+    inputs: Mapping[str, Input | BatchInput] | None = None,
+) -> Callable[[Callable[..., ResultT]], Callable[..., ResultT]]:
+    """Declare a typed metric while returning its function unchanged."""
+
+    def decorator(function: Callable[..., ResultT]) -> Callable[..., ResultT]:
+        if hasattr(function, _METRIC_DEFINITION_ATTRIBUTE):
+            signature = _format_function_signature(function)
+            msg = f"Metric handler {signature} is already decorated"
+            raise PluginDefinitionError(msg)
+        definition = _build_metric_definition(
+            name=name,
+            description=description,
+            output=output,
+            function=function,
+            input_declarations=dict(inputs or {}),
+        )
+        definition.manifest_metric()
+        setattr(function, _METRIC_DEFINITION_ATTRIBUTE, definition)
+        return function
+
+    return decorator
+
+
+class PluginDefinition:
+    """Immutable collection of typed metric functions and runtime dispatcher."""
+
+    def __init__(self, *, metrics: Sequence[Callable[..., Any]]) -> None:
+        if not metrics:
+            msg = (
+                "PluginDefinition requires at least one decorated metric. "
+                "Lyra does not scan sibling modules; import and pass each decorated "
+                "handler explicitly."
+            )
+            raise PluginDefinitionError(msg)
+
+        definitions: dict[str, _MetricDefinition[Any]] = {}
+        for function in metrics:
+            definition = getattr(function, _METRIC_DEFINITION_ATTRIBUTE, None)
+            if not isinstance(definition, _MetricDefinition):
+                handler = getattr(function, "__qualname__", repr(function))
+                msg = f"PluginDefinition metric handler {handler!r} is not decorated"
+                raise PluginDefinitionError(msg)
+            if definition.name in definitions:
+                msg = f"Duplicate metric name in PluginDefinition: {definition.name!r}"
+                raise PluginDefinitionError(msg)
+            definitions[definition.name] = definition
+        self._metrics = MappingProxyType(definitions)
 
     @property
     def metric_names(self) -> tuple[str, ...]:
         return tuple(self._metrics)
-
-    def metric(
-        self,
-        *,
-        name: str,
-        description: str,
-        output: OutputSpecV3,
-        inputs: Mapping[str, Input | BatchInput] | None = None,
-    ) -> Callable[[Callable[..., ResultT]], Callable[..., ResultT]]:
-        """Register a typed metric while returning its function unchanged."""
-
-        def decorator(function: Callable[..., ResultT]) -> Callable[..., ResultT]:
-            if name in self._metrics:
-                msg = f"Duplicate metric name in PluginDefinition: {name!r}"
-                raise PluginDefinitionError(msg)
-            definition = _build_metric_definition(
-                name=name,
-                description=description,
-                output=output,
-                function=function,
-                input_declarations=dict(inputs or {}),
-            )
-            definition.manifest_metric("lyra_plugin:plugin")
-            self._metrics[name] = definition
-            return function
-
-        return decorator
 
     def describe(self, name: str) -> MetricDescription:
         """Return structured authoring information for one registered metric."""
@@ -280,30 +303,25 @@ class PluginDefinition:
     def manifest(
         self,
         *,
-        plugin: PluginInfoV3,
-        entrypoint: str,
-    ) -> PluginManifestV3:
-        if not self._metrics:
-            msg = "PluginDefinition must register at least one metric"
-            raise PluginDefinitionError(msg)
-        return PluginManifestV3(
-            schema_version=3,
+        plugin: PluginInfoV4,
+        factory: str,
+    ) -> PluginManifestV4:
+        return PluginManifestV4(
+            schema_version=4,
             plugin=plugin,
+            factory=factory,
             metrics=[
-                definition.manifest_metric(entrypoint)
-                for definition in self._metrics.values()
+                definition.manifest_metric() for definition in self._metrics.values()
             ],
         )
 
     def compiled_manifest(
         self,
         *,
-        plugin: PluginInfoV3,
-        entrypoint: str,
-    ) -> CompiledPluginManifestV3:
-        return compile_plugin_manifest(
-            self.manifest(plugin=plugin, entrypoint=entrypoint)
-        )
+        plugin: PluginInfoV4,
+        factory: str,
+    ) -> CompiledPluginManifestV4:
+        return compile_plugin_manifest(self.manifest(plugin=plugin, factory=factory))
 
     def __call__(self, job: JobEnvelope, context: RunContext) -> PluginResult:
         try:
@@ -374,7 +392,7 @@ def _normal_input_spec(
     annotation: PythonAnnotation,
     *,
     default: JsonValue | type,
-) -> PluginOwnedInputSpecV3:
+) -> PluginOwnedInputSpecV4:
     annotation, nullable = _split_nullable(annotation)
     schema = TypeAdapter(annotation).json_schema()
     if not schema:
@@ -414,35 +432,35 @@ def _normal_input_spec(
             )
             if key in schema_without_metadata
         }
-        return StringInputV3.model_validate({"kind": "string", **constraints, **common})
+        return StringInputV4.model_validate({"kind": "string", **constraints, **common})
     if schema_type == "number" and keys <= {"type", "minimum", "maximum"}:
         constraints = {
             key: schema_without_metadata[key]
             for key in ("minimum", "maximum")
             if key in schema_without_metadata
         }
-        return NumberInputV3.model_validate({"kind": "number", **constraints, **common})
+        return NumberInputV4.model_validate({"kind": "number", **constraints, **common})
     if schema_type == "integer" and keys <= {"type", "minimum", "maximum"}:
         constraints = {
             key: schema_without_metadata[key]
             for key in ("minimum", "maximum")
             if key in schema_without_metadata
         }
-        return IntegerInputV3.model_validate(
+        return IntegerInputV4.model_validate(
             {"kind": "integer", **constraints, **common}
         )
     if schema_type == "boolean" and keys == {"type"}:
-        return BooleanInputV3(kind="boolean", **common)
+        return BooleanInputV4(kind="boolean", **common)
     if isinstance(schema_without_metadata.get("enum"), list) and keys <= {
         "enum",
         "type",
     }:
-        return EnumInputV3(
+        return EnumInputV4(
             kind="enum",
             values=schema_without_metadata["enum"],
             **common,
         )
-    return JsonSchemaInputV3(
+    return JsonSchemaInputV4(
         kind="json_schema",
         schema=schema_without_metadata,
         **common,
@@ -498,7 +516,7 @@ def _reject_field_metadata(annotation: PythonAnnotation, *, location: str) -> No
     if any(isinstance(value, FieldInfo) for value in metadata):
         msg = (
             f"{location} contains Field metadata; move descriptions, examples, "
-            "and constraints to the @plugin.metric inputs mapping"
+            "and constraints to the @metric inputs mapping"
         )
         raise PluginDefinitionError(msg)
 
@@ -508,7 +526,7 @@ def _input_spec(
     *,
     declaration: Input | BatchInput | None,
     default: JsonValue | type,
-) -> tuple[InputSpecV3, BatchInput | None, PythonAnnotation]:
+) -> tuple[InputSpecV4, BatchInput | None, PythonAnnotation]:
     _reject_field_metadata(annotation, location="metric input annotation")
     spatial = _spatial_marker(annotation)
 
@@ -520,8 +538,8 @@ def _input_spec(
             msg = "spatial metric inputs cannot define defaults"
             raise PluginDefinitionError(msg)
         if spatial.kind == "location":
-            return LocationInputV3(kind="location"), None, annotation
-        return BoundsInputV3(kind="bounds"), None, annotation
+            return LocationInputV4(kind="location"), None, annotation
+        return BoundsInputV4(kind="bounds"), None, annotation
 
     if isinstance(declaration, BatchInput):
         if default is not _MISSING:
@@ -545,7 +563,7 @@ def _input_spec(
             default=_MISSING,
         )
         return (
-            BatchInputV3(
+            BatchInputV4(
                 kind="batch",
                 max_items=declaration.max_items,
                 value=value_spec,
@@ -579,10 +597,10 @@ def _build_metric_definition(
     *,
     name: str,
     description: str,
-    output: OutputSpecV3,
+    output: OutputSpecV4,
     function: Callable[..., ResultT],
     input_declarations: dict[str, Input | BatchInput],
-) -> MetricDefinition[ResultT]:
+) -> _MetricDefinition[ResultT]:
     signature = inspect.signature(function)
     try:
         hints = get_type_hints(function, include_extras=True)
@@ -602,7 +620,7 @@ def _build_metric_definition(
         input_declarations=input_declarations,
     )
 
-    inputs: dict[str, InputSpecV3] = {}
+    inputs: dict[str, InputSpecV4] = {}
     parameters: list[_MetricParameter] = []
     accepts_context = False
     for parameter, annotation in resolved_parameters:
@@ -635,7 +653,7 @@ def _build_metric_definition(
             )
         )
 
-    return MetricDefinition(
+    return _MetricDefinition(
         name=name,
         description=description,
         output=output,
@@ -802,8 +820,8 @@ __all__ = [
     "BoundsInput",
     "Input",
     "LocationInput",
-    "MetricDefinition",
     "MetricDescription",
     "PluginDefinition",
     "PluginDefinitionError",
+    "metric",
 ]

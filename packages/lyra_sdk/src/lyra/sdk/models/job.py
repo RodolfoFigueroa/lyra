@@ -15,11 +15,11 @@ from typing import (
     Unpack,
 )
 
-from lyra.sdk.models.plugin_v3 import (
-    OutputSpecV3,
-    PluginInfoV3,
-    TableOutputColumnV3,
-    TableOutputV3,
+from lyra.sdk.models.plugin_v4 import (
+    OutputSpecV4,
+    PluginInfoV4,
+    TableOutputColumnV4,
+    TableOutputV4,
     expand_table_output_columns,
 )
 from lyra.sdk.models.strict import StrictBaseModel
@@ -95,11 +95,11 @@ class JobRunProvenance(StrictBaseModel):
         min_length=1,
         description="Public catalog fingerprint used to validate the submission.",
     )
-    plugin: PluginInfoV3 = Field(description="Plugin identity used for the run.")
+    plugin: PluginInfoV4 = Field(description="Plugin identity used for the run.")
     input: dict[str, Any] = Field(
         description="Validated unresolved public request submitted by the client.",
     )
-    output: OutputSpecV3 = Field(
+    output: OutputSpecV4 = Field(
         description="Metric output declaration used to validate the run.",
     )
     created_at: datetime = Field(description="UTC timestamp when the job was created.")
@@ -442,7 +442,7 @@ class ResultTableMetadata(StrictBaseModel):
     row_count: int = Field(ge=0, description="Total number of rows in the table.")
     column_count: int = Field(ge=0, description="Total number of table columns.")
     columns: list[str] = Field(description="Ordered table column names.")
-    column_contracts: list[TableOutputColumnV3] = Field(
+    column_contracts: list[TableOutputColumnV4] = Field(
         description=(
             "Ordered concrete column contracts captured for this result table."
         ),
@@ -595,7 +595,7 @@ class ResultDescriptor(StrictBaseModel):
                 msg = "table results must include table metadata"
                 raise ValueError(msg)
             if self.provenance is not None:
-                if not isinstance(self.provenance.output, TableOutputV3):
+                if not isinstance(self.provenance.output, TableOutputV4):
                     msg = "table result provenance must declare a table output"
                     raise ValueError(msg)
                 if not self.table.column_contracts:
@@ -728,10 +728,10 @@ def build_result_descriptor(
     resolved_lifetime = lifetime or ResultLifetime()
 
     if isinstance(result, TableJobResult):
-        column_contracts: list[TableOutputColumnV3] = []
+        column_contracts: list[TableOutputColumnV4] = []
         row_identity: RowIdentityMetadata | None = None
         if provenance is not None:
-            if not isinstance(provenance.output, TableOutputV3):
+            if not isinstance(provenance.output, TableOutputV4):
                 msg = "table result provenance must declare a table output"
                 raise ValueError(msg)
             column_contracts = expand_table_output_columns(

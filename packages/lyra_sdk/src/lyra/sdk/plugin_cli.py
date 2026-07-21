@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import difflib
-import importlib
 import json
 import os
 import sys
@@ -11,20 +10,22 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lyra.sdk.models.plugin_v3 import (
-    BatchInputV3,
-    FileOutputV3,
-    InputSpecV3,
-    OutputSpecV3,
-    PluginInfoV3,
-    PluginOwnedInputMetadataV3,
-    TableOutputV3,
+from lyra.sdk.models.plugin_v4 import (
+    BatchInputV4,
+    FileOutputV4,
+    InputSpecV4,
+    OutputSpecV4,
+    PluginInfoV4,
+    PluginOwnedInputMetadataV4,
+    TableOutputV4,
     compile_plugin_manifest,
 )
-from lyra.sdk.plugin import MetricDescription, PluginDefinition
+from lyra.sdk.plugin_loader import PluginLoadError, load_plugin_definition
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from lyra.sdk.plugin import MetricDescription, PluginDefinition
 
 MANIFEST_FILENAME = "lyra.plugin.json"
 
@@ -56,44 +57,35 @@ def _project_configuration(project_root: Path) -> tuple[str, str, str]:
 
     tool = payload.get("tool")
     lyra = tool.get("lyra") if isinstance(tool, dict) else None
-    entrypoint = lyra.get("plugin") if isinstance(lyra, dict) else None
-    if not isinstance(entrypoint, str) or not entrypoint:
-        msg = "pyproject.toml must define [tool.lyra].plugin as 'module:object'"
+    factory = lyra.get("factory") if isinstance(lyra, dict) else None
+    if not isinstance(factory, str) or not factory:
+        msg = "pyproject.toml must define [tool.lyra].factory as 'module:attribute'"
         raise PluginBuildError(msg)
-    return name, version, entrypoint
+    return name, version, factory
 
 
-def _load_definition(project_root: Path, entrypoint: str) -> PluginDefinition:
-    module_name, separator, object_name = entrypoint.partition(":")
-    if not separator or not module_name or not object_name:
-        msg = f"Plugin entrypoint must use 'module:object' format: {entrypoint!r}"
-        raise PluginBuildError(msg)
-
+def _load_definition(project_root: Path, factory: str) -> PluginDefinition:
     import_paths = [project_root, project_root / "src"]
     for import_path in reversed(import_paths):
         path = str(import_path)
         if import_path.is_dir() and path not in sys.path:
             sys.path.insert(0, path)
     try:
-        value = getattr(importlib.import_module(module_name), object_name)
-    except (ImportError, AttributeError) as exc:
-        msg = f"Could not import plugin definition {entrypoint!r}: {exc}"
+        return load_plugin_definition(factory)
+    except PluginLoadError as exc:
+        msg = str(exc)
         raise PluginBuildError(msg) from exc
-    if not isinstance(value, PluginDefinition):
-        msg = f"Plugin entrypoint {entrypoint!r} must resolve to PluginDefinition"
-        raise PluginBuildError(msg)
-    return value
 
 
 def render_manifest(project_root: Path) -> str:
     """Build the canonical manifest text for one plugin project."""
 
     project_root = project_root.resolve()
-    name, version, entrypoint = _project_configuration(project_root)
-    definition = _load_definition(project_root, entrypoint)
+    name, version, factory = _project_configuration(project_root)
+    definition = _load_definition(project_root, factory)
     manifest = definition.manifest(
-        plugin=PluginInfoV3(name=name, version=version),
-        entrypoint=entrypoint,
+        plugin=PluginInfoV4(name=name, version=version),
+        factory=factory,
     )
     compile_plugin_manifest(manifest)
     return (
@@ -159,8 +151,8 @@ def describe_plugin(
     """Load and describe one or all metrics in a plugin project."""
 
     project_root = project_root.resolve()
-    _name, _version, entrypoint = _project_configuration(project_root)
-    definition = _load_definition(project_root, entrypoint)
+    _name, _version, factory = _project_configuration(project_root)
+    definition = _load_definition(project_root, factory)
     names = definition.metric_names if metric_name is None else (metric_name,)
     return [definition.describe(name) for name in names]
 
@@ -236,8 +228,8 @@ def _render_table(
     ]
 
 
-def _input_requirement(input_spec: InputSpecV3) -> str:
-    if not isinstance(input_spec, PluginOwnedInputMetadataV3):
+def _input_requirement(input_spec: InputSpecV4) -> str:
+    if not isinstance(input_spec, PluginOwnedInputMetadataV4):
         return "required"
     if input_spec.required:
         return "required"
@@ -246,8 +238,8 @@ def _input_requirement(input_spec: InputSpecV3) -> str:
     return "optional"
 
 
-def _input_description(input_spec: InputSpecV3) -> str:
-    if isinstance(input_spec, BatchInputV3):
+def _input_description(input_spec: InputSpecV4) -> str:
+    if isinstance(input_spec, BatchInputV4):
         return input_spec.value.description or ""
     description = getattr(input_spec, "description", None)
     if isinstance(description, str):
@@ -257,8 +249,8 @@ def _input_description(input_spec: InputSpecV3) -> str:
     return "Lyra-resolved bounds."
 
 
-def _input_details(input_spec: InputSpecV3) -> str:
-    if isinstance(input_spec, BatchInputV3):
+def _input_details(input_spec: InputSpecV4) -> str:
+    if isinstance(input_spec, BatchInputV4):
         labels = "allowed" if input_spec.label else "disabled"
         return (
             f"items={input_spec.value.kind}, max_items={input_spec.max_items}, "
@@ -300,13 +292,13 @@ def _input_details(input_spec: InputSpecV3) -> str:
     return ", ".join(details) or "—"
 
 
-def _output_summary(output: OutputSpecV3) -> str:
-    if isinstance(output, TableOutputV3):
+def _output_summary(output: OutputSpecV4) -> str:
+    if isinstance(output, TableOutputV4):
         return (
             f"table ({len(output.columns)} static column(s), "
             f"{len(output.batched_columns)} batched column group(s))"
         )
-    if isinstance(output, FileOutputV3):
+    if isinstance(output, FileOutputV4):
         extensions = ", ".join(output.extensions)
         return f"file ({output.media_type}; {extensions})"
     return str(output.kind)

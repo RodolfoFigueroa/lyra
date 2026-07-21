@@ -20,10 +20,11 @@ examples/lyra-plugin/
   lyra.plugin.json
   smoke_plugin/
     __init__.py
-    runner.py
+    metrics.py
+    plugin.py
 ```
 
-Its project metadata declares the SDK and the one registry workers import:
+Its project metadata declares the SDK and the zero-argument factory workers load:
 
 <CodeExample path="examples/lyra-plugin/pyproject.toml" lang="toml" />
 
@@ -34,7 +35,7 @@ mapping to produce manifest inputs. The output declaration describes the
 successful result:
 
 <CodeExample
-  path="examples/lyra-plugin/smoke_plugin/runner.py"
+  path="examples/lyra-plugin/smoke_plugin/metrics.py"
   region="table-metric"
   lang="python"
 />
@@ -42,6 +43,11 @@ successful result:
 The decorated function remains directly callable in unit tests. At runtime the
 registry validates resolved input, constructs typed arguments, injects
 `RunContext`, calls the function, and validates its result.
+
+The factory is the explicit composition root. It imports every decorated metric
+and returns an immutable definition; Lyra never scans sibling modules:
+
+<CodeExample path="examples/lyra-plugin/smoke_plugin/plugin.py" lang="python" />
 
 ## Generate the manifest
 
@@ -62,7 +68,7 @@ Test the decorated function and manifest before publishing:
 ```bash
 uv run lyra-plugin check-manifest
 uv run lyra-plugin describe
-uv run python -c "from smoke_plugin.runner import plugin; print(plugin.metric_names)"
+uv run python -c "from smoke_plugin.plugin import create_plugin; print(create_plugin().metric_names)"
 uv run pytest
 ```
 

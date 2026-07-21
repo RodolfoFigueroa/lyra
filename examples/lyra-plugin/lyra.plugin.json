@@ -1,14 +1,14 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "plugin": {
     "name": "lyra-smoke-plugin",
     "version": "0.1.0"
   },
+  "factory": "smoke_plugin.plugin:create_plugin",
   "metrics": [
     {
       "name": "smoke_table_metric",
       "description": "Return the submitted value for each input feature.",
-      "entrypoint": "smoke_plugin.runner:plugin",
       "inputs": {
         "location": {
           "kind": "location"
@@ -33,7 +33,6 @@
     {
       "name": "smoke_file_metric",
       "description": "Write a small text artifact for the submitted features.",
-      "entrypoint": "smoke_plugin.runner:plugin",
       "inputs": {
         "location": {
           "kind": "location"
@@ -50,7 +49,6 @@
     {
       "name": "smoke_cancel_metric",
       "description": "Emit progress and observe cancellation before returning.",
-      "entrypoint": "smoke_plugin.runner:plugin",
       "inputs": {
         "location": {
           "kind": "location"

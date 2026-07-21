@@ -60,10 +60,10 @@ from lyra.sdk.plugin import (
     BoundsInput,
     Input,
     LocationInput,
-    MetricDefinition,
     MetricDescription,
     PluginDefinition,
     PluginDefinitionError,
+    metric,
 )
 
 __all__ = [
@@ -96,7 +96,6 @@ __all__ = [
     "LyraDB",
     "MetZoneCodeResponse",
     "MetricCatalogResponse",
-    "MetricDefinition",
     "MetricDescription",
     "MetricQueueAssignmentResponse",
     "PluginCatalogRefreshResponse",
@@ -128,6 +127,7 @@ __all__ = [
     "build_table_summary",
     "expand_runner_table_output_columns",
     "expand_table_output_columns",
+    "metric",
     "parse_job_result",
     "result_ref_for_job",
 ]

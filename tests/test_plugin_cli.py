@@ -29,26 +29,24 @@ name = "example-plugin"
 version = "1.2.3"
 
 [tool.lyra]
-plugin = "example_plugin:plugin"
+factory = "example_plugin:create_plugin"
 """.strip()
         + "\n",
         encoding="utf-8",
     )
     (project / "example_plugin.py").write_text(
         """
-from lyra.sdk import Input, LocationInput, PluginDefinition
+from lyra.sdk import Input, LocationInput, PluginDefinition, metric
 from lyra.sdk.models import TableJobResult
-from lyra.sdk.models.plugin_v3 import TableOutputColumnV3, TableOutputV3
+from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4
 
-plugin = PluginDefinition()
-
-@plugin.metric(
+@metric(
     name="example",
     description="Example metric.",
     inputs={"value": Input(description="Example input value.")},
-    output=TableOutputV3(
+    output=TableOutputV4(
         kind="table",
-        columns=[TableOutputColumnV3(
+        columns=[TableOutputColumnV4(
             name="value",
             type="integer",
             unit="count",
@@ -58,6 +56,9 @@ plugin = PluginDefinition()
 )
 def calculate(location: LocationInput, value: int = 2) -> TableJobResult:
     raise AssertionError
+
+def create_plugin() -> PluginDefinition:
+    return PluginDefinition(metrics=[calculate])
 """.lstrip(),
         encoding="utf-8",
     )
@@ -75,7 +76,8 @@ def test_build_and_check_manifest_are_deterministic(tmp_path: Path) -> None:
     assert first.endswith("\n")
     payload = json.loads(first)
     assert payload["plugin"] == {"name": "example-plugin", "version": "1.2.3"}
-    assert payload["metrics"][0]["entrypoint"] == "example_plugin:plugin"
+    assert payload["factory"] == "example_plugin:create_plugin"
+    assert "entrypoint" not in payload["metrics"][0]
     assert check_manifest(tmp_path) == (True, "")
 
     manifest_path.write_text("{}\n", encoding="utf-8")
@@ -100,7 +102,8 @@ def test_cli_exit_codes_and_project_errors(
 
 
 def test_smoke_plugin_manifest_is_current() -> None:
-    sys.modules.pop("smoke_plugin.runner", None)
+    sys.modules.pop("smoke_plugin.metrics", None)
+    sys.modules.pop("smoke_plugin.plugin", None)
     sys.modules.pop("smoke_plugin", None)
 
     assert check_manifest(SMOKE_PLUGIN_DIR) == (True, "")

@@ -19,7 +19,7 @@ from lyra.sdk.types import (
 from pydantic import Field, TypeAdapter, field_validator, model_validator
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
-_ENTRYPOINT_PATTERN = re.compile(
+_FACTORY_PATTERN = re.compile(
     rf"^{_IDENTIFIER}(?:\.{_IDENTIFIER})*:{_IDENTIFIER}$",
 )
 _TEMPLATE_FIELD_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -92,47 +92,47 @@ def _const_to_enum(schema: JsonObject) -> JsonObject:
     return converted
 
 
-class CVEGEOListWrapperV3(StrictBaseModel):
+class CVEGEOListWrapperV4(StrictBaseModel):
     data_type: Literal["cvegeo_list"]
     value: list[str]
 
 
-class GeoJSONLocationWrapperV3(StrictBaseModel):
+class GeoJSONLocationWrapperV4(StrictBaseModel):
     data_type: Literal["geojson"]
     value: GeoJSON
 
 
-class GeoJSONBoundsWrapperV3(StrictBaseModel):
+class GeoJSONBoundsWrapperV4(StrictBaseModel):
     data_type: Literal["geojson"]
     value: SingleGeoJSON
 
 
-class MetZoneCodeWrapperV3(StrictBaseModel):
+class MetZoneCodeWrapperV4(StrictBaseModel):
     data_type: Literal["met_zone_code"]
     value: str = Field(min_length=1)
 
 
-_LocationWrapperUnionV3 = Annotated[
-    CVEGEOListWrapperV3 | GeoJSONLocationWrapperV3 | MetZoneCodeWrapperV3,
+_LocationWrapperUnionV4 = Annotated[
+    CVEGEOListWrapperV4 | GeoJSONLocationWrapperV4 | MetZoneCodeWrapperV4,
     Field(discriminator="data_type"),
 ]
-_BoundsWrapperUnionV3 = Annotated[
-    CVEGEOListWrapperV3 | GeoJSONBoundsWrapperV3 | MetZoneCodeWrapperV3,
+_BoundsWrapperUnionV4 = Annotated[
+    CVEGEOListWrapperV4 | GeoJSONBoundsWrapperV4 | MetZoneCodeWrapperV4,
     Field(discriminator="data_type"),
 ]
-_LOCATION_WRAPPER_ADAPTER = TypeAdapter(_LocationWrapperUnionV3)
-_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(_BoundsWrapperUnionV3)
+_LOCATION_WRAPPER_ADAPTER = TypeAdapter(_LocationWrapperUnionV4)
+_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(_BoundsWrapperUnionV4)
 
 
-class PluginInfoV3(StrictBaseModel):
-    """Package-level metadata declared by a schema v3 Lyra plugin."""
+class PluginInfoV4(StrictBaseModel):
+    """Package-level metadata declared by a schema v4 Lyra plugin."""
 
     name: str = Field(min_length=1, description="Human-readable plugin name.")
     version: str = Field(min_length=1, description="Plugin package version.")
 
 
-class PluginOwnedInputMetadataV3(StrictBaseModel):
-    """Metadata accepted only by plugin-owned schema v3 input values."""
+class PluginOwnedInputMetadataV4(StrictBaseModel):
+    """Metadata accepted only by plugin-owned schema v4 input values."""
 
     description: str | None = Field(
         default=None,
@@ -157,22 +157,22 @@ class PluginOwnedInputMetadataV3(StrictBaseModel):
     )
 
 
-class LocationInputV3(StrictBaseModel):
+class LocationInputV4(StrictBaseModel):
     """Lyra-owned location spatial input."""
 
     kind: Literal["location"] = Field(description="Input kind.")
 
 
-class BoundsInputV3(StrictBaseModel):
+class BoundsInputV4(StrictBaseModel):
     """Lyra-owned bounds spatial input."""
 
     kind: Literal["bounds"] = Field(description="Input kind.")
 
 
-SpatialInputKindV3 = Literal["location", "bounds"]
+SpatialInputKindV4 = Literal["location", "bounds"]
 
 
-class StringInputV3(PluginOwnedInputMetadataV3):
+class StringInputV4(PluginOwnedInputMetadataV4):
     """Plugin-owned string input."""
 
     kind: Literal["string"] = Field(description="Input kind.")
@@ -192,7 +192,7 @@ class StringInputV3(PluginOwnedInputMetadataV3):
         return self
 
 
-class NumberInputV3(PluginOwnedInputMetadataV3):
+class NumberInputV4(PluginOwnedInputMetadataV4):
     """Plugin-owned numeric input."""
 
     kind: Literal["number"] = Field(description="Input kind.")
@@ -211,7 +211,7 @@ class NumberInputV3(PluginOwnedInputMetadataV3):
         return self
 
 
-class IntegerInputV3(PluginOwnedInputMetadataV3):
+class IntegerInputV4(PluginOwnedInputMetadataV4):
     """Plugin-owned integer input."""
 
     kind: Literal["integer"] = Field(description="Input kind.")
@@ -230,13 +230,13 @@ class IntegerInputV3(PluginOwnedInputMetadataV3):
         return self
 
 
-class BooleanInputV3(PluginOwnedInputMetadataV3):
+class BooleanInputV4(PluginOwnedInputMetadataV4):
     """Plugin-owned boolean input."""
 
     kind: Literal["boolean"] = Field(description="Input kind.")
 
 
-class EnumInputV3(PluginOwnedInputMetadataV3):
+class EnumInputV4(PluginOwnedInputMetadataV4):
     """Plugin-owned enum input."""
 
     kind: Literal["enum"] = Field(description="Input kind.")
@@ -273,7 +273,7 @@ class EnumInputV3(PluginOwnedInputMetadataV3):
         return values
 
 
-class JsonSchemaInputV3(PluginOwnedInputMetadataV3):
+class JsonSchemaInputV4(PluginOwnedInputMetadataV4):
     """Plugin-owned raw JSON Schema input."""
 
     kind: Literal["json_schema"] = Field(description="Input kind.")
@@ -293,23 +293,23 @@ class JsonSchemaInputV3(PluginOwnedInputMetadataV3):
         return schema
 
 
-PluginOwnedInputSpecV3 = Annotated[
-    StringInputV3
-    | NumberInputV3
-    | IntegerInputV3
-    | BooleanInputV3
-    | EnumInputV3
-    | JsonSchemaInputV3,
+PluginOwnedInputSpecV4 = Annotated[
+    StringInputV4
+    | NumberInputV4
+    | IntegerInputV4
+    | BooleanInputV4
+    | EnumInputV4
+    | JsonSchemaInputV4,
     Field(discriminator="kind"),
 ]
 
 
-class BatchInputV3(StrictBaseModel):
+class BatchInputV4(StrictBaseModel):
     """Metric-local batch input that can drive dynamic table columns."""
 
     kind: Literal["batch"] = Field(description="Input kind.")
     max_items: int = Field(ge=1, description="Maximum number of batch items.")
-    value: PluginOwnedInputSpecV3 = Field(
+    value: PluginOwnedInputSpecV4 = Field(
         description="Plugin-owned schema for each batch item value.",
     )
     label: bool = Field(
@@ -318,15 +318,15 @@ class BatchInputV3(StrictBaseModel):
     )
 
 
-InputSpecV3 = Annotated[
-    LocationInputV3 | BoundsInputV3 | BatchInputV3 | PluginOwnedInputSpecV3,
+InputSpecV4 = Annotated[
+    LocationInputV4 | BoundsInputV4 | BatchInputV4 | PluginOwnedInputSpecV4,
     Field(discriminator="kind"),
 ]
 
-OutputColumnTypeV3 = Literal["number", "integer", "string", "boolean"]
+OutputColumnTypeV4 = Literal["number", "integer", "string", "boolean"]
 
 
-class FractionOfLocationAreaDerivationV3(StrictBaseModel):
+class FractionOfLocationAreaDerivationV4(StrictBaseModel):
     """Server-owned fraction derived from a square-metre result column."""
 
     kind: Literal["fraction_of_location_area"] = Field(
@@ -339,11 +339,11 @@ class FractionOfLocationAreaDerivationV3(StrictBaseModel):
     )
 
 
-class TableOutputColumnV3(StrictBaseModel):
-    """One scalar column produced by a schema v3 table metric."""
+class TableOutputColumnV4(StrictBaseModel):
+    """One scalar column produced by a schema v4 table metric."""
 
     name: str = Field(min_length=1, description="Column name in the result table.")
-    type: OutputColumnTypeV3 = Field(description="Scalar value type for this column.")
+    type: OutputColumnTypeV4 = Field(description="Scalar value type for this column.")
     unit: str = Field(min_length=1, description="Measurement unit for this column.")
     description: str = Field(
         min_length=1,
@@ -353,7 +353,7 @@ class TableOutputColumnV3(StrictBaseModel):
         default=False,
         description="Whether this column may contain null values.",
     )
-    derivations: list[FractionOfLocationAreaDerivationV3] = Field(
+    derivations: list[FractionOfLocationAreaDerivationV4] = Field(
         default_factory=list,
         max_length=1,
         description="Server-owned columns derived from this runner output column.",
@@ -373,8 +373,8 @@ class TableOutputColumnV3(StrictBaseModel):
         return self
 
 
-class BatchedTableOutputColumnV3(StrictBaseModel):
-    """Column group generated from a schema v3 batch input."""
+class BatchedTableOutputColumnV4(StrictBaseModel):
+    """Column group generated from a schema v4 batch input."""
 
     source: str = Field(
         min_length=1,
@@ -384,7 +384,7 @@ class BatchedTableOutputColumnV3(StrictBaseModel):
         min_length=1,
         description="Column name template containing '{key}'.",
     )
-    type: OutputColumnTypeV3 = Field(description="Scalar value type for these columns.")
+    type: OutputColumnTypeV4 = Field(description="Scalar value type for these columns.")
     unit: str = Field(min_length=1, description="Measurement unit for these columns.")
     description: str = Field(
         min_length=1,
@@ -421,15 +421,15 @@ class BatchedTableOutputColumnV3(StrictBaseModel):
         return template
 
 
-class TableOutputV3(StrictBaseModel):
-    """Output declaration for schema v3 table metrics."""
+class TableOutputV4(StrictBaseModel):
+    """Output declaration for schema v4 table metrics."""
 
     kind: Literal["table"] = Field(description="Metric output kind.")
-    columns: list[TableOutputColumnV3] = Field(
+    columns: list[TableOutputColumnV4] = Field(
         default_factory=list,
         description="Ordered static result columns.",
     )
-    batched_columns: list[BatchedTableOutputColumnV3] = Field(
+    batched_columns: list[BatchedTableOutputColumnV4] = Field(
         default_factory=list,
         description="Ordered batch-backed result column groups.",
     )
@@ -496,9 +496,9 @@ def _expand_batched_template(template: str, context: dict[str, str]) -> str:
 
 
 def expand_runner_table_output_columns(
-    output: TableOutputV3,
+    output: TableOutputV4,
     job_input: JsonObject,
-) -> list[TableOutputColumnV3]:
+) -> list[TableOutputColumnV4]:
     """Expand only columns that a runner must return for one job input."""
 
     columns = [column.model_copy(deep=True) for column in output.columns]
@@ -523,7 +523,7 @@ def expand_runner_table_output_columns(
                 template_context,
             )
             columns.append(
-                TableOutputColumnV3(
+                TableOutputColumnV4(
                     name=name,
                     type=column_group.type,
                     unit=column_group.unit,
@@ -541,18 +541,18 @@ def expand_runner_table_output_columns(
 
 
 def expand_table_output_columns(
-    output: TableOutputV3,
+    output: TableOutputV4,
     job_input: JsonObject,
-) -> list[TableOutputColumnV3]:
+) -> list[TableOutputColumnV4]:
     """Expand the effective table output contract for one validated job input."""
 
     runner_columns = expand_runner_table_output_columns(output, job_input)
-    columns: list[TableOutputColumnV3] = []
+    columns: list[TableOutputColumnV4] = []
     for column in runner_columns:
         columns.append(column)
         columns.extend(
             [
-                TableOutputColumnV3(
+                TableOutputColumnV4(
                     name=derivation.name,
                     type="number",
                     unit="ratio",
@@ -571,8 +571,8 @@ def expand_table_output_columns(
     return columns
 
 
-class FileOutputV3(StrictBaseModel):
-    """Output declaration for schema v3 file-producing metrics."""
+class FileOutputV4(StrictBaseModel):
+    """Output declaration for schema v4 file-producing metrics."""
 
     kind: Literal["file"] = Field(description="Metric output kind.")
     media_type: str = Field(min_length=1, description="Produced file media type.")
@@ -604,41 +604,32 @@ class FileOutputV3(StrictBaseModel):
         return extensions
 
 
-OutputSpecV3 = Annotated[
-    TableOutputV3 | FileOutputV3,
+OutputSpecV4 = Annotated[
+    TableOutputV4 | FileOutputV4,
     Field(discriminator="kind"),
 ]
 
 
-class MetricManifestV3(StrictBaseModel):
-    """Manifest entry that describes one schema v3 executable metric."""
+class MetricManifestV4(StrictBaseModel):
+    """Manifest entry that describes one schema v4 executable metric."""
 
     name: str = Field(min_length=1, description="Public metric name.")
     description: str = Field(
         min_length=1,
         description="Short description shown to API clients.",
     )
-    entrypoint: str = Field(description="Python module:function runner reference.")
-    inputs: dict[str, InputSpecV3] = Field(
+    inputs: dict[str, InputSpecV4] = Field(
         min_length=1,
         description="Metric request input declarations.",
     )
-    output: OutputSpecV3 = Field(description="Successful metric output declaration.")
-
-    @field_validator("entrypoint")
-    @classmethod
-    def validate_entrypoint(cls, entrypoint: str) -> str:
-        if not _ENTRYPOINT_PATTERN.fullmatch(entrypoint):
-            msg = "entrypoint must be a module:function reference"
-            raise ValueError(msg)
-        return entrypoint
+    output: OutputSpecV4 = Field(description="Successful metric output declaration.")
 
     @field_validator("inputs")
     @classmethod
     def validate_input_field_names(
         cls,
-        inputs: dict[str, InputSpecV3],
-    ) -> dict[str, InputSpecV3]:
+        inputs: dict[str, InputSpecV4],
+    ) -> dict[str, InputSpecV4]:
         empty_fields = [field for field in inputs if not field.strip()]
         if empty_fields:
             msg = "input field names must be non-empty strings"
@@ -650,15 +641,15 @@ class MetricManifestV3(StrictBaseModel):
         spatial_inputs = [
             input_spec
             for input_spec in self.inputs.values()
-            if isinstance(input_spec, LocationInputV3 | BoundsInputV3)
+            if isinstance(input_spec, LocationInputV4 | BoundsInputV4)
         ]
         if not spatial_inputs:
             msg = "metrics must declare at least one location or bounds input"
             raise ValueError(msg)
 
-        if isinstance(self.output, TableOutputV3):
+        if isinstance(self.output, TableOutputV4):
             location_input = self.inputs.get("location")
-            if not isinstance(location_input, LocationInputV3):
+            if not isinstance(location_input, LocationInputV4):
                 msg = "table metrics must declare inputs.location as kind 'location'"
                 raise ValueError(msg)  # noqa: TRY004
         return self
@@ -668,10 +659,10 @@ class MetricManifestV3(StrictBaseModel):
         batch_input_names = {
             name
             for name, input_spec in self.inputs.items()
-            if isinstance(input_spec, BatchInputV3)
+            if isinstance(input_spec, BatchInputV4)
         }
 
-        if not isinstance(self.output, TableOutputV3):
+        if not isinstance(self.output, TableOutputV4):
             if not batch_input_names:
                 return self
             names = ", ".join(sorted(batch_input_names))
@@ -683,7 +674,7 @@ class MetricManifestV3(StrictBaseModel):
             if source_input is None:
                 msg = f"batched column source is not defined in inputs: {column.source}"
                 raise ValueError(msg)
-            if not isinstance(source_input, BatchInputV3):
+            if not isinstance(source_input, BatchInputV4):
                 msg = (
                     "batched column source must reference a batch input: "
                     f"{column.source}"
@@ -699,15 +690,26 @@ class MetricManifestV3(StrictBaseModel):
         return self
 
 
-class PluginManifestV3(StrictBaseModel):
-    """Top-level schema v3 plugin manifest file."""
+class PluginManifestV4(StrictBaseModel):
+    """Top-level schema v4 plugin manifest file."""
 
-    schema_version: Literal[3] = Field(description="Manifest schema version.")
-    plugin: PluginInfoV3 = Field(description="Plugin metadata.")
-    metrics: list[MetricManifestV3] = Field(
+    schema_version: Literal[4] = Field(description="Manifest schema version.")
+    plugin: PluginInfoV4 = Field(description="Plugin metadata.")
+    factory: str = Field(
+        description="Python module:attribute plugin factory reference."
+    )
+    metrics: list[MetricManifestV4] = Field(
         min_length=1,
         description="Executable metrics exposed by the plugin.",
     )
+
+    @field_validator("factory")
+    @classmethod
+    def validate_factory(cls, factory: str) -> str:
+        if not _FACTORY_PATTERN.fullmatch(factory):
+            msg = "factory must be a module:attribute reference"
+            raise ValueError(msg)
+        return factory
 
     @model_validator(mode="after")
     def validate_unique_metric_names(self) -> Self:
@@ -724,13 +726,12 @@ class PluginManifestV3(StrictBaseModel):
         return self
 
 
-class CompiledMetricManifestV3(StrictBaseModel):
-    """Compiled schema v3 metric contract consumed by Lyra runtime services."""
+class CompiledMetricManifestV4(StrictBaseModel):
+    """Compiled schema v4 metric contract consumed by Lyra runtime services."""
 
     name: str = Field(min_length=1, description="Public metric name.")
     description: str = Field(description="Human-readable metric description.")
-    entrypoint: str = Field(description="Python module:function runner reference.")
-    spatial_inputs: dict[str, SpatialInputKindV3] = Field(
+    spatial_inputs: dict[str, SpatialInputKindV4] = Field(
         min_length=1,
         description="Request fields Lyra resolves into spatial GeoJSON inputs.",
     )
@@ -740,7 +741,7 @@ class CompiledMetricManifestV3(StrictBaseModel):
     request_schema: JsonObject = Field(
         description="Effective JSON Schema for unresolved client requests.",
     )
-    output: OutputSpecV3 = Field(description="Successful metric output declaration.")
+    output: OutputSpecV4 = Field(description="Successful metric output declaration.")
 
     @field_validator("request_schema")
     @classmethod
@@ -749,25 +750,28 @@ class CompiledMetricManifestV3(StrictBaseModel):
         return schema
 
 
-class CompiledPluginManifestV3(StrictBaseModel):
-    """Compiled schema v3 plugin manifest contract."""
+class CompiledPluginManifestV4(StrictBaseModel):
+    """Compiled schema v4 plugin manifest contract."""
 
-    schema_version: Literal[3] = Field(description="Manifest schema version.")
-    plugin: PluginInfoV3 = Field(description="Plugin metadata.")
-    metrics: list[CompiledMetricManifestV3] = Field(
+    schema_version: Literal[4] = Field(description="Manifest schema version.")
+    plugin: PluginInfoV4 = Field(description="Plugin metadata.")
+    factory: str = Field(
+        description="Python module:attribute plugin factory reference."
+    )
+    metrics: list[CompiledMetricManifestV4] = Field(
         min_length=1,
         description="Compiled executable metrics exposed by the plugin.",
     )
 
 
 def _adapter_for_spatial_kind(
-    kind: SpatialInputKindV3,
-) -> TypeAdapter[_LocationWrapperUnionV3] | TypeAdapter[_BoundsWrapperUnionV3]:
+    kind: SpatialInputKindV4,
+) -> TypeAdapter[_LocationWrapperUnionV4] | TypeAdapter[_BoundsWrapperUnionV4]:
     return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
 
 
 def _wrapper_field_schema(
-    kind: SpatialInputKindV3,
+    kind: SpatialInputKindV4,
 ) -> tuple[JsonObject, JsonObject]:
     schema = _const_to_enum(_adapter_for_spatial_kind(kind).json_schema())
     defs = schema.pop("$defs", {})
@@ -808,7 +812,7 @@ def _validate_value_against_schema(
 
 def _apply_common_metadata(
     schema: JsonObject,
-    input_spec: PluginOwnedInputMetadataV3,
+    input_spec: PluginOwnedInputMetadataV4,
 ) -> JsonObject:
     compiled = deepcopy(schema)
     if input_spec.nullable:
@@ -826,7 +830,7 @@ def _apply_common_metadata(
 def _validate_common_values(
     schema: JsonObject,
     defs: JsonObject,
-    input_spec: PluginOwnedInputMetadataV3,
+    input_spec: PluginOwnedInputMetadataV4,
     path: str,
 ) -> None:
     validation_schema = _schema_with_defs(schema, defs)
@@ -845,7 +849,7 @@ def _validate_common_values(
             )
 
 
-def _compile_string_input(input_spec: StringInputV3) -> JsonObject:
+def _compile_string_input(input_spec: StringInputV4) -> JsonObject:
     schema: JsonObject = {"type": "string"}
     if input_spec.min_length is not None:
         schema["minLength"] = input_spec.min_length
@@ -856,7 +860,7 @@ def _compile_string_input(input_spec: StringInputV3) -> JsonObject:
     return schema
 
 
-def _compile_number_input(input_spec: NumberInputV3) -> JsonObject:
+def _compile_number_input(input_spec: NumberInputV4) -> JsonObject:
     schema: JsonObject = {"type": "number"}
     if input_spec.minimum is not None:
         schema["minimum"] = input_spec.minimum
@@ -865,7 +869,7 @@ def _compile_number_input(input_spec: NumberInputV3) -> JsonObject:
     return schema
 
 
-def _compile_integer_input(input_spec: IntegerInputV3) -> JsonObject:
+def _compile_integer_input(input_spec: IntegerInputV4) -> JsonObject:
     schema: JsonObject = {"type": "integer"}
     if input_spec.minimum is not None:
         schema["minimum"] = input_spec.minimum
@@ -875,22 +879,22 @@ def _compile_integer_input(input_spec: IntegerInputV3) -> JsonObject:
 
 
 def _compile_plugin_owned_input(
-    input_spec: PluginOwnedInputSpecV3,
+    input_spec: PluginOwnedInputSpecV4,
     path: str,
 ) -> tuple[JsonObject, JsonObject]:
     defs: JsonObject = {}
     schema: JsonObject
-    if isinstance(input_spec, StringInputV3):
+    if isinstance(input_spec, StringInputV4):
         schema = _compile_string_input(input_spec)
-    elif isinstance(input_spec, NumberInputV3):
+    elif isinstance(input_spec, NumberInputV4):
         schema = _compile_number_input(input_spec)
-    elif isinstance(input_spec, IntegerInputV3):
+    elif isinstance(input_spec, IntegerInputV4):
         schema = _compile_integer_input(input_spec)
-    elif isinstance(input_spec, BooleanInputV3):
+    elif isinstance(input_spec, BooleanInputV4):
         schema = {"type": "boolean"}
-    elif isinstance(input_spec, EnumInputV3):
+    elif isinstance(input_spec, EnumInputV4):
         schema = {"enum": validate_json_value(deepcopy(input_spec.values))}
-    elif isinstance(input_spec, JsonSchemaInputV3):
+    elif isinstance(input_spec, JsonSchemaInputV4):
         schema = deepcopy(input_spec.schema)
         defs = _hoist_json_schema_defs(schema, path)
     else:
@@ -947,9 +951,9 @@ def _hoist_json_schema_defs(
 
 
 def _compile_spatial_input(
-    input_spec: LocationInputV3 | BoundsInputV3,
-) -> tuple[JsonObject, JsonObject, SpatialInputKindV3]:
-    kind: SpatialInputKindV3 = input_spec.kind
+    input_spec: LocationInputV4 | BoundsInputV4,
+) -> tuple[JsonObject, JsonObject, SpatialInputKindV4]:
+    kind: SpatialInputKindV4 = input_spec.kind
     schema, defs = _wrapper_field_schema(kind)
     compiled = deepcopy(schema)
     if kind == "location":
@@ -962,7 +966,7 @@ def _compile_spatial_input(
 
 
 def _compile_batch_input(
-    input_spec: BatchInputV3,
+    input_spec: BatchInputV4,
     path: str,
     field_name: str,
 ) -> tuple[JsonObject, JsonObject]:
@@ -996,13 +1000,13 @@ def _compile_batch_input(
 
 
 def _compile_input_property(
-    input_spec: InputSpecV3,
+    input_spec: InputSpecV4,
     path: str,
     field_name: str,
-) -> tuple[JsonObject, JsonObject, SpatialInputKindV3 | None]:
-    if isinstance(input_spec, LocationInputV3 | BoundsInputV3):
+) -> tuple[JsonObject, JsonObject, SpatialInputKindV4 | None]:
+    if isinstance(input_spec, LocationInputV4 | BoundsInputV4):
         return _compile_spatial_input(input_spec)
-    if isinstance(input_spec, BatchInputV3):
+    if isinstance(input_spec, BatchInputV4):
         schema, defs = _compile_batch_input(input_spec, path, field_name)
         return schema, defs, None
 
@@ -1024,12 +1028,12 @@ def _merge_defs(
 
 
 def _compile_metric_request_schema(
-    metric: MetricManifestV3,
+    metric: MetricManifestV4,
     metric_index: int,
-) -> tuple[JsonObject, dict[str, SpatialInputKindV3], list[str]]:
+) -> tuple[JsonObject, dict[str, SpatialInputKindV4], list[str]]:
     required: list[str] = []
     properties: JsonObject = {}
-    spatial_inputs: dict[str, SpatialInputKindV3] = {}
+    spatial_inputs: dict[str, SpatialInputKindV4] = {}
     batch_inputs: list[str] = []
     root_defs: JsonObject = {}
 
@@ -1042,13 +1046,13 @@ def _compile_metric_request_schema(
         )
         properties[field_name] = property_schema
         if (
-            not isinstance(input_spec, PluginOwnedInputMetadataV3)
+            not isinstance(input_spec, PluginOwnedInputMetadataV4)
             or input_spec.required
         ):
             required.append(field_name)
         if spatial_kind is not None:
             spatial_inputs[field_name] = spatial_kind
-        if isinstance(input_spec, BatchInputV3):
+        if isinstance(input_spec, BatchInputV4):
             batch_inputs.append(field_name)
         _merge_defs(root_defs, defs, path)
 
@@ -1067,20 +1071,19 @@ def _compile_metric_request_schema(
     return request_schema, spatial_inputs, batch_inputs
 
 
-def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifestV3:
-    """Compile a schema v3 authoring manifest into Lyra's runtime contract."""
+def compile_plugin_manifest(manifest: PluginManifestV4) -> CompiledPluginManifestV4:
+    """Compile a schema v4 authoring manifest into Lyra's runtime contract."""
 
-    compiled_metrics: list[CompiledMetricManifestV3] = []
+    compiled_metrics: list[CompiledMetricManifestV4] = []
     for index, metric in enumerate(manifest.metrics):
         request_schema, spatial_inputs, batch_inputs = _compile_metric_request_schema(
             metric,
             index,
         )
         compiled_metrics.append(
-            CompiledMetricManifestV3(
+            CompiledMetricManifestV4(
                 name=metric.name,
                 description=metric.description,
-                entrypoint=metric.entrypoint,
                 spatial_inputs=spatial_inputs,
                 batch_inputs=batch_inputs,
                 request_schema=request_schema,
@@ -1088,38 +1091,39 @@ def compile_plugin_manifest(manifest: PluginManifestV3) -> CompiledPluginManifes
             )
         )
 
-    return CompiledPluginManifestV3(
-        schema_version=3,
+    return CompiledPluginManifestV4(
+        schema_version=4,
         plugin=manifest.plugin.model_copy(deep=True),
+        factory=manifest.factory,
         metrics=compiled_metrics,
     )
 
 
 __all__ = [
-    "BatchInputV3",
-    "BatchedTableOutputColumnV3",
-    "BooleanInputV3",
-    "BoundsInputV3",
-    "CompiledMetricManifestV3",
-    "CompiledPluginManifestV3",
-    "EnumInputV3",
-    "FileOutputV3",
-    "FractionOfLocationAreaDerivationV3",
-    "InputSpecV3",
-    "IntegerInputV3",
-    "JsonSchemaInputV3",
-    "LocationInputV3",
-    "MetricManifestV3",
-    "NumberInputV3",
-    "OutputColumnTypeV3",
-    "OutputSpecV3",
-    "PluginInfoV3",
-    "PluginManifestV3",
-    "PluginOwnedInputSpecV3",
-    "SpatialInputKindV3",
-    "StringInputV3",
-    "TableOutputColumnV3",
-    "TableOutputV3",
+    "BatchInputV4",
+    "BatchedTableOutputColumnV4",
+    "BooleanInputV4",
+    "BoundsInputV4",
+    "CompiledMetricManifestV4",
+    "CompiledPluginManifestV4",
+    "EnumInputV4",
+    "FileOutputV4",
+    "FractionOfLocationAreaDerivationV4",
+    "InputSpecV4",
+    "IntegerInputV4",
+    "JsonSchemaInputV4",
+    "LocationInputV4",
+    "MetricManifestV4",
+    "NumberInputV4",
+    "OutputColumnTypeV4",
+    "OutputSpecV4",
+    "PluginInfoV4",
+    "PluginManifestV4",
+    "PluginOwnedInputSpecV4",
+    "SpatialInputKindV4",
+    "StringInputV4",
+    "TableOutputColumnV4",
+    "TableOutputV4",
     "compile_plugin_manifest",
     "expand_runner_table_output_columns",
     "expand_table_output_columns",

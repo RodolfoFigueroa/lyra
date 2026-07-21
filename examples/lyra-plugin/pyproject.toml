@@ -7,7 +7,7 @@ dependencies = [
 ]
 
 [tool.lyra]
-plugin = "smoke_plugin.runner:plugin"
+factory = "smoke_plugin.plugin:create_plugin"
 
 [build-system]
 requires = ["hatchling"]

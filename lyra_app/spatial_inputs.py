@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from lyra_app.models import ExplicitBoundsUnion, ExplicitLocationUnion
 
 if TYPE_CHECKING:
-    from lyra.sdk.models.plugin_v3 import SpatialInputKindV3
+    from lyra.sdk.models.plugin_v4 import SpatialInputKindV4
 
 _LOCATION_WRAPPER_ADAPTER = TypeAdapter(ExplicitLocationUnion)
 _BOUNDS_WRAPPER_ADAPTER = TypeAdapter(ExplicitBoundsUnion)
@@ -43,7 +43,7 @@ class SpatialInputResolutionUnavailableError(Exception):
     pass
 
 
-def _adapter_for_kind(kind: SpatialInputKindV3) -> TypeAdapter[Any]:
+def _adapter_for_kind(kind: SpatialInputKindV4) -> TypeAdapter[Any]:
     return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
 
 
@@ -63,7 +63,7 @@ def _format_pydantic_errors(
 
 def resolve_spatial_inputs(
     payload: dict[str, Any],
-    spatial_inputs: dict[str, SpatialInputKindV3],
+    spatial_inputs: dict[str, SpatialInputKindV4],
     converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if converter_map is None:
@@ -104,7 +104,7 @@ def resolve_spatial_inputs(
 
 def resolve_spatial_inputs_with_metadata(
     payload: dict[str, Any],
-    spatial_inputs: dict[str, SpatialInputKindV3],
+    spatial_inputs: dict[str, SpatialInputKindV4],
     converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> SpatialInputResolution:
     """Resolve spatial inputs while retaining no resolved geometry in metadata."""

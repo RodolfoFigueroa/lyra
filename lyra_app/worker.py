@@ -1,4 +1,3 @@
-import importlib
 import logging
 import math
 from collections.abc import Callable
@@ -17,19 +16,20 @@ from lyra.sdk.models import (
     parse_job_result,
 )
 from lyra.sdk.models.geometry import GeoJSON
-from lyra.sdk.models.plugin_v3 import (
-    CompiledMetricManifestV3,
-    CompiledPluginManifestV3,
-    FileOutputV3,
-    OutputColumnTypeV3,
-    OutputSpecV3,
-    TableOutputColumnV3,
-    TableOutputV3,
+from lyra.sdk.models.plugin_v4 import (
+    CompiledMetricManifestV4,
+    CompiledPluginManifestV4,
+    FileOutputV4,
+    OutputColumnTypeV4,
+    OutputSpecV4,
+    TableOutputColumnV4,
+    TableOutputV4,
     expand_runner_table_output_columns,
     expand_table_output_columns,
 )
 from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.plugin import PluginDefinition, PluginResult
+from lyra.sdk.plugin_loader import load_plugin_definition
 from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
 
@@ -63,8 +63,7 @@ MetricRunCallable = Callable[[JobEnvelope, "WorkerRunContext"], PluginResult]
 class RunnerMetricEntry:
     metric_name: str
     queue: str
-    entrypoint: str
-    output: OutputSpecV3
+    output: OutputSpecV4
     run: MetricRunCallable
 
 
@@ -98,21 +97,8 @@ def set_runner_temp_base(path: Path | None) -> None:
     _RUNNER_TEMP_BASE = path
 
 
-def _load_entrypoint(spec: str) -> PluginDefinition:
-    module_name, sep, function_name = spec.partition(":")
-    if not sep or not module_name or not function_name:
-        msg = f"Entrypoint must use 'module:function' format: {spec!r}"
-        raise ValueError(msg)
-
-    value = getattr(importlib.import_module(module_name), function_name)
-    if not isinstance(value, PluginDefinition):
-        msg = f"Entrypoint {spec!r} did not resolve to a PluginDefinition."
-        raise TypeError(msg)
-    return value
-
-
 def _entry_from_metric(
-    metric: CompiledMetricManifestV3,
+    metric: CompiledMetricManifestV4,
     *,
     queue: str,
     definition: PluginDefinition,
@@ -120,28 +106,22 @@ def _entry_from_metric(
     return RunnerMetricEntry(
         metric_name=metric.name,
         queue=queue,
-        entrypoint=metric.entrypoint,
         output=metric.output,
         run=definition,
     )
 
 
 def _validated_plugin_definition(
-    manifest: CompiledPluginManifestV3,
+    manifest: CompiledPluginManifestV4,
 ) -> PluginDefinition:
-    entrypoints = {metric.entrypoint for metric in manifest.metrics}
-    if len(entrypoints) != 1:
-        msg = "Generated plugin manifests must use one PluginDefinition entrypoint."
-        raise RuntimeError(msg)
-    entrypoint = next(iter(entrypoints))
-    definition = _load_entrypoint(entrypoint)
+    definition = load_plugin_definition(manifest.factory)
     live_manifest = definition.compiled_manifest(
         plugin=manifest.plugin,
-        entrypoint=entrypoint,
+        factory=manifest.factory,
     )
     if live_manifest.model_dump(mode="json") != manifest.model_dump(mode="json"):
         msg = (
-            f"Plugin definition {entrypoint!r} does not match {MANIFEST_FILENAME}. "
+            f"Plugin factory {manifest.factory!r} does not match {MANIFEST_FILENAME}. "
             "Run 'lyra-plugin build-manifest' in the plugin project."
         )
         raise RuntimeError(msg)
@@ -170,7 +150,7 @@ def _runner_queues(worker_name: str, config: LyraConfig) -> set[str]:
 
 
 def _resolve_metric_queue(
-    metric: CompiledMetricManifestV3,
+    metric: CompiledMetricManifestV4,
     metric_queues: dict[str, str],
 ) -> str:
     try:
@@ -203,7 +183,7 @@ def load_runner_metric_entries(
 
     for repo in repos:
         manifest = load_plugin_manifest(repo.path)
-        selected_metrics: list[tuple[CompiledMetricManifestV3, str]] = []
+        selected_metrics: list[tuple[CompiledMetricManifestV4, str]] = []
         for metric in manifest.metrics:
             queue = _resolve_metric_queue(metric, metric_queues)
             if queues and queue not in queues:
@@ -322,7 +302,7 @@ def _persist_result(
 
 def _cell_error(
     value: JsonValue,
-    column_type: OutputColumnTypeV3,
+    column_type: OutputColumnTypeV4,
     *,
     nullable: bool,
 ) -> str | None:
@@ -367,7 +347,7 @@ def _expected_table_index(
 
 def _validate_table_values(
     result: TableJobResult,
-    columns: list[TableOutputColumnV3],
+    columns: list[TableOutputColumnV4],
 ) -> str | None:
     for row_position, row in enumerate(result.data):
         for column_position, column in enumerate(columns):
@@ -421,7 +401,7 @@ def _fractional_area_value(
 def _derive_fractional_area_columns(
     result: TableJobResult,
     job: JobEnvelope,
-    runner_columns: list[TableOutputColumnV3],
+    runner_columns: list[TableOutputColumnV4],
 ) -> TableJobResult | FailedJobResult:
     if not any(column.derivations for column in runner_columns):
         return result
@@ -474,7 +454,7 @@ def _derive_fractional_area_columns(
 def _validate_result_against_columns(
     result: TableJobResult,
     job: JobEnvelope,
-    columns: list[TableOutputColumnV3],
+    columns: list[TableOutputColumnV4],
     *,
     mismatch_message: str,
 ) -> FailedJobResult | None:
@@ -510,7 +490,7 @@ def _validate_result_index(
 def _validate_table_result(
     result: TableJobResult,
     job: JobEnvelope,
-    output: TableOutputV3,
+    output: TableOutputV4,
 ) -> TableJobResult | FailedJobResult:
     index_error = _validate_result_index(result, job)
     if index_error is not None:
@@ -554,7 +534,7 @@ def _validate_table_result(
 def _validate_file_result(
     result: FileJobResult,
     job: JobEnvelope,
-    output: FileOutputV3,
+    output: FileOutputV4,
     context: WorkerRunContext,
 ) -> FileJobResult | FailedJobResult:
     if result.media_type != output.media_type:
@@ -598,13 +578,13 @@ def _validate_file_result(
 def _validate_success_result(
     result: TerminalJobResult,
     job: JobEnvelope,
-    output: OutputSpecV3,
+    output: OutputSpecV4,
     context: WorkerRunContext,
 ) -> TerminalJobResult:
     if isinstance(result, FailedJobResult | CancelledJobResult):
         return result
 
-    if isinstance(output, TableOutputV3):
+    if isinstance(output, TableOutputV4):
         if not isinstance(result, TableJobResult):
             return _failed_result(
                 job.job_id,

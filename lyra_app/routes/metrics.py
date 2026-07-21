@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Response
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
 
 from lyra_app.registry import get_metric_catalog, get_metric_info
 
@@ -14,7 +14,7 @@ async def list_metrics(response: Response) -> MetricCatalogResponse:
 
 
 @router.get("/metrics/{metric_name}")
-async def get_metric(metric_name: str) -> MetricInfoV3:
+async def get_metric(metric_name: str) -> MetricInfoV4:
     info = get_metric_info(metric_name)
     if info is None:
         raise HTTPException(

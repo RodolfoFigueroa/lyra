@@ -1,10 +1,10 @@
 import unicodedata
 
-from lyra.sdk.models.plugin_v3 import (
-    FileOutputV3,
-    OutputSpecV3,
-    SpatialInputKindV3,
-    TableOutputV3,
+from lyra.sdk.models.plugin_v4 import (
+    FileOutputV4,
+    OutputSpecV4,
+    SpatialInputKindV4,
+    TableOutputV4,
 )
 from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.types import JsonObject, JsonValue
@@ -71,22 +71,22 @@ def normalize_metric_search_tokens(value: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(tokens))
 
 
-class MetricInfoV3(StrictBaseModel):
-    """Catalog metadata for one schema v3 metric exposed by the API."""
+class MetricInfoV4(StrictBaseModel):
+    """Catalog metadata for one schema v4 metric exposed by the API."""
 
     name: str = Field(description="Public metric name.")
     description: str = Field(description="Human-readable metric description.")
     request_schema: JsonObject = Field(
         description="Effective JSON Schema for the client request payload.",
     )
-    spatial_inputs: dict[str, SpatialInputKindV3] = Field(
+    spatial_inputs: dict[str, SpatialInputKindV4] = Field(
         default_factory=dict,
         description=(
             "Request field names mapped to Lyra-owned spatial input kinds resolved "
             "before worker execution."
         ),
     )
-    output: OutputSpecV3 = Field(
+    output: OutputSpecV4 = Field(
         description="Successful metric output declaration.",
     )
 
@@ -96,7 +96,7 @@ class MetricInfoV3(StrictBaseModel):
         return build_metric_search_text(self)
 
 
-def build_metric_search_text(metric: MetricInfoV3) -> str:
+def build_metric_search_text(metric: MetricInfoV4) -> str:
     """Build deterministic lexical text from public metric catalog fields."""
 
     parts: list[str] = [metric.name, metric.description]
@@ -109,7 +109,7 @@ def build_metric_search_text(metric: MetricInfoV3) -> str:
 
     output = metric.output
     _append_search_part(parts, output.kind)
-    if isinstance(output, TableOutputV3):
+    if isinstance(output, TableOutputV4):
         for column in output.columns:
             _append_search_part(parts, column.name)
             _append_search_part(parts, column.description)
@@ -119,7 +119,7 @@ def build_metric_search_text(metric: MetricInfoV3) -> str:
             _append_search_part(parts, column.name)
             _append_search_part(parts, column.description)
             _append_search_part(parts, column.unit)
-    elif isinstance(output, FileOutputV3):
+    elif isinstance(output, FileOutputV4):
         _append_search_part(parts, output.media_type)
         for extension in output.extensions:
             _append_search_part(parts, extension)
@@ -135,14 +135,14 @@ class MetricCatalogResponse(StrictBaseModel):
         min_length=1,
         description="SHA-256 fingerprint of the public metric catalog contract.",
     )
-    metrics: list[MetricInfoV3] = Field(
+    metrics: list[MetricInfoV4] = Field(
         description="Client-facing metric metadata sorted by metric name.",
     )
 
 
 __all__ = [
     "MetricCatalogResponse",
-    "MetricInfoV3",
+    "MetricInfoV4",
     "build_metric_search_text",
     "normalize_metric_search_tokens",
 ]

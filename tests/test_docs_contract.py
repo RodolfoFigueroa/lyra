@@ -70,7 +70,8 @@ def test_canonical_plugin_example_is_the_only_documented_example() -> None:
     example = ROOT / "examples" / "lyra-plugin"
 
     assert (example / "lyra.plugin.json").is_file()
-    assert (example / "smoke_plugin" / "runner.py").is_file()
+    assert (example / "smoke_plugin" / "metrics.py").is_file()
+    assert (example / "smoke_plugin" / "plugin.py").is_file()
     assert not (
         ROOT / "tests" / "fixtures" / "plugins" / "smoke_plugin" / "lyra.plugin.json"
     ).exists()

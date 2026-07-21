@@ -51,7 +51,7 @@ from lyra.sdk.models import (
     WorkersResponse,
     parse_job_result,
 )
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -731,7 +731,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
 
         return MetricCatalogResponse.model_validate(metrics)
 
-    async def get_metric(self, metric_name: str) -> MetricInfoV3:
+    async def get_metric(self, metric_name: str) -> MetricInfoV4:
         metric: Any = None
         status: int = 0
 
@@ -755,7 +755,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Failed to fetch metric. HTTP {status}"
             raise DownloadError(err)
 
-        return MetricInfoV3.model_validate(metric)
+        return MetricInfoV4.model_validate(metric)
 
     async def _wait_for_terminal_event(self, job_id: str) -> JobEvent:
         async for event in self.iter_job_events(job_id):

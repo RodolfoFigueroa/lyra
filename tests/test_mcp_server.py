@@ -24,12 +24,12 @@ from lyra.sdk.models import (
     TableJobResult,
     build_result_descriptor,
 )
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
-from lyra.sdk.models.plugin_v3 import (
-    FileOutputV3,
-    SpatialInputKindV3,
-    TableOutputColumnV3,
-    TableOutputV3,
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+from lyra.sdk.models.plugin_v4 import (
+    FileOutputV4,
+    SpatialInputKindV4,
+    TableOutputColumnV4,
+    TableOutputV4,
 )
 from lyra.sdk.types import (
     JsonObject,
@@ -214,7 +214,7 @@ def _app_with_mcp(
 
 
 class FakeMCPBackend:
-    def __init__(self, metrics: list[MetricInfoV3]) -> None:
+    def __init__(self, metrics: list[MetricInfoV4]) -> None:
         self.catalog = MetricCatalogResponse(
             catalog_fingerprint="catalog-1",
             metrics=metrics,
@@ -246,7 +246,7 @@ class FakeMCPBackend:
         self.met_zone_queries.append(name)
         return self.met_zone_matches.get(name)
 
-    async def get_metric(self, metric: str) -> MetricInfoV3 | None:
+    async def get_metric(self, metric: str) -> MetricInfoV4 | None:
         return next(
             (
                 candidate
@@ -365,9 +365,9 @@ def _table_metric(
     name: str,
     description: str,
     *,
-    spatial_inputs: dict[str, SpatialInputKindV3] | None = None,
+    spatial_inputs: dict[str, SpatialInputKindV4] | None = None,
     value_type: str = "integer",
-) -> MetricInfoV3:
+) -> MetricInfoV4:
     spatial = spatial_inputs or {"location": "location"}
     properties: dict[str, Any] = {
         field: {
@@ -388,7 +388,7 @@ def _table_metric(
         "type": value_type,
         "description": "Value copied into each output row.",
     }
-    return MetricInfoV3(
+    return MetricInfoV4(
         name=name,
         description=description,
         request_schema={
@@ -398,10 +398,10 @@ def _table_metric(
             "additionalProperties": False,
         },
         spatial_inputs=spatial,
-        output=TableOutputV3(
+        output=TableOutputV4(
             kind="table",
             columns=[
-                TableOutputColumnV3(
+                TableOutputColumnV4(
                     name="value",
                     type="integer",
                     unit="count",
@@ -412,8 +412,8 @@ def _table_metric(
     )
 
 
-def _file_metric(name: str, description: str) -> MetricInfoV3:
-    return MetricInfoV3(
+def _file_metric(name: str, description: str) -> MetricInfoV4:
+    return MetricInfoV4(
         name=name,
         description=description,
         request_schema={
@@ -423,7 +423,7 @@ def _file_metric(name: str, description: str) -> MetricInfoV3:
             "additionalProperties": False,
         },
         spatial_inputs={"location": "location"},
-        output=FileOutputV3(kind="file", media_type="text/plain", extensions=[".txt"]),
+        output=FileOutputV4(kind="file", media_type="text/plain", extensions=[".txt"]),
     )
 
 

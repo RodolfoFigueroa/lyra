@@ -1,25 +1,23 @@
 from __future__ import annotations
 
-from lyra.sdk import Input, LocationInput, PluginDefinition, RunContext
+from lyra.sdk import Input, LocationInput, RunContext, metric
 from lyra.sdk.models import FileJobResult, TableJobResult
-from lyra.sdk.models.plugin_v3 import (
-    FileOutputV3,
-    TableOutputColumnV3,
-    TableOutputV3,
+from lyra.sdk.models.plugin_v4 import (
+    FileOutputV4,
+    TableOutputColumnV4,
+    TableOutputV4,
 )
-
-plugin = PluginDefinition()
 
 
 def _feature_ids(location: LocationInput) -> list[str]:
     return [feature.id for feature in location.features]
 
 
-def _value_output() -> TableOutputV3:
-    return TableOutputV3(
+def _value_output() -> TableOutputV4:
+    return TableOutputV4(
         kind="table",
         columns=[
-            TableOutputColumnV3(
+            TableOutputColumnV4(
                 name="value",
                 type="integer",
                 unit="count",
@@ -30,7 +28,7 @@ def _value_output() -> TableOutputV3:
 
 
 # docs:start table-metric
-@plugin.metric(
+@metric(
     name="smoke_table_metric",
     description="Return the submitted value for each input feature.",
     inputs={
@@ -58,10 +56,10 @@ def run_table(
 # docs:end table-metric
 
 
-@plugin.metric(
+@metric(
     name="smoke_file_metric",
     description="Write a small text artifact for the submitted features.",
-    output=FileOutputV3(
+    output=FileOutputV4(
         kind="file",
         media_type="text/plain",
         extensions=[".txt"],
@@ -87,7 +85,7 @@ def run_file(
     )
 
 
-@plugin.metric(
+@metric(
     name="smoke_cancel_metric",
     description="Emit progress and observe cancellation before returning.",
     inputs={

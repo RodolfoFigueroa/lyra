@@ -958,7 +958,7 @@ def test_sync_client_returns_grouped_data_type_schemas(
     assert response.bounds[0].wrapper_schema == {"type": "object"}
 
 
-def test_sync_client_returns_v3_metric_catalog(
+def test_sync_client_returns_v4_metric_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
@@ -989,7 +989,7 @@ def test_sync_client_returns_v3_metric_catalog(
     assert batched_column["name"] == "job_accessibility_{key}"
 
 
-def test_sync_client_returns_one_v3_metric(
+def test_sync_client_returns_one_v4_metric(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
@@ -1746,7 +1746,7 @@ def test_async_client_returns_grouped_data_type_schemas(
     assert response.bounds[0].wrapper_schema == {"type": "object"}
 
 
-def test_async_client_returns_v3_metric_catalog(
+def test_async_client_returns_v4_metric_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeSession.responses = [
@@ -1774,7 +1774,7 @@ def test_async_client_returns_v3_metric_catalog(
     assert batched_column["description"] == "Job accessibility for {label}."
 
 
-def test_async_client_returns_one_v3_metric(
+def test_async_client_returns_one_v4_metric(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeSession.responses = [

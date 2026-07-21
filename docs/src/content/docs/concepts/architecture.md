@@ -9,13 +9,13 @@ Lyra separates public contracts from trusted execution.
 
 1. Operators configure plugin sources and queue assignments in Lyra-owned state.
 2. The API syncs enabled sources into its catalog directory.
-3. It parses committed schema-v3 manifests without importing Python code.
+3. It parses committed schema-v4 manifests without importing Python code.
 4. The registry compiles semantic inputs into effective request schemas and
    runtime spatial/batch metadata.
 5. `/metrics` publishes only client-facing names, descriptions, schemas, spatial
    mappings, outputs, and a contract fingerprint.
 
-The public fingerprint excludes repository IDs, entrypoints, queues, and job
+The public fingerprint excludes repository IDs, factories, queues, and job
 state.
 
 ## Job path

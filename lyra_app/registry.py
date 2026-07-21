@@ -14,13 +14,13 @@ from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
 from lyra.sdk.models.metric import (
     MetricCatalogResponse,
-    MetricInfoV3,
+    MetricInfoV4,
     build_metric_search_text,
 )
-from lyra.sdk.models.plugin_v3 import (
-    CompiledMetricManifestV3,
-    CompiledPluginManifestV3,
-    PluginManifestV3,
+from lyra.sdk.models.plugin_v4 import (
+    CompiledMetricManifestV4,
+    CompiledPluginManifestV4,
+    PluginManifestV4,
     compile_plugin_manifest,
 )
 from lyra.sdk.types import JsonObject, JsonValue
@@ -41,14 +41,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MetricRegistryEntry:
-    metric: CompiledMetricManifestV3
+    metric: CompiledMetricManifestV4
     plugin_name: str
     plugin_version: str
     request_schema: JsonObject
     request_validator: Validator
     queue: str
     repo_id: str
-    entrypoint: str
     catalog_fingerprint: str
 
 
@@ -83,7 +82,7 @@ def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
 
 
 def _normalised_manifest_payload(
-    manifests: list[tuple[CompiledPluginManifestV3, Path, str]],
+    manifests: list[tuple[CompiledPluginManifestV4, Path, str]],
     metric_queues: dict[str, str],
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
@@ -100,7 +99,7 @@ def _normalised_manifest_payload(
     )
 
 
-def load_plugin_manifest(path: Path) -> CompiledPluginManifestV3:
+def load_plugin_manifest(path: Path) -> CompiledPluginManifestV4:
     manifest_path = path / MANIFEST_FILENAME
     if not manifest_path.exists():
         msg = f"Plugin repo {path} is missing required {MANIFEST_FILENAME}."
@@ -108,7 +107,7 @@ def load_plugin_manifest(path: Path) -> CompiledPluginManifestV3:
 
     try:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest = PluginManifestV3.model_validate(raw)
+        manifest = PluginManifestV4.model_validate(raw)
         return compile_plugin_manifest(manifest)
     except json.JSONDecodeError as exc:
         msg = f"Plugin manifest {manifest_path} is not valid JSON."
@@ -129,7 +128,7 @@ def _build_request_validator(metric_name: str, schema: JsonObject) -> Validator:
 
 
 def _build_registry(
-    manifests: list[tuple[CompiledPluginManifestV3, Path, str]],
+    manifests: list[tuple[CompiledPluginManifestV4, Path, str]],
     metric_queues: dict[str, str],
 ) -> dict[str, MetricRegistryEntry]:
     catalog_fingerprint = public_catalog_fingerprint(
@@ -159,7 +158,6 @@ def _build_registry(
                 request_validator=_build_request_validator(metric.name, request_schema),
                 queue=queue,
                 repo_id=repo_id,
-                entrypoint=metric.entrypoint,
                 catalog_fingerprint=catalog_fingerprint,
             )
     return registry
@@ -314,14 +312,14 @@ def get_loaded_catalog_fingerprint() -> str:
     return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
 
 
-def _public_metric_payload(metrics: list[MetricInfoV3]) -> list[dict[str, Any]]:
+def _public_metric_payload(metrics: list[MetricInfoV4]) -> list[dict[str, Any]]:
     return [
         metric.model_dump(mode="json")
         for metric in sorted(metrics, key=lambda item: item.name)
     ]
 
 
-def public_catalog_fingerprint(metrics: list[MetricInfoV3]) -> str:
+def public_catalog_fingerprint(metrics: list[MetricInfoV4]) -> str:
     return _fingerprint_payload(_public_metric_payload(metrics))
 
 
@@ -348,14 +346,14 @@ def get_metric_entry(name: str) -> MetricRegistryEntry | None:
     return TASK_REGISTRY.get(name)
 
 
-def get_metric_info(name: str) -> MetricInfoV3 | None:
+def get_metric_info(name: str) -> MetricInfoV4 | None:
     entry = get_metric_entry(name)
     if entry is None:
         return None
     return _metric_info_from_entry(entry)
 
 
-def get_metrics_info() -> list[MetricInfoV3]:
+def get_metrics_info() -> list[MetricInfoV4]:
     ensure_catalog_loaded()
     return [
         _metric_info_from_entry(entry) for _name, entry in sorted(TASK_REGISTRY.items())
@@ -411,7 +409,7 @@ def validate_metric_entry_payload(
 
 
 def _validate_unique_batch_keys(
-    metric: CompiledMetricManifestV3,
+    metric: CompiledMetricManifestV4,
     payload: dict[str, Any],
 ) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
@@ -445,12 +443,12 @@ def _format_validation_error(error: JsonSchemaValidationError) -> dict[str, Any]
     }
 
 
-def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV3:
+def _metric_info_from_entry(entry: MetricRegistryEntry) -> MetricInfoV4:
     return _metric_info_from_manifest(entry.metric)
 
 
-def _metric_info_from_manifest(metric: CompiledMetricManifestV3) -> MetricInfoV3:
-    return MetricInfoV3(
+def _metric_info_from_manifest(metric: CompiledMetricManifestV4) -> MetricInfoV4:
+    return MetricInfoV4(
         name=metric.name,
         description=metric.description.strip(),
         request_schema=metric.request_schema,

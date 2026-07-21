@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from fastapi import HTTPException
     from lyra.sdk.models import JobCreateResponse, JobStatusInfo, ResultDescriptor
-    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
+    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
     from lyra.sdk.types import JsonObject, JsonValue
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
@@ -51,7 +51,7 @@ class LyraMCPBackend(Protocol):
 
     async def lookup_met_zone(self, name: str) -> dict[str, str] | None: ...
 
-    async def get_metric(self, metric: str) -> MetricInfoV3 | None: ...
+    async def get_metric(self, metric: str) -> MetricInfoV4 | None: ...
 
     async def create_job(
         self,
@@ -127,7 +127,7 @@ class InProcessLyraBackend:
         cve_met, nom_met = result
         return {"cve_met": cve_met, "nom_met": nom_met}
 
-    async def get_metric(self, metric: str) -> MetricInfoV3 | None:
+    async def get_metric(self, metric: str) -> MetricInfoV4 | None:
         from lyra_app.registry import get_metric_info  # noqa: PLC0415
 
         return await asyncio.to_thread(get_metric_info, metric)
@@ -556,7 +556,7 @@ async def _descriptor_for_result_ref(
 
 def _run_payload_for_metric(
     *,
-    metric: MetricInfoV3,
+    metric: MetricInfoV4,
     met_zone_code: str,
     parameters: dict[str, Any],
 ) -> dict[str, Any]:
@@ -632,7 +632,7 @@ def _running_payload(
     return payload
 
 
-def _search_candidate(metric: MetricInfoV3, query: str) -> dict[str, Any]:
+def _search_candidate(metric: MetricInfoV4, query: str) -> dict[str, Any]:
     query_tokens = _tokens(query)
     search_text = str(metric.search_text()) if hasattr(metric, "search_text") else ""
     haystack = _tokens(search_text)
@@ -676,7 +676,7 @@ def _search_reason(
     return f"{metric_name}: public catalog entry."
 
 
-def _required_spatial_fields(metric: MetricInfoV3) -> list[dict[str, str]]:
+def _required_spatial_fields(metric: MetricInfoV4) -> list[dict[str, str]]:
     spatial_inputs = getattr(metric, "spatial_inputs", {})
     if not isinstance(spatial_inputs, dict):
         return []
@@ -687,7 +687,7 @@ def _required_spatial_fields(metric: MetricInfoV3) -> list[dict[str, str]]:
 
 
 def _relevant_columns(
-    metric: MetricInfoV3,
+    metric: MetricInfoV4,
     query_tokens: list[str],
 ) -> list[JsonObject]:
     output = getattr(metric, "output", None)

@@ -5,12 +5,12 @@ from typing import Any
 
 import lyra.sdk.models as sdk_models
 import pytest
-from lyra.sdk.models import PluginManifestV3
-from lyra.sdk.models.plugin_v3 import (
-    BatchInputV3,
-    FileOutputV3,
-    JsonSchemaInputV3,
-    TableOutputV3,
+from lyra.sdk.models import PluginManifestV4
+from lyra.sdk.models.plugin_v4 import (
+    BatchInputV4,
+    FileOutputV4,
+    JsonSchemaInputV4,
+    TableOutputV4,
 )
 from pydantic import ValidationError
 
@@ -19,7 +19,6 @@ def _static_metric(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     metric: dict[str, Any] = {
         "name": "urbanized_area",
         "description": "Compute urbanized area statistics.",
-        "entrypoint": "urban_metrics.runner:run",
         "inputs": {
             "location": {"kind": "location"},
             "year": {
@@ -49,8 +48,9 @@ def _manifest(
     metric_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "urban-metrics", "version": "0.1.0"},
+        "factory": "urban_metrics.plugin:create_plugin",
         "metrics": [_static_metric(metric_overrides)],
     }
 
@@ -96,27 +96,27 @@ def _dynamic_metric() -> dict[str, Any]:
 
 def _assert_invalid(raw: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
-        PluginManifestV3.model_validate(raw)
+        PluginManifestV4.model_validate(raw)
 
 
-def test_sdk_public_surface_exposes_v3_manifest_entrypoints() -> None:
-    assert sdk_models.PluginManifestV3 is PluginManifestV3
+def test_sdk_public_surface_exposes_v4_manifest_models() -> None:
+    assert sdk_models.PluginManifestV4 is PluginManifestV4
     assert hasattr(sdk_models, "compile_plugin_manifest")
-    assert not hasattr(sdk_models, "PluginManifestV2")
-    assert not hasattr(sdk_models, "MetricInfoV2")
+    assert not hasattr(sdk_models, "PluginManifestV3")
+    assert not hasattr(sdk_models, "MetricInfoV3")
 
 
-def test_manifest_v3_accepts_minimal_static_table_metric() -> None:
-    manifest = PluginManifestV3.model_validate(_manifest())
+def test_manifest_v4_accepts_minimal_static_table_metric() -> None:
+    manifest = PluginManifestV4.model_validate(_manifest())
     metric = manifest.metrics[0]
 
-    assert manifest.schema_version == 3
+    assert manifest.schema_version == 4
     assert "queue" not in metric.model_dump()
-    assert isinstance(metric.output, TableOutputV3)
+    assert isinstance(metric.output, TableOutputV4)
     assert metric.output.columns[0].nullable is False
 
 
-def test_manifest_v3_accepts_fractional_area_derivation() -> None:
+def test_manifest_v4_accepts_fractional_area_derivation() -> None:
     raw = _manifest()
     raw["metrics"][0]["output"]["columns"][0]["derivations"] = [
         {
@@ -126,9 +126,9 @@ def test_manifest_v3_accepts_fractional_area_derivation() -> None:
         }
     ]
 
-    manifest = PluginManifestV3.model_validate(raw)
+    manifest = PluginManifestV4.model_validate(raw)
     output = manifest.metrics[0].output
-    assert isinstance(output, TableOutputV3)
+    assert isinstance(output, TableOutputV4)
     derivation = output.columns[0].derivations[0]
 
     assert derivation.kind == "fraction_of_location_area"
@@ -142,7 +142,7 @@ def test_manifest_v3_accepts_fractional_area_derivation() -> None:
         ({"unit": "km2"}, "source unit 'm2'"),
     ],
 )
-def test_manifest_v3_rejects_invalid_fractional_area_source(
+def test_manifest_v4_rejects_invalid_fractional_area_source(
     column_update: dict[str, Any],
     match: str,
 ) -> None:
@@ -160,7 +160,7 @@ def test_manifest_v3_rejects_invalid_fractional_area_source(
     _assert_invalid(raw, match)
 
 
-def test_manifest_v3_rejects_fractional_area_name_collision() -> None:
+def test_manifest_v4_rejects_fractional_area_name_collision() -> None:
     raw = _manifest()
     raw["metrics"][0]["output"]["columns"][0]["derivations"] = [
         {
@@ -181,10 +181,11 @@ def test_manifest_v3_rejects_fractional_area_name_collision() -> None:
     _assert_invalid(raw, "duplicate")
 
 
-def test_manifest_v3_rejects_derivations_on_batched_columns() -> None:
+def test_manifest_v4_rejects_derivations_on_batched_columns() -> None:
     raw = {
-        "schema_version": 3,
+        "schema_version": 4,
         "plugin": {"name": "accessibility-metrics", "version": "0.1.0"},
+        "factory": "accessibility_metrics.plugin:create_plugin",
         "metrics": [_dynamic_metric()],
     }
     raw["metrics"][0]["output"]["batched_columns"][0]["derivations"] = []
@@ -192,31 +193,32 @@ def test_manifest_v3_rejects_derivations_on_batched_columns() -> None:
     _assert_invalid(raw, "Extra inputs")
 
 
-def test_manifest_v3_rejects_metric_queue_field() -> None:
+def test_manifest_v4_rejects_metric_queue_field() -> None:
     raw = _manifest({"queue": "interactive"})
 
     _assert_invalid(raw, "Extra inputs")
 
 
-def test_manifest_v3_accepts_dynamic_table_metric() -> None:
-    manifest = PluginManifestV3.model_validate(
+def test_manifest_v4_accepts_dynamic_table_metric() -> None:
+    manifest = PluginManifestV4.model_validate(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "plugin": {"name": "accessibility-metrics", "version": "0.1.0"},
+            "factory": "accessibility_metrics.plugin:create_plugin",
             "metrics": [_dynamic_metric()],
         }
     )
     metric = manifest.metrics[0]
     batch = metric.inputs["destination_categories"]
 
-    assert isinstance(batch, BatchInputV3)
+    assert isinstance(batch, BatchInputV4)
     assert batch.max_items == 12
-    assert isinstance(metric.output, TableOutputV3)
+    assert isinstance(metric.output, TableOutputV4)
     assert metric.output.batched_columns[0].name == "accessibility_{key}"
 
 
-def test_manifest_v3_accepts_file_metric_with_bounds() -> None:
-    manifest = PluginManifestV3.model_validate(
+def test_manifest_v4_accepts_file_metric_with_bounds() -> None:
+    manifest = PluginManifestV4.model_validate(
         _manifest(
             {
                 "name": "land_cover_raster",
@@ -234,11 +236,11 @@ def test_manifest_v3_accepts_file_metric_with_bounds() -> None:
         )
     )
 
-    assert isinstance(manifest.metrics[0].output, FileOutputV3)
+    assert isinstance(manifest.metrics[0].output, FileOutputV4)
 
 
-def test_manifest_v3_accepts_plugin_owned_json_schema_input() -> None:
-    manifest = PluginManifestV3.model_validate(
+def test_manifest_v4_accepts_plugin_owned_json_schema_input() -> None:
+    manifest = PluginManifestV4.model_validate(
         _manifest(
             {
                 "inputs": {
@@ -262,24 +264,24 @@ def test_manifest_v3_accepts_plugin_owned_json_schema_input() -> None:
     )
 
     advanced_filter = manifest.metrics[0].inputs["advanced_filter"]
-    assert isinstance(advanced_filter, JsonSchemaInputV3)
+    assert isinstance(advanced_filter, JsonSchemaInputV4)
     assert advanced_filter.required is False
 
 
-def test_manifest_v3_rejects_unknown_fields() -> None:
+def test_manifest_v4_rejects_unknown_fields() -> None:
     raw = _manifest({"request_schema": {"type": "object"}})
 
     _assert_invalid(raw, "Extra inputs")
 
 
-def test_manifest_v3_rejects_invalid_schema_version() -> None:
+def test_manifest_v4_rejects_invalid_schema_version() -> None:
     raw = _manifest()
     raw["schema_version"] = 2
 
     _assert_invalid(raw, "schema_version")
 
 
-def test_manifest_v3_rejects_duplicate_metric_names() -> None:
+def test_manifest_v4_rejects_duplicate_metric_names() -> None:
     raw = _manifest()
     raw["metrics"].append(_static_metric())
 
@@ -287,7 +289,7 @@ def test_manifest_v3_rejects_duplicate_metric_names() -> None:
 
 
 @pytest.mark.parametrize(
-    "entrypoint",
+    "factory",
     [
         "urban_metrics.runner.run",
         "urban_metrics.runner:run:again",
@@ -296,13 +298,14 @@ def test_manifest_v3_rejects_duplicate_metric_names() -> None:
         ":run",
     ],
 )
-def test_manifest_v3_rejects_invalid_entrypoint_strings(entrypoint: str) -> None:
-    raw = _manifest({"entrypoint": entrypoint})
+def test_manifest_v4_rejects_invalid_factory_strings(factory: str) -> None:
+    raw = _manifest()
+    raw["factory"] = factory
 
-    _assert_invalid(raw, "module:function")
+    _assert_invalid(raw, "module:attribute")
 
 
-def test_manifest_v3_rejects_metric_without_spatial_input() -> None:
+def test_manifest_v4_rejects_metric_without_spatial_input() -> None:
     raw = _manifest(
         {
             "inputs": {"year": {"kind": "integer"}},
@@ -317,13 +320,13 @@ def test_manifest_v3_rejects_metric_without_spatial_input() -> None:
     _assert_invalid(raw, "location or bounds")
 
 
-def test_manifest_v3_rejects_table_metric_without_location_input() -> None:
+def test_manifest_v4_rejects_table_metric_without_location_input() -> None:
     raw = _manifest({"inputs": {"bounds": {"kind": "bounds"}}})
 
     _assert_invalid(raw, "inputs.location")
 
 
-def test_manifest_v3_rejects_batch_input_without_batched_column() -> None:
+def test_manifest_v4_rejects_batch_input_without_batched_column() -> None:
     raw = _manifest()
     raw["metrics"][0]["inputs"]["destination_categories"] = {
         "kind": "batch",
@@ -334,7 +337,7 @@ def test_manifest_v3_rejects_batch_input_without_batched_column() -> None:
     _assert_invalid(raw, "referenced by batched_columns")
 
 
-def test_manifest_v3_rejects_batched_column_source_missing_from_inputs() -> None:
+def test_manifest_v4_rejects_batched_column_source_missing_from_inputs() -> None:
     raw = _manifest(
         {
             "output": {
@@ -355,7 +358,7 @@ def test_manifest_v3_rejects_batched_column_source_missing_from_inputs() -> None
     _assert_invalid(raw, "not defined in inputs")
 
 
-def test_manifest_v3_rejects_batched_column_source_that_is_not_batch() -> None:
+def test_manifest_v4_rejects_batched_column_source_that_is_not_batch() -> None:
     raw = _manifest(
         {
             "inputs": {
@@ -380,7 +383,7 @@ def test_manifest_v3_rejects_batched_column_source_that_is_not_batch() -> None:
     _assert_invalid(raw, "must reference a batch input")
 
 
-def test_manifest_v3_rejects_unsupported_batched_template_fields() -> None:
+def test_manifest_v4_rejects_unsupported_batched_template_fields() -> None:
     raw = _manifest({"output": deepcopy(_dynamic_metric()["output"])})
     raw["metrics"][0]["inputs"] = deepcopy(_dynamic_metric()["inputs"])
     raw["metrics"][0]["output"]["batched_columns"][0]["name"] = "accessibility_{value}"
@@ -388,7 +391,7 @@ def test_manifest_v3_rejects_unsupported_batched_template_fields() -> None:
     _assert_invalid(raw, "unsupported field")
 
 
-def test_manifest_v3_rejects_duplicate_static_columns() -> None:
+def test_manifest_v4_rejects_duplicate_static_columns() -> None:
     raw = _manifest()
     raw["metrics"][0]["output"]["columns"].append(
         {
@@ -402,7 +405,7 @@ def test_manifest_v3_rejects_duplicate_static_columns() -> None:
     _assert_invalid(raw, "duplicate")
 
 
-def test_manifest_v3_rejects_invalid_file_output_extension() -> None:
+def test_manifest_v4_rejects_invalid_file_output_extension() -> None:
     raw = _manifest(
         {
             "output": {
@@ -416,7 +419,7 @@ def test_manifest_v3_rejects_invalid_file_output_extension() -> None:
     _assert_invalid(raw, "extension")
 
 
-def test_manifest_v3_rejects_invalid_raw_json_schema_input() -> None:
+def test_manifest_v4_rejects_invalid_raw_json_schema_input() -> None:
     raw = _manifest(
         {
             "inputs": {
@@ -443,7 +446,7 @@ def test_manifest_v3_rejects_invalid_raw_json_schema_input() -> None:
         {"bounds": {"kind": "bounds", "description": "Custom."}},
     ],
 )
-def test_manifest_v3_rejects_spatial_input_metadata(
+def test_manifest_v4_rejects_spatial_input_metadata(
     inputs: dict[str, Any],
 ) -> None:
     _assert_invalid(_manifest({"inputs": inputs}), "Extra inputs are not permitted")
@@ -453,7 +456,7 @@ def test_manifest_v3_rejects_spatial_input_metadata(
     "field",
     ["description", "examples", "default", "required", "nullable"],
 )
-def test_manifest_v3_rejects_batch_container_metadata(field: str) -> None:
+def test_manifest_v4_rejects_batch_container_metadata(field: str) -> None:
     raw = _manifest()
     raw["metrics"][0] = _dynamic_metric()
     raw["metrics"][0]["inputs"]["destination_categories"][field] = (

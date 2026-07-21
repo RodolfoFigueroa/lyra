@@ -39,7 +39,11 @@ lyra-tui = { workspace = true }
 [tool.ruff.lint]
 preview = true
 select = ["ALL"]
-ignore = ["magic-value-comparison", "missing-trailing-comma"]
+ignore = [
+    "magic-value-comparison",
+    "missing-trailing-comma",
+    "missing-copyright-notice",
+]
 per-file-ignores = { "tests/**/*.py" = [
     "assert",
     "undocumented-public-module",

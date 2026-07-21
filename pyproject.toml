@@ -49,6 +49,7 @@ per-file-ignores = { "tests/**/*.py" = [
     "D105",
     "D107",
 ] }
+pydocstyle = { "convention" = "google" }
 
 
 [dependency-groups]

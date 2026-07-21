@@ -180,7 +180,6 @@ def get_worker_engine(config: LyraConfig | None = None) -> Engine:
 
 def probe_worker_database(config: LyraConfig) -> None:
     """Verify worker database connectivity without retaining a pre-fork engine."""
-
     engine = create_sync_database_engine(config.database.worker, config)
     try:
         with engine.connect() as connection:

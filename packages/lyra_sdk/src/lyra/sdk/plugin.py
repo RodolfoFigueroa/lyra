@@ -302,7 +302,6 @@ class PluginDefinition:
 
     def describe(self, name: str) -> MetricDescription:
         """Return structured authoring information for one registered metric."""
-
         try:
             metric = self._metrics[name]
         except KeyError as exc:

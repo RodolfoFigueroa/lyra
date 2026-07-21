@@ -15,6 +15,7 @@ def _extract_names(node: ast.AST | None) -> set[str]:
 
     Returns:
         A set of identifier strings found in the node.
+
     """
     if not node:
         return set()
@@ -36,6 +37,7 @@ def _make_method_abstract(
         item: The function definition node to transform in-place.
         annotation_names: Mutable set updated with names used in annotations.
         runtime_names: Mutable set updated with names used in default values.
+
     """
     item.decorator_list.append(ast.Name(id="abstractmethod", ctx=ast.Load()))
     _collect_signature_names(item, annotation_names, runtime_names)
@@ -79,6 +81,7 @@ def _transform_class(
         ``class_node`` is the transformed ``ClassDef`` node (or ``None`` if the
         class was not found), ``annotation_names`` contains names used only for
         typing, and ``runtime_names`` contains names used in default values.
+
     """
     annotation_names: set[str] = set()
     runtime_names: set[str] = set()
@@ -112,6 +115,7 @@ def _filter_import(
     Returns:
         The same node with its ``names`` list narrowed to required aliases, or
         ``None`` if no alias in the statement is required.
+
     """
     new_aliases = [
         alias
@@ -141,6 +145,7 @@ def _build_module_body(
     Returns:
         A list of AST statements containing runtime imports, annotation-only
         imports guarded by ``TYPE_CHECKING``, and the abstract class definition.
+
     """
     new_body: list[ast.stmt] = []
     stdlib_type_imports: list[ast.stmt] = []
@@ -197,6 +202,7 @@ def generate_sdk_interface(source: str, dest: str) -> None:
 
     Raises:
         ValueError: If ``LyraDBImplicit`` is not found in the source file.
+
     """
     source_path = Path(source)
     source_path_str = source_path.as_posix()

@@ -108,7 +108,6 @@ def resolve_spatial_inputs_with_metadata(
     converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> SpatialInputResolution:
     """Resolve spatial inputs while retaining no resolved geometry in metadata."""
-
     resolved = resolve_spatial_inputs(payload, spatial_inputs, converter_map)
     row_identity: RowIdentityMetadata | None = None
     for field_name, kind in spatial_inputs.items():

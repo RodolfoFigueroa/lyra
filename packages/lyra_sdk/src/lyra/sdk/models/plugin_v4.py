@@ -484,7 +484,6 @@ def expand_runner_table_output_columns(
     job_input: JsonObject,
 ) -> list[TableOutputColumnV4]:
     """Expand only columns that a runner must return for one job input."""
-
     columns = [column.model_copy(deep=True) for column in output.columns]
 
     for column_group in output.batched_columns:
@@ -529,7 +528,6 @@ def expand_table_output_columns(
     job_input: JsonObject,
 ) -> list[TableOutputColumnV4]:
     """Expand the effective table output contract for one validated job input."""
-
     runner_columns = expand_runner_table_output_columns(output, job_input)
     columns: list[TableOutputColumnV4] = []
     for column in runner_columns:
@@ -1066,7 +1064,6 @@ def _compile_metric_request_schema(
 
 def compile_plugin_manifest(manifest: PluginManifestV4) -> CompiledPluginManifestV4:
     """Compile a schema v4 authoring manifest into Lyra's runtime contract."""
-
     compiled_metrics: list[CompiledMetricManifestV4] = []
     for index, metric in enumerate(manifest.metrics):
         request_schema, spatial_inputs, batch_inputs = _compile_metric_request_schema(

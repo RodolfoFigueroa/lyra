@@ -18,7 +18,6 @@ class PluginLoadError(RuntimeError):
 
 def load_plugin_definition(factory_ref: str) -> PluginDefinition:
     """Import and invoke one synchronous, parameterless plugin factory."""
-
     match = _FACTORY_PATTERN.fullmatch(factory_ref)
     if match is None:
         msg = f"Plugin factory must use 'module:attribute' format: {factory_ref!r}"

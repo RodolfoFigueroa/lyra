@@ -93,7 +93,6 @@ def eval_job_script(
     keys_and_args: tuple[str | float, ...],
 ) -> int | str:
     """Emulate job-store Lua scripts for focused in-memory test doubles."""
-
     if numkeys == 5:
         keys = [str(value) for value in keys_and_args[:numkeys]]
         return _eval_event_script(client, keys, keys_and_args[numkeys:])

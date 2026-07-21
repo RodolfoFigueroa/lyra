@@ -1,3 +1,5 @@
+"""Synchronous consumer and administrator clients for the Lyra HTTP API."""
+
 from __future__ import annotations
 
 import json
@@ -228,7 +230,15 @@ def _validate_max_reconnect_attempts(max_reconnect_attempts: int) -> None:
 
 
 class JobHandle(Generic[_SuccessResultT]):
-    """Synchronous observation and result handle for one submitted job."""
+    """Observe a submitted job and retrieve its successful result synchronously.
+
+    Instances are returned by :meth:`LyraClient.raw.submit`; applications normally
+    do not construct handles directly.
+
+    Attributes:
+        submission: The response returned when the job was submitted.
+
+    """
 
     def __init__(
         self,
@@ -240,13 +250,24 @@ class JobHandle(Generic[_SuccessResultT]):
 
     @property
     def job_id(self) -> str:
+        """Return the submitted job's identifier."""
         return self.submission.job_id
 
     @property
     def metric(self) -> str:
+        """Return the name of the submitted metric."""
         return self.submission.metric
 
     def status(self) -> JobStatusInfo:
+        """Fetch the job's current lifecycle status.
+
+        Returns:
+            The latest status reported by the API.
+
+        Raises:
+            DownloadError: If the status request fails or returns an error response.
+
+        """
         return self._client.get_job(self.job_id)
 
     def events(
@@ -257,6 +278,29 @@ class JobHandle(Generic[_SuccessResultT]):
         timeout: float | None = None,
         max_reconnect_attempts: int = 5,
     ) -> Iterator[JobEventRecord]:
+        """Stream job events until the job reaches a terminal state.
+
+        The stream reconnects automatically after transient connection failures and
+        resumes after the last received event.
+
+        Args:
+            after_id: Resume after this server-sent event identifier.
+            kinds: Event kinds to yield. All events are yielded when omitted.
+            timeout: Maximum total number of seconds to wait. ``None`` waits without
+                a deadline.
+            max_reconnect_attempts: Number of consecutive reconnection attempts
+                allowed after the initial connection.
+
+        Yields:
+            Job event records in server order.
+
+        Raises:
+            ValueError: If ``max_reconnect_attempts`` is negative.
+            JobEventCursorGapError: If the requested event is no longer retained.
+            JobEventStreamError: If the stream cannot be resumed.
+            JobWaitTimeoutError: If ``timeout`` expires.
+
+        """
         return self._client.iter_job_events(
             self.job_id,
             last_event_id=after_id,
@@ -266,6 +310,16 @@ class JobHandle(Generic[_SuccessResultT]):
         )
 
     def result(self) -> _SuccessResultT:
+        """Fetch and return the job's successful terminal result.
+
+        Returns:
+            The table or file result associated with the job.
+
+        Raises:
+            MetricRunError: If the job failed or was cancelled.
+            DownloadError: If the result request fails or returns an error response.
+
+        """
         result = self._client.get_job_result(self.job_id)
         if isinstance(result, FailedJobResult | CancelledJobResult):
             raise MetricRunError(result)
@@ -279,6 +333,25 @@ class JobHandle(Generic[_SuccessResultT]):
         on_progress: Callable[[JobProgressEvent], None] | None = None,
         on_message: Callable[[JobMessageEvent], None] | None = None,
     ) -> _SuccessResultT:
+        """Wait for the job to finish and return its successful result.
+
+        Args:
+            timeout: Maximum total number of seconds to wait. ``None`` waits without
+                a deadline.
+            on_event: Called for every event received from the job stream.
+            on_progress: Called for every progress event.
+            on_message: Called for every message event.
+
+        Returns:
+            The table or file result produced by the job.
+
+        Raises:
+            MetricRunError: If the job failed or was cancelled.
+            JobEventStreamError: If the event stream ends or cannot be resumed.
+            JobEventCursorGapError: If event history needed to resume was discarded.
+            JobWaitTimeoutError: If ``timeout`` expires.
+
+        """
         for record in self.events(timeout=timeout):
             if on_event is not None:
                 on_event(record)
@@ -1226,7 +1299,34 @@ class _AdminRoutingResource:
 
 
 class LyraClient:
-    """Resource-oriented synchronous client for the Lyra HTTP API."""
+    """Access Lyra's consumer API with synchronous requests.
+
+    The client groups endpoints into resource namespaces. Use :attr:`catalog` to
+    discover metrics, :attr:`raw` to submit or run metrics without a generated
+    typed client, and :attr:`jobs` and :attr:`results` to observe existing jobs.
+
+    Args:
+        host: API hostname, optionally including a base path, but without a URL
+            scheme.
+        timeout: Default HTTP request timeout in seconds.
+        headers: Additional headers included with every request.
+        agent_api_key: Bearer token for agent-protected job endpoints. Public
+            catalog, lookup, and health endpoints do not require it.
+        secure: Use HTTPS when true and HTTP when false.
+
+    Attributes:
+        health: Liveness and readiness endpoints.
+        lookups: Public lookup endpoints.
+        catalog: Metric and data-type discovery endpoints.
+        jobs: Job status and event-stream endpoints.
+        results: Job result inspection and download endpoints.
+        raw: Untyped metric submission and execution endpoints.
+
+    Example:
+        >>> client = LyraClient("lyra.example.com", agent_api_key="...")
+        >>> metrics = client.catalog.metrics()
+
+    """
 
     def __init__(
         self,
@@ -1246,15 +1346,48 @@ class LyraClient:
         )
         self._transport = transport
         self.health = _HealthResource(transport)
+        """Liveness and readiness endpoints."""
         self.lookups = _LookupsResource(transport)
+        """Public lookup endpoints."""
         self.catalog = _CatalogResource(transport)
+        """Metric and data-type discovery endpoints."""
         self.jobs = _JobsResource(transport)
+        """Job status and event-stream endpoints."""
         self.results = _ResultsResource(transport)
+        """Job result inspection and download endpoints."""
         self.raw = _RawMetricsResource(transport)
+        """Untyped metric submission and execution endpoints."""
 
 
 class LyraAdminClient:
-    """Resource-oriented synchronous client for Lyra administration."""
+    """Access Lyra's administrator API with synchronous requests.
+
+    Administrator credentials are intentionally isolated from :class:`LyraClient`.
+    This client exposes operational state and mutation endpoints, plus the public
+    health checks, but does not expose consumer metric execution.
+
+    Args:
+        host: API hostname, optionally including a base path, but without a URL
+            scheme.
+        timeout: Default HTTP request timeout in seconds.
+        headers: Additional headers included with every request.
+        admin_api_key: Bearer token for administrator endpoints.
+        secure: Use HTTPS when true and HTTP when false.
+
+    Attributes:
+        health: Liveness and readiness endpoints.
+        jobs: Administrative job listing and cancellation endpoints.
+        plugin_repos: Plugin repository configuration and synchronization endpoints.
+        catalog: Administrative catalog summary and refresh endpoints.
+        workers: Worker inspection and restart endpoints.
+        queues: Queue inspection endpoints.
+        routing: Metric-to-queue routing endpoints.
+
+    Example:
+        >>> admin = LyraAdminClient("lyra.example.com", admin_api_key="...")
+        >>> status = admin.status()
+
+    """
 
     def __init__(
         self,
@@ -1274,15 +1407,40 @@ class LyraAdminClient:
         )
         self._transport = transport
         self.health = _HealthResource(transport)
+        """Liveness and readiness endpoints."""
         self.jobs = _AdminJobsResource(transport)
+        """Administrative job listing and cancellation endpoints."""
         self.plugin_repos = _AdminPluginReposResource(transport)
+        """Plugin repository configuration and synchronization endpoints."""
         self.catalog = _AdminCatalogResource(transport)
+        """Administrative catalog summary and refresh endpoints."""
         self.workers = _AdminWorkersResource(transport)
+        """Worker inspection and restart endpoints."""
         self.queues = _AdminQueuesResource(transport)
+        """Queue inspection endpoints."""
         self.routing = _AdminRoutingResource(transport)
+        """Metric-to-queue routing endpoints."""
 
     def status(self) -> AdminStatusResponse:
+        """Fetch a summary of the running Lyra service.
+
+        Returns:
+            API, storage, catalog, queue, and worker configuration status.
+
+        Raises:
+            DownloadError: If the status request fails or returns an error response.
+
+        """
         return self._transport.get_admin_status()
 
     def config_summary(self) -> ConfigSummaryResponse:
+        """Fetch the effective non-secret service configuration.
+
+        Returns:
+            The API, queue, worker, job-store, and plugin path configuration.
+
+        Raises:
+            DownloadError: If the request fails or returns an error response.
+
+        """
         return self._transport.get_admin_config_summary()

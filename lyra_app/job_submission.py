@@ -119,7 +119,6 @@ def canonical_request_fingerprint(
     request: Mapping[str, JsonValue],
 ) -> str:
     """Digest a metric and validated unresolved request using canonical JSON."""
-
     encoded = json.dumps(
         {"metric": metric, "input": request},
         allow_nan=False,
@@ -291,7 +290,6 @@ async def submit_job(
     **options: Unpack[SubmissionOptions],
 ) -> JobCreateResponse:
     """Validate, deduplicate, persist, and dispatch one public job request."""
-
     client = options.get("client")
     dispatcher = options.get("dispatcher")
     job_id_factory = options.get("job_id_factory")

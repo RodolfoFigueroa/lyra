@@ -290,7 +290,6 @@ class JobLifecycleEvent(StrictBaseModel):
     @property
     def name(self) -> str:
         """Return the lifecycle status as a concise event name."""
-
         return self.status
 
 
@@ -334,7 +333,6 @@ class JobProgressEvent(StrictBaseModel):
     @property
     def name(self) -> str:
         """Return ``"progress"`` as a concise event name."""
-
         return self.kind
 
     @model_validator(mode="after")
@@ -356,8 +354,8 @@ class JobProgressEvent(StrictBaseModel):
 
         Returns:
             Progress fields suitable for embedding in a job status snapshot.
-        """
 
+        """
         return JobProgress.model_validate(
             self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
         )
@@ -387,7 +385,6 @@ class JobMessageEvent(StrictBaseModel):
     @property
     def name(self) -> str:
         """Return ``"message"`` as a concise event name."""
-
         return self.kind
 
     def snapshot(self) -> JobMessage:
@@ -395,8 +392,8 @@ class JobMessageEvent(StrictBaseModel):
 
         Returns:
             Message fields suitable for embedding in a job status snapshot.
-        """
 
+        """
         return JobMessage.model_validate(
             self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
         )
@@ -433,8 +430,8 @@ def parse_job_event(value: object) -> JobEvent:
 
     Raises:
         pydantic.ValidationError: If the value does not match a supported event.
-    """
 
+    """
     return _JOB_EVENT_ADAPTER.validate_python(value)
 
 
@@ -460,7 +457,6 @@ class TableJobResult(StrictBaseModel):
     @classmethod
     def from_dataframe(cls, job_id: str, dataframe: DataFrameLike) -> Self:
         """Build a table result from a pandas-like DataFrame."""
-
         return cls(
             job_id=job_id,
             index=_string_axis_values(dataframe.index, axis="index"),
@@ -477,7 +473,6 @@ class TableJobResult(StrictBaseModel):
         name: str | None = None,
     ) -> Self:
         """Build a one-column table result from a pandas-like Series."""
-
         column_name = name or series.name or "value"
         return cls(
             job_id=job_id,
@@ -498,7 +493,6 @@ class TableJobResult(StrictBaseModel):
         ],
     ) -> Self:
         """Build a table result from values keyed by the original input index."""
-
         raw_index = list(input_index)
         result_index = _string_axis_values(raw_index, axis="index")
         result_columns = _string_axis_values(columns, axis="column")
@@ -608,13 +602,11 @@ _TERMINAL_JOB_RESULT_ADAPTER: TypeAdapter[TerminalJobResult] = TypeAdapter(
 
 def parse_job_result(payload: JsonValue) -> TerminalJobResult:
     """Parse a terminal job result payload into the discriminated result union."""
-
     return _TERMINAL_JOB_RESULT_ADAPTER.validate_python(payload)
 
 
 def result_ref_for_job(job_id: str) -> str:
     """Return the stable v1 result reference for a job."""
-
     return f"lyra://results/{job_id}"
 
 
@@ -633,8 +625,8 @@ class ResultReference(StrictBaseModel):
 
         Returns:
             A reference containing the job identifier and its ``lyra://`` URI.
-        """
 
+        """
         return cls(job_id=job_id, uri=result_ref_for_job(job_id))
 
     @model_validator(mode="after")
@@ -872,7 +864,6 @@ def build_table_preview(
     index_field: str | None = None,
 ) -> ResultTablePreview:
     """Build a row-oriented table preview that includes the result index."""
-
     preview_index_field = index_field or _preview_index_field(result.columns)
     rows: list[dict[str, Any]] = []
     for result_index, values in zip(
@@ -926,7 +917,6 @@ def _numeric_summary(values: Sequence[Any]) -> NumericColumnSummary | None:
 
 def build_table_summary(result: TableJobResult) -> ResultSummary:
     """Build deterministic per-column summaries for a table result."""
-
     columns: list[ResultColumnSummary] = []
     for position, column in enumerate(result.columns):
         values = _column_values(result, position)
@@ -964,7 +954,6 @@ def build_result_descriptor(
     **options: Unpack[ResultDescriptorOptions],
 ) -> ResultDescriptor:
     """Build an agent-facing descriptor from a terminal result."""
-
     completed_at = options["completed_at"]
     provenance = options.get("provenance")
     lifetime = options.get("lifetime")

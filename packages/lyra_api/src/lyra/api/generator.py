@@ -83,7 +83,6 @@ def _import_block(module: str, names: list[str]) -> list[str]:
 
 def canonical_catalog_json(catalog: MetricCatalogResponse) -> str:
     """Serialize a catalog snapshot deterministically."""
-
     payload = catalog.model_dump(mode="json")
     payload["metrics"] = sorted(payload["metrics"], key=lambda item: item["name"])
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
@@ -91,7 +90,6 @@ def canonical_catalog_json(catalog: MetricCatalogResponse) -> str:
 
 def pull_catalog(host: str, *, insecure: bool = False) -> MetricCatalogResponse:
     """Fetch and validate the public generated-client catalog."""
-
     normalized = host.rstrip("/")
     if not normalized.startswith(("http://", "https://")):
         scheme = "http" if insecure else "https"
@@ -1051,7 +1049,6 @@ def _render_models_source(
 
 def render_package(catalog: MetricCatalogResponse) -> tuple[dict[str, str], list[str]]:
     """Render all generator-owned files without touching a destination."""
-
     _validate_catalog(catalog)
     catalog = catalog.model_copy(
         update={"metrics": sorted(catalog.metrics, key=lambda metric: metric.name)}
@@ -1180,7 +1177,6 @@ def generate_client(
     check: bool = False,
 ) -> bool:
     """Generate a package, returning false only when check mode finds drift."""
-
     if not _PACKAGE_NAME.fullmatch(package):
         msg = f"package must be one Python identifier, got {package!r}"
         raise ClientGenerationError(msg)
@@ -1204,7 +1200,6 @@ def generate_client(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser used by ``lyra-client``."""
-
     parser = argparse.ArgumentParser(
         prog="lyra-client",
         description="Pull metric catalogs and generate typed Python clients.",

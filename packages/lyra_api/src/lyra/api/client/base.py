@@ -36,7 +36,6 @@ def service_unavailable_error(
 
 def parse_result_ref(result_ref_or_job_id: str) -> str:
     """Return the job id from a Lyra result reference or raw job id."""
-
     value = result_ref_or_job_id.strip()
     if not value:
         err = "Result reference or job id must be a non-empty string."
@@ -97,6 +96,7 @@ class _BaseTransport:
                 defaults to an empty dict.
             api_key: Bearer token used by this transport's protected routes.
             secure: Whether to use HTTPS. Defaults to True.
+
         """
         self.host = host.rstrip("/")
         self.timeout = timeout

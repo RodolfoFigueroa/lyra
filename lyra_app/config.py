@@ -767,7 +767,6 @@ def _reject_env_backed_config(raw_config: TomlTable) -> None:
 
 def parse_config_toml(raw_config: TomlTable) -> LyraConfig:
     """Normalize and validate one TOML document as the runtime configuration."""
-
     raw_config = normalize_toml_table(raw_config)
     _reject_env_backed_config(raw_config)
     return LyraConfig.model_validate(raw_config)

@@ -14,6 +14,7 @@ def get_date_range(month: int, year: int) -> tuple[str, str]:
     Returns:
         A tuple of (start_date, end_date) as ``"YYYY-MM-DD"`` strings,
         representing the first and last day of the month.
+
     """
     month_str = str(month).rjust(2, "0")
 
@@ -49,6 +50,7 @@ def get_season_date_range(
 
     Raises:
         ValueError: If ``season`` is not one of the four valid values.
+
     """
     if season == "winter":
         start, _ = get_date_range(12, year - 1)

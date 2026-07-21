@@ -38,8 +38,17 @@ lyra-tui = { workspace = true }
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D", "PLR2004", "COM812"]
-per-file-ignores = { "tests/**/*.py" = ["S101"] }
+ignore = ["PLR2004", "COM812"]
+per-file-ignores = { "tests/**/*.py" = [
+    "S101",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D107",
+] }
 
 
 [dependency-groups]

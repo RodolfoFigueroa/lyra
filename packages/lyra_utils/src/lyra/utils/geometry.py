@@ -21,6 +21,7 @@ def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame
     Returns:
         A GeoDataFrame with one row per feature, indexed by feature ID, and
         the CRS set from the GeoJSON's CRS property.
+
     """
     out = gpd.GeoDataFrame.from_features(
         [feature.model_dump(mode="json") for feature in geojson.features],
@@ -33,7 +34,6 @@ def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame
 
 def calculate_feature_areas_m2(geojson: GeoJSON) -> dict[str, float]:
     """Calculate valid polygon feature areas in Lyra's canonical Mexico CRS."""
-
     feature_ids = [str(feature.id) for feature in geojson.features]
     if len(feature_ids) != len(set(feature_ids)):
         msg = "Location feature IDs must be unique to calculate areas."

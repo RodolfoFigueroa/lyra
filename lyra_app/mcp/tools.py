@@ -240,7 +240,6 @@ async def execute_tool(
     public_api_base_url: str,
 ) -> dict[str, Any]:
     """Execute one validated tool call against the Lyra domain service."""
-
     if name == "lyra_lookup_met_zone":
         payload = await _lookup_met_zone(cast("LookupMetZoneInput", arguments), backend)
     elif name == "lyra_list_metrics":

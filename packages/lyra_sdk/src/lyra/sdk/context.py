@@ -63,6 +63,7 @@ class RunContext(Protocol):
 
         Raises:
             ValueError: If the values are invalid or progress regresses.
+
         """
         ...
 
@@ -85,6 +86,7 @@ class RunContext(Protocol):
 
         Raises:
             ValueError: If the message or encoded event exceeds runtime limits.
+
         """
         ...
 
@@ -96,6 +98,7 @@ class RunContext(Protocol):
 
         Raises:
             RuntimeError: If the current job has been cancelled.
+
         """
         ...
 

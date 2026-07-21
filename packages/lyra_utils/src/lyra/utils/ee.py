@@ -21,6 +21,7 @@ def convert_polygon_to_ee(polygon: shapely.Polygon) -> ee.Geometry:
     Returns:
         An ``ee.Geometry.Polygon`` built from the exterior coordinates of the
         input polygon.
+
     """
     return ee.Geometry.Polygon(list(polygon.exterior.coords))
 
@@ -33,6 +34,7 @@ def convert_gdf_to_ee(gdf: gpd.GeoDataFrame) -> ee.FeatureCollection:
 
     Returns:
         An ``ee.FeatureCollection`` built from the input GeoDataFrame.
+
     """
     if not gdf.crs or gdf.crs.to_epsg() != 4326:
         err = "GeoDataFrame must be in EPSG:4326 (WGS84)"
@@ -56,6 +58,7 @@ def get_reducer_name(reducer: ee.Reducer) -> str:
     Raises:
         ValueError: If the reducer name cannot be parsed from the string
             representation.
+
     """
     # ee.Reducer objects don't have a public method to get their name, but the
     # name is included in the string representation.
@@ -89,6 +92,7 @@ def compute_gdf(
     Returns:
         A ``pd.Series`` indexed by the original GeoDataFrame index, containing
         the reducer value for each geometry.
+
     """
     features = convert_gdf_to_ee(gdf[["geometry"]].reset_index(names="orig_index"))
     computed = ee.data.computeFeatures(
@@ -113,6 +117,7 @@ def chunk_gdf(
 
     Yields:
         GeoDataFrame slices of at most ``chunk_size`` rows each.
+
     """
     for i in range(0, len(gdf), chunk_size):
         yield gdf.iloc[i : i + chunk_size]
@@ -141,6 +146,7 @@ def reduce_ee_image_over_gdf_factory(
     Returns:
         A function that accepts an ``ExplicitLocationAPI`` object and returns a
         ``dict`` mapping each feature's original index to its reducer value.
+
     """
 
     def _f(data: ExplicitLocationAPI) -> dict:

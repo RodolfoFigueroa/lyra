@@ -15,7 +15,6 @@ from pydantic import (
 
 def validate_cvegeos(value: list[str]) -> list[str]:
     """Validate a non-empty, same-level list of INEGI CVEGEO identifiers."""
-
     if not value:
         msg = "CVEGEO lists must contain at least one identifier."
         raise ValueError(msg)

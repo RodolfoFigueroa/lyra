@@ -28,7 +28,6 @@ def normalize_metric_search_tokens(value: str) -> tuple[str, ...]:
     preserving their first-seen order so callers cannot change ranking by
     repeating a search term.
     """
-
     segments: list[str] = []
     current: list[str] = []
 
@@ -94,13 +93,11 @@ class MetricInfoV4(StrictBaseModel):
 
     def search_text(self) -> str:
         """Return derived lexical text for catalog search."""
-
         return build_metric_search_text(self)
 
 
 def build_metric_search_text(metric: MetricInfoV4) -> str:
     """Build deterministic lexical text from public metric catalog fields."""
-
     parts: list[str] = [metric.name, metric.description]
     properties = metric.request_schema.get("properties")
     if isinstance(properties, dict):

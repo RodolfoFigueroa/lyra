@@ -497,7 +497,6 @@ def job_index_key() -> str:
 
 def agent_submission_limit_key() -> str:
     """Return the non-secret Redis key shared by all agent submissions."""
-
     return AGENT_SUBMISSION_LIMIT_KEY
 
 
@@ -508,7 +507,6 @@ async def consume_agent_submission_limit_async(
     client: AsyncScriptClient | None = None,
 ) -> AgentSubmissionLimitDecision:
     """Atomically consume capacity from the shared agent fixed window."""
-
     client = _default_async_client(client)
     raw_decision = await client.eval(
         _CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT,
@@ -533,7 +531,6 @@ async def release_agent_submission_limit_async(
     client: AsyncScriptClient | None = None,
 ) -> bool:
     """Return capacity when a consumed submission fails before dispatch."""
-
     client = _default_async_client(client)
     released = await client.eval(
         _RELEASE_AGENT_SUBMISSION_LIMIT_SCRIPT,
@@ -665,7 +662,6 @@ async def claim_idempotency_key_async(
     client: AsyncIdempotencyClient | None = None,
 ) -> tuple[IdempotencyRecord, bool]:
     """Atomically bind one caller key to a request digest and job identity."""
-
     client = _default_async_client(client)
     key = idempotency_key(caller_key, agent_scope=agent_scope)
     record = IdempotencyRecord(request_digest=request_digest, job_id=job_id)
@@ -701,7 +697,6 @@ async def release_idempotency_key_async(
     client: AsyncIdempotencyClient | None = None,
 ) -> bool:
     """Release only the exact reservation owned by ``record``."""
-
     client = _default_async_client(client)
     key = idempotency_key(caller_key, agent_scope=agent_scope)
     encoded = _dump_json(record.model_dump(mode="json"))

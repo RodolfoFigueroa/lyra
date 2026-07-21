@@ -1,3 +1,5 @@
+"""Asynchronous consumer and administrator clients for the Lyra HTTP API."""
+
 from __future__ import annotations
 
 import asyncio
@@ -233,7 +235,15 @@ async def _validate_event_response(
 
 
 class AsyncJobHandle(Generic[_SuccessResultT]):
-    """Asynchronous observation and result handle for one submitted job."""
+    """Observe a submitted job and retrieve its successful result asynchronously.
+
+    Instances are returned by :meth:`AsyncLyraClient.raw.submit`; applications
+    normally do not construct handles directly.
+
+    Attributes:
+        submission: The response returned when the job was submitted.
+
+    """
 
     def __init__(
         self,
@@ -245,13 +255,24 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
 
     @property
     def job_id(self) -> str:
+        """Return the submitted job's identifier."""
         return self.submission.job_id
 
     @property
     def metric(self) -> str:
+        """Return the name of the submitted metric."""
         return self.submission.metric
 
     async def status(self) -> JobStatusInfo:
+        """Fetch the job's current lifecycle status.
+
+        Returns:
+            The latest status reported by the API.
+
+        Raises:
+            DownloadError: If the status request fails or returns an error response.
+
+        """
         return await self._client.get_job(self.job_id)
 
     def events(
@@ -262,6 +283,29 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         timeout: float | None = None,
         max_reconnect_attempts: int = 5,
     ) -> AsyncIterator[JobEventRecord]:
+        """Stream job events asynchronously until a terminal state is reached.
+
+        The stream reconnects automatically after transient connection failures and
+        resumes after the last received event.
+
+        Args:
+            after_id: Resume after this server-sent event identifier.
+            kinds: Event kinds to yield. All events are yielded when omitted.
+            timeout: Maximum total number of seconds to wait. ``None`` waits without
+                a deadline.
+            max_reconnect_attempts: Number of consecutive reconnection attempts
+                allowed after the initial connection.
+
+        Yields:
+            Job event records in server order.
+
+        Raises:
+            ValueError: If ``max_reconnect_attempts`` is negative.
+            JobEventCursorGapError: If the requested event is no longer retained.
+            JobEventStreamError: If the stream cannot be resumed.
+            JobWaitTimeoutError: If ``timeout`` expires.
+
+        """
         return self._client.iter_job_events(
             self.job_id,
             last_event_id=after_id,
@@ -271,6 +315,16 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         )
 
     async def result(self) -> _SuccessResultT:
+        """Fetch and return the job's successful terminal result.
+
+        Returns:
+            The table or file result associated with the job.
+
+        Raises:
+            MetricRunError: If the job failed or was cancelled.
+            DownloadError: If the result request fails or returns an error response.
+
+        """
         result = await self._client.get_job_result(self.job_id)
         if isinstance(result, FailedJobResult | CancelledJobResult):
             raise MetricRunError(result)
@@ -284,6 +338,28 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         on_progress: Callable[[JobProgressEvent], object] | None = None,
         on_message: Callable[[JobMessageEvent], object] | None = None,
     ) -> Awaitable[_SuccessResultT]:
+        """Return an awaitable that waits for and returns the successful result.
+
+        Callbacks may be regular functions or return awaitables; awaitable callback
+        results are awaited before the next event is processed.
+
+        Args:
+            timeout: Maximum total number of seconds to wait. ``None`` waits without
+                a deadline.
+            on_event: Called for every event received from the job stream.
+            on_progress: Called for every progress event.
+            on_message: Called for every message event.
+
+        Returns:
+            An awaitable resolving to the table or file result produced by the job.
+
+        Raises:
+            MetricRunError: If the job failed or was cancelled.
+            JobEventStreamError: If the event stream ends or cannot be resumed.
+            JobEventCursorGapError: If event history needed to resume was discarded.
+            JobWaitTimeoutError: If ``timeout`` expires.
+
+        """
         return self._wait(
             wait_seconds=timeout,
             on_event=on_event,
@@ -1356,7 +1432,34 @@ class _AdminRoutingResource:
 
 
 class AsyncLyraClient:
-    """Resource-oriented asynchronous client for the Lyra HTTP API."""
+    """Access Lyra's consumer API with asynchronous requests.
+
+    The client groups endpoints into resource namespaces. Use :attr:`catalog` to
+    discover metrics, :attr:`raw` to submit or run metrics without a generated
+    typed client, and :attr:`jobs` and :attr:`results` to observe existing jobs.
+
+    Args:
+        host: API hostname, optionally including a base path, but without a URL
+            scheme.
+        timeout: Default HTTP request timeout in seconds.
+        headers: Additional headers included with every request.
+        agent_api_key: Bearer token for agent-protected job endpoints. Public
+            catalog, lookup, and health endpoints do not require it.
+        secure: Use HTTPS when true and HTTP when false.
+
+    Attributes:
+        health: Asynchronous liveness and readiness endpoints.
+        lookups: Asynchronous public lookup endpoints.
+        catalog: Asynchronous metric and data-type discovery endpoints.
+        jobs: Asynchronous job status and event-stream endpoints.
+        results: Asynchronous job result inspection and download endpoints.
+        raw: Asynchronous untyped metric submission and execution endpoints.
+
+    Example:
+        >>> client = AsyncLyraClient("lyra.example.com", agent_api_key="...")
+        >>> metrics = await client.catalog.metrics()
+
+    """
 
     def __init__(
         self,
@@ -1376,15 +1479,52 @@ class AsyncLyraClient:
         )
         self._transport = transport
         self.health = _HealthResource(transport)
+        """Asynchronous liveness and readiness endpoints."""
         self.lookups = _LookupsResource(transport)
+        """Asynchronous public lookup endpoints."""
         self.catalog = _CatalogResource(transport)
+        """Asynchronous metric and data-type discovery endpoints."""
         self.jobs = _JobsResource(transport)
+        """Asynchronous job status and event-stream endpoints."""
         self.results = _ResultsResource(transport)
+        """Asynchronous job result inspection and download endpoints."""
         self.raw = _RawMetricsResource(transport)
+        """Asynchronous untyped metric submission and execution endpoints."""
 
 
 class AsyncLyraAdminClient:
-    """Resource-oriented asynchronous client for Lyra administration."""
+    """Access Lyra's administrator API with asynchronous requests.
+
+    Administrator credentials are intentionally isolated from
+    :class:`AsyncLyraClient`. This client exposes operational state and mutation
+    endpoints, plus the public health checks, but does not expose consumer metric
+    execution.
+
+    Args:
+        host: API hostname, optionally including a base path, but without a URL
+            scheme.
+        timeout: Default HTTP request timeout in seconds.
+        headers: Additional headers included with every request.
+        admin_api_key: Bearer token for administrator endpoints.
+        secure: Use HTTPS when true and HTTP when false.
+
+    Attributes:
+        health: Asynchronous liveness and readiness endpoints.
+        jobs: Asynchronous administrative job listing and cancellation endpoints.
+        plugin_repos: Asynchronous plugin repository configuration and
+            synchronization endpoints.
+        catalog: Asynchronous administrative catalog summary and refresh endpoints.
+        workers: Asynchronous worker inspection and restart endpoints.
+        queues: Asynchronous queue inspection endpoints.
+        routing: Asynchronous metric-to-queue routing endpoints.
+
+    Example:
+        >>> admin = AsyncLyraAdminClient(
+        ...     "lyra.example.com", admin_api_key="..."
+        ... )
+        >>> status = await admin.status()
+
+    """
 
     def __init__(
         self,
@@ -1404,15 +1544,40 @@ class AsyncLyraAdminClient:
         )
         self._transport = transport
         self.health = _HealthResource(transport)
+        """Asynchronous liveness and readiness endpoints."""
         self.jobs = _AdminJobsResource(transport)
+        """Asynchronous administrative job listing and cancellation endpoints."""
         self.plugin_repos = _AdminPluginReposResource(transport)
+        """Asynchronous plugin repository configuration and synchronization."""
         self.catalog = _AdminCatalogResource(transport)
+        """Asynchronous administrative catalog summary and refresh endpoints."""
         self.workers = _AdminWorkersResource(transport)
+        """Asynchronous worker inspection and restart endpoints."""
         self.queues = _AdminQueuesResource(transport)
+        """Asynchronous queue inspection endpoints."""
         self.routing = _AdminRoutingResource(transport)
+        """Asynchronous metric-to-queue routing endpoints."""
 
     async def status(self) -> AdminStatusResponse:
+        """Fetch a summary of the running Lyra service.
+
+        Returns:
+            API, storage, catalog, queue, and worker configuration status.
+
+        Raises:
+            DownloadError: If the status request fails or returns an error response.
+
+        """
         return await self._transport.get_admin_status()
 
     async def config_summary(self) -> ConfigSummaryResponse:
+        """Fetch the effective non-secret service configuration.
+
+        Returns:
+            The API, queue, worker, job-store, and plugin path configuration.
+
+        Raises:
+            DownloadError: If the request fails or returns an error response.
+
+        """
         return await self._transport.get_admin_config_summary()

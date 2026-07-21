@@ -35,6 +35,7 @@ class LyraDBImplicit(LyraDB):
 
         Returns:
             A GeoDataFrame with columns ``["per_ocu", "codigo_act", "geometry"]``.
+
         """
         table_name = quoted_name(f"denue_{year}_{month:02d}", quote=True)
 
@@ -64,6 +65,7 @@ class LyraDBImplicit(LyraDB):
 
         Returns:
             A GeoDataFrame with columns ``["codigo", "geometry"]``.
+
         """
         with self._engine.connect() as conn:
             return load_geometries_from_bounds(
@@ -94,6 +96,7 @@ class LyraDBImplicit(LyraDB):
 
         Returns:
             A GeoDataFrame of census records intersecting the bounding box.
+
         """
         with self._engine.connect() as conn:
             return load_geometries_from_bounds(

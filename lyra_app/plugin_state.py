@@ -378,7 +378,6 @@ def render_plugin_state_toml(state: PluginState) -> str:
 
 def parse_plugin_state_toml(raw_state: TomlTable) -> PluginState:
     """Normalize and validate one TOML document as persisted plugin state."""
-
     return PluginState.model_validate(normalize_toml_table(raw_state))
 
 

@@ -41,6 +41,7 @@ class LyraDB(ABC):
 
         Returns:
             A GeoDataFrame with columns ``["per_ocu", "codigo_act", "geometry"]``.
+
         """
         ...
 
@@ -60,6 +61,7 @@ class LyraDB(ABC):
 
         Returns:
             A GeoDataFrame with columns ``["codigo", "geometry"]``.
+
         """
         ...
 
@@ -85,5 +87,6 @@ class LyraDB(ABC):
 
         Returns:
             A GeoDataFrame of census records intersecting the bounding box.
+
         """
         ...

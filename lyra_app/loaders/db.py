@@ -39,6 +39,7 @@ def load_geometries_from_bounds(
 
     Returns:
         A GeoDataFrame of rows whose geometries intersect the given envelope.
+
     """
     if "geometry" not in columns:
         columns = [*list(columns), "geometry"]
@@ -82,6 +83,7 @@ def get_table_name_for_cvegeos(cvegeos: list[str]) -> str:
 
     Raises:
         ValueError: If the cvegeo codes do not all have the same length.
+
     """
     cvegeo_lengths = {len(cvegeo) for cvegeo in cvegeos}
 
@@ -111,6 +113,7 @@ def load_geometries_from_cvegeos(
 
     Returns:
         A GeoDataFrame indexed by ``cvegeo`` with a ``geometry`` column.
+
     """
     table_name = get_table_name_for_cvegeos(cvegeos)
 
@@ -142,6 +145,7 @@ def load_bounds_from_cvegeos(
 
     Returns:
         A single-row GeoDataFrame with the combined bounding-box geometry.
+
     """
     table_name = get_table_name_for_cvegeos(cvegeos)
 
@@ -175,6 +179,7 @@ def load_geometries_from_met_zone_code(
 
     Returns:
         A GeoDataFrame of AGEB geometries indexed by ``cvegeo``.
+
     """
     return gpd.read_postgis(
         """
@@ -205,6 +210,7 @@ def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDat
     Returns:
         A single-row GeoDataFrame indexed by ``cve_met`` containing the
         combined bounding-box geometry.
+
     """
     crs = conn.execute(
         sqlalchemy.text("SELECT ST_SRID(geometry) FROM census_2020_ageb LIMIT 1")
@@ -243,6 +249,7 @@ def get_met_zone_code_from_name(
 
     Returns:
         A tuple of (cve_met, nom_met) for the best match, or None.
+
     """
     result = conn.execute(_MET_ZONE_LOOKUP_QUERY, {"name": name})
     row = result.fetchone()

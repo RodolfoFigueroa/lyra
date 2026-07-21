@@ -101,6 +101,7 @@ def require_admin_key(
     Raises:
         HTTPException: With status 500 if the configured secret cannot be
             loaded, or status 403 if the supplied token does not match.
+
     """
     try:
         expected = get_config().admin.read_api_key()

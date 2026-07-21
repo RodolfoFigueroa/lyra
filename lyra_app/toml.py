@@ -48,7 +48,6 @@ def normalize_toml_table(
     location: str = "TOML document",
 ) -> TomlTable:
     """Trim TOML keys and strings while preserving its recursive value types."""
-
     normalized: TomlTable = {}
     for raw_key, raw_value in table.items():
         key = _normalized_string(raw_key, location=f"{location} key")
@@ -64,14 +63,12 @@ def normalize_toml_table(
 
 def load_normalized_toml(source: BinaryIO) -> TomlTable:
     """Parse and normalize one TOML document at the untyped library boundary."""
-
     parsed = cast("TomlTable", tomllib.load(source))
     return normalize_toml_table(parsed)
 
 
 def loads_normalized_toml(source: str) -> TomlTable:
     """Parse and normalize TOML text at the untyped library boundary."""
-
     parsed = cast("TomlTable", tomllib.loads(source))
     return normalize_toml_table(parsed)
 

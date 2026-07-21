@@ -25,13 +25,11 @@ _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
 def validate_json_value(value: object) -> JsonValue:
     """Validate and normalize an arbitrary boundary value as recursive JSON."""
-
     return _JSON_VALUE_ADAPTER.validate_python(value)
 
 
 def validate_json_object(value: object) -> JsonObject:
     """Validate and normalize an arbitrary boundary value as a JSON object."""
-
     return _JSON_OBJECT_ADAPTER.validate_python(value)
 
 

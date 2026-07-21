@@ -398,7 +398,6 @@ def validate_metric_entry_payload(
     payload: JsonValue,
 ) -> JsonObject:
     """Validate a payload against one captured registry contract."""
-
     if not isinstance(payload, dict):
         raise MetricPayloadValidationError(
             [{"loc": [], "msg": "Input must be a JSON object.", "type": "type"}],

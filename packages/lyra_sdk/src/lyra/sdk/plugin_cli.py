@@ -85,7 +85,6 @@ def _load_definition(project_root: Path, factory: str) -> PluginDefinition:
 
 def render_manifest(project_root: Path) -> str:
     """Build the canonical manifest text for one plugin project."""
-
     project_root = project_root.resolve()
     name, version, factory = _project_configuration(project_root)
     definition = _load_definition(project_root, factory)
@@ -212,7 +211,6 @@ def _inspect_pre_commit_repositories(
 
 def add_pre_commit_hook(project_root: Path) -> tuple[Path, bool]:
     """Add the Lyra manifest hook to a plugin project's pre-commit config."""
-
     config_path = project_root.resolve() / PRE_COMMIT_CONFIG_FILENAME
     yaml = _pre_commit_yaml()
     configuration = _load_pre_commit_configuration(config_path, yaml)
@@ -264,7 +262,6 @@ def describe_plugin(
     metric_name: str | None = None,
 ) -> list[MetricDescription]:
     """Load and describe one or all metrics in a plugin project."""
-
     project_root = project_root.resolve()
     _name, _version, factory = _project_configuration(project_root)
     definition = _load_definition(project_root, factory)
@@ -279,7 +276,6 @@ def render_description(
     json_output: bool = False,
 ) -> str:
     """Render deterministic author-facing metric information."""
-
     descriptions = describe_plugin(project_root, metric_name)
     if json_output:
         payload = {

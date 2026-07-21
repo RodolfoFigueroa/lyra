@@ -4,8 +4,9 @@ on:
   push:
     branches:
       - dev
-    tags:
-      - "lyra-app-v*"
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
@@ -19,22 +20,25 @@ concurrency:
 
 jobs:
   build:
+    if: >-
+      github.event_name != 'release' ||
+      startsWith(github.event.release.tag_name, 'lyra-v')
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out the complete repository history
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
           python-version: "3.11"
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
@@ -44,7 +48,7 @@ jobs:
         shell: bash
         run: |
           dev_ref=HEAD
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
             dev_ref=origin/dev
           fi
           uv run --frozen --group dev python -m docs.scripts.versioned_site \
@@ -52,7 +56,7 @@ jobs:
             --dev-ref "$dev_ref"
 
       - name: Upload the Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: docs-site
 
@@ -66,4 +70,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

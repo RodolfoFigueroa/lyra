@@ -3,16 +3,14 @@
   "release-type": "python",
   "include-component-in-tag": true,
   "separate-pull-requests": false,
+  "skip-github-release": true,
   "bump-minor-pre-major": true,
-  "bootstrap-sha": "27a317afe02a17f5d43da664a5c2b21803b04132",
   "packages": {
     ".": {
-      "component": "lyra-app",
+      "component": "lyra",
       "package-name": "lyra-app",
       "exclude-paths": [
-        "docs/**",
-        "packages/lyra_api/**",
-        "packages/lyra_tui/**"
+        "docs/**"
       ]
     },
     "packages/lyra_sdk": {

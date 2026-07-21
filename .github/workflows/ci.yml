@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
           python-version: "3.11"
@@ -57,8 +57,22 @@ jobs:
       - name: Type check
         run: uv run ty check
 
-      - name: Build application distribution
-        run: uv build
+      - name: Validate release metadata
+        run: uv run python -m build_scripts.release validate
+
+      - name: Build every package
+        run: uv build --all-packages --out-dir "${RUNNER_TEMP}/lyra-dist"
+
+      - name: Smoke test the built distributions
+        run: |
+          mkdir -p "${RUNNER_TEMP}/lyra-ci-smoke"
+          cd "${RUNNER_TEMP}/lyra-ci-smoke"
+          uv init --bare
+          uv add "${RUNNER_TEMP}"/lyra-dist/*.whl
+          uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra.tui; import lyra_app"
+          uv run lyra-plugin --help
+          uv run lyra-client --help
+          uv run lyra-tui --help
 
       - name: Test
         run: >-
@@ -73,16 +87,16 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
           python-version: "3.11"
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm

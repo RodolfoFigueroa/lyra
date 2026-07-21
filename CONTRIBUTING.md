@@ -85,15 +85,41 @@ editing generated Markdown or JSON.
 - Keep one authoritative example or explanation and link to it elsewhere.
 - Use Conventional Commit titles. Release Please versions the application,
   SDK, API client, utilities, and TUI independently.
-- Application release tags (`lyra-app-vX.Y.Z`) define stable documentation
-  versions. Package-only tags do not publish a new documentation site.
+- Product release tags (`lyra-vX.Y.Z`) define stable documentation versions.
+  Historical `lyra-app-vX.Y.Z` tags remain valid documentation sources.
+  Package-only tags do not publish a new documentation site.
 
 ## Releases
 
-Merges to `main` feed Release Please. Its combined release PR updates affected
-components and the workspace lockfile. Merging that PR creates component tags
-and GitHub Releases; an application release also publishes the container and a
-stable documentation build from the exact application tag.
+Merges to `main` feed Release Please. It maintains one aggregate release PR,
+while each package keeps its own version. Ordinary contributors only need to
+use a Conventional Commit PR title; they do not create tags or edit release
+metadata by hand.
+
+For maintainers, the release workflow is:
+
+1. Review the bot's aggregate release PR. Confirm the proposed product and
+   package versions, changelog entries, lockfile, and required CI checks.
+2. Keep the PR open while more changes accumulate, or merge it when the product
+   is ready to ship. The product version always advances when any package ships.
+3. After merge, automation rebuilds and smoke-tests every distribution from the
+   immutable merge commit. If validation succeeds, it creates tags only for
+   changed packages, publishes the versioned and `latest` container images, then
+   creates one GitHub Release named `Lyra vX.Y.Z` with a machine-readable
+   component manifest attached.
+4. The published product release triggers the stable documentation deployment.
+
+The release publisher is intentionally ordered so no tag, image, or GitHub
+Release is created before validation passes. Its tag and release operations are
+idempotent: a failed run can be retried from GitHub Actions. If an existing tag
+points at a different commit, the run stops for manual investigation instead of
+moving the tag. Do not manually merge a second release PR or create release tags
+while a publication run is active.
+
+The repository secret `RELEASE_PLEASE_TOKEN` must be able to update release PRs,
+push tags, create releases, and edit PR labels. GitHub's package token publishes
+the container image. Component distributions are currently build artifacts and
+tags only; this pipeline does not publish them to PyPI.
 
 Use `fix` for patch changes, `feat` for minor changes, and `!` or a
 `BREAKING CHANGE` footer for breaking changes. Below 1.0, breaking changes

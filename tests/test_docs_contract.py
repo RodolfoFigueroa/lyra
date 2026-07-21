@@ -77,16 +77,18 @@ def test_canonical_plugin_example_is_the_only_documented_example() -> None:
     ).exists()
 
 
-def test_release_parser_rejects_non_application_and_unsupported_tags() -> None:
+def test_release_parser_accepts_product_and_legacy_application_tags() -> None:
+    assert parse_release("lyra-v0.8.0") == Release((0, 8, 0), "lyra-v0.8.0")
     assert parse_release("lyra-app-v0.7.0") == Release((0, 7, 0), "lyra-app-v0.7.0")
     assert parse_release("lyra-sdk-v9.0.0") is None
+    assert parse_release("lyra-api-v9.0.0") is None
     assert parse_release("lyra-app-v0.5.0") is None
-    assert parse_release("lyra-app-v1.0") is None
+    assert parse_release("lyra-v1.0") is None
 
 
 def test_version_selector_marks_each_tree_and_is_idempotent(tmp_path: Path) -> None:
     releases = [
-        Release((0, 7, 0), "lyra-app-v0.7.0"),
+        Release((0, 7, 0), "lyra-v0.7.0"),
         Release((0, 6, 0), "lyra-app-v0.6.0"),
     ]
     manifest = version_manifest(releases)

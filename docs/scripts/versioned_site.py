@@ -1,4 +1,4 @@
-"""Build one GitHub Pages tree from dev and every supported application tag."""
+"""Build one GitHub Pages tree from dev and every supported product tag."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TAG_PATTERN = re.compile(r"^lyra-app-v(?P<version>\d+\.\d+\.\d+)$")
+TAG_PATTERN = re.compile(r"^lyra(?:-app)?-v(?P<version>\d+\.\d+\.\d+)$")
 MINIMUM_VERSION = (0, 6, 0)
 
 
@@ -49,16 +49,21 @@ def parse_release(tag: str) -> Release | None:
 
 def discover_releases() -> list[Release]:
     result = subprocess.run(
-        ["git", "tag", "--list", "lyra-app-v*"],  # noqa: S607 -- trusted CI path
+        ["git", "tag", "--list", "lyra-v*", "lyra-app-v*"],  # noqa: S607
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    releases = [
-        release for tag in result.stdout.splitlines() if (release := parse_release(tag))
-    ]
-    return sorted(releases, reverse=True)
+    releases_by_version: dict[tuple[int, int, int], Release] = {}
+    for tag in result.stdout.splitlines():
+        release = parse_release(tag)
+        if release is None:
+            continue
+        previous = releases_by_version.get(release.version)
+        if previous is None or release.tag.startswith("lyra-v"):
+            releases_by_version[release.version] = release
+    return sorted(releases_by_version.values(), reverse=True)
 
 
 def run(
@@ -107,7 +112,7 @@ def build_ref(ref: str, base: str, destination: Path, worktrees: Path) -> None:
 
 def version_manifest(releases: list[Release]) -> list[dict[str, str]]:
     if not releases:
-        message = "No supported lyra-app release tags exist"
+        message = "No supported Lyra product release tags exist"
         raise VersionedSiteError(message)
     return [
         {"label": "Stable", "version": releases[0].label, "base": "/lyra"},

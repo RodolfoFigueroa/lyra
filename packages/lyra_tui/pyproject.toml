@@ -4,7 +4,7 @@ version = "0.5.0"
 description = "Terminal operator console for running Lyra instances."
 requires-python = ">=3.11"
 dependencies = [
-    "lyra-api",
+    "lyra-api>=0.6.0",
     "textual>=0.86.0",
 ]
 

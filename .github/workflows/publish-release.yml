@@ -1,0 +1,234 @@
+name: Publish aggregate release
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+concurrency:
+  group: publish-release-main
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'autorelease: pending') &&
+      startsWith(github.event.pull_request.head.ref, 'release-please--branches--main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      product_version: ${{ steps.release.outputs.product_version }}
+      product_tag: ${{ steps.release.outputs.product_tag }}
+      changed_components: ${{ steps.release.outputs.changed_components }}
+      release_commit: ${{ steps.release.outputs.release_commit }}
+
+    steps:
+      - name: Check out the merged release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Build the immutable release plan
+        id: release
+        env:
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          BASE_SHA="$(git rev-parse "${RELEASE_SHA}^1")"
+          uv run python -m build_scripts.release plan \
+            --base-ref "$BASE_SHA" \
+            --head-ref "$RELEASE_SHA" \
+            --output-dir "${RUNNER_TEMP}/lyra-release" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload the release plan
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: lyra-release-plan
+          path: ${{ runner.temp }}/lyra-release
+          if-no-files-found: error
+
+  validate:
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out the immutable release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.plan.outputs.release_commit }}
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Validate release metadata and lockfile
+        run: |
+          uv lock --check
+          uv sync --frozen
+          uv run python -m build_scripts.release validate
+
+      - name: Build every package
+        run: uv build --all-packages --out-dir "${RUNNER_TEMP}/lyra-dist"
+
+      - name: Smoke test the built distributions
+        run: |
+          mkdir -p "${RUNNER_TEMP}/lyra-release-smoke"
+          cd "${RUNNER_TEMP}/lyra-release-smoke"
+          uv init --bare
+          uv add "${RUNNER_TEMP}"/lyra-dist/*.whl
+          uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra.tui; import lyra_app"
+          uv run lyra-plugin --help
+          uv run lyra-client --help
+          uv run lyra-tui --help
+
+  tag-components:
+    needs:
+      - plan
+      - validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the immutable release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.plan.outputs.release_commit }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Create changed component tags
+        env:
+          CHANGED_COMPONENTS: ${{ needs.plan.outputs.changed_components }}
+          RELEASE_SHA: ${{ needs.plan.outputs.release_commit }}
+        run: |
+          while IFS= read -r tag; do
+            remote_sha="$(git ls-remote --refs --tags origin "refs/tags/${tag}" | cut -f1)"
+            if [[ -n "$remote_sha" ]]; then
+              if [[ "$remote_sha" != "$RELEASE_SHA" ]]; then
+                echo "Tag ${tag} already points to ${remote_sha}, not ${RELEASE_SHA}" >&2
+                exit 1
+              fi
+              continue
+            fi
+            git tag "$tag" "$RELEASE_SHA"
+            git push origin "refs/tags/${tag}"
+          done < <(jq -r '.[].tag' <<<"$CHANGED_COMPONENTS")
+
+  publish-app-image:
+    needs:
+      - plan
+      - validate
+    uses: docker/github-builder/.github/workflows/build.yml@3415a188caae9a0da7fba83bc06985776e0b1790 # v1
+    permissions:
+      contents: read
+      packages: write
+    with:
+      output: image
+      push: true
+      platforms: linux/amd64,linux/arm64
+      distribute: true
+      runner: |
+        default=ubuntu-24.04
+        linux/arm64=ubuntu-24.04-arm
+      cache: true
+      cache-mode: max
+      cache-scope: lyra-app
+      sign: "false"
+      meta-images: ghcr.io/${{ github.repository_owner }}/lyra
+      meta-tags: |
+        type=raw,value=${{ needs.plan.outputs.product_version }}
+        type=raw,value=latest
+      set-meta-labels: true
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-product-release:
+    needs:
+      - plan
+      - validate
+      - tag-components
+      - publish-app-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the immutable release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.plan.outputs.release_commit }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Download the release plan
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: lyra-release-plan
+          path: ${{ runner.temp }}/lyra-release
+
+      - name: Create the product tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PRODUCT_TAG: ${{ needs.plan.outputs.product_tag }}
+          PRODUCT_VERSION: ${{ needs.plan.outputs.product_version }}
+          RELEASE_SHA: ${{ needs.plan.outputs.release_commit }}
+        run: |
+          remote_sha="$(git ls-remote --refs --tags origin "refs/tags/${PRODUCT_TAG}" | cut -f1)"
+          if [[ -n "$remote_sha" && "$remote_sha" != "$RELEASE_SHA" ]]; then
+            echo "Tag ${PRODUCT_TAG} already points to ${remote_sha}, not ${RELEASE_SHA}" >&2
+            exit 1
+          fi
+          if [[ -z "$remote_sha" ]]; then
+            git tag "$PRODUCT_TAG" "$RELEASE_SHA"
+            git push origin "refs/tags/${PRODUCT_TAG}"
+          fi
+          if ! gh release view "$PRODUCT_TAG" >/dev/null 2>&1; then
+            gh release create "$PRODUCT_TAG" \
+              --title "Lyra v${PRODUCT_VERSION}" \
+              --notes-file "${RUNNER_TEMP}/lyra-release/release-notes.md" \
+              --latest \
+              "${RUNNER_TEMP}/lyra-release/release-manifest.json"
+          fi
+
+  finalize:
+    needs:
+      - plan
+      - publish-product-release
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Mark the release PR as published
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+            --jq '.[].name' | grep -Fxq 'autorelease: pending'; then
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels/autorelease%3A%20pending"
+          fi
+          gh pr edit "$PR_NUMBER" --add-label 'autorelease: tagged' \
+            --repo "$GITHUB_REPOSITORY"

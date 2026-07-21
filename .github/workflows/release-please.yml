@@ -11,99 +11,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  release-pr:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
-    outputs:
-      app_released: ${{ steps.release.outputs.release_created }}
-      app_version: ${{ steps.release.outputs.version }}
 
     steps:
-      - name: Create or update releases
-        id: release
-        uses: googleapis/release-please-action@v5
+      - name: Create or update the aggregate release PR
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-
-      - name: Set up uv for release smoke tests
-        if: ${{ steps.release.outputs.releases_created == 'true' }}
-        uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-          python-version: "3.11"
-
-      - name: Create the release smoke-test project
-        if: ${{ steps.release.outputs.releases_created == 'true' }}
-        run: |
-          mkdir -p "${RUNNER_TEMP}/lyra-release-smoke"
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
-          uv init --bare
-
-      - name: Smoke test the released SDK
-        if: ${{ steps.release.outputs['packages/lyra_sdk--release_created'] == 'true' }}
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs['packages/lyra_sdk--tag_name'] }}
-        run: |
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
-          uv add "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_TAG}#subdirectory=packages/lyra_sdk"
-          uv run python -c "import lyra.sdk"
-
-      - name: Smoke test the released API client
-        if: ${{ steps.release.outputs['packages/lyra_api--release_created'] == 'true' }}
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs['packages/lyra_api--tag_name'] }}
-        run: |
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
-          uv add "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_TAG}#subdirectory=packages/lyra_api"
-          uv run python -c "import lyra.api"
-
-      - name: Smoke test the released utilities
-        if: ${{ steps.release.outputs['packages/lyra_utils--release_created'] == 'true' }}
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs['packages/lyra_utils--tag_name'] }}
-        run: |
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
-          uv add "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_TAG}#subdirectory=packages/lyra_utils"
-          uv run python -c "import lyra.utils"
-
-      - name: Smoke test the released TUI
-        if: ${{ steps.release.outputs['packages/lyra_tui--release_created'] == 'true' }}
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs['packages/lyra_tui--tag_name'] }}
-        run: |
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
-          uv add "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_TAG}#subdirectory=packages/lyra_tui"
-          uv run python -c "import lyra.tui"
-
-  publish-app-image:
-    needs: release
-    if: ${{ needs.release.outputs.app_released == 'true' }}
-    uses: docker/github-builder/.github/workflows/build.yml@v1
-    permissions:
-      contents: read
-      packages: write
-    with:
-      output: image
-      push: true
-      platforms: linux/amd64,linux/arm64
-      distribute: true
-      runner: |
-        default=ubuntu-24.04
-        linux/arm64=ubuntu-24.04-arm
-      cache: true
-      cache-mode: max
-      cache-scope: lyra-app
-      sign: "false"
-      meta-images: ghcr.io/${{ github.repository_owner }}/lyra
-      meta-tags: |
-        type=raw,value=${{ needs.release.outputs.app_version }}
-        type=raw,value=latest
-      set-meta-labels: true
-    secrets:
-      registry-auths: |
-        - registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}

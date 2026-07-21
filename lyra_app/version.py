@@ -1,3 +1,5 @@
-APP_VERSION = "0.1.0"
+from importlib.metadata import version
+
+APP_VERSION = version("lyra-app")
 
 __all__ = ["APP_VERSION"]

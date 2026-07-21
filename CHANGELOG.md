@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.15.0...lyra-v0.16.0) (2026-07-21)
+
+
+### Features
+
+* Decouple admin and consumer clients ([09d7521](https://github.com/RodolfoFigueroa/lyra/commit/09d7521553822a6048c51b9a0dcdd6b123291d72))
+
 ## [0.15.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.14.1...lyra-v0.15.0) (2026-07-21)
 
 

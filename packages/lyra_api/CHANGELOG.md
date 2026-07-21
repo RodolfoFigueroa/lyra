@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.7.0...lyra-api-v0.8.0) (2026-07-21)
+
+
+### Features
+
+* Decouple admin and consumer clients ([09d7521](https://github.com/RodolfoFigueroa/lyra/commit/09d7521553822a6048c51b9a0dcdd6b123291d72))
+
 ## [0.7.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.6.1...lyra-api-v0.7.0) (2026-07-21)
 
 

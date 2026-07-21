@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.10.1...lyra-sdk-v0.11.0) (2026-07-21)
+
+
+### Features
+
+* Add dynamic API generation ([e39bca5](https://github.com/RodolfoFigueroa/lyra/commit/e39bca591cfac29d6cf5bee1055c2d78f29eab68))
+
 ## [0.10.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.10.0...lyra-sdk-v0.10.1) (2026-07-21)
 
 

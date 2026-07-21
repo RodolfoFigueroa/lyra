@@ -1,6 +1,6 @@
 [project]
 name = "lyra-tui"
-version = "0.4.0"
+version = "0.5.0"
 description = "Terminal operator console for running Lyra instances."
 requires-python = ">=3.11"
 dependencies = [

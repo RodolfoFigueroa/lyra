@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.13.2...lyra-app-v0.14.0) (2026-07-21)
+
+
+### Features
+
+* Add dynamic API generation ([e39bca5](https://github.com/RodolfoFigueroa/lyra/commit/e39bca591cfac29d6cf5bee1055c2d78f29eab68))
+
 ## [0.13.2](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.13.1...lyra-app-v0.13.2) (2026-07-21)
 
 

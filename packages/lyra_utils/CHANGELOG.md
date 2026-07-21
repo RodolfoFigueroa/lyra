@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-utils-v0.3.0...lyra-utils-v0.4.0) (2026-07-21)
+
+
+### Features
+
+* Add missing docstrings and misc. lint fixes ([2cd9b2b](https://github.com/RodolfoFigueroa/lyra/commit/2cd9b2bf8c91ffaaa146c9e081a741b59215b9b0))
+
 ## [0.3.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-utils-v0.2.0...lyra-utils-v0.3.0) (2026-07-21)
 
 

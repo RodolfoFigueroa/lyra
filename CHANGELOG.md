@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.14.0...lyra-app-v0.14.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* Fix missing CLI documentation ([8e39843](https://github.com/RodolfoFigueroa/lyra/commit/8e39843669ab7c79aee1f62c089fa17fe592ab85))
+
 ## [0.14.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.13.2...lyra-app-v0.14.0) (2026-07-21)
 
 

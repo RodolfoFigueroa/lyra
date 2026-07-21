@@ -1451,7 +1451,7 @@ wheels = [
 
 [[package]]
 name = "lyra-api"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "packages/lyra_api" }
 dependencies = [
     { name = "aiofiles" },
@@ -1474,7 +1474,7 @@ requires-dist = [
 
 [[package]]
 name = "lyra-app"
-version = "0.14.0"
+version = "0.14.1"
 source = { editable = "." }
 dependencies = [
     { name = "celery" },

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.3.0...lyra-api-v0.4.0) (2026-07-21)
+
+
+### Features
+
+* Change metric schema ([f246346](https://github.com/RodolfoFigueroa/lyra/commit/f246346c9363d9de88f28f198f54645f79dc96c1))
+
 ## [0.3.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.2.0...lyra-api-v0.3.0) (2026-07-21)
 
 

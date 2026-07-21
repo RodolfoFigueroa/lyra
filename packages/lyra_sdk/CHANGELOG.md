@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.7.0...lyra-sdk-v0.8.0) (2026-07-21)
+
+
+### Features
+
+* Change metric schema ([f246346](https://github.com/RodolfoFigueroa/lyra/commit/f246346c9363d9de88f28f198f54645f79dc96c1))
+
 ## [0.7.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.6.0...lyra-sdk-v0.7.0) (2026-07-21)
 
 

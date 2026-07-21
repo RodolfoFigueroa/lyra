@@ -112,3 +112,38 @@ def test_dockerfile_prioritizes_bundled_workspace_packages() -> None:
     assert (
         "PYTHONPATH=/app/packages/lyra_sdk/src:/app/packages/lyra_utils/src" in contents
     )
+
+
+def test_dockerfile_caches_third_party_dependencies_separately() -> None:
+    contents = _read(ROOT / "Dockerfile")
+
+    dependency_sync = "uv sync --frozen --no-dev --no-cache --no-install-workspace"
+    source_copy = "COPY packages/lyra_sdk ./packages/lyra_sdk"
+
+    assert dependency_sync in contents
+    assert contents.index(dependency_sync) < contents.index(source_copy)
+
+
+def test_runtime_image_contains_only_runtime_workspace_packages_and_license() -> None:
+    contents = _read(ROOT / "Dockerfile")
+    runtime_stage = contents.split("FROM python:3.11-slim", maxsplit=2)[-1]
+
+    assert "COPY LICENSE ./LICENSE" in runtime_stage
+    assert "COPY packages/lyra_sdk ./packages/lyra_sdk" in runtime_stage
+    assert "COPY packages/lyra_utils ./packages/lyra_utils" in runtime_stage
+    assert "COPY packages ./packages" not in runtime_stage
+    assert "COPY packages/lyra_api " not in runtime_stage
+    assert "COPY packages/lyra_tui " not in runtime_stage
+
+
+def test_publish_workflows_build_supported_platforms() -> None:
+    workflows = [
+        ROOT / ".github" / "workflows" / "docker-publish.yml",
+        ROOT / ".github" / "workflows" / "release-please.yml",
+    ]
+
+    for workflow in workflows:
+        contents = _read(workflow)
+
+        assert "uses: docker/setup-qemu-action@v3" in contents
+        assert "platforms: linux/amd64,linux/arm64" in contents

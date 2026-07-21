@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.10.0...lyra-app-v0.11.0) (2026-07-21)
+
+
+### Features
+
+* Change metric schema ([f246346](https://github.com/RodolfoFigueroa/lyra/commit/f246346c9363d9de88f28f198f54645f79dc96c1))
+
+
+### Bug Fixes
+
+* Fix some node warnings ([ccbc520](https://github.com/RodolfoFigueroa/lyra/commit/ccbc520d6c8695a62f1e5599c0d2271c7c38290e))
+
 ## [0.10.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.9.0...lyra-app-v0.10.0) (2026-07-21)
 
 

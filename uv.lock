@@ -1472,7 +1472,7 @@ requires-dist = [
 
 [[package]]
 name = "lyra-app"
-version = "0.13.0"
+version = "0.13.1"
 source = { editable = "." }
 dependencies = [
     { name = "celery" },
@@ -1539,7 +1539,7 @@ dev = [
 
 [[package]]
 name = "lyra-sdk"
-version = "0.10.0"
+version = "0.10.1"
 source = { editable = "packages/lyra_sdk" }
 dependencies = [
     { name = "jsonschema" },

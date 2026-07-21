@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.10.0...lyra-sdk-v0.10.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* Add missing docstrings ([aa39841](https://github.com/RodolfoFigueroa/lyra/commit/aa398415770add15408eab52fda1017a32779f2f))
+
 ## [0.10.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.9.0...lyra-sdk-v0.10.0) (2026-07-21)
 
 

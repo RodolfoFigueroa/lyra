@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.13.0...lyra-app-v0.13.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* Add missing docstrings ([aa39841](https://github.com/RodolfoFigueroa/lyra/commit/aa398415770add15408eab52fda1017a32779f2f))
+
 ## [0.13.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.12.0...lyra-app-v0.13.0) (2026-07-21)
 
 

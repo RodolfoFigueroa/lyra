@@ -86,7 +86,7 @@ class ClientSecurityOptions(TypedDict):
     log_level: NotRequired[int]
 
 
-class _BaseLyraAPIClient:
+class _BaseTransport:
     """Base class for Lyra API clients, containing shared logic and configuration."""
 
     def __init__(

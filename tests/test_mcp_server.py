@@ -216,6 +216,8 @@ def _app_with_mcp(
 class FakeMCPBackend:
     def __init__(self, metrics: list[MetricInfoV4]) -> None:
         self.catalog = MetricCatalogResponse(
+            client_schema_version=1,
+            json_schema_dialect="https://json-schema.org/draft/2020-12/schema",
             catalog_fingerprint="catalog-1",
             metrics=metrics,
         )
@@ -1561,10 +1563,11 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
         },
         "client_helpers": {
             "python_sync": (
-                "LyraAPIClient.download_result(result_ref, path, format='jsonl')"
+                "LyraClient.results.download(result_ref, path, format='jsonl')"
             ),
             "python_async": (
-                "AsyncLyraAPIClient.download_result(result_ref, path, format='jsonl')"
+                "await AsyncLyraClient.results.download("
+                "result_ref, path, format='jsonl')"
             ),
         },
         "expires_in_seconds": 3600,

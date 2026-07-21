@@ -655,7 +655,12 @@ def test_discovery_and_lookup_routes_remain_public(
     monkeypatch.setattr(
         metrics,
         "get_metric_catalog",
-        lambda: MetricCatalogResponse(catalog_fingerprint="catalog-1", metrics=[]),
+        lambda: MetricCatalogResponse(
+            client_schema_version=1,
+            json_schema_dialect="https://json-schema.org/draft/2020-12/schema",
+            catalog_fingerprint="catalog-1",
+            metrics=[],
+        ),
     )
 
     async def lookup_met_zone(_name: str, *, conn: object) -> tuple[str, str]:

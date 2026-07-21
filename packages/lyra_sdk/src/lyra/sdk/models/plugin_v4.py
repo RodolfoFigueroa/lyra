@@ -7,7 +7,8 @@ from typing import Annotated, Literal, Self
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
-from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
+from lyra.sdk.client_contract import JSON_SCHEMA_DIALECT
+from lyra.sdk.models.spatial import BoundsReference, LocationReference
 from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.types import (
     JsonObject,
@@ -51,6 +52,17 @@ _BOUNDS_EXAMPLES = [
 ]
 _BATCHED_ITEM_FIELDS = {"key", "value", "label"}
 _BATCHED_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PUBLIC_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _validate_public_name(value: str, *, kind: str) -> str:
+    if not _PUBLIC_NAME_PATTERN.fullmatch(value):
+        msg = f"{kind} must match ^[a-z][a-z0-9_]*$"
+        raise ValueError(msg)
+    if value.startswith("lyra_"):
+        msg = f"{kind} must not begin with reserved prefix 'lyra_'"
+        raise ValueError(msg)
+    return value
 
 
 def _validate_json_schema(schema: JsonObject, field_name: str) -> None:
@@ -92,36 +104,8 @@ def _const_to_enum(schema: JsonObject) -> JsonObject:
     return converted
 
 
-class CVEGEOListWrapperV4(StrictBaseModel):
-    data_type: Literal["cvegeo_list"]
-    value: list[str]
-
-
-class GeoJSONLocationWrapperV4(StrictBaseModel):
-    data_type: Literal["geojson"]
-    value: GeoJSON
-
-
-class GeoJSONBoundsWrapperV4(StrictBaseModel):
-    data_type: Literal["geojson"]
-    value: SingleGeoJSON
-
-
-class MetZoneCodeWrapperV4(StrictBaseModel):
-    data_type: Literal["met_zone_code"]
-    value: str = Field(min_length=1)
-
-
-_LocationWrapperUnionV4 = Annotated[
-    CVEGEOListWrapperV4 | GeoJSONLocationWrapperV4 | MetZoneCodeWrapperV4,
-    Field(discriminator="data_type"),
-]
-_BoundsWrapperUnionV4 = Annotated[
-    CVEGEOListWrapperV4 | GeoJSONBoundsWrapperV4 | MetZoneCodeWrapperV4,
-    Field(discriminator="data_type"),
-]
-_LOCATION_WRAPPER_ADAPTER = TypeAdapter(_LocationWrapperUnionV4)
-_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(_BoundsWrapperUnionV4)
+_LOCATION_WRAPPER_ADAPTER = TypeAdapter(LocationReference)
+_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(BoundsReference)
 
 
 class PluginInfoV4(StrictBaseModel):
@@ -624,16 +608,19 @@ class MetricManifestV4(StrictBaseModel):
     )
     output: OutputSpecV4 = Field(description="Successful metric output declaration.")
 
+    @field_validator("name")
+    @classmethod
+    def validate_public_metric_name(cls, name: str) -> str:
+        return _validate_public_name(name, kind="metric name")
+
     @field_validator("inputs")
     @classmethod
     def validate_input_field_names(
         cls,
         inputs: dict[str, InputSpecV4],
     ) -> dict[str, InputSpecV4]:
-        empty_fields = [field for field in inputs if not field.strip()]
-        if empty_fields:
-            msg = "input field names must be non-empty strings"
-            raise ValueError(msg)
+        for field_name in inputs:
+            _validate_public_name(field_name, kind="root input name")
         return inputs
 
     @model_validator(mode="after")
@@ -743,6 +730,11 @@ class CompiledMetricManifestV4(StrictBaseModel):
     )
     output: OutputSpecV4 = Field(description="Successful metric output declaration.")
 
+    @field_validator("name")
+    @classmethod
+    def validate_public_metric_name(cls, name: str) -> str:
+        return _validate_public_name(name, kind="metric name")
+
     @field_validator("request_schema")
     @classmethod
     def validate_request_schema(cls, schema: JsonObject) -> JsonObject:
@@ -766,7 +758,7 @@ class CompiledPluginManifestV4(StrictBaseModel):
 
 def _adapter_for_spatial_kind(
     kind: SpatialInputKindV4,
-) -> TypeAdapter[_LocationWrapperUnionV4] | TypeAdapter[_BoundsWrapperUnionV4]:
+) -> TypeAdapter[LocationReference] | TypeAdapter[BoundsReference]:
     return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
 
 
@@ -1058,6 +1050,7 @@ def _compile_metric_request_schema(
 
     request_schema = validate_json_object(
         {
+            "$schema": JSON_SCHEMA_DIALECT,
             "type": "object",
             "required": required,
             "properties": properties,

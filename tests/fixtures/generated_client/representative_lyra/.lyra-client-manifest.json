@@ -1,0 +1,12 @@
+{
+  "generated_files": [
+    ".lyra-client-manifest.json",
+    "__init__.py",
+    "_client.py",
+    "_contract.py",
+    "_metrics.py",
+    "_models.py",
+    "_runtime.py",
+    "py.typed"
+  ]
+}

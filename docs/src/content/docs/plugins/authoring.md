@@ -7,6 +7,12 @@ Every metric is a synchronous decorated function with at least one spatial
 input and a declared terminal output. Use public contracts from `lyra-sdk`; do
 not import application internals.
 
+Public metric names and root input names must match
+`^[a-z][a-z0-9_]*$`. The `lyra_` prefix is reserved for generated runtime
+keywords. Decorator and manifest construction reject invalid names immediately;
+generator diagnostics also fail on naming collisions, broken references, or
+contracts that cannot be emitted without ambiguity.
+
 Declare metrics with the standalone `@metric` decorator, then assemble them in
 one explicit, synchronous factory:
 
@@ -203,7 +209,9 @@ inputs, output declarations, and the plugin factory. Generation reads
 `[project]` and `[tool.lyra].factory` from `pyproject.toml` plus the live
 definition returned by the factory.
 
-The compiler rejects extra fields, invalid defaults/examples, duplicate metric
-names, missing spatial inputs, invalid table contracts, and stale artifacts.
+The compiler rejects extra fields, invalid or reserved public names, invalid
+defaults/examples, duplicate metric names, missing spatial inputs, invalid table
+contracts, and stale artifacts. Every compiled request schema declares Draft
+2020-12 so client generators can validate it without guessing a dialect.
 Use the generated [Python reference](../../reference/generated/python/) for
 exact SDK model fields.

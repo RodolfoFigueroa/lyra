@@ -1,0 +1,4 @@
+CLIENT_SCHEMA_VERSION = 1
+JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
+
+__all__ = ["CLIENT_SCHEMA_VERSION", "JSON_SCHEMA_DIALECT"]

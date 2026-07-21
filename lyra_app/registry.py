@@ -13,6 +13,8 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
 from lyra.sdk.models.metric import (
+    CLIENT_SCHEMA_VERSION,
+    JSON_SCHEMA_DIALECT,
     MetricCatalogResponse,
     MetricInfoV4,
     build_metric_search_text,
@@ -76,7 +78,7 @@ def _empty_catalog_fingerprint() -> str:
     return _fingerprint_payload([])
 
 
-def _fingerprint_payload(payload: list[dict[str, Any]]) -> str:
+def _fingerprint_payload(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -320,7 +322,13 @@ def _public_metric_payload(metrics: list[MetricInfoV4]) -> list[dict[str, Any]]:
 
 
 def public_catalog_fingerprint(metrics: list[MetricInfoV4]) -> str:
-    return _fingerprint_payload(_public_metric_payload(metrics))
+    return _fingerprint_payload(
+        {
+            "client_schema_version": CLIENT_SCHEMA_VERSION,
+            "json_schema_dialect": JSON_SCHEMA_DIALECT,
+            "metrics": _public_metric_payload(metrics),
+        }
+    )
 
 
 def get_public_catalog_fingerprint() -> str:
@@ -370,6 +378,8 @@ def get_metric_search_text(name: str) -> str | None:
 def get_metric_catalog() -> MetricCatalogResponse:
     metrics = get_metrics_info()
     return MetricCatalogResponse(
+        client_schema_version=CLIENT_SCHEMA_VERSION,
+        json_schema_dialect=JSON_SCHEMA_DIALECT,
         catalog_fingerprint=public_catalog_fingerprint(metrics),
         metrics=metrics,
     )

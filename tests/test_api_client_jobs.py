@@ -1,19 +1,33 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Self, TypedDict, Unpack, cast
 
 import pytest
 import requests
 from lyra.api import parse_result_ref
-from lyra.api.client.async_ import AsyncLyraAPIClient
-from lyra.api.client.sync import LyraAPIClient
+from lyra.api.client.async_ import AsyncLyraClient
+from lyra.api.client.sync import LyraClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
-from lyra.sdk.models import FileJobResult, JobProgressEvent
+from lyra.sdk.models import FileJobResult, JobProgressEvent, TableJobResult
 from lyra.sdk.types import JsonValue
 
 from lyra_app.config import DEFAULT_API_HOST
+
+
+class LyraAPIClient(LyraClient):
+    """Exercise the retained private sync transport through the historical tests."""
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        return cast("Callable[..., Any]", getattr(self._transport, name))
+
+
+class AsyncLyraAPIClient(AsyncLyraClient):
+    """Exercise the retained private async transport through historical tests."""
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        return cast("Callable[..., Any]", getattr(self._transport, name))
 
 
 class _FakeSyncResponseOptions(TypedDict):
@@ -566,6 +580,8 @@ def _metric_response() -> dict[str, Any]:
 
 def _metric_catalog_response() -> dict[str, Any]:
     return {
+        "client_schema_version": 1,
+        "json_schema_dialect": "https://json-schema.org/draft/2020-12/schema",
         "catalog_fingerprint": "abc123",
         "metrics": [_metric_response()],
     }
@@ -614,7 +630,7 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     status = client.get_job(job.job_id)
     events = list(client.iter_job_events(job.job_id))
     result = client.get_job_result(job.job_id)
-    processed = client.process("heavy_metric", {"value": 3})
+    processed = client.raw.run("heavy_metric", {"value": 3})
 
     assert posted[0]["url"] == "http://example.test/jobs"
     assert posted[0]["json"] == {
@@ -629,6 +645,7 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert [event.event.name for event in events] == ["succeeded"]
     assert result.kind == "table"
     assert result.data == [[6]]
+    assert isinstance(processed, TableJobResult)
     assert processed.data == [[6]]
 
 
@@ -1402,7 +1419,7 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
     result = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).process(
+        AsyncLyraAPIClient("example.test", secure=False).raw.run(
             "heavy_metric",
             {"value": 3},
         )

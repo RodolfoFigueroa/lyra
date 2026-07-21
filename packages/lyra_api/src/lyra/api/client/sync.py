@@ -6,11 +6,21 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, TypeVar, Unpack
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    NotRequired,
+    TypedDict,
+    TypeVar,
+    Unpack,
+    cast,
+)
 
 import requests
 from lyra.api.client.base import (
-    _BaseLyraAPIClient,
+    ClientSecurityOptions,
+    _BaseTransport,
     _load_pandas,
     service_unavailable_error,
 )
@@ -19,9 +29,11 @@ from lyra.api.exceptions import (
     JobEventCursorGapError,
     JobEventStreamError,
     JobWaitTimeoutError,
+    MetricRunError,
 )
 from lyra.sdk.models import (
     AdminStatusResponse,
+    CancelledJobResult,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
     CreatePluginRepoRequest,
@@ -29,6 +41,7 @@ from lyra.sdk.models import (
     DataTypesResponse,
     DeleteMetricQueueResponse,
     DeletePluginRepoResponse,
+    FailedJobResult,
     FileJobResult,
     JobCancelResponse,
     JobCreateResponse,
@@ -67,9 +80,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
     import pandas as pd
+    from lyra.api.options import RunOptions, SubmitOptions
+    from lyra.sdk.types import JsonObject
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
+_SuccessResultT = TypeVar("_SuccessResultT", bound=TableJobResult | FileJobResult)
+SuccessfulJobResult = TableJobResult | FileJobResult
 
 
 @dataclass
@@ -215,10 +232,14 @@ def _validate_max_reconnect_attempts(max_reconnect_attempts: int) -> None:
         raise ValueError(err)
 
 
-class JobHandle:
+class JobHandle(Generic[_SuccessResultT]):
     """Synchronous observation and result handle for one submitted job."""
 
-    def __init__(self, client: LyraAPIClient, submission: JobCreateResponse) -> None:
+    def __init__(
+        self,
+        client: _SyncTransport,
+        submission: JobCreateResponse,
+    ) -> None:
         self._client = client
         self.submission = submission
 
@@ -249,8 +270,11 @@ class JobHandle:
             max_reconnect_attempts=max_reconnect_attempts,
         )
 
-    def result(self) -> TerminalJobResult:
-        return self._client.get_job_result(self.job_id)
+    def result(self) -> _SuccessResultT:
+        result = self._client.get_job_result(self.job_id)
+        if isinstance(result, FailedJobResult | CancelledJobResult):
+            raise MetricRunError(result)
+        return cast("_SuccessResultT", result)
 
     def wait(
         self,
@@ -259,7 +283,7 @@ class JobHandle:
         on_event: Callable[[JobEventRecord], None] | None = None,
         on_progress: Callable[[JobProgressEvent], None] | None = None,
         on_message: Callable[[JobMessageEvent], None] | None = None,
-    ) -> TerminalJobResult:
+    ) -> _SuccessResultT:
         for record in self.events(timeout=timeout):
             if on_event is not None:
                 on_event(record)
@@ -285,8 +309,8 @@ class _RequestModelOptions(TypedDict):
     json_body: NotRequired[dict[str, Any] | None]
 
 
-class LyraAPIClient(_BaseLyraAPIClient):
-    """Synchronous client for the Lyra HTTP job API."""
+class _SyncTransport(_BaseTransport):
+    """Private synchronous HTTP implementation used by resource clients."""
 
     def _request_model(
         self,
@@ -407,7 +431,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
         payload: dict[str, Any],
         *,
         idempotency_key: str | None = None,
-    ) -> JobHandle:
+    ) -> JobHandle[SuccessfulJobResult]:
         return JobHandle(
             self,
             self.create_job(metric, payload, idempotency_key=idempotency_key),
@@ -940,41 +964,291 @@ class LyraAPIClient(_BaseLyraAPIClient):
 
         return MetricInfoV4.model_validate(response.json())
 
-    def process(
-        self,
-        metric: str,
-        payload: dict[str, Any],
-        *,
-        idempotency_key: str | None = None,
-    ) -> TableJobResult:
-        job = self.submit_job(metric, payload, idempotency_key=idempotency_key)
-        result = job.wait()
-        if result.status != "succeeded":
-            err = (
-                f"Job {job.job_id} finished with status {result.status}: {result.error}"
-            )
-            raise DownloadError(err)
-        if not isinstance(result, TableJobResult):
-            err = f"Job {job.job_id} produced a file result; use process_to_file()."
-            raise DownloadError(err)
-        return result
 
-    def process_to_file(
+class _HealthResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def liveness(self) -> LivenessResponse:
+        return self._transport.get_liveness()
+
+    def readiness(self) -> ReadinessResponse:
+        return self._transport.get_readiness()
+
+
+class _LookupsResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def met_zone_code(self, name: str) -> MetZoneCodeResponse:
+        return self._transport.get_met_zone_code(name)
+
+
+class _CatalogResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def data_types(self) -> DataTypesResponse:
+        return self._transport.get_data_types()
+
+    def metrics(self) -> MetricCatalogResponse:
+        return self._transport.get_metrics()
+
+    def metric(self, name: str) -> MetricInfoV4:
+        return self._transport.get_metric(name)
+
+
+class _JobsResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def get(self, job_id: str) -> JobStatusInfo:
+        return self._transport.get_job(job_id)
+
+    def events(
         self,
-        metric: str,
-        payload: dict[str, Any],
+        job_id: str,
+        *,
+        after_id: str | None = None,
+        kinds: set[str] | None = None,
+        timeout: float | None = None,
+        max_reconnect_attempts: int = 5,
+    ) -> Iterator[JobEventRecord]:
+        return self._transport.iter_job_events(
+            job_id,
+            last_event_id=after_id,
+            kinds=kinds,
+            timeout=timeout,
+            max_reconnect_attempts=max_reconnect_attempts,
+        )
+
+
+class _ResultsResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def get(self, job_id: str) -> TerminalJobResult:
+        return self._transport.get_job_result(job_id)
+
+    def descriptor(self, ref: str) -> ResultDescriptor:
+        return self._transport.get_result_descriptor(ref)
+
+    def download(
+        self,
+        ref: str,
         path: str | os.PathLike[str],
         *,
-        idempotency_key: str | None = None,
+        format: str = "jsonl",  # noqa: A002
     ) -> None:
-        job = self.submit_job(metric, payload, idempotency_key=idempotency_key)
-        result = job.wait()
-        if result.status != "succeeded":
-            err = (
-                f"Job {job.job_id} finished with status {result.status}: {result.error}"
-            )
-            raise DownloadError(err)
+        self._transport.download_result(ref, path, format=format)
+
+    def download_file(self, job_id: str, path: str | os.PathLike[str]) -> None:
+        self._transport.download_job_result_to_file(job_id, path)
+
+    def dataframe(self, ref: str) -> pd.DataFrame:
+        return self._transport.result_dataframe(ref)
+
+
+class _RawMetricsResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def create(
+        self,
+        metric: str,
+        arguments: JsonObject,
+        *,
+        options: SubmitOptions | None = None,
+    ) -> JobCreateResponse:
+        key = options.idempotency_key if options is not None else None
+        return self._transport.create_job(metric, arguments, idempotency_key=key)
+
+    def submit(
+        self,
+        metric: str,
+        arguments: JsonObject,
+        *,
+        options: SubmitOptions | None = None,
+    ) -> JobHandle[SuccessfulJobResult]:
+        key = options.idempotency_key if options is not None else None
+        return self._transport.submit_job(metric, arguments, idempotency_key=key)
+
+    def run(
+        self,
+        metric: str,
+        arguments: JsonObject,
+        *,
+        options: RunOptions | None = None,
+    ) -> SuccessfulJobResult:
+        key = options.idempotency_key if options is not None else None
+        wait_seconds = options.timeout if options is not None else None
+        handle = self._transport.submit_job(
+            metric,
+            arguments,
+            idempotency_key=key,
+        )
+        return handle.wait(timeout=wait_seconds)
+
+    def run_to_file(
+        self,
+        metric: str,
+        arguments: JsonObject,
+        path: str | os.PathLike[str],
+        *,
+        options: RunOptions | None = None,
+    ) -> None:
+        result = self.run(
+            metric,
+            arguments,
+            options=options,
+        )
         if not isinstance(result, FileJobResult):
-            err = f"Job {job.job_id} did not produce a file result."
+            err = f"Job {result.job_id} did not produce a file result."
             raise DownloadError(err)
-        self.download_job_result_to_file(job.job_id, path)
+        self._transport.download_job_result_to_file(result.job_id, path)
+
+
+class _AdminJobsResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: JobLifecycleStatus | None = None,
+        metric: str | None = None,
+    ) -> JobListResponse:
+        return self._transport.list_admin_jobs(
+            limit=limit,
+            status=status,
+            metric=metric,
+        )
+
+    def cancel(self, job_id: str) -> JobCancelResponse:
+        return self._transport.cancel_admin_job(job_id)
+
+
+class _AdminPluginReposResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def list(self) -> PluginRepoListResponse:
+        return self._transport.list_plugin_repos()
+
+    def create(
+        self,
+        source: str,
+        *,
+        repo_id: str | None = None,
+        enabled: bool = True,
+    ) -> CreatePluginRepoResponse:
+        return self._transport.create_plugin_repo(
+            source,
+            repo_id=repo_id,
+            enabled=enabled,
+        )
+
+    def update(
+        self,
+        repo_id: str,
+        *,
+        source: str | None = None,
+        enabled: bool | None = None,
+    ) -> UpdatePluginRepoResponse:
+        return self._transport.update_plugin_repo(
+            repo_id,
+            source=source,
+            enabled=enabled,
+        )
+
+    def delete(self, repo_id: str) -> DeletePluginRepoResponse:
+        return self._transport.delete_plugin_repo(repo_id)
+
+    def sync(self, repo_id: str) -> SyncPluginRepoResponse:
+        return self._transport.sync_plugin_repo(repo_id)
+
+
+class _AdminCatalogResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def summary(self) -> CatalogSummaryResponse:
+        return self._transport.get_admin_catalog()
+
+    def refresh(self) -> PluginCatalogRefreshResponse:
+        return self._transport.refresh_plugin_catalog()
+
+
+class _AdminWorkersResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def list(self) -> WorkersResponse:
+        return self._transport.get_admin_workers()
+
+    def get(self, name: str) -> WorkerDetail:
+        return self._transport.get_admin_worker(name)
+
+    def restart(self, *, timeout: float = 30.0) -> WorkerRestartResponse:
+        return self._transport.restart_workers(timeout=timeout)
+
+
+class _AdminQueuesResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def list(self) -> QueuesResponse:
+        return self._transport.get_admin_queues()
+
+
+class _AdminRoutingResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+
+    def list(self) -> PluginRoutingResponse:
+        return self._transport.list_plugin_routing()
+
+    def set(self, metric: str, queue: str) -> MetricQueueAssignmentResponse:
+        return self._transport.set_plugin_routing(metric, queue)
+
+    def delete(self, metric: str) -> DeleteMetricQueueResponse:
+        return self._transport.delete_plugin_routing(metric)
+
+
+class _AdminResource:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._transport = transport
+        self.jobs = _AdminJobsResource(transport)
+        self.plugin_repos = _AdminPluginReposResource(transport)
+        self.catalog = _AdminCatalogResource(transport)
+        self.workers = _AdminWorkersResource(transport)
+        self.queues = _AdminQueuesResource(transport)
+        self.routing = _AdminRoutingResource(transport)
+
+    def status(self) -> AdminStatusResponse:
+        return self._transport.get_admin_status()
+
+    def config_summary(self) -> ConfigSummaryResponse:
+        return self._transport.get_admin_config_summary()
+
+
+class LyraClient:
+    """Resource-oriented synchronous client for the Lyra HTTP API."""
+
+    def __init__(
+        self,
+        host: str,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
+        **options: Unpack[ClientSecurityOptions],
+    ) -> None:
+        transport = _SyncTransport(host, timeout, headers, **options)
+        self._transport = transport
+        self.health = _HealthResource(transport)
+        self.lookups = _LookupsResource(transport)
+        self.catalog = _CatalogResource(transport)
+        self.jobs = _JobsResource(transport)
+        self.results = _ResultsResource(transport)
+        self.raw = _RawMetricsResource(transport)
+        self.admin = _AdminResource(transport)

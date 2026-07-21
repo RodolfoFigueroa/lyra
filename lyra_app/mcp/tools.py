@@ -525,10 +525,11 @@ async def _download_result(
         },
         "client_helpers": {
             "python_sync": (
-                "LyraAPIClient.download_result(result_ref, path, format='jsonl')"
+                "LyraClient.results.download(result_ref, path, format='jsonl')"
             ),
             "python_async": (
-                "AsyncLyraAPIClient.download_result(result_ref, path, format='jsonl')"
+                "await AsyncLyraClient.results.download("
+                "result_ref, path, format='jsonl')"
             ),
         },
         "expires_in_seconds": lifetime.get("expires_in_seconds"),

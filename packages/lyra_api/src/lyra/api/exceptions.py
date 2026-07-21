@@ -1,5 +1,12 @@
 """Custom exceptions for Lyra API client."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lyra.sdk.models import CancelledJobResult, FailedJobResult
+
 
 class LyraAPIError(Exception):
     """Base exception for all Lyra API errors."""
@@ -49,3 +56,17 @@ class ServiceUnavailableError(LyraAPIError):
         self.code = code
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
+
+
+class MetricRunError(LyraAPIError):
+    """A submitted metric reached a failed or cancelled terminal state."""
+
+    def __init__(self, result: FailedJobResult | CancelledJobResult) -> None:
+        detail = result.error
+        super().__init__(
+            f"Metric job {result.job_id} finished with status {result.status}: {detail}"
+        )
+        self.job_id = result.job_id
+        self.status = result.status
+        self.error = detail
+        self.result = result

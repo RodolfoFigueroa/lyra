@@ -150,7 +150,7 @@ def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
     assert info_payload["request_schema"]["required"] == ["location", "value"]
     assert info_payload["request_schema"]["properties"]["value"] == {"type": "integer"}
     assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
-    assert "GeoJSONLocationWrapperV4" in info_payload["request_schema"]["$defs"]
+    assert "GeoJSONLocation" in info_payload["request_schema"]["$defs"]
     assert entry is not None
     assert entry.queue == "lightweight"
     assert entry.repo_id == "owner__repo"
@@ -385,9 +385,7 @@ def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
     ]
     assert table_entry is not None
     assert table_entry.queue == "interactive"
-    assert "GeoJSONLocationWrapperV4" in _json_object(
-        table_entry.request_schema["$defs"]
-    )
+    assert "GeoJSONLocation" in _json_object(table_entry.request_schema["$defs"])
     assert table_info is not None
     assert table_info.spatial_inputs == {"location": "location"}
     assert file_entry is not None
@@ -554,7 +552,7 @@ def test_catalog_refresh_reads_v4_file_metric(
         "extensions": [".tif", ".tiff"],
     }
     assert info.request_schema["required"] == ["bounds", "year"]
-    assert "GeoJSONBoundsWrapperV4" in _json_object(info.request_schema["$defs"])
+    assert "GeoJSONBounds" in _json_object(info.request_schema["$defs"])
     assert entry is not None
     assert entry.queue == "heavy"
 
@@ -1178,5 +1176,5 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
     info = registry.get_metric_info("light_metric")
     assert info is not None
     schema_defs = _json_object(info.request_schema["$defs"])
-    assert "GeoJSONLocationWrapperV4" in schema_defs
-    assert "GeoJSONBoundsWrapperV4" in schema_defs
+    assert "GeoJSONLocation" in schema_defs
+    assert "GeoJSONBounds" in schema_defs

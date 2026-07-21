@@ -129,7 +129,7 @@ def test_compile_v4_static_table_metric_request_schema() -> None:
     assert schema["properties"]["location"]["examples"] == [
         {"data_type": "cvegeo_list", "value": ["09002"]}
     ]
-    assert "GeoJSONLocationWrapperV4" in schema["$defs"]
+    assert "GeoJSONLocation" in schema["$defs"]
     assert metric["output"] == {
         "kind": "table",
         "columns": [
@@ -375,7 +375,7 @@ def test_compile_v4_file_metric_with_bounds_spatial_schema() -> None:
     assert metric["spatial_inputs"] == {"bounds": "bounds"}
     assert metric["batch_inputs"] == []
     assert schema["required"] == ["bounds", "year"]
-    assert "GeoJSONBoundsWrapperV4" in schema["$defs"]
+    assert "GeoJSONBounds" in schema["$defs"]
     assert schema["properties"]["bounds"]["description"] == (
         "Area used to bound the analysis, supplied through a supported spatial "
         "reference format."

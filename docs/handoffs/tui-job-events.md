@@ -19,7 +19,7 @@ The authoritative contracts live in `lyra.sdk.models.job`:
   `AsyncJobHandle`. Both support status, resumable events, waiting, and results.
 
 Do not parse raw SSE in the TUI. Use `AsyncJobHandle.events()` or
-`AsyncLyraAPIClient.iter_job_events()` so authentication, validation,
+`AsyncLyraClient.jobs.events()` so authentication, validation,
 reconnection, deduplication, cursor gaps, and deadlines have one implementation.
 
 ## Recommended experience
@@ -96,4 +96,3 @@ through the normal UI event loop.
 - Reopening or reconnecting resumes from the last applied `JobEventRecord.id`.
 - A cursor gap is explicit and recovers from `JobStatusInfo`.
 - Observation stops cleanly on terminal state, selection change, and unmount.
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from lyra.api import AsyncLyraAPIClient
+from lyra.api import AsyncLyraClient
 
 if TYPE_CHECKING:
     from lyra.sdk.models import (
@@ -93,7 +93,7 @@ class LyraApiClientAdapter:
     """Thin async adapter around the public Lyra API client."""
 
     def __init__(self, config: TuiConfig) -> None:
-        self._client = AsyncLyraAPIClient(
+        self._client = AsyncLyraClient(
             config.host,
             timeout=config.timeout,
             admin_api_key=config.admin_api_key,
@@ -101,41 +101,41 @@ class LyraApiClientAdapter:
         )
 
     async def get_readiness(self) -> ReadinessResponse:
-        return await self._client.get_readiness()
+        return await self._client.health.readiness()
 
     async def get_admin_status(self) -> AdminStatusResponse:
-        return await self._client.get_admin_status()
+        return await self._client.admin.status()
 
     async def get_admin_config_summary(self) -> ConfigSummaryResponse:
-        return await self._client.get_admin_config_summary()
+        return await self._client.admin.config_summary()
 
     async def get_admin_catalog(self) -> CatalogSummaryResponse:
-        return await self._client.get_admin_catalog()
+        return await self._client.admin.catalog.summary()
 
     async def get_admin_workers(self) -> WorkersResponse:
-        return await self._client.get_admin_workers()
+        return await self._client.admin.workers.list()
 
     async def get_admin_queues(self) -> QueuesResponse:
-        return await self._client.get_admin_queues()
+        return await self._client.admin.queues.list()
 
     async def list_admin_jobs(self) -> JobListResponse:
-        return await self._client.list_admin_jobs()
+        return await self._client.admin.jobs.list()
 
     async def list_plugin_repos(self) -> PluginRepoListResponse:
-        return await self._client.list_plugin_repos()
+        return await self._client.admin.plugin_repos.list()
 
     async def list_plugin_routing(self) -> PluginRoutingResponse:
-        return await self._client.list_plugin_routing()
+        return await self._client.admin.routing.list()
 
     async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
-        return await self._client.cancel_admin_job(job_id)
+        return await self._client.admin.jobs.cancel(job_id)
 
     async def restart_workers(
         self,
         *,
         restart_timeout: float = 30.0,
     ) -> WorkerRestartResponse:
-        return await self._client.restart_workers(timeout=restart_timeout)
+        return await self._client.admin.workers.restart(wait_seconds=restart_timeout)
 
     async def create_plugin_repo(
         self,
@@ -144,7 +144,7 @@ class LyraApiClientAdapter:
         repo_id: str | None = None,
         enabled: bool = True,
     ) -> CreatePluginRepoResponse:
-        return await self._client.create_plugin_repo(
+        return await self._client.admin.plugin_repos.create(
             source,
             repo_id=repo_id,
             enabled=enabled,
@@ -157,30 +157,30 @@ class LyraApiClientAdapter:
         source: str | None = None,
         enabled: bool | None = None,
     ) -> UpdatePluginRepoResponse:
-        return await self._client.update_plugin_repo(
+        return await self._client.admin.plugin_repos.update(
             repo_id,
             source=source,
             enabled=enabled,
         )
 
     async def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
-        return await self._client.delete_plugin_repo(repo_id)
+        return await self._client.admin.plugin_repos.delete(repo_id)
 
     async def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
-        return await self._client.sync_plugin_repo(repo_id)
+        return await self._client.admin.plugin_repos.sync(repo_id)
 
     async def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse:
-        return await self._client.refresh_plugin_catalog()
+        return await self._client.admin.catalog.refresh()
 
     async def set_plugin_routing(
         self,
         metric_name: str,
         queue: str,
     ) -> MetricQueueAssignmentResponse:
-        return await self._client.set_plugin_routing(metric_name, queue)
+        return await self._client.admin.routing.set(metric_name, queue)
 
     async def delete_plugin_routing(
         self,
         metric_name: str,
     ) -> DeleteMetricQueueResponse:
-        return await self._client.delete_plugin_routing(metric_name)
+        return await self._client.admin.routing.delete(metric_name)

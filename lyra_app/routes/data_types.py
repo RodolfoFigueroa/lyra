@@ -2,11 +2,13 @@ from typing import Literal, get_args, get_origin
 
 from fastapi import APIRouter
 from lyra.sdk.models import DataTypeSchemaInfo, DataTypesResponse
+from lyra.sdk.models.spatial import (
+    CVEGEOList,
+    GeoJSONBounds,
+    GeoJSONLocation,
+    MetZoneCode,
+)
 from lyra.sdk.models.strict import StrictBaseModel
-
-from lyra_app.models.cvegeo_list import CVEGEOListWrapper
-from lyra_app.models.geojson import GeoJSONWrapper, SingleGeoJSONWrapper
-from lyra_app.models.met_zone_code import MetZoneCodeWrapper
 
 router = APIRouter(tags=["Catalog"])
 
@@ -56,13 +58,13 @@ def build_data_type_info(
 async def list_data_types() -> DataTypesResponse:
     return DataTypesResponse(
         location=[
-            build_data_type_info(CVEGEOListWrapper),
-            build_data_type_info(GeoJSONWrapper),
-            build_data_type_info(MetZoneCodeWrapper),
+            build_data_type_info(CVEGEOList),
+            build_data_type_info(GeoJSONLocation),
+            build_data_type_info(MetZoneCode),
         ],
         bounds=[
-            build_data_type_info(CVEGEOListWrapper),
-            build_data_type_info(SingleGeoJSONWrapper),
-            build_data_type_info(MetZoneCodeWrapper),
+            build_data_type_info(CVEGEOList),
+            build_data_type_info(GeoJSONBounds),
+            build_data_type_info(MetZoneCode),
         ],
     )

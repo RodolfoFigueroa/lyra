@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import types
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -58,6 +59,7 @@ ResultT = TypeVar("ResultT")
 PythonAnnotation: TypeAlias = TypeForm[Any] | str
 PluginResult: TypeAlias = JsonValue | StrictBaseModel
 ConstraintValue: TypeAlias = int | float
+_PUBLIC_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class CommonInputMetadata(TypedDict):
@@ -131,6 +133,15 @@ BoundsInput = Annotated[SingleGeoJSON, _SpatialInputMarker("bounds")]
 
 class PluginDefinitionError(ValueError):
     """Raised when a typed plugin definition cannot produce a valid contract."""
+
+
+def _validate_public_name(value: str, *, kind: str) -> None:
+    if not _PUBLIC_NAME_PATTERN.fullmatch(value):
+        msg = f"{kind} must match ^[a-z][a-z0-9_]*$"
+        raise PluginDefinitionError(msg)
+    if value.startswith("lyra_"):
+        msg = f"{kind} must not begin with reserved prefix 'lyra_'"
+        raise PluginDefinitionError(msg)
 
 
 class MetricDescription(StrictBaseModel):
@@ -601,6 +612,7 @@ def _build_metric_definition(
     function: Callable[..., ResultT],
     input_declarations: dict[str, Input | BatchInput],
 ) -> _MetricDefinition[ResultT]:
+    _validate_public_name(name, kind="metric name")
     signature = inspect.signature(function)
     try:
         hints = get_type_hints(function, include_extras=True)
@@ -627,6 +639,7 @@ def _build_metric_definition(
         if parameter.name == "context":
             accepts_context = True
             continue
+        _validate_public_name(parameter.name, kind="root input name")
         declaration = input_declarations.get(parameter.name)
         try:
             input_spec, batch, effective_annotation = _input_spec(

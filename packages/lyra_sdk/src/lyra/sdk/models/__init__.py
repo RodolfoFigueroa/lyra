@@ -63,7 +63,12 @@ from lyra.sdk.models.job import (
     result_ref_for_job,
 )
 from lyra.sdk.models.lookups import MetZoneCodeResponse
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+from lyra.sdk.models.metric import (
+    CLIENT_SCHEMA_VERSION,
+    JSON_SCHEMA_DIALECT,
+    MetricCatalogResponse,
+    MetricInfoV4,
+)
 from lyra.sdk.models.observability import (
     AdminStatusResponse,
     CatalogSummaryResponse,
@@ -113,15 +118,27 @@ from lyra.sdk.models.plugin_v4 import (
     expand_runner_table_output_columns,
     expand_table_output_columns,
 )
+from lyra.sdk.models.spatial import (
+    BoundsReference,
+    CVEGEOList,
+    GeoJSONBounds,
+    GeoJSONLocation,
+    LocationReference,
+    MetZoneCode,
+)
 
 __all__ = [
+    "CLIENT_SCHEMA_VERSION",
     "DEFAULT_RESULT_INDEX_FIELD",
     "DEFAULT_RESULT_PREVIEW_ROWS",
+    "JSON_SCHEMA_DIALECT",
     "AdminStatusResponse",
     "BatchInputV4",
     "BatchedTableOutputColumnV4",
     "BooleanInputV4",
     "BoundsInputV4",
+    "BoundsReference",
+    "CVEGEOList",
     "CancelledJobResult",
     "CatalogSummaryResponse",
     "CompiledMetricManifestV4",
@@ -139,6 +156,8 @@ __all__ = [
     "FileJobResult",
     "FileOutputV4",
     "FractionOfLocationAreaDerivationV4",
+    "GeoJSONBounds",
+    "GeoJSONLocation",
     "InputSpecV4",
     "IntegerInputV4",
     "JobCancelResponse",
@@ -161,6 +180,8 @@ __all__ = [
     "JsonSchemaInputV4",
     "LivenessResponse",
     "LocationInputV4",
+    "LocationReference",
+    "MetZoneCode",
     "MetZoneCodeResponse",
     "MetricCatalogResponse",
     "MetricInfoV4",

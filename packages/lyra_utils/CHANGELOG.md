@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-utils-v0.2.0...lyra-utils-v0.3.0) (2026-07-21)
+
+
+### Features
+
+* Centralize release pipeline ([0eed021](https://github.com/RodolfoFigueroa/lyra/commit/0eed0216427bc4b8a0413ad0783e68e8fb46cd11))
+
 ## [0.2.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-utils-v0.1.0...lyra-utils-v0.2.0) (2026-07-20)
 
 

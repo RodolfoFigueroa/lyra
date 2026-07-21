@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.6.1...lyra-api-v0.7.0) (2026-07-21)
+
+
+### Features
+
+* Centralize release pipeline ([0eed021](https://github.com/RodolfoFigueroa/lyra/commit/0eed0216427bc4b8a0413ad0783e68e8fb46cd11))
+
 ## [0.6.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.6.0...lyra-api-v0.6.1) (2026-07-21)
 
 

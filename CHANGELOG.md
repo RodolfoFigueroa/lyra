@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.8.0...lyra-app-v0.9.0) (2026-07-21)
+
+
+### Features
+
+* Offload input description to decorator ([ad1ebf9](https://github.com/RodolfoFigueroa/lyra/commit/ad1ebf9058d9aa5cfb5cb64cb8fc88628fef891c))
+* Refactor types and tighten assertions ([7d6264f](https://github.com/RodolfoFigueroa/lyra/commit/7d6264fb31b8fbcc16dff060f46f32d4cf7a59bc))
+
 ## [0.8.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.7.0...lyra-app-v0.8.0) (2026-07-20)
 
 

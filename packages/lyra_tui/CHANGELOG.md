@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-tui-v0.2.0...lyra-tui-v0.3.0) (2026-07-21)
+
+
+### Features
+
+* Refactor types and tighten assertions ([7d6264f](https://github.com/RodolfoFigueroa/lyra/commit/7d6264fb31b8fbcc16dff060f46f32d4cf7a59bc))
+
 ## [0.2.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-tui-v0.1.0...lyra-tui-v0.2.0) (2026-07-20)
 
 

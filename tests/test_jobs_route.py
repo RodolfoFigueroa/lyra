@@ -2,11 +2,11 @@ import asyncio
 import importlib
 import json
 import sys
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ParamSpec, TypeVar, cast
 
 import httpx
 import pytest
@@ -21,6 +21,7 @@ from lyra.sdk.models import (
 )
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.metric import MetricCatalogResponse
+from lyra.sdk.types import JsonValue
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -30,6 +31,9 @@ from lyra_app.mcp.tools import InProcessLyraBackend
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.config_helpers import load_test_config, plugin_state_store
+
+Parameters = ParamSpec("Parameters")
+ReturnT = TypeVar("ReturnT")
 
 
 def _manifest() -> dict[str, Any]:
@@ -135,7 +139,7 @@ def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
 def _spatial_payload(
     *,
     data_type: str = "geojson",
-    value: Any | None = None,
+    value: JsonValue = None,
 ) -> dict[str, Any]:
     return {
         "location": {
@@ -268,16 +272,17 @@ class FakeRedisAsync:
     async def xrange(
         self,
         key: str,
+        minimum: str,
+        /,
         *,
-        min: str,  # noqa: A002
         count: int | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
         records = self.streams.get(key, [])
-        if min.startswith("("):
-            after_id = min[1:]
+        if minimum.startswith("("):
+            after_id = minimum[1:]
             records = [record for record in records if record[0] > after_id]
-        elif min != job_store.STREAM_START:
-            records = [record for record in records if record[0] >= min]
+        elif minimum != job_store.STREAM_START:
+            records = [record for record in records if record[0] >= minimum]
         return records if count is None else records[:count]
 
     async def xread(
@@ -383,7 +388,12 @@ def reset_catalog(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> Iterator[None]:
-    async def run_inline(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+    async def run_inline(
+        func: Callable[Parameters, ReturnT],
+        /,
+        *args: Parameters.args,
+        **kwargs: Parameters.kwargs,
+    ) -> ReturnT:
         return func(*args, **kwargs)
 
     monkeypatch.setattr(job_submission.asyncio, "to_thread", run_inline)

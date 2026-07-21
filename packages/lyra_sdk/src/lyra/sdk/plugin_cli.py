@@ -9,11 +9,13 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from lyra.sdk.models.plugin_v3 import (
     BatchInputV3,
     FileOutputV3,
+    InputSpecV3,
+    OutputSpecV3,
     PluginInfoV3,
     PluginOwnedInputMetadataV3,
     TableOutputV3,
@@ -234,7 +236,7 @@ def _render_table(
     ]
 
 
-def _input_requirement(input_spec: Any) -> str:
+def _input_requirement(input_spec: InputSpecV3) -> str:
     if not isinstance(input_spec, PluginOwnedInputMetadataV3):
         return "required"
     if input_spec.required:
@@ -244,7 +246,7 @@ def _input_requirement(input_spec: Any) -> str:
     return "optional"
 
 
-def _input_description(input_spec: Any) -> str:
+def _input_description(input_spec: InputSpecV3) -> str:
     if isinstance(input_spec, BatchInputV3):
         return input_spec.value.description or ""
     description = getattr(input_spec, "description", None)
@@ -255,7 +257,7 @@ def _input_description(input_spec: Any) -> str:
     return "Lyra-resolved bounds."
 
 
-def _input_details(input_spec: Any) -> str:
+def _input_details(input_spec: InputSpecV3) -> str:
     if isinstance(input_spec, BatchInputV3):
         labels = "allowed" if input_spec.label else "disabled"
         return (
@@ -298,7 +300,7 @@ def _input_details(input_spec: Any) -> str:
     return ", ".join(details) or "—"
 
 
-def _output_summary(output: Any) -> str:
+def _output_summary(output: OutputSpecV3) -> str:
     if isinstance(output, TableOutputV3):
         return (
             f"table ({len(output.columns)} static column(s), "

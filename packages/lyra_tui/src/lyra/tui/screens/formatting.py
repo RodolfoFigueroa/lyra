@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+
+class Stringable(Protocol):
+    def __str__(self) -> str: ...
 
 
 def bool_label(*, value: bool) -> str:
@@ -25,7 +29,7 @@ def timestamp_label(value: datetime | None) -> str:
     return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def truncate(value: Any, *, limit: int = 64) -> str:
+def truncate(value: Stringable, *, limit: int = 64) -> str:
     text = str(value)
     if len(text) <= limit:
         return text

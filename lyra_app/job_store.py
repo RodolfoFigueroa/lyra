@@ -1,8 +1,22 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, TypeAlias
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypedDict,
+    TypeVar,
+    Unpack,
+    cast,
+    runtime_checkable,
+)
 
 from lyra.sdk.models import (
     JobEnvelope,
@@ -24,6 +38,11 @@ from lyra_app.config import (
 )
 from lyra_app.db.redis import redis_client, redis_client_sync
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Sequence
+
+    from lyra.sdk.types import JsonValue
+
 JobStatus: TypeAlias = Literal[
     "queued",
     "started",
@@ -34,6 +53,27 @@ JobStatus: TypeAlias = Literal[
 ]
 
 TerminalJobStatus: TypeAlias = Literal["succeeded", "failed", "cancelled"]
+
+
+class JobStatusOptions(TypedDict, total=False):
+    """Optional persistence and event controls for a status update."""
+
+    metric: str | None
+    error: dict[str, Any] | None
+    event_data: dict[str, Any] | None
+    emit_event: bool
+    client: SyncJobWriter | None
+
+
+class AsyncJobStatusOptions(TypedDict, total=False):
+    """Async persistence and event controls for a status update."""
+
+    metric: str | None
+    error: dict[str, Any] | None
+    event_data: dict[str, Any] | None
+    emit_event: bool
+    client: AsyncJobWriter | None
+
 
 JOB_STORE_TTL_SECONDS = DEFAULT_JOB_STORE_TTL_SECONDS
 STREAM_START = "0-0"
@@ -92,6 +132,191 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """.strip()
+
+RedisPayload: TypeAlias = str | bytes
+RedisStreamFields: TypeAlias = Mapping[str, RedisPayload] | Mapping[bytes, RedisPayload]
+RedisStreamRecord: TypeAlias = tuple[RedisPayload, RedisStreamFields]
+
+
+@runtime_checkable
+class SyncKeyReader(Protocol):
+    def get(self, key: str) -> RedisPayload | None: ...
+
+
+@runtime_checkable
+class AsyncKeyReader(Protocol):
+    def get(self, key: str) -> Awaitable[RedisPayload | None]: ...
+
+
+@runtime_checkable
+class SyncMillisecondLifetimeReader(Protocol):
+    def pttl(self, key: str) -> int: ...
+
+
+@runtime_checkable
+class SyncSecondLifetimeReader(Protocol):
+    def ttl(self, key: str) -> int: ...
+
+
+@runtime_checkable
+class AsyncMillisecondLifetimeReader(Protocol):
+    def pttl(self, key: str) -> Awaitable[int]: ...
+
+
+@runtime_checkable
+class AsyncSecondLifetimeReader(Protocol):
+    def ttl(self, key: str) -> Awaitable[int]: ...
+
+
+class SyncJobWriter(Protocol):
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool | None: ...
+
+    def expire(self, key: str, ttl: int) -> bool | None: ...
+
+    def xadd(self, key: str, fields: dict[str, str]) -> RedisPayload: ...
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> int | None: ...
+
+    def zremrangebyscore(
+        self,
+        key: str,
+        minimum: str | float,
+        maximum: float,
+        /,
+    ) -> int | None: ...
+
+
+class AsyncJobWriter(Protocol):
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> Awaitable[bool | None]: ...
+
+    def expire(self, key: str, ttl: int) -> Awaitable[bool | None]: ...
+
+    def xadd(
+        self,
+        key: str,
+        fields: dict[str, str],
+    ) -> Awaitable[RedisPayload]: ...
+
+    def zadd(
+        self,
+        key: str,
+        mapping: dict[str, float],
+    ) -> Awaitable[int | None]: ...
+
+    def zremrangebyscore(
+        self,
+        key: str,
+        minimum: str | float,
+        maximum: float,
+        /,
+    ) -> Awaitable[int | None]: ...
+
+
+class SyncJobClient(SyncJobWriter, SyncKeyReader, Protocol):
+    pass
+
+
+class SyncJobListClient(SyncKeyReader, Protocol):
+    def zrevrange(self, key: str, start: int, stop: int) -> Sequence[RedisPayload]: ...
+
+    def zrem(self, key: str, *members: str) -> int | None: ...
+
+    def zremrangebyscore(
+        self,
+        key: str,
+        minimum: str | float,
+        maximum: float,
+        /,
+    ) -> int | None: ...
+
+
+class SyncEventReader(Protocol):
+    def xrange(
+        self,
+        key: str,
+        minimum: str,
+        /,
+        *,
+        count: int | None = None,
+    ) -> Sequence[RedisStreamRecord]: ...
+
+
+class AsyncEventReader(Protocol):
+    def xrange(
+        self,
+        key: str,
+        minimum: str,
+        /,
+        *,
+        count: int | None = None,
+    ) -> Awaitable[Sequence[RedisStreamRecord]]: ...
+
+
+class AsyncNewEventReader(Protocol):
+    def xread(
+        self,
+        streams: dict[str, str],
+        *,
+        block: int,
+        count: int | None = None,
+    ) -> Awaitable[Sequence[tuple[RedisPayload, Sequence[RedisStreamRecord]]]]: ...
+
+
+class AsyncDeleteClient(Protocol):
+    def delete(self, key: str) -> Awaitable[int | None]: ...
+
+
+class AsyncScriptClient(Protocol):
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        key: str,
+        /,
+        *args: str | int,
+    ) -> Awaitable[int | list[int]]: ...
+
+
+class AsyncIdempotencyClient(
+    AsyncKeyReader, AsyncDeleteClient, AsyncScriptClient, Protocol
+):
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> Awaitable[bool | None]: ...
+
+
+RedisClientT = TypeVar("RedisClientT")
+
+
+def _default_sync_client(client: RedisClientT | None) -> RedisClientT:
+    if client is not None:
+        return client
+    return cast("RedisClientT", redis_client_sync)
+
+
+def _default_async_client(client: RedisClientT | None) -> RedisClientT:
+    if client is not None:
+        return client
+    return cast("RedisClientT", redis_client)
 
 
 class JobStatusSnapshot(StrictBaseModel):
@@ -169,11 +394,11 @@ async def consume_agent_submission_limit_async(
     *,
     limit: int,
     window_seconds: int,
-    client: Any | None = None,
+    client: AsyncScriptClient | None = None,
 ) -> AgentSubmissionLimitDecision:
     """Atomically consume capacity from the shared agent fixed window."""
 
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     raw_decision = await client.eval(
         _CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT,
         1,
@@ -181,6 +406,9 @@ async def consume_agent_submission_limit_async(
         limit,
         window_seconds,
     )
+    if not isinstance(raw_decision, list) or len(raw_decision) != 3:
+        msg = "Redis submission-limit script returned an invalid response"
+        raise RuntimeError(msg)
     accepted, count, retry_after_seconds = (int(value) for value in raw_decision)
     return AgentSubmissionLimitDecision(
         accepted=bool(accepted),
@@ -191,11 +419,11 @@ async def consume_agent_submission_limit_async(
 
 async def release_agent_submission_limit_async(
     *,
-    client: Any | None = None,
+    client: AsyncScriptClient | None = None,
 ) -> bool:
     """Return capacity when a consumed submission fails before dispatch."""
 
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     released = await client.eval(
         _RELEASE_AGENT_SUBMISSION_LIMIT_SCRIPT,
         1,
@@ -216,7 +444,7 @@ def _json_non_finite_constant(_: str) -> None:
     return None
 
 
-def _loads_json(payload: Any) -> Any:
+def _loads_json(payload: RedisPayload) -> JsonValue:
     if isinstance(payload, bytes):
         payload = payload.decode()
     return json.loads(payload, parse_constant=_json_non_finite_constant)
@@ -246,45 +474,40 @@ def _lifetime_from_ttl_seconds(ttl_seconds: int | None) -> ResultLifetime:
 def get_result_lifetime(
     job_id: str,
     *,
-    client: Any | None = None,
+    client: SyncKeyReader | None = None,
 ) -> ResultLifetime:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     key = result_key(job_id)
-    pttl = getattr(client, "pttl", None)
-    if callable(pttl):
-        return _lifetime_from_ttl_ms(pttl(key))
-    ttl = getattr(client, "ttl", None)
-    if callable(ttl):
-        return _lifetime_from_ttl_seconds(ttl(key))
+    if isinstance(client, SyncMillisecondLifetimeReader) and callable(client.pttl):
+        return _lifetime_from_ttl_ms(client.pttl(key))
+    if isinstance(client, SyncSecondLifetimeReader) and callable(client.ttl):
+        return _lifetime_from_ttl_seconds(client.ttl(key))
     return ResultLifetime()
 
 
 async def get_result_lifetime_async(
     job_id: str,
     *,
-    client: Any | None = None,
+    client: AsyncKeyReader | None = None,
 ) -> ResultLifetime:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     key = result_key(job_id)
-    pttl = getattr(client, "pttl", None)
-    if callable(pttl):
-        return _lifetime_from_ttl_ms(await pttl(key))
-    ttl = getattr(client, "ttl", None)
-    if callable(ttl):
-        return _lifetime_from_ttl_seconds(await ttl(key))
+    if isinstance(client, AsyncMillisecondLifetimeReader):
+        return _lifetime_from_ttl_ms(await client.pttl(key))
+    if isinstance(client, AsyncSecondLifetimeReader):
+        return _lifetime_from_ttl_seconds(await client.ttl(key))
     return ResultLifetime()
 
 
-def _apply_ttl_sync(client: Any, job_id: str) -> None:
+def _apply_ttl_sync(client: SyncJobWriter, job_id: str) -> None:
     ttl = _job_store_ttl_seconds()
     client.expire(status_key(job_id), ttl)
     client.expire(result_key(job_id), ttl)
     client.expire(events_key(job_id), ttl)
     client.expire(provenance_key(job_id), ttl)
-    get = getattr(client, "get", None)
-    if not callable(get):
+    if not isinstance(client, SyncKeyReader):
         return
-    reservation_key = get(job_idempotency_key(job_id))
+    reservation_key = client.get(job_idempotency_key(job_id))
     if reservation_key is not None:
         if isinstance(reservation_key, bytes):
             reservation_key = reservation_key.decode()
@@ -292,16 +515,15 @@ def _apply_ttl_sync(client: Any, job_id: str) -> None:
         client.expire(job_idempotency_key(job_id), ttl)
 
 
-async def _apply_ttl_async(client: Any, job_id: str) -> None:
+async def _apply_ttl_async(client: AsyncJobWriter, job_id: str) -> None:
     ttl = _job_store_ttl_seconds()
     await client.expire(status_key(job_id), ttl)
     await client.expire(result_key(job_id), ttl)
     await client.expire(events_key(job_id), ttl)
     await client.expire(provenance_key(job_id), ttl)
-    get = getattr(client, "get", None)
-    if not callable(get):
+    if not isinstance(client, AsyncKeyReader):
         return
-    reservation_key = await get(job_idempotency_key(job_id))
+    reservation_key = await client.get(job_idempotency_key(job_id))
     if reservation_key is not None:
         if isinstance(reservation_key, bytes):
             reservation_key = reservation_key.decode()
@@ -315,11 +537,11 @@ async def claim_idempotency_key_async(
     job_id: str,
     *,
     agent_scope: str = DEFAULT_AGENT_SCOPE,
-    client: Any | None = None,
+    client: AsyncIdempotencyClient | None = None,
 ) -> tuple[IdempotencyRecord, bool]:
     """Atomically bind one caller key to a request digest and job identity."""
 
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     key = idempotency_key(caller_key, agent_scope=agent_scope)
     record = IdempotencyRecord(request_digest=request_digest, job_id=job_id)
     encoded = _dump_json(record.model_dump(mode="json"))
@@ -351,11 +573,11 @@ async def release_idempotency_key_async(
     record: IdempotencyRecord,
     *,
     agent_scope: str = DEFAULT_AGENT_SCOPE,
-    client: Any | None = None,
+    client: AsyncIdempotencyClient | None = None,
 ) -> bool:
     """Release only the exact reservation owned by ``record``."""
 
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     key = idempotency_key(caller_key, agent_scope=agent_scope)
     encoded = _dump_json(record.model_dump(mode="json"))
     released = await client.eval(_RELEASE_IDEMPOTENCY_SCRIPT, 1, key, encoded)
@@ -364,27 +586,38 @@ async def release_idempotency_key_async(
     return bool(released)
 
 
-def _prune_job_index_sync(client: Any, *, now: datetime | None = None) -> None:
+def _prune_job_index_sync(
+    client: SyncJobWriter | SyncJobListClient,
+    *,
+    now: datetime | None = None,
+) -> None:
     cutoff = (now or _now()).timestamp() - _job_store_ttl_seconds()
     client.zremrangebyscore(JOB_INDEX_KEY, "-inf", cutoff)
 
 
-async def _prune_job_index_async(client: Any, *, now: datetime | None = None) -> None:
+async def _prune_job_index_async(
+    client: AsyncJobWriter,
+    *,
+    now: datetime | None = None,
+) -> None:
     cutoff = (now or _now()).timestamp() - _job_store_ttl_seconds()
     await client.zremrangebyscore(JOB_INDEX_KEY, "-inf", cutoff)
 
 
-def _index_job_status_sync(client: Any, snapshot: "JobStatusSnapshot") -> None:
+def _index_job_status_sync(client: SyncJobWriter, snapshot: JobStatusSnapshot) -> None:
     client.zadd(JOB_INDEX_KEY, {snapshot.job_id: snapshot.updated_at.timestamp()})
     _prune_job_index_sync(client, now=snapshot.updated_at)
 
 
-async def _index_job_status_async(client: Any, snapshot: "JobStatusSnapshot") -> None:
+async def _index_job_status_async(
+    client: AsyncJobWriter,
+    snapshot: JobStatusSnapshot,
+) -> None:
     await client.zadd(JOB_INDEX_KEY, {snapshot.job_id: snapshot.updated_at.timestamp()})
     await _prune_job_index_async(client, now=snapshot.updated_at)
 
 
-def _decode_job_index_member(member: Any) -> str:
+def _decode_job_index_member(member: RedisPayload) -> str:
     if isinstance(member, bytes):
         return member.decode()
     return str(member)
@@ -395,7 +628,7 @@ def _append_job_event_record_sync(
     event: str,
     data: dict[str, Any],
     *,
-    client: Any,
+    client: SyncJobWriter,
 ) -> StoredJobEvent:
     job_event = JobEvent(
         job_id=job_id,
@@ -421,7 +654,7 @@ async def _append_job_event_record_async(
     event: str,
     data: dict[str, Any],
     *,
-    client: Any,
+    client: AsyncJobWriter,
 ) -> StoredJobEvent:
     job_event = JobEvent(
         job_id=job_id,
@@ -462,7 +695,7 @@ def _save_job_provenance_sync(
     job_id: str,
     provenance: JobRunProvenance,
     *,
-    client: Any,
+    client: SyncJobWriter,
 ) -> None:
     payload = provenance.model_dump(mode="json", exclude_none=True)
     client.set(
@@ -477,7 +710,7 @@ async def _save_job_provenance_async(
     job_id: str,
     provenance: JobRunProvenance,
     *,
-    client: Any,
+    client: AsyncJobWriter,
 ) -> None:
     payload = provenance.model_dump(mode="json", exclude_none=True)
     await client.set(
@@ -491,9 +724,9 @@ async def _save_job_provenance_async(
 def create_job(
     job: JobEnvelope,
     provenance: JobRunProvenance | None = None,
-    client: Any | None = None,
+    client: SyncJobWriter | None = None,
 ) -> JobStatusSnapshot:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     if provenance is not None:
         _save_job_provenance_sync(job.job_id, provenance, client=client)
     return set_job_status(job.job_id, "queued", metric=job.metric, client=client)
@@ -502,14 +735,14 @@ def create_job(
 def set_job_status(
     job_id: str,
     status: JobStatus,
-    *,
-    metric: str | None = None,
-    error: dict[str, Any] | None = None,
-    event_data: dict[str, Any] | None = None,
-    emit_event: bool = True,
-    client: Any | None = None,
+    **options: Unpack[JobStatusOptions],
 ) -> JobStatusSnapshot:
-    client = redis_client_sync if client is None else client
+    metric = options.get("metric")
+    error = options.get("error")
+    event_data = options.get("event_data")
+    emit_event = options.get("emit_event", True)
+    client = options.get("client")
+    client = _default_sync_client(client)
     payload = _status_payload(job_id, status, metric=metric, error=error)
     client.set(status_key(job_id), _dump_json(payload), ex=_job_store_ttl_seconds())
     _apply_ttl_sync(client, job_id)
@@ -529,9 +762,9 @@ def save_job_result(
     result: TerminalJobResult,
     *,
     metric: str | None = None,
-    client: Any | None = None,
+    client: SyncJobWriter | None = None,
 ) -> dict[str, Any]:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     payload = result.model_dump(mode="json", exclude_none=True)
     client.set(
         result_key(result.job_id),
@@ -558,20 +791,24 @@ def save_job_result(
 
 def get_job_result(
     job_id: str,
-    client: Any | None = None,
+    client: SyncKeyReader | None = None,
 ) -> dict[str, Any] | None:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     payload = client.get(result_key(job_id))
     if payload is None:
         return None
-    return _loads_json(payload)
+    decoded = _loads_json(payload)
+    if not isinstance(decoded, dict):
+        msg = f"Stored result for job {job_id!r} is not a JSON object"
+        raise TypeError(msg)
+    return decoded
 
 
 def get_job_provenance(
     job_id: str,
-    client: Any | None = None,
+    client: SyncKeyReader | None = None,
 ) -> JobRunProvenance | None:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     payload = client.get(provenance_key(job_id))
     if payload is None:
         return None
@@ -581,9 +818,9 @@ def get_job_provenance(
 def get_job_result_descriptor(
     job_id: str,
     *,
-    client: Any | None = None,
+    client: SyncKeyReader | None = None,
 ) -> ResultDescriptor | None:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     payload = get_job_result(job_id, client=client)
     if payload is None:
         return None
@@ -600,9 +837,9 @@ def get_job_result_descriptor(
 
 def get_job_status(
     job_id: str,
-    client: Any | None = None,
+    client: SyncKeyReader | None = None,
 ) -> JobStatusSnapshot | None:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     payload = client.get(status_key(job_id))
     if payload is None:
         return None
@@ -618,9 +855,9 @@ def list_job_statuses(
     limit: int = 50,
     status: JobStatus | None = None,
     metric: str | None = None,
-    client: Any | None = None,
+    client: SyncJobListClient | None = None,
 ) -> list[JobStatusSnapshot]:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     _prune_job_index_sync(client)
     jobs: list[JobStatusSnapshot] = []
     stale_job_ids: list[str] = []
@@ -659,9 +896,9 @@ def list_job_statuses(
 def cancel_job(
     job_id: str,
     *,
-    client: Any | None = None,
+    client: SyncJobClient | None = None,
 ) -> tuple[JobStatusSnapshot | None, bool]:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     snapshot = get_job_status(job_id, client=client)
     if snapshot is None:
         return None, False
@@ -676,12 +913,12 @@ def cancel_job(
     return cancelled, True
 
 
-def is_job_cancelled(job_id: str, client: Any | None = None) -> bool:
+def is_job_cancelled(job_id: str, client: SyncKeyReader | None = None) -> bool:
     snapshot = get_job_status(job_id, client)
     return snapshot is not None and snapshot.status == "cancelled"
 
 
-def raise_if_cancelled(job_id: str, client: Any | None = None) -> None:
+def raise_if_cancelled(job_id: str, client: SyncKeyReader | None = None) -> None:
     if is_job_cancelled(job_id, client):
         raise JobCancelledError(job_id)
 
@@ -692,9 +929,9 @@ def append_job_event(
     data: dict[str, Any] | None = None,
     *,
     metric: str | None = None,
-    client: Any | None = None,
+    client: SyncJobWriter | None = None,
 ) -> StoredJobEvent:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     stored_event = _append_job_event_record_sync(
         event=event,
         data=data or {},
@@ -711,20 +948,20 @@ def read_job_events(
     *,
     after_id: str | None = None,
     count: int | None = None,
-    client: Any | None = None,
+    client: SyncEventReader | None = None,
 ) -> list[StoredJobEvent]:
-    client = redis_client_sync if client is None else client
+    client = _default_sync_client(client)
     start_id = STREAM_START if after_id is None else f"({after_id}"
-    records = client.xrange(events_key(job_id), min=start_id, count=count) or []
+    records = client.xrange(events_key(job_id), start_id, count=count) or []
     return [_stored_event_from_record(record) for record in records]
 
 
 async def create_job_async(
     job: JobEnvelope,
     provenance: JobRunProvenance | None = None,
-    client: Any | None = None,
+    client: AsyncJobWriter | None = None,
 ) -> JobStatusSnapshot:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     if provenance is not None:
         await _save_job_provenance_async(job.job_id, provenance, client=client)
     return await set_job_status_async(
@@ -738,14 +975,14 @@ async def create_job_async(
 async def set_job_status_async(
     job_id: str,
     status: JobStatus,
-    *,
-    metric: str | None = None,
-    error: dict[str, Any] | None = None,
-    event_data: dict[str, Any] | None = None,
-    emit_event: bool = True,
-    client: Any | None = None,
+    **options: Unpack[AsyncJobStatusOptions],
 ) -> JobStatusSnapshot:
-    client = redis_client if client is None else client
+    metric = options.get("metric")
+    error = options.get("error")
+    event_data = options.get("event_data")
+    emit_event = options.get("emit_event", True)
+    client = options.get("client")
+    client = _default_async_client(client)
     payload = _status_payload(job_id, status, metric=metric, error=error)
     await client.set(
         status_key(job_id),
@@ -767,9 +1004,9 @@ async def set_job_status_async(
 
 async def get_job_status_async(
     job_id: str,
-    client: Any | None = None,
+    client: AsyncKeyReader | None = None,
 ) -> JobStatusSnapshot | None:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     payload = await client.get(status_key(job_id))
     if payload is None:
         return None
@@ -778,20 +1015,24 @@ async def get_job_status_async(
 
 async def get_job_result_async(
     job_id: str,
-    client: Any | None = None,
+    client: AsyncKeyReader | None = None,
 ) -> dict[str, Any] | None:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     payload = await client.get(result_key(job_id))
     if payload is None:
         return None
-    return _loads_json(payload)
+    decoded = _loads_json(payload)
+    if not isinstance(decoded, dict):
+        msg = f"Stored result for job {job_id!r} is not a JSON object"
+        raise TypeError(msg)
+    return decoded
 
 
 async def get_job_provenance_async(
     job_id: str,
-    client: Any | None = None,
+    client: AsyncKeyReader | None = None,
 ) -> JobRunProvenance | None:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     payload = await client.get(provenance_key(job_id))
     if payload is None:
         return None
@@ -801,9 +1042,9 @@ async def get_job_provenance_async(
 async def get_job_result_descriptor_async(
     job_id: str,
     *,
-    client: Any | None = None,
+    client: AsyncKeyReader | None = None,
 ) -> ResultDescriptor | None:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     payload = await get_job_result_async(job_id, client=client)
     if payload is None:
         return None
@@ -818,8 +1059,11 @@ async def get_job_result_descriptor_async(
     )
 
 
-async def delete_job_result_async(job_id: str, client: Any | None = None) -> None:
-    client = redis_client if client is None else client
+async def delete_job_result_async(
+    job_id: str,
+    client: AsyncDeleteClient | None = None,
+) -> None:
+    client = _default_async_client(client)
     await client.delete(result_key(job_id))
 
 
@@ -828,11 +1072,11 @@ async def read_job_events_async(
     *,
     after_id: str | None = None,
     count: int | None = None,
-    client: Any | None = None,
+    client: AsyncEventReader | None = None,
 ) -> list[StoredJobEvent]:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     start_id = STREAM_START if after_id is None else f"({after_id}"
-    records = await client.xrange(events_key(job_id), min=start_id, count=count) or []
+    records = await client.xrange(events_key(job_id), start_id, count=count) or []
     return [_stored_event_from_record(record) for record in records]
 
 
@@ -842,9 +1086,9 @@ async def read_new_job_events_async(
     after_id: str = STREAM_LATEST,
     block_ms: int = DEFAULT_STREAM_BLOCK_MS,
     count: int | None = None,
-    client: Any | None = None,
+    client: AsyncNewEventReader | None = None,
 ) -> list[StoredJobEvent]:
-    client = redis_client if client is None else client
+    client = _default_async_client(client)
     response = await client.xread(
         {events_key(job_id): after_id},
         block=block_ms,
@@ -857,7 +1101,7 @@ async def read_new_job_events_async(
     return [_stored_event_from_record(record) for record in records]
 
 
-def _stored_event_from_record(record: Any) -> StoredJobEvent:
+def _stored_event_from_record(record: RedisStreamRecord) -> StoredJobEvent:
     stream_id, fields = record
     if fields is None:
         msg = f"Redis stream record {stream_id!r} did not include fields."
@@ -868,6 +1112,9 @@ def _stored_event_from_record(record: Any) -> StoredJobEvent:
     payload = fields.get("payload")
     if payload is None:
         payload = fields.get(b"payload")
+    if payload is None:
+        msg = f"Redis stream record {stream_id!r} did not include a payload."
+        raise ValueError(msg)
 
     return StoredJobEvent(
         stream_id=str(stream_id),

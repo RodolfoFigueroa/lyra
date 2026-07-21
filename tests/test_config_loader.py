@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from lyra_app import config as config_module
 from lyra_app.config import (
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_AGENT_API_KEY_ENV,
@@ -15,15 +14,16 @@ from lyra_app.config import (
     LYRA_POSTGRES_PORT_ENV,
     LYRA_POSTGRES_USER_ENV,
     ConfigLoadError,
-    LyraConfig,
     clear_config_cache,
     ensure_runtime_directories,
     get_config,
     load_config,
+    parse_config_toml,
     reload_config,
     render_config_toml,
     save_config,
 )
+from lyra_app.toml import loads_normalized_toml
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -147,7 +147,7 @@ def test_load_and_render_config_preserves_initial_plugin_repos(
 
     config = load_config(config_path)
     rendered = render_config_toml(config)
-    reparsed = LyraConfig.model_validate(config_module.tomllib.loads(rendered))
+    reparsed = parse_config_toml(loads_normalized_toml(rendered))
 
     assert config.plugins.initial_repos == [
         "owner/plugin@main",
@@ -298,7 +298,7 @@ def test_render_config_toml_preserves_dynamic_quoted_worker_keys(
     config = load_config(config_path)
 
     rendered = render_config_toml(config)
-    reparsed = LyraConfig.model_validate(config_module.tomllib.loads(rendered))
+    reparsed = parse_config_toml(loads_normalized_toml(rendered))
 
     assert '[workers."interactive.worker"]' in rendered
     assert sorted(reparsed.workers) == ["interactive.worker"]

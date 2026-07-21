@@ -2,13 +2,20 @@ import json
 import math
 import re
 from copy import deepcopy
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal, Self
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.types import (
+    JsonObject,
+    JsonScalar,
+    JsonValue,
+    validate_json_object,
+    validate_json_value,
+)
 from pydantic import Field, TypeAdapter, field_validator, model_validator
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -46,7 +53,7 @@ _BATCHED_ITEM_FIELDS = {"key", "value", "label"}
 _BATCHED_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _validate_json_schema(schema: dict[str, Any], field_name: str) -> None:
+def _validate_json_schema(schema: JsonObject, field_name: str) -> None:
     try:
         validator_for(schema).check_schema(schema)
     except SchemaError as exc:
@@ -58,21 +65,31 @@ def _template_fields(template: str) -> set[str]:
     return set(_TEMPLATE_FIELD_PATTERN.findall(template))
 
 
-def _json_scalar_identity(value: Any) -> str:
+def _json_scalar_identity(value: JsonScalar) -> str:
     return f"{type(value).__name__}:{json.dumps(value, sort_keys=True)}"
 
 
-def _const_to_enum(value: Any) -> Any:
+def _const_to_enum_value(value: JsonValue) -> JsonValue:
     if isinstance(value, dict):
         converted = {
-            key: _const_to_enum(item) for key, item in value.items() if key != "const"
+            key: _const_to_enum_value(item)
+            for key, item in value.items()
+            if key != "const"
         }
         if "const" in value:
             converted["enum"] = [deepcopy(value["const"])]
         return converted
     if isinstance(value, list):
-        return [_const_to_enum(item) for item in value]
+        return [_const_to_enum_value(item) for item in value]
     return deepcopy(value)
+
+
+def _const_to_enum(schema: JsonObject) -> JsonObject:
+    converted = _const_to_enum_value(schema)
+    if not isinstance(converted, dict):
+        msg = "JSON Schema conversion did not produce an object"
+        raise TypeError(msg)
+    return converted
 
 
 class CVEGEOListWrapperV3(StrictBaseModel):
@@ -122,11 +139,11 @@ class PluginOwnedInputMetadataV3(StrictBaseModel):
         min_length=1,
         description="Human-readable input description.",
     )
-    default: Any = Field(
+    default: JsonValue = Field(
         default=None,
         description="Default value applied by clients when omitted.",
     )
-    examples: list[Any] | None = Field(
+    examples: list[JsonValue] | None = Field(
         default=None,
         description="Example values for this input.",
     )
@@ -223,13 +240,16 @@ class EnumInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned enum input."""
 
     kind: Literal["enum"] = Field(description="Input kind.")
-    values: list[Any] = Field(min_length=1, description="Allowed scalar values.")
+    values: list[JsonScalar] = Field(
+        min_length=1,
+        description="Allowed scalar values.",
+    )
 
     @field_validator("values")
     @classmethod
-    def validate_values(cls, values: list[Any]) -> list[Any]:
+    def validate_values(cls, values: list[JsonScalar]) -> list[JsonScalar]:
         identities: set[str] = set()
-        duplicates: list[Any] = []
+        duplicates: list[JsonScalar] = []
         for value in values:
             if value is None:
                 msg = "enum values must not include null; use nullable: true"
@@ -257,18 +277,18 @@ class JsonSchemaInputV3(PluginOwnedInputMetadataV3):
     """Plugin-owned raw JSON Schema input."""
 
     kind: Literal["json_schema"] = Field(description="Input kind.")
-    schema_: dict[str, Any] = Field(
+    schema_: JsonObject = Field(
         alias="schema",
         description="Plugin-owned JSON Schema.",
     )
 
     @property
-    def schema(self) -> dict[str, Any]:
+    def schema(self) -> JsonObject:
         return self.schema_
 
     @field_validator("schema_")
     @classmethod
-    def validate_schema(cls, schema: dict[str, Any]) -> dict[str, Any]:
+    def validate_schema(cls, schema: JsonObject) -> JsonObject:
         _validate_json_schema(schema, "json_schema.schema")
         return schema
 
@@ -437,7 +457,7 @@ class TableOutputV3(StrictBaseModel):
         return self
 
 
-def _batched_template_context(value: Any) -> dict[str, str]:
+def _batched_template_context(value: JsonValue) -> dict[str, str]:
     if not isinstance(value, dict):
         msg = "Batched column source values must be objects."
         raise TypeError(msg)
@@ -477,7 +497,7 @@ def _expand_batched_template(template: str, context: dict[str, str]) -> str:
 
 def expand_runner_table_output_columns(
     output: TableOutputV3,
-    job_input: dict[str, Any],
+    job_input: JsonObject,
 ) -> list[TableOutputColumnV3]:
     """Expand only columns that a runner must return for one job input."""
 
@@ -522,7 +542,7 @@ def expand_runner_table_output_columns(
 
 def expand_table_output_columns(
     output: TableOutputV3,
-    job_input: dict[str, Any],
+    job_input: JsonObject,
 ) -> list[TableOutputColumnV3]:
     """Expand the effective table output contract for one validated job input."""
 
@@ -717,14 +737,14 @@ class CompiledMetricManifestV3(StrictBaseModel):
     batch_inputs: list[str] = Field(
         description="Request fields Lyra validates as batch inputs.",
     )
-    request_schema: dict[str, Any] = Field(
+    request_schema: JsonObject = Field(
         description="Effective JSON Schema for unresolved client requests.",
     )
     output: OutputSpecV3 = Field(description="Successful metric output declaration.")
 
     @field_validator("request_schema")
     @classmethod
-    def validate_request_schema(cls, schema: dict[str, Any]) -> dict[str, Any]:
+    def validate_request_schema(cls, schema: JsonObject) -> JsonObject:
         _validate_json_schema(schema, "request_schema")
         return schema
 
@@ -740,13 +760,15 @@ class CompiledPluginManifestV3(StrictBaseModel):
     )
 
 
-def _adapter_for_spatial_kind(kind: SpatialInputKindV3) -> TypeAdapter[Any]:
+def _adapter_for_spatial_kind(
+    kind: SpatialInputKindV3,
+) -> TypeAdapter[_LocationWrapperUnionV3] | TypeAdapter[_BoundsWrapperUnionV3]:
     return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
 
 
 def _wrapper_field_schema(
     kind: SpatialInputKindV3,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[JsonObject, JsonObject]:
     schema = _const_to_enum(_adapter_for_spatial_kind(kind).json_schema())
     defs = schema.pop("$defs", {})
     if not isinstance(defs, dict):
@@ -756,9 +778,9 @@ def _wrapper_field_schema(
 
 
 def _schema_with_defs(
-    schema: dict[str, Any],
-    defs: dict[str, Any],
-) -> dict[str, Any]:
+    schema: JsonObject,
+    defs: JsonObject,
+) -> JsonObject:
     if not defs:
         return schema
 
@@ -768,8 +790,8 @@ def _schema_with_defs(
 
 
 def _validate_value_against_schema(
-    schema: dict[str, Any],
-    value: Any,
+    schema: JsonObject,
+    value: JsonValue,
     path: str,
 ) -> None:
     validator_cls = validator_for(schema)
@@ -785,12 +807,12 @@ def _validate_value_against_schema(
 
 
 def _apply_common_metadata(
-    schema: dict[str, Any],
+    schema: JsonObject,
     input_spec: PluginOwnedInputMetadataV3,
-) -> dict[str, Any]:
+) -> JsonObject:
     compiled = deepcopy(schema)
     if input_spec.nullable:
-        compiled = {"anyOf": [compiled, {"type": "null"}]}
+        compiled = validate_json_object({"anyOf": [compiled, {"type": "null"}]})
 
     if input_spec.description is not None:
         compiled["description"] = input_spec.description
@@ -802,8 +824,8 @@ def _apply_common_metadata(
 
 
 def _validate_common_values(
-    schema: dict[str, Any],
-    defs: dict[str, Any],
+    schema: JsonObject,
+    defs: JsonObject,
     input_spec: PluginOwnedInputMetadataV3,
     path: str,
 ) -> None:
@@ -823,8 +845,8 @@ def _validate_common_values(
             )
 
 
-def _compile_string_input(input_spec: StringInputV3) -> dict[str, Any]:
-    schema: dict[str, Any] = {"type": "string"}
+def _compile_string_input(input_spec: StringInputV3) -> JsonObject:
+    schema: JsonObject = {"type": "string"}
     if input_spec.min_length is not None:
         schema["minLength"] = input_spec.min_length
     if input_spec.max_length is not None:
@@ -834,8 +856,8 @@ def _compile_string_input(input_spec: StringInputV3) -> dict[str, Any]:
     return schema
 
 
-def _compile_number_input(input_spec: NumberInputV3) -> dict[str, Any]:
-    schema: dict[str, Any] = {"type": "number"}
+def _compile_number_input(input_spec: NumberInputV3) -> JsonObject:
+    schema: JsonObject = {"type": "number"}
     if input_spec.minimum is not None:
         schema["minimum"] = input_spec.minimum
     if input_spec.maximum is not None:
@@ -843,8 +865,8 @@ def _compile_number_input(input_spec: NumberInputV3) -> dict[str, Any]:
     return schema
 
 
-def _compile_integer_input(input_spec: IntegerInputV3) -> dict[str, Any]:
-    schema: dict[str, Any] = {"type": "integer"}
+def _compile_integer_input(input_spec: IntegerInputV3) -> JsonObject:
+    schema: JsonObject = {"type": "integer"}
     if input_spec.minimum is not None:
         schema["minimum"] = input_spec.minimum
     if input_spec.maximum is not None:
@@ -855,8 +877,9 @@ def _compile_integer_input(input_spec: IntegerInputV3) -> dict[str, Any]:
 def _compile_plugin_owned_input(
     input_spec: PluginOwnedInputSpecV3,
     path: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    defs: dict[str, Any] = {}
+) -> tuple[JsonObject, JsonObject]:
+    defs: JsonObject = {}
+    schema: JsonObject
     if isinstance(input_spec, StringInputV3):
         schema = _compile_string_input(input_spec)
     elif isinstance(input_spec, NumberInputV3):
@@ -866,7 +889,7 @@ def _compile_plugin_owned_input(
     elif isinstance(input_spec, BooleanInputV3):
         schema = {"type": "boolean"}
     elif isinstance(input_spec, EnumInputV3):
-        schema = {"enum": deepcopy(input_spec.values)}
+        schema = {"enum": validate_json_value(deepcopy(input_spec.values))}
     elif isinstance(input_spec, JsonSchemaInputV3):
         schema = deepcopy(input_spec.schema)
         defs = _hoist_json_schema_defs(schema, path)
@@ -879,7 +902,10 @@ def _compile_plugin_owned_input(
     return compiled, defs
 
 
-def _rewrite_local_definition_refs(value: Any, names: dict[str, str]) -> Any:
+def _rewrite_local_definition_refs(
+    value: JsonValue,
+    names: dict[str, str],
+) -> JsonValue:
     if isinstance(value, dict):
         return {
             key: _rewrite_local_definition_refs(item, names)
@@ -896,9 +922,9 @@ def _rewrite_local_definition_refs(value: Any, names: dict[str, str]) -> Any:
 
 
 def _hoist_json_schema_defs(
-    schema: dict[str, Any],
+    schema: JsonObject,
     path: str,
-) -> dict[str, Any]:
+) -> JsonObject:
     raw_defs = schema.pop("$defs", None)
     if raw_defs is None:
         return {}
@@ -909,6 +935,9 @@ def _hoist_json_schema_defs(
     prefix = re.sub(r"[^A-Za-z0-9_]+", "__", path).strip("_")
     names = {name: f"{prefix}__{name}" for name in raw_defs}
     rewritten_schema = _rewrite_local_definition_refs(schema, names)
+    if not isinstance(rewritten_schema, dict):
+        msg = f"{path}.schema did not remain an object while rewriting references"
+        raise TypeError(msg)
     schema.clear()
     schema.update(rewritten_schema)
     return {
@@ -919,16 +948,16 @@ def _hoist_json_schema_defs(
 
 def _compile_spatial_input(
     input_spec: LocationInputV3 | BoundsInputV3,
-) -> tuple[dict[str, Any], dict[str, Any], SpatialInputKindV3]:
+) -> tuple[JsonObject, JsonObject, SpatialInputKindV3]:
     kind: SpatialInputKindV3 = input_spec.kind
     schema, defs = _wrapper_field_schema(kind)
     compiled = deepcopy(schema)
     if kind == "location":
         compiled["description"] = _LOCATION_DESCRIPTION
-        compiled["examples"] = deepcopy(_LOCATION_EXAMPLES)
+        compiled["examples"] = validate_json_value(deepcopy(_LOCATION_EXAMPLES))
     else:
         compiled["description"] = _BOUNDS_DESCRIPTION
-        compiled["examples"] = deepcopy(_BOUNDS_EXAMPLES)
+        compiled["examples"] = validate_json_value(deepcopy(_BOUNDS_EXAMPLES))
     return compiled, defs, kind
 
 
@@ -936,7 +965,7 @@ def _compile_batch_input(
     input_spec: BatchInputV3,
     path: str,
     field_name: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[JsonObject, JsonObject]:
     value_schema, defs = _compile_plugin_owned_input(input_spec.value, f"{path}.value")
     properties = {
         "key": deepcopy(_BATCH_KEY_SCHEMA),
@@ -945,22 +974,24 @@ def _compile_batch_input(
     if input_spec.label:
         properties["label"] = deepcopy(_BATCH_LABEL_SCHEMA)
 
-    schema = {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": input_spec.max_items,
-        "uniqueItems": True,
-        "description": (
-            f"Keyed batch values for {field_name!r}. Each item contains a stable "
-            "key, a plugin-defined value, and optionally a display label."
-        ),
-        "items": {
-            "type": "object",
-            "required": ["key", "value"],
-            "additionalProperties": False,
-            "properties": properties,
-        },
-    }
+    schema = validate_json_object(
+        {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": input_spec.max_items,
+            "uniqueItems": True,
+            "description": (
+                f"Keyed batch values for {field_name!r}. Each item contains a stable "
+                "key, a plugin-defined value, and optionally a display label."
+            ),
+            "items": {
+                "type": "object",
+                "required": ["key", "value"],
+                "additionalProperties": False,
+                "properties": properties,
+            },
+        }
+    )
     return schema, defs
 
 
@@ -968,7 +999,7 @@ def _compile_input_property(
     input_spec: InputSpecV3,
     path: str,
     field_name: str,
-) -> tuple[dict[str, Any], dict[str, Any], SpatialInputKindV3 | None]:
+) -> tuple[JsonObject, JsonObject, SpatialInputKindV3 | None]:
     if isinstance(input_spec, LocationInputV3 | BoundsInputV3):
         return _compile_spatial_input(input_spec)
     if isinstance(input_spec, BatchInputV3):
@@ -980,8 +1011,8 @@ def _compile_input_property(
 
 
 def _merge_defs(
-    root_defs: dict[str, Any],
-    defs: dict[str, Any],
+    root_defs: JsonObject,
+    defs: JsonObject,
     path: str,
 ) -> None:
     for name, definition in defs.items():
@@ -995,12 +1026,12 @@ def _merge_defs(
 def _compile_metric_request_schema(
     metric: MetricManifestV3,
     metric_index: int,
-) -> tuple[dict[str, Any], dict[str, SpatialInputKindV3], list[str]]:
+) -> tuple[JsonObject, dict[str, SpatialInputKindV3], list[str]]:
     required: list[str] = []
-    properties: dict[str, Any] = {}
+    properties: JsonObject = {}
     spatial_inputs: dict[str, SpatialInputKindV3] = {}
     batch_inputs: list[str] = []
-    root_defs: dict[str, Any] = {}
+    root_defs: JsonObject = {}
 
     for field_name, input_spec in metric.inputs.items():
         path = f"metrics[{metric_index}].inputs.{field_name}"
@@ -1021,12 +1052,14 @@ def _compile_metric_request_schema(
             batch_inputs.append(field_name)
         _merge_defs(root_defs, defs, path)
 
-    request_schema: dict[str, Any] = {
-        "type": "object",
-        "required": required,
-        "properties": properties,
-        "additionalProperties": False,
-    }
+    request_schema = validate_json_object(
+        {
+            "type": "object",
+            "required": required,
+            "properties": properties,
+            "additionalProperties": False,
+        }
+    )
     if root_defs:
         request_schema["$defs"] = root_defs
 

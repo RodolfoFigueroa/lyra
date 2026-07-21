@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 import geopandas as gpd
 import sqlalchemy
+from lyra.sdk.db_types import Bounds
 from sqlalchemy import Connection, quoted_name, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -18,10 +19,7 @@ _MET_ZONE_LOOKUP_QUERY = text(
 
 
 def load_geometries_from_bounds(
-    xmin: float,
-    ymin: float,
-    xmax: float,
-    ymax: float,
+    bounds: Bounds,
     *,
     conn: Connection,
     columns: Sequence[str],
@@ -33,10 +31,7 @@ def load_geometries_from_bounds(
     ``columns``. Uses SRID 6372 (Mexico ITRF2008) for the envelope.
 
     Args:
-        xmin: Minimum x coordinate of the bounding box.
-        ymin: Minimum y coordinate of the bounding box.
-        xmax: Maximum x coordinate of the bounding box.
-        ymax: Maximum y coordinate of the bounding box.
+        bounds: Minimum and maximum x/y coordinates to query.
         conn: Active SQLAlchemy database connection.
         columns: Column names to select. ``"geometry"`` is appended
             automatically if not present.
@@ -59,10 +54,10 @@ def load_geometries_from_bounds(
         """,  # noqa: S608
         conn,
         params={
-            "xmin": float(xmin),
-            "ymin": float(ymin),
-            "xmax": float(xmax),
-            "ymax": float(ymax),
+            "xmin": float(bounds.xmin),
+            "ymin": float(bounds.ymin),
+            "xmax": float(bounds.xmax),
+            "ymax": float(bounds.ymax),
         },
         geom_col="geometry",
     )

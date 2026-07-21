@@ -1,6 +1,7 @@
 import ast
 import copy
 import logging
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,8 @@ def _build_module_body(
         imports guarded by ``TYPE_CHECKING``, and the abstract class definition.
     """
     new_body: list[ast.stmt] = []
-    type_checking_imports: list[ast.stmt] = []
+    stdlib_type_imports: list[ast.stmt] = []
+    external_type_imports: list[ast.stmt] = []
     annotation_only_names = annotation_names - runtime_names
 
     for node in tree.body:
@@ -155,13 +157,26 @@ def _build_module_body(
                 copy.deepcopy(node), annotation_only_names
             )
             if type_checking_import:
-                type_checking_imports.append(type_checking_import)
+                module = (
+                    type_checking_import.module
+                    if isinstance(type_checking_import, ast.ImportFrom)
+                    else type_checking_import.names[0].name
+                )
+                root_module = (module or "").split(".", maxsplit=1)[0]
+                destination = (
+                    stdlib_type_imports
+                    if root_module in sys.stdlib_module_names
+                    else external_type_imports
+                )
+                destination.append(type_checking_import)
         elif node is abstract_class_node:
-            if type_checking_imports:
+            for imports in (stdlib_type_imports, external_type_imports):
+                if not imports:
+                    continue
                 new_body.append(
                     ast.If(
                         test=ast.Name(id="TYPE_CHECKING", ctx=ast.Load()),
-                        body=type_checking_imports,
+                        body=imports,
                         orelse=[],
                     )
                 )

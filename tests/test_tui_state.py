@@ -27,6 +27,8 @@ from lyra.tui import LyraTuiApp, TuiConfig
 from lyra.tui.state import LyraTuiState, TuiSnapshot, refresh_snapshot
 from lyra.tui.widgets import ConnectionStatus
 
+from lyra_app.config import DEFAULT_API_HOST
+
 if TYPE_CHECKING:
     from lyra.tui.client import LyraTuiReadClient
 
@@ -256,7 +258,7 @@ def _admin_status_response() -> AdminStatusResponse:
 
 def _config_summary_response() -> ConfigSummaryResponse:
     return ConfigSummaryResponse(
-        api_host="0.0.0.0",
+        api_host=DEFAULT_API_HOST,
         api_port=5219,
         allowed_queues=["interactive"],
         default_queue="interactive",

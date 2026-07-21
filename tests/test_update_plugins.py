@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NotRequired, TypedDict, Unpack
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -33,7 +33,9 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        if nx and key in self.values:
+            return
         self.values[key] = value
         self.expirations.append((key, ex))
 
@@ -52,13 +54,14 @@ class FakeRedisSync:
     def xrange(
         self,
         key: str,
+        minimum: str,
+        /,
         *,
-        min: str,  # noqa: A002
         count: int | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
         records = self.streams.get(key, [])
-        if min.startswith("("):
-            after_id = min[1:]
+        if minimum.startswith("("):
+            after_id = minimum[1:]
             records = [record for record in records if record[0] > after_id]
         return records if count is None else records[:count]
 
@@ -120,45 +123,57 @@ def _synced_repo(*, changed: bool = True) -> SyncedPluginRepo:
     )
 
 
+class _CatalogRefreshResultOptions(TypedDict):
+    updated_plugins: NotRequired[list[str] | None]
+    catalog_changed: NotRequired[bool]
+    previous_catalog_fingerprint: NotRequired[str]
+    catalog_fingerprint: NotRequired[str]
+    assigned_metric_queues: NotRequired[list[str] | None]
+    removed_metric_queues: NotRequired[list[str] | None]
+
+
 def _catalog_refresh_result(
-    *,
-    updated_plugins: list[str] | None = None,
-    catalog_changed: bool = False,
-    previous_catalog_fingerprint: str = "same",
-    catalog_fingerprint: str = "same",
-    assigned_metric_queues: list[str] | None = None,
-    removed_metric_queues: list[str] | None = None,
+    **options: Unpack[_CatalogRefreshResultOptions],
 ) -> CatalogRefreshResult:
     return CatalogRefreshResult(
-        updated_plugins=updated_plugins or [],
-        previous_catalog_fingerprint=previous_catalog_fingerprint,
-        catalog_fingerprint=catalog_fingerprint,
-        catalog_changed=catalog_changed,
-        assigned_metric_queues=assigned_metric_queues or [],
-        removed_metric_queues=removed_metric_queues or [],
+        updated_plugins=options.get("updated_plugins") or [],
+        previous_catalog_fingerprint=options.get(
+            "previous_catalog_fingerprint", "same"
+        ),
+        catalog_fingerprint=options.get("catalog_fingerprint", "same"),
+        catalog_changed=options.get("catalog_changed", False),
+        assigned_metric_queues=options.get("assigned_metric_queues") or [],
+        removed_metric_queues=options.get("removed_metric_queues") or [],
     )
 
 
+class _CatalogRefreshStatusOptions(TypedDict):
+    refreshed: NotRequired[bool]
+    error: NotRequired[str | None]
+    catalog_changed: NotRequired[bool | None]
+    previous_catalog_fingerprint: NotRequired[str | None]
+    catalog_fingerprint: NotRequired[str | None]
+    assigned_metric_queues: NotRequired[list[str] | None]
+    removed_metric_queues: NotRequired[list[str] | None]
+    workers_restart_recommended: NotRequired[bool]
+
+
 def _catalog_refresh_status(
-    *,
-    refreshed: bool = True,
-    error: str | None = None,
-    catalog_changed: bool | None = False,
-    previous_catalog_fingerprint: str | None = "same",
-    catalog_fingerprint: str | None = "same",
-    assigned_metric_queues: list[str] | None = None,
-    removed_metric_queues: list[str] | None = None,
-    workers_restart_recommended: bool = False,
+    **options: Unpack[_CatalogRefreshStatusOptions],
 ) -> dict[str, object]:
     return {
-        "refreshed": refreshed,
-        "error": error,
-        "catalog_changed": catalog_changed,
-        "previous_catalog_fingerprint": previous_catalog_fingerprint,
-        "catalog_fingerprint": catalog_fingerprint,
-        "assigned_metric_queues": assigned_metric_queues or [],
-        "removed_metric_queues": removed_metric_queues or [],
-        "workers_restart_recommended": workers_restart_recommended,
+        "refreshed": options.get("refreshed", True),
+        "error": options.get("error"),
+        "catalog_changed": options.get("catalog_changed", False),
+        "previous_catalog_fingerprint": options.get(
+            "previous_catalog_fingerprint", "same"
+        ),
+        "catalog_fingerprint": options.get("catalog_fingerprint", "same"),
+        "assigned_metric_queues": options.get("assigned_metric_queues") or [],
+        "removed_metric_queues": options.get("removed_metric_queues") or [],
+        "workers_restart_recommended": options.get(
+            "workers_restart_recommended", False
+        ),
     }
 
 

@@ -4,10 +4,10 @@ import json
 import os
 import re
 import tempfile
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self
+from tomllib import TOMLDecodeError
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -20,6 +20,12 @@ from pydantic import (
 
 from lyra_app.config import LYRA_DATA_DIR
 from lyra_app.plugins import parse_repo_entry
+from lyra_app.toml import (
+    TomlNormalizationError,
+    TomlTable,
+    load_normalized_toml,
+    normalize_toml_table,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -31,6 +37,7 @@ PLUGIN_STATE_SCHEMA_VERSION = 1
 
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _REPO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+MappingValueT = TypeVar("MappingValueT")
 
 
 class PluginStateError(RuntimeError):
@@ -73,10 +80,7 @@ class MetricQueueSyncResult:
     removed: list[str]
 
 
-def _strip_required_string(value: Any, *, field_name: str) -> Any:
-    if not isinstance(value, str):
-        return value
-
+def _strip_required_string(value: str, *, field_name: str) -> str:
     stripped = value.strip()
     if not stripped:
         msg = f"{field_name} must be a non-empty string"
@@ -84,8 +88,8 @@ def _strip_required_string(value: Any, *, field_name: str) -> Any:
     return stripped
 
 
-def _strip_optional_string(value: Any, *, field_name: str) -> Any:
-    if value is None or not isinstance(value, str):
+def _strip_optional_string(value: str | None, *, field_name: str) -> str | None:
+    if value is None:
         return value
 
     stripped = value.strip()
@@ -95,11 +99,12 @@ def _strip_optional_string(value: Any, *, field_name: str) -> Any:
     return stripped
 
 
-def _strip_mapping_keys(value: Any, *, key_label: str) -> Any:
-    if not isinstance(value, dict):
-        return value
-
-    stripped_items: dict[Any, Any] = {}
+def _strip_mapping_keys(
+    value: dict[str, MappingValueT],
+    *,
+    key_label: str,
+) -> dict[str, MappingValueT]:
+    stripped_items: dict[str, MappingValueT] = {}
     for raw_key, raw_value in value.items():
         key = _strip_required_string(raw_key, field_name=key_label)
         if key in stripped_items:
@@ -164,9 +169,9 @@ class PluginRepoRecord(StrictPluginStateModel):
     ref: str | None = None
     enabled: bool = True
 
-    @field_validator("id", mode="before")
+    @field_validator("id")
     @classmethod
-    def normalize_id(cls, value: Any) -> Any:
+    def normalize_id(cls, value: str) -> str:
         return _strip_required_string(value, field_name="repos.id")
 
     @field_validator("id")
@@ -177,14 +182,14 @@ class PluginRepoRecord(StrictPluginStateModel):
             raise ValueError(msg)
         return value
 
-    @field_validator("source", mode="before")
+    @field_validator("source")
     @classmethod
-    def normalize_source(cls, value: Any) -> Any:
+    def normalize_source(cls, value: str) -> str:
         return _strip_required_string(value, field_name="repos.source")
 
-    @field_validator("ref", mode="before")
+    @field_validator("ref")
     @classmethod
-    def normalize_ref(cls, value: Any) -> Any:
+    def normalize_ref(cls, value: str | None) -> str | None:
         return _strip_optional_string(value, field_name="repos.ref")
 
     @model_validator(mode="after")
@@ -218,14 +223,14 @@ class MetricQueueRecord(StrictPluginStateModel):
     queue: str = Field(min_length=1)
     repo_id: str = Field(min_length=1)
 
-    @field_validator("queue", mode="before")
+    @field_validator("queue")
     @classmethod
-    def normalize_queue(cls, value: Any) -> Any:
+    def normalize_queue(cls, value: str) -> str:
         return _strip_required_string(value, field_name="queue name")
 
-    @field_validator("repo_id", mode="before")
+    @field_validator("repo_id")
     @classmethod
-    def normalize_repo_id(cls, value: Any) -> Any:
+    def normalize_repo_id(cls, value: str) -> str:
         return _strip_required_string(value, field_name="repo_id")
 
 
@@ -234,9 +239,12 @@ class PluginState(StrictPluginStateModel):
     repos: list[PluginRepoRecord] = Field(default_factory=list)
     metric_queues: dict[str, MetricQueueRecord] = Field(default_factory=dict)
 
-    @field_validator("metric_queues", mode="before")
+    @field_validator("metric_queues")
     @classmethod
-    def normalize_metric_queues(cls, value: Any) -> Any:
+    def normalize_metric_queues(
+        cls,
+        value: dict[str, MetricQueueRecord],
+    ) -> dict[str, MetricQueueRecord]:
         return _strip_mapping_keys(value, key_label="metric name")
 
     @model_validator(mode="after")
@@ -368,6 +376,12 @@ def render_plugin_state_toml(state: PluginState) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def parse_plugin_state_toml(raw_state: TomlTable) -> PluginState:
+    """Normalize and validate one TOML document as persisted plugin state."""
+
+    return PluginState.model_validate(normalize_toml_table(raw_state))
+
+
 def load_plugin_state(
     path: str | Path = DEFAULT_PLUGIN_STATE_PATH,
     *,
@@ -376,20 +390,23 @@ def load_plugin_state(
     state_path = Path(path)
     try:
         with state_path.open("rb") as state_file:
-            raw_state = tomllib.load(state_file)
+            raw_state = load_normalized_toml(state_file)
     except FileNotFoundError:
         state = PluginState.empty()
         validate_plugin_state(state, allowed_queues=allowed_queues)
         return state
-    except tomllib.TOMLDecodeError as exc:
+    except TOMLDecodeError as exc:
         msg = f"Plugin state file is not valid TOML: {state_path}: {exc}"
+        raise PluginStateLoadError(msg) from exc
+    except TomlNormalizationError as exc:
+        msg = f"Plugin state file failed normalization: {state_path}: {exc}"
         raise PluginStateLoadError(msg) from exc
     except OSError as exc:
         msg = f"Plugin state file could not be read: {state_path}"
         raise PluginStateLoadError(msg) from exc
 
     try:
-        state = PluginState.model_validate(raw_state)
+        state = parse_plugin_state_toml(raw_state)
         validate_plugin_state(state, allowed_queues=allowed_queues)
     except (ValidationError, PluginStateValidationError) as exc:
         msg = f"Plugin state file failed validation: {state_path}: {exc}"

@@ -6,7 +6,7 @@ import json
 import threading
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, Unpack
 
 import httpx
 import pytest
@@ -19,6 +19,7 @@ from lyra.sdk.models import (
     JobLinks,
     JobRunProvenance,
     JobStatusInfo,
+    ResultDescriptor,
     ResultLifetime,
     TableJobResult,
     build_result_descriptor,
@@ -29,6 +30,12 @@ from lyra.sdk.models.plugin_v3 import (
     SpatialInputKindV3,
     TableOutputColumnV3,
     TableOutputV3,
+)
+from lyra.sdk.types import (
+    JsonObject,
+    JsonValue,
+    validate_json_object,
+    validate_json_value,
 )
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -54,17 +61,25 @@ if TYPE_CHECKING:
     from lyra_app.config import LyraConfig
 
 
-def _initialize_payload() -> dict[str, object]:
-    return {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "pytest", "version": "0"},
-        },
-    }
+class _RequestOptions(TypedDict):
+    headers: NotRequired[dict[str, str]]
+    json: NotRequired[JsonObject]
+    content: NotRequired[str]
+
+
+def _initialize_payload() -> JsonObject:
+    return validate_json_object(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "0"},
+            },
+        }
+    )
 
 
 def _mcp_headers(bearer: str | None = None) -> dict[str, str]:
@@ -90,7 +105,7 @@ def _tool_call_payload(
     }
 
 
-def _tool_payload(response: Any) -> dict[str, Any]:
+def _tool_payload(response: httpx.Response) -> dict[str, Any]:
     assert response.status_code == 200
     result = response.json()["result"]
     assert json.loads(result["content"][0]["text"]) == result["structuredContent"]
@@ -140,13 +155,18 @@ class _ManagedTestClient:
             self._ready.set()
             await self._stop.wait()
 
-    def get(self, path: str, **kwargs: Any) -> httpx.Response:
+    def get(self, path: str, **kwargs: Unpack[_RequestOptions]) -> httpx.Response:
         return self._request("GET", path, **kwargs)
 
-    def post(self, path: str, **kwargs: Any) -> httpx.Response:
+    def post(self, path: str, **kwargs: Unpack[_RequestOptions]) -> httpx.Response:
         return self._request("POST", path, **kwargs)
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        **kwargs: Unpack[_RequestOptions],
+    ) -> httpx.Response:
         assert self._client is not None
         assert self._loop is not None
         request = self._client.request(method, path, **kwargs)
@@ -200,7 +220,7 @@ class FakeMCPBackend:
             metrics=metrics,
         )
         self.jobs: dict[str, JobStatusInfo] = {}
-        self.descriptors: dict[str, Any] = {}
+        self.descriptors: dict[str, ResultDescriptor] = {}
         self.payloads: list[dict[str, Any]] = []
         self.idempotency_records: dict[
             str,
@@ -250,7 +270,7 @@ class FakeMCPBackend:
             raise self._tool_error(
                 code,
                 message,
-                details,
+                validate_json_value(details),
             )
 
         if idempotency_key is not None and idempotency_key in self.idempotency_records:
@@ -315,7 +335,7 @@ class FakeMCPBackend:
         self.jobs[job_id] = self._job_status(job_id, status, self.jobs[job_id].metric)
         return self.jobs[job_id]
 
-    async def get_result_descriptor(self, job_id: str) -> Any | None:
+    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
         return self.descriptors.get(job_id)
 
     def payloads_for_job(self, job_id: str) -> list[dict[str, Any]]:
@@ -335,7 +355,7 @@ class FakeMCPBackend:
         )
 
     @staticmethod
-    def _tool_error(code: str, message: str, details: Any) -> Exception:
+    def _tool_error(code: str, message: str, details: JsonValue) -> Exception:
         from lyra_app.mcp.server import ToolCallError  # noqa: PLC0415
 
         return ToolCallError(code, message, details)
@@ -589,12 +609,14 @@ def test_streamable_http_transport_enforces_sdk_request_rules() -> None:
     )
     invalid_protocol = client.post(
         "/",
-        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        json=validate_json_object({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
         headers={**_mcp_headers(), "MCP-Protocol-Version": "1900-01-01"},
     )
     notification = client.post(
         "/",
-        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        json=validate_json_object(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        ),
         headers=_mcp_headers(),
     )
     invalid_content_type = client.post(
@@ -1598,7 +1620,9 @@ def test_mcp_download_returns_structured_expired_error() -> None:
         CancelledJobResult(job_id="job-cancelled"),
     ],
 )
-def test_mcp_download_preserves_structured_result_kind_errors(result: Any) -> None:
+def test_mcp_download_preserves_structured_result_kind_errors(
+    result: FileJobResult | FailedJobResult | CancelledJobResult,
+) -> None:
     backend = FakeMCPBackend([_table_metric("metric", "Return a table.")])
     backend.descriptors[result.job_id] = build_result_descriptor(
         result,

@@ -1,10 +1,10 @@
+from __future__ import annotations
+
 import json
-import os
 import tempfile
-from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, TypeVar, Unpack
 
 import aiofiles
 import aiofiles.os
@@ -54,6 +54,12 @@ from lyra.sdk.models import (
 from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 from pydantic import BaseModel
 
+if TYPE_CHECKING:
+    import os
+    from collections.abc import AsyncIterator
+
+    import pandas as pd
+
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -85,6 +91,13 @@ async def _response_lines(response: aiohttp.ClientResponse) -> AsyncIterator[str
         yield raw_line.decode().rstrip("\r\n")
 
 
+class _RequestModelOptions(TypedDict):
+    error_context: str
+    expected_status: NotRequired[int]
+    params: NotRequired[dict[str, Any] | None]
+    json_body: NotRequired[dict[str, Any] | None]
+
+
 class AsyncLyraAPIClient(_BaseLyraAPIClient):
     """Asynchronous client for the Lyra HTTP job API."""
 
@@ -93,12 +106,12 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         method: str,
         path: str,
         response_model: type[_ModelT],
-        *,
-        error_context: str,
-        expected_status: int = 200,
-        params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        **options: Unpack[_RequestModelOptions],
     ) -> _ModelT:
+        error_context = options["error_context"]
+        expected_status = options.get("expected_status", 200)
+        params = options.get("params")
+        json_body = options.get("json_body")
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
@@ -649,7 +662,7 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Result download error: {exc}"
             raise DownloadError(err) from exc
 
-    async def result_dataframe(self, result_ref_or_job_id: str) -> Any:
+    async def result_dataframe(self, result_ref_or_job_id: str) -> pd.DataFrame:
         pandas = _load_pandas()
         with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
             temp_path = Path(temp_file.name)

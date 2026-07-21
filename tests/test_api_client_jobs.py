@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, NotRequired, Self, TypedDict, Unpack, cast
 
 import pytest
 from lyra.api import parse_result_ref
@@ -10,25 +10,35 @@ from lyra.api.client.async_ import AsyncLyraAPIClient
 from lyra.api.client.sync import LyraAPIClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
 from lyra.sdk.models import FileJobResult
+from lyra.sdk.types import JsonValue
+
+from lyra_app.config import DEFAULT_API_HOST
+
+
+class _FakeSyncResponseOptions(TypedDict):
+    status_code: NotRequired[int]
+    payload: NotRequired[JsonValue]
+    text: NotRequired[str]
+    headers: NotRequired[dict[str, str] | None]
+    lines: NotRequired[list[str] | None]
+    chunks: NotRequired[list[bytes] | None]
+
+
+class _SyncRequestOptions(TypedDict):
+    params: dict[str, Any] | None
+    json: dict[str, Any] | None
+    timeout: float
+    headers: dict[str, str]
 
 
 class FakeSyncResponse:
-    def __init__(
-        self,
-        *,
-        status_code: int = 200,
-        payload: Any | None = None,
-        text: str = "",
-        headers: dict[str, str] | None = None,
-        lines: list[str] | None = None,
-        chunks: list[bytes] | None = None,
-    ) -> None:
-        self.status_code = status_code
-        self._payload = payload
-        self.text = text
-        self.headers = headers or {"content-type": "application/json"}
-        self._lines = lines or []
-        self._chunks = chunks or []
+    def __init__(self, **options: Unpack[_FakeSyncResponseOptions]) -> None:
+        self.status_code = options.get("status_code", 200)
+        self._payload = options.get("payload")
+        self.text = options.get("text", "")
+        self.headers = options.get("headers") or {"content-type": "application/json"}
+        self._lines = options.get("lines") or []
+        self._chunks = options.get("chunks") or []
 
     def __enter__(self) -> Self:
         return self
@@ -36,7 +46,7 @@ class FakeSyncResponse:
     def __exit__(self, *args: object) -> None:
         return None
 
-    def json(self) -> Any:
+    def json(self) -> JsonValue:
         assert self._payload is not None
         return self._payload
 
@@ -133,7 +143,7 @@ def _admin_status_response() -> dict[str, Any]:
 
 def _config_summary_response() -> dict[str, Any]:
     return {
-        "api_host": "0.0.0.0",
+        "api_host": DEFAULT_API_HOST,
         "api_port": 5219,
         "allowed_queues": ["interactive"],
         "default_queue": "interactive",
@@ -761,20 +771,16 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
     def request(
         method: str,
         url: str,
-        *,
-        params: dict[str, Any] | None,
-        json: dict[str, Any] | None,
-        timeout: float,
-        headers: dict[str, str],
+        **options: Unpack[_SyncRequestOptions],
     ) -> FakeSyncResponse:
         requests_seen.append(
             {
                 "method": method,
                 "url": url,
-                "params": params,
-                "json": json,
-                "timeout": timeout,
-                "headers": headers,
+                "params": options["params"],
+                "json": options["json"],
+                "timeout": options["timeout"],
+                "headers": options["headers"],
             }
         )
         return FakeSyncResponse(payload=responses.pop(0))
@@ -918,13 +924,9 @@ def test_sync_client_reports_operator_route_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def request(
-        method: str,  # noqa: ARG001
-        url: str,  # noqa: ARG001
-        *,
-        params: dict[str, Any] | None,  # noqa: ARG001
-        json: dict[str, Any] | None,  # noqa: ARG001
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        _method: str,
+        _url: str,
+        **_options: Unpack[_SyncRequestOptions],
     ) -> FakeSyncResponse:
         return FakeSyncResponse(status_code=409, text="plugin disabled")
 
@@ -1093,14 +1095,10 @@ def test_sync_client_fetches_result_descriptor_from_ref(
     def request(
         method: str,
         url: str,
-        *,
-        params: dict[str, Any] | None,  # noqa: ARG001
-        json: dict[str, Any] | None,  # noqa: ARG001
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],
+        **options: Unpack[_SyncRequestOptions],
     ) -> FakeSyncResponse:
         seen.append(f"{method} {url}")
-        assert headers == {"Authorization": "Bearer agent-secret"}
+        assert options["headers"] == {"Authorization": "Bearer agent-secret"}
         return FakeSyncResponse(payload=_result_descriptor_response())
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
@@ -1251,22 +1249,25 @@ class FakeContent:
             yield chunk
 
 
+class _FakeAsyncResponseOptions(TypedDict):
+    status: NotRequired[int]
+    payload: NotRequired[JsonValue]
+    text: NotRequired[str]
+    headers: NotRequired[dict[str, str] | None]
+    lines: NotRequired[list[str] | None]
+    chunks: NotRequired[list[bytes] | None]
+
+
 class FakeAsyncResponse:
-    def __init__(
-        self,
-        *,
-        status: int = 200,
-        payload: Any | None = None,
-        text: str = "",
-        headers: dict[str, str] | None = None,
-        lines: list[str] | None = None,
-        chunks: list[bytes] | None = None,
-    ) -> None:
-        self.status = status
-        self._payload = payload
-        self._text = text
-        self.headers = headers or {"content-type": "application/json"}
-        self.content = FakeContent(lines=lines, chunks=chunks)
+    def __init__(self, **options: Unpack[_FakeAsyncResponseOptions]) -> None:
+        self.status = options.get("status", 200)
+        self._payload = options.get("payload")
+        self._text = options.get("text", "")
+        self.headers = options.get("headers") or {"content-type": "application/json"}
+        self.content = FakeContent(
+            lines=options.get("lines"),
+            chunks=options.get("chunks"),
+        )
 
     async def __aenter__(self) -> Self:
         return self
@@ -1274,7 +1275,7 @@ class FakeAsyncResponse:
     async def __aexit__(self, *args: object) -> None:
         return None
 
-    async def json(self) -> Any:
+    async def json(self) -> JsonValue:
         assert self._payload is not None
         return self._payload
 

@@ -10,6 +10,7 @@ from typing import Any
 from filelock import FileLock
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
 from lyra.sdk.models.metric import (
     MetricCatalogResponse,
@@ -22,6 +23,7 @@ from lyra.sdk.models.plugin_v3 import (
     PluginManifestV3,
     compile_plugin_manifest,
 )
+from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.config import LyraConfig, get_config
@@ -42,8 +44,8 @@ class MetricRegistryEntry:
     metric: CompiledMetricManifestV3
     plugin_name: str
     plugin_version: str
-    request_schema: dict[str, Any]
-    request_validator: Any
+    request_schema: JsonObject
+    request_validator: Validator
     queue: str
     repo_id: str
     entrypoint: str
@@ -116,7 +118,7 @@ def load_plugin_manifest(path: Path) -> CompiledPluginManifestV3:
         raise RuntimeError(msg) from exc
 
 
-def _build_request_validator(metric_name: str, schema: dict[str, Any]) -> Any:
+def _build_request_validator(metric_name: str, schema: JsonObject) -> Validator:
     validator_class = validator_for(schema)
     try:
         validator_class.check_schema(schema)
@@ -375,7 +377,7 @@ def get_metric_catalog() -> MetricCatalogResponse:
     )
 
 
-def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
+def validate_metric_payload(metric_name: str, payload: JsonValue) -> JsonObject:
     entry = get_metric_entry(metric_name)
     if entry is None:
         msg = f"Unknown metric: {metric_name!r}"
@@ -385,8 +387,8 @@ def validate_metric_payload(metric_name: str, payload: Any) -> dict[str, Any]:
 
 def validate_metric_entry_payload(
     entry: MetricRegistryEntry,
-    payload: Any,
-) -> dict[str, Any]:
+    payload: JsonValue,
+) -> JsonObject:
     """Validate a payload against one captured registry contract."""
 
     if not isinstance(payload, dict):

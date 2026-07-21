@@ -4,14 +4,15 @@ from typing import Any
 import pytest
 from jsonschema import validate
 from jsonschema.exceptions import ValidationError
+from lyra.sdk.models import DataTypeSchemaInfo
 
 from lyra_app.routes.data_types import list_data_types
 
 
 def _entry_by_data_type(
-    entries: list[Any],
+    entries: list[DataTypeSchemaInfo],
     data_type: str,
-) -> Any:
+) -> DataTypeSchemaInfo:
     return next(entry for entry in entries if entry.data_type == data_type)
 
 

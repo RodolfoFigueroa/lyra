@@ -1,5 +1,4 @@
 import unicodedata
-from typing import Any
 
 from lyra.sdk.models.plugin_v3 import (
     FileOutputV3,
@@ -8,10 +7,11 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputV3,
 )
 from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import Field
 
 
-def _append_search_part(parts: list[str], value: Any) -> None:
+def _append_search_part(parts: list[str], value: JsonValue) -> None:
     if isinstance(value, str):
         stripped = value.strip()
         if stripped:
@@ -76,7 +76,7 @@ class MetricInfoV3(StrictBaseModel):
 
     name: str = Field(description="Public metric name.")
     description: str = Field(description="Human-readable metric description.")
-    request_schema: dict[str, Any] = Field(
+    request_schema: JsonObject = Field(
         description="Effective JSON Schema for the client request payload.",
     )
     spatial_inputs: dict[str, SpatialInputKindV3] = Field(

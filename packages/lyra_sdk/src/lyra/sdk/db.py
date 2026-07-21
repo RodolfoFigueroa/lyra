@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Literal
-
+if TYPE_CHECKING:
     import geopandas as gpd
+    from lyra.sdk.db_types import Bounds
     from sqlalchemy.engine import Engine
 
 
@@ -21,10 +22,7 @@ class LyraDB(ABC):
     @abstractmethod
     def load_denue_from_bounds(
         self,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
+        bounds: Bounds,
         *,
         year: Literal[2020, 2021, 2022, 2023, 2024, 2025],
         month: Literal[5, 11],
@@ -36,11 +34,7 @@ class LyraDB(ABC):
         (employment size), ``codigo_act`` (activity code), and ``geometry``.
 
         Args:
-            xmin: Minimum x coordinate of the bounding box.
-            ymin: Minimum y coordinate of the bounding box.
-            xmax: Maximum x coordinate of the bounding box.
-            ymax: Maximum y coordinate of the bounding box.
-            conn: Active SQLAlchemy database connection.
+            bounds: Minimum and maximum x/y coordinates to query.
             year: Edition year of the DENUE dataset.
             month: Edition month of the DENUE dataset; either ``5`` (May) or
                 ``11`` (November). Defaults to ``11``.
@@ -52,13 +46,7 @@ class LyraDB(ABC):
 
     @abstractmethod
     def load_mesh_from_bounds(
-        self,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
-        *,
-        level: Literal[4, 5, 6, 7, 8, 9] = 9,
+        self, bounds: Bounds, *, level: Literal[4, 5, 6, 7, 8, 9] = 9
     ) -> gpd.GeoDataFrame:
         """Load mesh-grid cells that intersect a bounding box.
 
@@ -66,11 +54,7 @@ class LyraDB(ABC):
         ``codigo`` identifier and geometry.
 
         Args:
-            xmin: Minimum x coordinate of the bounding box.
-            ymin: Minimum y coordinate of the bounding box.
-            xmax: Maximum x coordinate of the bounding box.
-            ymax: Maximum y coordinate of the bounding box.
-            conn: Active SQLAlchemy database connection.
+            bounds: Minimum and maximum x/y coordinates to query.
             level: Mesh resolution level (4-9). Higher values are finer.
                 Defaults to ``9``.
 
@@ -82,10 +66,7 @@ class LyraDB(ABC):
     @abstractmethod
     def load_census_from_bounds(
         self,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
+        bounds: Bounds,
         *,
         level: Literal["ent", "mun", "loc", "ageb", "mza"],
         columns: Sequence[str],
@@ -96,11 +77,7 @@ class LyraDB(ABC):
         level and columns.
 
         Args:
-            xmin: Minimum x coordinate of the bounding box.
-            ymin: Minimum y coordinate of the bounding box.
-            xmax: Maximum x coordinate of the bounding box.
-            ymax: Maximum y coordinate of the bounding box.
-            conn: Active SQLAlchemy database connection.
+            bounds: Minimum and maximum x/y coordinates to query.
             level: Geographic level of the census table. One of ``"ent"``
                 (state), ``"mun"`` (municipality), ``"loc"`` (locality),
                 ``"ageb"``, or ``"mza"`` (block).

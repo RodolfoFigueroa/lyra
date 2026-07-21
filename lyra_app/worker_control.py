@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any
 
 from lyra.sdk.models import FailedJobResult
+from lyra.sdk.types import JsonObject, JsonValue
 
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
@@ -26,10 +27,10 @@ WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS = 10.0
 @dataclass(frozen=True)
 class WorkerInspectSnapshot:
     inspect_available: bool
-    active: dict[str, list[dict[str, Any]]] | None
-    reserved: dict[str, list[dict[str, Any]]] | None
-    scheduled: dict[str, list[dict[str, Any]]] | None
-    stats: dict[str, dict[str, Any]] | None
+    active: dict[str, list[JsonObject]] | None
+    reserved: dict[str, list[JsonObject]] | None
+    scheduled: dict[str, list[JsonObject]] | None
+    stats: dict[str, JsonObject] | None
     active_queues: dict[str, list[str]] | None
 
     @property
@@ -87,18 +88,18 @@ _UNKNOWN_WORKER_INSPECT_SNAPSHOT = WorkerInspectSnapshot(
 )
 
 
-def _inspect_call(inspector: Any, method_name: str) -> Any | None:
+def _inspect_call(call: Callable[[], JsonValue], method_name: str) -> JsonValue:
     try:
-        return getattr(inspector, method_name)()
+        return call()
     except Exception:  # noqa: BLE001  # pragma: no cover - Celery transports vary
         logger.warning("Celery inspect.%s() failed.", method_name, exc_info=True)
         return None
 
 
-def _normalise_task_section(raw: Any | None) -> dict[str, list[dict[str, Any]]] | None:
+def _normalise_task_section(raw: JsonValue) -> dict[str, list[JsonObject]] | None:
     if raw is None or not isinstance(raw, dict):
         return None
-    normalised: dict[str, list[dict[str, Any]]] = {}
+    normalised: dict[str, list[JsonObject]] = {}
     for worker_name, tasks in raw.items():
         if not isinstance(worker_name, str):
             continue
@@ -109,7 +110,7 @@ def _normalise_task_section(raw: Any | None) -> dict[str, list[dict[str, Any]]] 
     return normalised
 
 
-def _normalise_stats(raw: Any | None) -> dict[str, dict[str, Any]] | None:
+def _normalise_stats(raw: JsonValue) -> dict[str, JsonObject] | None:
     if raw is None or not isinstance(raw, dict):
         return None
     return {
@@ -119,7 +120,7 @@ def _normalise_stats(raw: Any | None) -> dict[str, dict[str, Any]] | None:
     }
 
 
-def _normalise_active_queues(raw: Any | None) -> dict[str, list[str]] | None:
+def _normalise_active_queues(raw: JsonValue) -> dict[str, list[str]] | None:
     if raw is None or not isinstance(raw, dict):
         return None
     queues_by_worker: dict[str, list[str]] = {}
@@ -128,11 +129,12 @@ def _normalise_active_queues(raw: Any | None) -> dict[str, list[str]] | None:
             continue
         queue_names: list[str] = []
         if isinstance(queues, list):
-            queue_names.extend(
-                queue["name"]
-                for queue in queues
-                if isinstance(queue, dict) and isinstance(queue.get("name"), str)
-            )
+            for queue in queues:
+                if not isinstance(queue, dict):
+                    continue
+                name = queue.get("name")
+                if isinstance(name, str):
+                    queue_names.append(name)
         queues_by_worker[worker_name] = sorted(set(queue_names))
     return queues_by_worker
 
@@ -141,11 +143,13 @@ def inspect_workers() -> WorkerInspectSnapshot:
     inspector = celery_app.control.inspect(
         timeout=DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS
     )
-    active = _normalise_task_section(_inspect_call(inspector, "active"))
-    reserved = _normalise_task_section(_inspect_call(inspector, "reserved"))
-    scheduled = _normalise_task_section(_inspect_call(inspector, "scheduled"))
-    stats = _normalise_stats(_inspect_call(inspector, "stats"))
-    active_queues = _normalise_active_queues(_inspect_call(inspector, "active_queues"))
+    active = _normalise_task_section(_inspect_call(inspector.active, "active"))
+    reserved = _normalise_task_section(_inspect_call(inspector.reserved, "reserved"))
+    scheduled = _normalise_task_section(_inspect_call(inspector.scheduled, "scheduled"))
+    stats = _normalise_stats(_inspect_call(inspector.stats, "stats"))
+    active_queues = _normalise_active_queues(
+        _inspect_call(inspector.active_queues, "active_queues")
+    )
     return WorkerInspectSnapshot(
         inspect_available=any(
             section is not None
@@ -288,7 +292,7 @@ def worker_inspect_collector_running() -> bool:
     return task is not None and not task.done()
 
 
-def safe_task_summary(task: dict[str, Any], *, worker_name: str) -> dict[str, Any]:
+def safe_task_summary(task: JsonObject, *, worker_name: str) -> JsonObject:
     raw_request = task.get("request")
     request = raw_request if isinstance(raw_request, dict) else task
     time_start = request.get("time_start") or task.get("time_start")

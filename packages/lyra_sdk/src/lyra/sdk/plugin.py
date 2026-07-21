@@ -11,8 +11,12 @@ from typing import (
     Any,
     Generic,
     Literal,
+    NotRequired,
+    TypeAlias,
+    TypedDict,
     TypeVar,
     Union,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
@@ -40,14 +44,28 @@ from lyra.sdk.models.plugin_v3 import (
     compile_plugin_manifest,
 )
 from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import Field, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
+from typing_extensions import TypeForm
 
 if TYPE_CHECKING:
     from lyra.sdk.models.job import JobEnvelope
 
 InputT = TypeVar("InputT")
 ResultT = TypeVar("ResultT")
+PythonAnnotation: TypeAlias = TypeForm[Any] | str
+PluginResult: TypeAlias = JsonValue | StrictBaseModel
+ConstraintValue: TypeAlias = int | float
+
+
+class CommonInputMetadata(TypedDict):
+    description: NotRequired[str]
+    examples: NotRequired[list[JsonValue]]
+    required: NotRequired[bool]
+    default: NotRequired[JsonValue]
+    nullable: NotRequired[bool]
+
 
 _BATCH_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 _MISSING = inspect.Parameter.empty
@@ -63,17 +81,17 @@ class Input:
     """Describe and constrain one plugin-owned metric input."""
 
     description: str
-    examples: list[Any] | None = None
-    gt: Any = None
-    ge: Any = None
-    lt: Any = None
-    le: Any = None
-    multiple_of: Any = None
+    examples: list[JsonValue] | None = None
+    gt: ConstraintValue | None = None
+    ge: ConstraintValue | None = None
+    lt: ConstraintValue | None = None
+    le: ConstraintValue | None = None
+    multiple_of: ConstraintValue | None = None
     min_length: int | None = None
     max_length: int | None = None
     pattern: str | None = None
     strict: bool | None = None
-    json_schema_extra: dict[str, Any] | None = None
+    json_schema_extra: JsonObject | None = None
 
     def __post_init__(self) -> None:
         if not self.description.strip():
@@ -287,7 +305,7 @@ class PluginDefinition:
             self.manifest(plugin=plugin, entrypoint=entrypoint)
         )
 
-    def __call__(self, job: JobEnvelope, context: RunContext) -> Any:
+    def __call__(self, job: JobEnvelope, context: RunContext) -> PluginResult:
         try:
             metric = self._metrics[job.metric]
         except KeyError as exc:
@@ -296,7 +314,9 @@ class PluginDefinition:
         return metric.invoke(job, context)
 
 
-def _unwrap_annotated(annotation: Any) -> tuple[Any, list[Any]]:
+def _unwrap_annotated(
+    annotation: PythonAnnotation,
+) -> tuple[PythonAnnotation, list[Any]]:
     metadata: list[Any] = []
     value = annotation
     while get_origin(value) is Annotated:
@@ -306,7 +326,17 @@ def _unwrap_annotated(annotation: Any) -> tuple[Any, list[Any]]:
     return value, metadata
 
 
-def _split_nullable(annotation: Any) -> tuple[Any, bool]:
+def _with_annotation_metadata(
+    annotation: PythonAnnotation,
+    *metadata: FieldInfo | _SpatialInputMarker | JsonValue,
+) -> TypeForm[Any]:
+    if isinstance(annotation, str):
+        msg = "Deferred string annotations cannot be decorated at runtime"
+        raise PluginDefinitionError(msg)
+    return Annotated[annotation, *metadata]
+
+
+def _split_nullable(annotation: PythonAnnotation) -> tuple[PythonAnnotation, bool]:
     base, metadata = _unwrap_annotated(annotation)
     origin = get_origin(base)
     if origin not in {Union, types.UnionType}:
@@ -317,28 +347,33 @@ def _split_nullable(annotation: Any) -> tuple[Any, bool]:
         return annotation, False
     if len(non_none) != 1:
         return annotation, False
-    value: Any = non_none[0]
+    value: PythonAnnotation = non_none[0]
     if metadata:
-        value = Annotated[value, *metadata]
+        value = _with_annotation_metadata(value, *metadata)
     return value, True
 
 
-def _schema_metadata(annotation: Any, schema: dict[str, Any]) -> dict[str, Any]:
+def _schema_metadata(
+    annotation: PythonAnnotation,
+    schema: JsonObject,
+) -> CommonInputMetadata:
     _base, annotation_metadata = _unwrap_annotated(annotation)
     if not any(isinstance(value, FieldInfo) for value in annotation_metadata):
         return {}
-    metadata: dict[str, Any] = {}
-    if isinstance(schema.get("description"), str):
-        metadata["description"] = schema["description"]
-    if isinstance(schema.get("examples"), list):
-        metadata["examples"] = schema["examples"]
+    metadata: CommonInputMetadata = {}
+    description = schema.get("description")
+    if isinstance(description, str):
+        metadata["description"] = description
+    examples = schema.get("examples")
+    if isinstance(examples, list):
+        metadata["examples"] = examples
     return metadata
 
 
 def _normal_input_spec(
-    annotation: Any,
+    annotation: PythonAnnotation,
     *,
-    default: Any,
+    default: JsonValue | type,
 ) -> PluginOwnedInputSpecV3:
     annotation, nullable = _split_nullable(annotation)
     schema = TypeAdapter(annotation).json_schema()
@@ -348,6 +383,9 @@ def _normal_input_spec(
 
     common = _schema_metadata(annotation, schema)
     if default is not _MISSING:
+        if isinstance(default, type):
+            msg = "metric input defaults must be JSON-compatible values"
+            raise PluginDefinitionError(msg)
         common["required"] = False
         common["default"] = default
     if nullable:
@@ -376,21 +414,23 @@ def _normal_input_spec(
             )
             if key in schema_without_metadata
         }
-        return StringInputV3(kind="string", **constraints, **common)
+        return StringInputV3.model_validate({"kind": "string", **constraints, **common})
     if schema_type == "number" and keys <= {"type", "minimum", "maximum"}:
         constraints = {
             key: schema_without_metadata[key]
             for key in ("minimum", "maximum")
             if key in schema_without_metadata
         }
-        return NumberInputV3(kind="number", **constraints, **common)
+        return NumberInputV3.model_validate({"kind": "number", **constraints, **common})
     if schema_type == "integer" and keys <= {"type", "minimum", "maximum"}:
         constraints = {
             key: schema_without_metadata[key]
             for key in ("minimum", "maximum")
             if key in schema_without_metadata
         }
-        return IntegerInputV3(kind="integer", **constraints, **common)
+        return IntegerInputV3.model_validate(
+            {"kind": "integer", **constraints, **common}
+        )
     if schema_type == "boolean" and keys == {"type"}:
         return BooleanInputV3(kind="boolean", **common)
     if isinstance(schema_without_metadata.get("enum"), list) and keys <= {
@@ -409,7 +449,7 @@ def _normal_input_spec(
     )
 
 
-def _spatial_marker(annotation: Any) -> _SpatialInputMarker | None:
+def _spatial_marker(annotation: PythonAnnotation) -> _SpatialInputMarker | None:
     _base, metadata = _unwrap_annotated(annotation)
     markers = [value for value in metadata if isinstance(value, _SpatialInputMarker)]
     if len(markers) > 1:
@@ -418,7 +458,7 @@ def _spatial_marker(annotation: Any) -> _SpatialInputMarker | None:
     return markers[0] if markers else None
 
 
-def _batch_value_annotation(annotation: Any) -> Any:
+def _batch_value_annotation(annotation: PythonAnnotation) -> PythonAnnotation:
     base, _metadata = _unwrap_annotated(annotation)
     if get_origin(base) is not list:
         msg = "Batch inputs must annotate list[BatchItem[T]]"
@@ -453,7 +493,7 @@ def _input_field(input_: Input) -> FieldInfo:
     )
 
 
-def _reject_field_metadata(annotation: Any, *, location: str) -> None:
+def _reject_field_metadata(annotation: PythonAnnotation, *, location: str) -> None:
     _base, metadata = _unwrap_annotated(annotation)
     if any(isinstance(value, FieldInfo) for value in metadata):
         msg = (
@@ -464,11 +504,11 @@ def _reject_field_metadata(annotation: Any, *, location: str) -> None:
 
 
 def _input_spec(
-    annotation: Any,
+    annotation: PythonAnnotation,
     *,
     declaration: Input | BatchInput | None,
-    default: Any,
-) -> tuple[InputSpecV3, BatchInput | None, Any]:
+    default: JsonValue | type,
+) -> tuple[InputSpecV3, BatchInput | None, PythonAnnotation]:
     _reject_field_metadata(annotation, location="metric input annotation")
     spatial = _spatial_marker(annotation)
 
@@ -492,11 +532,14 @@ def _input_spec(
             value_annotation,
             location="BatchItem value annotation",
         )
-        effective_value_annotation = Annotated[
+        effective_value_annotation = _with_annotation_metadata(
             value_annotation,
             _input_field(declaration.items),
-        ]
-        effective_annotation = list[BatchItem[effective_value_annotation]]
+        )
+        batch_item_annotation = BatchItem.__class_getitem__(
+            cast("type[Any]", effective_value_annotation)
+        )
+        effective_annotation = types.GenericAlias(list, batch_item_annotation)
         value_spec = _normal_input_spec(
             effective_value_annotation,
             default=_MISSING,
@@ -521,7 +564,10 @@ def _input_spec(
     else:
         msg = "list[BatchItem[T]] inputs must use BatchInput, not Input"
         raise PluginDefinitionError(msg)
-    effective_annotation = Annotated[annotation, _input_field(declaration)]
+    effective_annotation = _with_annotation_metadata(
+        annotation,
+        _input_field(declaration),
+    )
     return (
         _normal_input_spec(effective_annotation, default=default),
         None,
@@ -675,7 +721,7 @@ def _validate_input_declaration_names(
 def _validate_batch_runtime_value(
     metric_name: str,
     field_name: str,
-    value: Any,
+    value: JsonValue,
     batch: BatchInput,
 ) -> None:
     if not isinstance(value, list) or not 1 <= len(value) <= batch.max_items:
@@ -737,7 +783,7 @@ def _format_function_signature(function: Callable[..., Any]) -> str:
     return rendered
 
 
-def _format_annotation(annotation: Any) -> str:
+def _format_annotation(annotation: PythonAnnotation) -> str:
     if isinstance(annotation, str):
         return annotation
     spatial = _spatial_marker(annotation)

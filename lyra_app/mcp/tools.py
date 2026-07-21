@@ -10,9 +10,16 @@ from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from lyra.sdk.models.metric import normalize_metric_search_tokens
+from lyra.sdk.types import validate_json_value
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fastapi import HTTPException
+    from lyra.sdk.models import JobCreateResponse, JobStatusInfo, ResultDescriptor
+    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
+    from lyra.sdk.types import JsonObject, JsonValue
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.mcp.models import (
@@ -40,23 +47,23 @@ _MAX_COMPACT_DESCRIPTION_LENGTH = 240
 
 
 class LyraMCPBackend(Protocol):
-    async def get_metrics(self) -> Any: ...
+    async def get_metrics(self) -> MetricCatalogResponse: ...
 
-    async def lookup_met_zone(self, name: str) -> Any | None: ...
+    async def lookup_met_zone(self, name: str) -> dict[str, str] | None: ...
 
-    async def get_metric(self, metric: str) -> Any | None: ...
+    async def get_metric(self, metric: str) -> MetricInfoV3 | None: ...
 
     async def create_job(
         self,
         metric: str,
-        payload: dict[str, Any],
+        payload: JsonObject,
         *,
         idempotency_key: str | None = None,
-    ) -> Any: ...
+    ) -> JobCreateResponse: ...
 
-    async def get_job(self, job_id: str) -> Any | None: ...
+    async def get_job(self, job_id: str) -> JobStatusInfo | None: ...
 
-    async def get_result_descriptor(self, job_id: str) -> Any | None: ...
+    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None: ...
 
 
 @dataclass(frozen=True)
@@ -65,27 +72,25 @@ class ToolCallError(Exception):
 
     code: str
     message: str
-    details: Any = None
+    details: JsonValue = None
 
     def to_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "error": {"code": self.code, "message": self.message}
-        }
+        error: JsonObject = {"code": self.code, "message": self.message}
         if self.details is not None:
-            payload["error"]["details"] = self.details
-        return payload
+            error["details"] = self.details
+        return {"error": error}
 
 
 class InProcessLyraBackend:
     def __init__(self, database: ApplicationDatabaseRuntime | None = None) -> None:
         self.database = database
 
-    async def get_metrics(self) -> Any:
+    async def get_metrics(self) -> MetricCatalogResponse:
         from lyra_app.registry import get_metric_catalog  # noqa: PLC0415
 
         return await asyncio.to_thread(get_metric_catalog)
 
-    async def lookup_met_zone(self, name: str) -> Any | None:
+    async def lookup_met_zone(self, name: str) -> dict[str, str] | None:
         from sqlalchemy.exc import SQLAlchemyError  # noqa: PLC0415
 
         from lyra_app.db.connection import (  # noqa: PLC0415
@@ -122,7 +127,7 @@ class InProcessLyraBackend:
         cve_met, nom_met = result
         return {"cve_met": cve_met, "nom_met": nom_met}
 
-    async def get_metric(self, metric: str) -> Any | None:
+    async def get_metric(self, metric: str) -> MetricInfoV3 | None:
         from lyra_app.registry import get_metric_info  # noqa: PLC0415
 
         return await asyncio.to_thread(get_metric_info, metric)
@@ -130,10 +135,10 @@ class InProcessLyraBackend:
     async def create_job(
         self,
         metric: str,
-        payload: dict[str, Any],
+        payload: JsonObject,
         *,
         idempotency_key: str | None = None,
-    ) -> Any:
+    ) -> JobCreateResponse:
         from lyra.sdk.models import JobCreateRequest  # noqa: PLC0415
 
         from lyra_app.db.connection import DatabaseUnavailableError  # noqa: PLC0415
@@ -165,19 +170,19 @@ class InProcessLyraBackend:
             raise ToolCallError(
                 _INVALID_PARAMETERS_ERROR,
                 "Invalid metric parameters.",
-                exc.errors,
+                validate_json_value(exc.errors),
             ) from exc
         except IdempotencyConflictError as exc:
             raise ToolCallError(
                 _IDEMPOTENCY_CONFLICT_ERROR,
                 str(exc),
-                exc.details,
+                validate_json_value(exc.details),
             ) from exc
         except SubmissionRateLimitedError as exc:
             raise ToolCallError(
                 _RATE_LIMITED_ERROR,
                 str(exc),
-                exc.details,
+                validate_json_value(exc.details),
             ) from exc
         except (
             DatabaseUnavailableError,
@@ -202,7 +207,7 @@ class InProcessLyraBackend:
                 _BACKEND_ERROR, "Failed to create job.", str(exc)
             ) from exc
 
-    async def get_job(self, job_id: str) -> Any | None:
+    async def get_job(self, job_id: str) -> JobStatusInfo | None:
         from fastapi import HTTPException as FastAPIHTTPException  # noqa: PLC0415
 
         from lyra_app.routes import jobs  # noqa: PLC0415
@@ -214,7 +219,7 @@ class InProcessLyraBackend:
                 return None
             raise _tool_error_from_http(exc, context="fetch job status") from exc
 
-    async def get_result_descriptor(self, job_id: str) -> Any | None:
+    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
         from fastapi import HTTPException as FastAPIHTTPException  # noqa: PLC0415
 
         from lyra_app import job_store  # noqa: PLC0415
@@ -469,21 +474,38 @@ async def _download_result(
     referenced_job_id = _job_id_from_result_ref(arguments.result_ref)
     descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
     payload = _model_dump(descriptor)
-    raw = dict(payload["raw"])
+    raw_value = payload["raw"]
+    if not isinstance(raw_value, dict):
+        _raise_tool_error(
+            "invalid_result_descriptor",
+            "Result descriptor raw metadata must be an object.",
+        )
+    raw = raw_value
     jsonl_path = raw.get("jsonl_path")
     formats = raw.get("formats", [])
-    if payload["result_kind"] != "table" or "jsonl" not in formats or not jsonl_path:
+    supports_jsonl = isinstance(formats, list) and "jsonl" in formats
+    if (
+        payload["result_kind"] != "table"
+        or not supports_jsonl
+        or not isinstance(jsonl_path, str)
+        or not jsonl_path
+    ):
         _raise_tool_error(
             "unsupported_result_download",
             "Only table results can be downloaded as JSONL through MCP v1.",
-            {
-                "job_id": payload["job_id"],
-                "result_ref": payload["result_ref"],
-                "result_kind": payload["result_kind"],
-                "formats": formats,
-            },
+            validate_json_value(
+                {
+                    "job_id": payload["job_id"],
+                    "result_ref": payload["result_ref"],
+                    "result_kind": payload["result_kind"],
+                    "formats": formats,
+                }
+            ),
         )
 
+    lifetime = payload.get("lifetime")
+    if not isinstance(lifetime, dict):
+        lifetime = {}
     return {
         "job_id": payload["job_id"],
         "result_ref": payload["result_ref"],
@@ -509,8 +531,8 @@ async def _download_result(
                 "AsyncLyraAPIClient.download_result(result_ref, path, format='jsonl')"
             ),
         },
-        "expires_in_seconds": payload.get("lifetime", {}).get("expires_in_seconds"),
-        "expires_at": payload.get("lifetime", {}).get("expires_at"),
+        "expires_in_seconds": lifetime.get("expires_in_seconds"),
+        "expires_at": lifetime.get("expires_at"),
     }
 
 
@@ -524,7 +546,7 @@ def _jsonl_download_url(public_api_base_url: str, job_id: str) -> str:
 async def _descriptor_for_result_ref(
     result_ref: str,
     backend: LyraMCPBackend,
-) -> Any:
+) -> ResultDescriptor:
     job_id = _job_id_from_result_ref(result_ref)
     descriptor = await backend.get_result_descriptor(job_id)
     if descriptor is None:
@@ -534,7 +556,7 @@ async def _descriptor_for_result_ref(
 
 def _run_payload_for_metric(
     *,
-    metric: Any,
+    metric: MetricInfoV3,
     met_zone_code: str,
     parameters: dict[str, Any],
 ) -> dict[str, Any]:
@@ -610,7 +632,7 @@ def _running_payload(
     return payload
 
 
-def _search_candidate(metric: Any, query: str) -> dict[str, Any]:
+def _search_candidate(metric: MetricInfoV3, query: str) -> dict[str, Any]:
     query_tokens = _tokens(query)
     search_text = str(metric.search_text()) if hasattr(metric, "search_text") else ""
     haystack = _tokens(search_text)
@@ -654,7 +676,7 @@ def _search_reason(
     return f"{metric_name}: public catalog entry."
 
 
-def _required_spatial_fields(metric: Any) -> list[dict[str, str]]:
+def _required_spatial_fields(metric: MetricInfoV3) -> list[dict[str, str]]:
     spatial_inputs = getattr(metric, "spatial_inputs", {})
     if not isinstance(spatial_inputs, dict):
         return []
@@ -664,11 +686,14 @@ def _required_spatial_fields(metric: Any) -> list[dict[str, str]]:
     ]
 
 
-def _relevant_columns(metric: Any, query_tokens: list[str]) -> list[dict[str, Any]]:
+def _relevant_columns(
+    metric: MetricInfoV3,
+    query_tokens: list[str],
+) -> list[JsonObject]:
     output = getattr(metric, "output", None)
     columns = list(getattr(output, "columns", []))
     batched_columns = list(getattr(output, "batched_columns", []))
-    relevant: list[dict[str, Any]] = []
+    relevant: list[JsonObject] = []
     for column in [*columns, *batched_columns]:
         column_payload = _model_dump(column)
         text = " ".join(str(value) for value in column_payload.values())
@@ -759,11 +784,9 @@ def _raise_invalid_metric_cursor(
     raise error from cause
 
 
-def _model_dump(value: Any) -> dict[str, Any]:
-    if hasattr(value, "model_dump"):
+def _model_dump(value: BaseModel | Mapping[str, JsonValue]) -> JsonObject:
+    if isinstance(value, BaseModel):
         return value.model_dump(mode="json", exclude_none=True)
-    if isinstance(value, dict):
-        return value
     return dict(value)
 
 
@@ -811,7 +834,11 @@ def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:
     return ToolCallError(code, f"Failed to {context}.", exc.detail)
 
 
-def _raise_tool_error(code: str, message: str, details: Any = None) -> NoReturn:
+def _raise_tool_error(
+    code: str,
+    message: str,
+    details: JsonValue = None,
+) -> NoReturn:
     raise ToolCallError(code, message, details)
 
 

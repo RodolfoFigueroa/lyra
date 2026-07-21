@@ -205,6 +205,29 @@ class LyraTuiApp(App[None]):
     ) -> None:
         self.call_after_refresh(self.screen.refresh_bindings)
 
+    def _check_operator_action(self, action: str) -> bool | None:
+        if action in {"refresh_catalog", "add_plugin_repo", "assign_route"}:
+            return self.config.has_admin_key and self._catalog_tab_is_active()
+        if action == "restart_workers":
+            return self.config.has_admin_key
+        if action in {
+            "toggle_plugin_repo",
+            "delete_plugin_repo",
+            "sync_plugin_repo",
+        }:
+            return (
+                self.config.has_admin_key
+                and self._catalog_tab_is_active()
+                and self._selected_repo() is not None
+            )
+        if action == "delete_route":
+            return (
+                self.config.has_admin_key
+                and self._catalog_tab_is_active()
+                and self._selected_route() is not None
+            )
+        return None
+
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         del parameters
         result: bool | None = None
@@ -223,30 +246,8 @@ class LyraTuiApp(App[None]):
             elif action == "cancel_job":
                 job = self._selected_job()
                 result = job is not None and is_active_job_status(job.status)
-            elif action in {
-                "refresh_catalog",
-                "add_plugin_repo",
-                "assign_route",
-            }:
-                result = self.config.has_admin_key and self._catalog_tab_is_active()
-            elif action == "restart_workers":
-                result = self.config.has_admin_key
-            elif action in {
-                "toggle_plugin_repo",
-                "delete_plugin_repo",
-                "sync_plugin_repo",
-            }:
-                result = (
-                    self.config.has_admin_key
-                    and self._catalog_tab_is_active()
-                    and self._selected_repo() is not None
-                )
-            elif action == "delete_route":
-                result = (
-                    self.config.has_admin_key
-                    and self._catalog_tab_is_active()
-                    and self._selected_route() is not None
-                )
+            else:
+                result = self._check_operator_action(action)
         except Exception:  # noqa: BLE001
             result = None
         return result

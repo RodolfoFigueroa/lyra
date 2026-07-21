@@ -1,5 +1,6 @@
 from lyra.sdk.context import RunContext
 from lyra.sdk.db import LyraDB
+from lyra.sdk.db_types import Bounds
 from lyra.sdk.models import (
     AdminStatusResponse,
     CancelledJobResult,
@@ -69,6 +70,7 @@ __all__ = [
     "AdminStatusResponse",
     "BatchInput",
     "BatchItem",
+    "Bounds",
     "BoundsInput",
     "CancelledJobResult",
     "CatalogSummaryResponse",

@@ -1,6 +1,7 @@
 import importlib
 import logging
 from types import ModuleType
+from typing import NotRequired, TypedDict, Unpack
 from urllib.parse import urlparse
 
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
@@ -76,6 +77,15 @@ def _load_pandas() -> ModuleType:
         raise DownloadError(err) from exc
 
 
+class ClientSecurityOptions(TypedDict):
+    """Authentication, transport, and logging options shared by API clients."""
+
+    agent_api_key: NotRequired[str | None]
+    admin_api_key: NotRequired[str | None]
+    secure: NotRequired[bool]
+    log_level: NotRequired[int]
+
+
 class _BaseLyraAPIClient:
     """Base class for Lyra API clients, containing shared logic and configuration."""
 
@@ -84,11 +94,7 @@ class _BaseLyraAPIClient:
         host: str,
         timeout: float = 30.0,
         headers: dict[str, str] | None = None,
-        *,
-        agent_api_key: str | None = None,
-        admin_api_key: str | None = None,
-        secure: bool = True,
-        log_level: int = logging.INFO,
+        **options: Unpack[ClientSecurityOptions],
     ) -> None:
         """Initialize shared client configuration.
 
@@ -102,6 +108,8 @@ class _BaseLyraAPIClient:
             secure: Whether to use HTTPS. Defaults to True.
             log_level: Logging level for status messages. Defaults to logging.INFO.
         """
+        agent_api_key = options.get("agent_api_key")
+        admin_api_key = options.get("admin_api_key")
         self.host = host.rstrip("/")
         self.timeout = timeout
         self.headers = dict(headers or {})
@@ -111,9 +119,9 @@ class _BaseLyraAPIClient:
             self._agent_headers["Authorization"] = f"Bearer {agent_api_key}"
         if admin_api_key is not None:
             self._admin_headers["Authorization"] = f"Bearer {admin_api_key}"
-        self.secure = secure
+        self.secure = options.get("secure", True)
         self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self._logger.setLevel(log_level)
+        self._logger.setLevel(options.get("log_level", logging.INFO))
 
     def _http_url(self, path: str) -> str:
         protocol = "https" if self.secure else "http"

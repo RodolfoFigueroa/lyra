@@ -88,16 +88,17 @@ class FakeRedisSync:
     def xrange(
         self,
         key: str,
+        minimum: str,
+        /,
         *,
-        min: str,  # noqa: A002
         count: int | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
         records = self.streams.get(key, [])
-        if min.startswith("("):
-            after_id = min[1:]
+        if minimum.startswith("("):
+            after_id = minimum[1:]
             records = [record for record in records if record[0] > after_id]
-        elif min != job_store.STREAM_START:
-            records = [record for record in records if record[0] >= min]
+        elif minimum != job_store.STREAM_START:
+            records = [record for record in records if record[0] >= minimum]
         return records if count is None else records[:count]
 
 
@@ -201,16 +202,17 @@ class FakeRedisAsync:
     async def xrange(
         self,
         key: str,
+        minimum: str,
+        /,
         *,
-        min: str,  # noqa: A002
         count: int | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
         records = self.streams.get(key, [])
-        if min.startswith("("):
-            after_id = min[1:]
+        if minimum.startswith("("):
+            after_id = minimum[1:]
             records = [record for record in records if record[0] > after_id]
-        elif min != job_store.STREAM_START:
-            records = [record for record in records if record[0] >= min]
+        elif minimum != job_store.STREAM_START:
+            records = [record for record in records if record[0] >= minimum]
         return records if count is None else records[:count]
 
     async def xread(

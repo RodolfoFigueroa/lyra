@@ -4,7 +4,7 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from sqlalchemy.engine import URL, Engine, create_engine
 from sqlalchemy.exc import DBAPIError, OperationalError
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 ResultT = TypeVar("ResultT")
+Parameters = ParamSpec("Parameters")
 
 
 class DatabaseUnavailableError(RuntimeError):
@@ -38,7 +39,9 @@ def database_url(
     )
 
 
-def _engine_options(pool: DatabasePoolConfig) -> dict[str, Any]:
+def _engine_options(
+    pool: DatabasePoolConfig,
+) -> dict[str, bool | int | float | dict[str, int | str]]:
     return {
         "pool_size": pool.pool_size,
         "max_overflow": pool.max_overflow,
@@ -123,10 +126,10 @@ class ApplicationDatabaseRuntime:
 
     async def run_spatial(
         self,
-        function: Callable[..., ResultT],
+        function: Callable[Parameters, ResultT],
         /,
-        *args: Any,
-        **kwargs: Any,
+        *args: Parameters.args,
+        **kwargs: Parameters.kwargs,
     ) -> ResultT:
         capacity = self._spatial_capacity
         executor = self._spatial_executor

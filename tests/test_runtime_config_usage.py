@@ -1,14 +1,25 @@
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 import pytest
 from lyra.sdk.models import JobEnvelope
 
 from lyra_app import auth, job_store
-from lyra_app.config import clear_config_cache, get_config, save_config
+from lyra_app.config import LyraConfig, clear_config_cache, get_config, save_config
 from lyra_app.logging_config import configure_logging
 from tests.config_helpers import load_test_config
+
+
+class _FakeCredentialsValue:
+    pass
+
+
+class _EarthEngineCalls(TypedDict, total=False):
+    service_account_file: Path
+    scopes: list[str]
+    credentials: _FakeCredentialsValue
+    project: str
 
 
 class FakeRedisSync:
@@ -18,7 +29,9 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        if nx and key in self.values:
+            return
         self.values[key] = value
         self.expirations.append((key, ex))
 
@@ -42,7 +55,7 @@ class FakeRedisSync:
                 sorted_set.pop(member, None)
 
 
-def _reload_test_config(config: Any, config_path: Path) -> None:
+def _reload_test_config(config: LyraConfig, config_path: Path) -> None:
     save_config(config, config_path)
     clear_config_cache()
     get_config(config_path)
@@ -86,17 +99,25 @@ def test_initialize_earth_engine_uses_configured_file_and_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = load_test_config(tmp_path)
-    calls: dict[str, Any] = {}
-    credentials = object()
+    calls: _EarthEngineCalls = {}
+    credentials = _FakeCredentialsValue()
 
     class FakeCredentials:
         @staticmethod
-        def from_service_account_file(path: Path, *, scopes: list[str]) -> object:
+        def from_service_account_file(
+            path: Path,
+            *,
+            scopes: list[str],
+        ) -> _FakeCredentialsValue:
             calls["service_account_file"] = path
             calls["scopes"] = scopes
             return credentials
 
-    def initialize(credentials_value: object, *, project: str) -> None:
+    def initialize(
+        credentials_value: _FakeCredentialsValue,
+        *,
+        project: str,
+    ) -> None:
         calls["credentials"] = credentials_value
         calls["project"] = project
 

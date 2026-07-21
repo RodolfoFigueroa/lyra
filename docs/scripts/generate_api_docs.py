@@ -8,7 +8,6 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import griffe
 from griffe import DocstringSectionKind
@@ -201,7 +200,7 @@ PAGE_SPECS = (
     ),
 )
 
-_MODULE_CACHE: dict[str, Any] = {}
+_MODULE_CACHE: dict[str, griffe.Module] = {}
 
 
 def main() -> None:
@@ -309,7 +308,7 @@ def frontmatter(
     )
 
 
-def resolve_symbol(symbol: SymbolRef) -> Any:
+def resolve_symbol(symbol: SymbolRef) -> griffe.Object:
     module = load_module(symbol.module)
     member = module.members.get(symbol.name)
     if member is None:
@@ -318,9 +317,9 @@ def resolve_symbol(symbol: SymbolRef) -> Any:
     return resolve_alias(member)
 
 
-def load_module(module_name: str) -> Any:
+def load_module(module_name: str) -> griffe.Module:
     if module_name not in _MODULE_CACHE:
-        _MODULE_CACHE[module_name] = griffe.load(
+        loaded = griffe.load(
             module_name,
             submodules=True,
             search_paths=SEARCH_PATHS,
@@ -333,17 +332,18 @@ def load_module(module_name: str) -> Any:
             allow_inspection=False,
             resolve_aliases=True,
         )
+        if not isinstance(loaded, griffe.Module):
+            msg = f"configured API module did not resolve to a module: {module_name}"
+            raise RuntimeError(msg)
+        _MODULE_CACHE[module_name] = loaded
     return _MODULE_CACHE[module_name]
 
 
-def resolve_alias(obj: Any) -> Any:
-    target = getattr(obj, "final_target", None)
-    if target is None:
-        return obj
-    return target
+def resolve_alias(obj: griffe.Object | griffe.Alias) -> griffe.Object:
+    return obj.final_target if isinstance(obj, griffe.Alias) else obj
 
 
-def render_symbol(obj: Any) -> list[str]:
+def render_symbol(obj: griffe.Object) -> list[str]:
     if isinstance(obj, griffe.Class):
         return render_class(obj)
     if isinstance(obj, griffe.Function):
@@ -568,25 +568,27 @@ def attribute_description(obj: griffe.Attribute) -> str:
     return field_description(obj.value)
 
 
-def field_call_arguments(value: Any) -> list[str] | None:
-    if not stringify(value).startswith("Field("):
+def field_call_arguments(value: str | griffe.Expr | None) -> list[str] | None:
+    if not isinstance(value, griffe.ExprCall) or stringify(value.function) != "Field":
         return None
     return [
         (
             f"{argument.name}={stringify(argument.value)}"
-            if getattr(argument, "name", None)
+            if isinstance(argument, griffe.ExprKeyword)
             else stringify(argument)
         )
         for argument in value.arguments
     ]
 
 
-def field_description(value: Any) -> str:
-    if value is None or not stringify(value).startswith("Field("):
+def field_description(value: str | griffe.Expr | None) -> str:
+    if not isinstance(value, griffe.ExprCall) or stringify(value.function) != "Field":
         return ""
 
     for argument in value.arguments:
-        if getattr(argument, "name", None) != "description":
+        if not isinstance(argument, griffe.ExprKeyword):
+            continue
+        if argument.name != "description":
             continue
         raw_value = stringify(argument.value)
         try:
@@ -597,7 +599,7 @@ def field_description(value: Any) -> str:
     return ""
 
 
-def render_docstring_text(docstring: Any) -> str:
+def render_docstring_text(docstring: griffe.Docstring | None) -> str:
     if docstring is None:
         return ""
     sections = docstring.parse()
@@ -608,7 +610,9 @@ def render_docstring_text(docstring: Any) -> str:
     )
 
 
-def docstring_parameter_descriptions(docstring: Any) -> dict[str, str]:
+def docstring_parameter_descriptions(
+    docstring: griffe.Docstring | None,
+) -> dict[str, str]:
     if docstring is None:
         return {}
 
@@ -621,7 +625,7 @@ def docstring_parameter_descriptions(docstring: Any) -> dict[str, str]:
     return descriptions
 
 
-def docstring_return_description(docstring: Any) -> str:
+def docstring_return_description(docstring: griffe.Docstring | None) -> str:
     if docstring is None:
         return ""
 
@@ -635,7 +639,7 @@ def docstring_return_description(docstring: Any) -> str:
     return " ".join(descriptions)
 
 
-def docstring_raises(docstring: Any) -> list[tuple[str, str]]:
+def docstring_raises(docstring: griffe.Docstring | None) -> list[tuple[str, str]]:
     if docstring is None:
         return []
 
@@ -651,13 +655,13 @@ def docstring_raises(docstring: Any) -> list[tuple[str, str]]:
     return rows
 
 
-def parameter_default(parameter: Any) -> str:
+def parameter_default(parameter: griffe.Parameter) -> str:
     if parameter.default is None:
         return "Required"
     return code_cell(stringify(parameter.default))
 
 
-def stringify(value: Any) -> str:
+def stringify(value: str | griffe.Expr | None) -> str:
     if value is None:
         return ""
     return str(value).replace("\n", " ")

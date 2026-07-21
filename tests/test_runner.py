@@ -1,11 +1,18 @@
+from __future__ import annotations
+
 import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from lyra.sdk.models import FileJobResult, JobEnvelope, TableJobResult
+from lyra.sdk.models import (
+    FileJobResult,
+    JobEnvelope,
+    TableJobResult,
+    TerminalJobResult,
+)
 from lyra.sdk.models.plugin_v3 import FileOutputV3, TableOutputV3
 
 from lyra_app.config import clear_config_cache, get_config
@@ -18,6 +25,14 @@ from tests.smoke_plugin_helpers import (
     feature_collection,
     smoke_plugin_uri,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from types import ModuleType
+
+    from lyra.sdk.types import JsonObject
+
+    from lyra_app.worker import WorkerRunContext
 
 
 def _metric(
@@ -152,7 +167,9 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        if nx and key in self.values:
+            return
         self.values[key] = value
         self.expirations.append((key, ex))
 
@@ -181,19 +198,22 @@ class FakeRedisSync:
     def xrange(
         self,
         key: str,
+        minimum: str,
+        /,
         *,
-        min: str,  # noqa: A002
         count: int | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
         records = self.streams.get(key, [])
-        if min.startswith("("):
-            after_id = min[1:]
+        if minimum.startswith("("):
+            after_id = minimum[1:]
             records = [record for record in records if record[0] > after_id]
         return records if count is None else records[:count]
 
 
 @pytest.fixture
-def worker_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+def worker_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[ModuleType]:
     load_test_config(
         tmp_path,
         metric_queues={
@@ -256,7 +276,7 @@ def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
 
 
 def _configure_runner_repos(
-    worker: Any,
+    worker: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     repo: Path,
 ) -> None:
@@ -271,7 +291,7 @@ def _configure_runner_repos(
 def _load_smoke_runner_registry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker: Any,
+    worker: ModuleType,
 ) -> tuple[dict[str, Any], list[SyncedPluginRepo]]:
     load_test_config(
         tmp_path,
@@ -294,18 +314,20 @@ def _load_smoke_runner_registry(
 
 
 def _decode_stored_result(
-    worker: Any,
+    worker: ModuleType,
     redis: FakeRedisSync,
     job_id: str,
 ) -> dict[str, Any]:
     return json.loads(redis.values[worker.job_store.result_key(job_id)])
 
 
-def _decode_status(worker: Any, redis: FakeRedisSync, job_id: str) -> dict[str, Any]:
+def _decode_status(
+    worker: ModuleType, redis: FakeRedisSync, job_id: str
+) -> dict[str, Any]:
     return json.loads(redis.values[worker.job_store.status_key(job_id)])
 
 
-def test_worker_registers_only_generic_task(worker_module: Any) -> None:
+def test_worker_registers_only_generic_task(worker_module: ModuleType) -> None:
     assert worker_module.GENERIC_TASK_NAME in worker_module.celery_app.tasks
     assert "light_metric" not in worker_module.celery_app.tasks
     assert "heavy_metric" not in worker_module.celery_app.tasks
@@ -314,7 +336,7 @@ def test_worker_registers_only_generic_task(worker_module: Any) -> None:
 def test_runner_loads_only_configured_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     repo = tmp_path / "repo"
     metrics = [
@@ -336,7 +358,7 @@ def test_runner_loads_only_configured_queue(
 def test_runner_syncs_enabled_state_repos_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     config = get_config()
     directory_source = tmp_path / "directory-plugin"
@@ -382,7 +404,7 @@ def test_runner_syncs_enabled_state_repos_only(
 def test_runner_loads_repo_and_routing_from_plugin_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     store = plugin_state_store(tmp_path, get_config())
     store.delete_repo("owner__repo")
@@ -426,7 +448,7 @@ def test_runner_loads_repo_and_routing_from_plugin_state(
 def test_runner_loads_directory_source_from_copied_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     source = tmp_path / "directory-plugin"
     metrics = [_metric(name="heavy_metric", entrypoint="heavy_plugin:plugin")]
@@ -463,7 +485,7 @@ def test_runner_loads_directory_source_from_copied_snapshot(
 def test_runner_loads_smoke_directory_fixture_from_copied_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     entries, installed = _load_smoke_runner_registry(
         tmp_path,
@@ -490,7 +512,7 @@ def test_runner_loads_smoke_directory_fixture_from_copied_snapshot(
 def test_runner_uses_configured_worker_temp_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     config = load_test_config(
         tmp_path,
@@ -528,7 +550,7 @@ def test_runner_uses_configured_worker_temp_dir(
 def test_runner_fails_when_metric_queue_assignment_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     load_test_config(tmp_path, metric_queues={})
     repo = tmp_path / "repo"
@@ -559,7 +581,7 @@ def test_runner_fails_when_metric_queue_assignment_is_missing(
 def test_runner_rejects_raw_function_entrypoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     repo = tmp_path / "repo"
     metrics = [_metric(name="heavy_metric", entrypoint="raw_plugin:run")]
@@ -575,7 +597,7 @@ def test_runner_rejects_raw_function_entrypoint(
 def test_runner_rejects_stale_generated_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     repo = tmp_path / "repo"
     live_metrics = [_metric(name="heavy_metric", entrypoint="stale_plugin:plugin")]
@@ -597,7 +619,7 @@ def test_runner_rejects_stale_generated_manifest(
 def test_generic_task_executes_entrypoint_and_persists_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(
@@ -689,7 +711,7 @@ def test_generic_task_executes_entrypoint_and_persists_result(
 def test_smoke_table_metric_executes_from_directory_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
     worker_module.set_runner_temp_base(tmp_path / "tmp")
@@ -733,7 +755,7 @@ def test_smoke_table_metric_executes_from_directory_fixture(
 
 def test_unknown_metric_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
@@ -753,7 +775,7 @@ def test_unknown_metric_persists_failed_result(
 
 def test_invalid_job_envelope_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
@@ -769,9 +791,9 @@ def test_invalid_job_envelope_persists_failed_result(
 
 def test_plugin_exception_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def fail(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         msg = "boom"
         raise RuntimeError(msg)
 
@@ -809,10 +831,13 @@ def test_plugin_exception_persists_failed_result(
 )
 def test_invalid_plugin_result_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
-    plugin_result: Any,
+    worker_module: ModuleType,
+    plugin_result: TerminalJobResult | JsonObject,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> Any:  # noqa: ARG001
+    def run(
+        _job: JobEnvelope,
+        _context: WorkerRunContext,
+    ) -> TerminalJobResult | JsonObject:
         return plugin_result
 
     worker_module.RUNNER_REGISTRY["invalid_metric"] = worker_module.RunnerMetricEntry(
@@ -867,10 +892,10 @@ def test_invalid_plugin_result_persists_failed_result(
 )
 def test_invalid_table_result_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
     plugin_result: TableJobResult,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return plugin_result
 
     worker_module.RUNNER_REGISTRY["invalid_table_metric"] = (
@@ -903,9 +928,9 @@ def test_invalid_table_result_persists_failed_result(
 
 def test_worker_appends_fractional_area_column(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -940,9 +965,9 @@ def test_worker_appends_fractional_area_column(
 
 def test_worker_normalizes_fraction_within_range_tolerance(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -977,10 +1002,10 @@ def test_worker_normalizes_fraction_within_range_tolerance(
 @pytest.mark.parametrize("source_value", [-1.0, 101.0])
 def test_worker_rejects_fraction_outside_unit_interval(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
     source_value: float,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1015,9 +1040,9 @@ def test_worker_rejects_fraction_outside_unit_interval(
 
 def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1060,9 +1085,9 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
 
 def test_duplicate_resolved_location_ids_persist_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1114,9 +1139,9 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
 def test_file_result_persists_through_generic_result_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> FileJobResult:
+    def run(job: JobEnvelope, context: WorkerRunContext) -> FileJobResult:
         output_path = context.temp_dir / "result.tif"
         output_path.write_bytes(b"data")
         return FileJobResult(
@@ -1154,7 +1179,7 @@ def test_file_result_persists_through_generic_result_path(
 def test_smoke_file_metric_executes_from_directory_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
     worker_module.set_runner_temp_base(tmp_path / "tmp")
@@ -1194,11 +1219,11 @@ def test_smoke_file_metric_executes_from_directory_fixture(
 def test_invalid_file_result_persists_failed_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
     filename: str,
     media_type: str,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> FileJobResult:
+    def run(job: JobEnvelope, context: WorkerRunContext) -> FileJobResult:
         output_path = context.temp_dir / filename
         output_path.write_bytes(b"data")
         return FileJobResult(
@@ -1234,9 +1259,9 @@ def test_invalid_file_result_persists_failed_result(
 
 def test_check_cancelled_persists_cancelled_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:
         worker_module.job_store.set_job_status(job.job_id, "cancelled")
         context.check_cancelled()
         return TableJobResult(
@@ -1275,7 +1300,7 @@ def test_check_cancelled_persists_cancelled_result(
 def test_smoke_cancel_metric_respects_pre_cancelled_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
     _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
     fake_redis = FakeRedisSync()
@@ -1310,7 +1335,7 @@ def test_smoke_cancel_metric_respects_pre_cancelled_job(
 
 
 def test_run_context_emit_event_writes_progress_event(
-    worker_module: Any,
+    worker_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:

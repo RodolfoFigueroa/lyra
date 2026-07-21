@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -28,10 +28,13 @@ from lyra_app.config import (
     LYRA_POSTGRES_USER_ENV,
     ConfigSecretError,
     LyraConfig,
+    parse_config_toml,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from lyra_app.toml import TomlTable
 
 
 def _write_secrets(base: Path) -> dict[str, Path]:
@@ -49,7 +52,7 @@ def _valid_config(base: Path) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "api": {
-            "host": "0.0.0.0",
+            "host": DEFAULT_API_HOST,
             "port": 5219,
             "public_base_url": "https://lyra.example.test/",
         },
@@ -99,6 +102,11 @@ def _assert_invalid(raw: dict[str, Any], match: str) -> None:
         LyraConfig.model_validate(raw)
 
 
+def _assert_invalid_toml(raw: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        parse_config_toml(cast("TomlTable", raw))
+
+
 @pytest.fixture(autouse=True)
 def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(LYRA_POSTGRES_HOST_ENV, " postgres ")
@@ -114,7 +122,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     config = LyraConfig.model_validate(_valid_config(tmp_path))
 
     assert config.schema_version == 1
-    assert config.api.host == "0.0.0.0"
+    assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == 5219
     assert config.api.public_base_url == "https://lyra.example.test"
     assert config.api.forwarded_allow_ips == DEFAULT_FORWARDED_ALLOW_IPS
@@ -242,7 +250,7 @@ def test_config_contract_rejects_agent_secret_in_toml(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
     raw["agent"] = {"api_key": "not-here"}
 
-    _assert_invalid(raw, r"\[agent\].*environment variables")
+    _assert_invalid_toml(raw, r"\[agent\].*environment variables")
 
 
 @pytest.mark.parametrize("mount_path", ["mcp", "/mcp/"])
@@ -282,7 +290,7 @@ def test_config_contract_rejects_invalid_values(
     tmp_path: Path,
     section: str,
     field: str,
-    value: Any,
+    value: str | int,
     match: str,
 ) -> None:
     raw = _valid_config(tmp_path)
@@ -328,7 +336,7 @@ def test_config_contract_accepts_explicit_loopback_http(
     raw = _valid_config(tmp_path)
     raw["api"]["public_base_url"] = public_base_url
 
-    config = LyraConfig.model_validate(raw)
+    config = parse_config_toml(cast("TomlTable", raw))
 
     assert config.api.public_base_url == public_base_url.rstrip("/")
 
@@ -375,7 +383,7 @@ def test_config_contract_trims_queues(tmp_path: Path) -> None:
     raw["plugins"]["default_queue"] = " interactive "
     raw["workers"] = {" interactive ": {"queues": [" interactive "]}}
 
-    config = LyraConfig.model_validate(raw)
+    config = parse_config_toml(cast("TomlTable", raw))
 
     assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.plugins.default_queue == "interactive"
@@ -397,7 +405,7 @@ def test_config_contract_rejects_env_backed_toml_sections(
     raw = _valid_config(tmp_path)
     raw[section] = {}
 
-    _assert_invalid(raw, "environment variables")
+    _assert_invalid_toml(raw, "environment variables")
 
 
 def test_config_contract_rejects_default_queue_outside_allowed_queues(

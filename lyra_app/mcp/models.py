@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, Unpack
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from typing_extensions import TypeForm
 
 MAX_RUN_WAIT_SECONDS = 10.0
 MAX_RESULT_WAIT_SECONDS = 30.0
@@ -369,7 +370,7 @@ class ToolContract:
     name: str
     description: str
     input_model: type[MCPContractModel]
-    output_adapter: TypeAdapter[Any]
+    output_adapter: TypeAdapter[BaseModel]
     read_only: bool
     idempotent: bool
     open_world: bool
@@ -383,24 +384,29 @@ class ToolContract:
         return self.output_adapter.json_schema()
 
 
+class ToolBehavior(TypedDict):
+    """Behavioral annotations advertised for an MCP tool."""
+
+    read_only: bool
+    idempotent: bool
+    open_world: NotRequired[bool]
+
+
 def _contract(
     name: str,
     description: str,
     input_model: type[MCPContractModel],
-    output_type: Any,
-    *,
-    read_only: bool,
-    idempotent: bool,
-    open_world: bool = False,
+    output_type: TypeForm[BaseModel],
+    **behavior: Unpack[ToolBehavior],
 ) -> ToolContract:
     return ToolContract(
         name=name,
         description=description,
         input_model=input_model,
         output_adapter=TypeAdapter(output_type),
-        read_only=read_only,
-        idempotent=idempotent,
-        open_world=open_world,
+        read_only=behavior["read_only"],
+        idempotent=behavior["idempotent"],
+        open_world=behavior.get("open_world", False),
     )
 
 

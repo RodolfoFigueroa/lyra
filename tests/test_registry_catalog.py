@@ -1,11 +1,12 @@
 import importlib
 import json
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
+from lyra.sdk.types import JsonValue, validate_json_object
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
@@ -23,6 +24,11 @@ from tests.smoke_plugin_helpers import (
     directory_uri,
     smoke_plugin_uri,
 )
+
+
+def _json_object(value: JsonValue) -> dict[str, JsonValue]:
+    assert isinstance(value, dict)
+    return value
 
 
 def _metric(
@@ -382,7 +388,9 @@ def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
     ]
     assert table_entry is not None
     assert table_entry.queue == "interactive"
-    assert "GeoJSONLocationWrapperV3" in table_entry.request_schema["$defs"]
+    assert "GeoJSONLocationWrapperV3" in _json_object(
+        table_entry.request_schema["$defs"]
+    )
     assert table_info is not None
     assert table_info.spatial_inputs == {"location": "location"}
     assert file_entry is not None
@@ -550,7 +558,7 @@ def test_catalog_refresh_reads_v3_file_metric(
         "extensions": [".tif", ".tiff"],
     }
     assert info.request_schema["required"] == ["bounds", "year"]
-    assert "GeoJSONBoundsWrapperV3" in info.request_schema["$defs"]
+    assert "GeoJSONBoundsWrapperV3" in _json_object(info.request_schema["$defs"])
     assert entry is not None
     assert entry.queue == "heavy"
 
@@ -657,7 +665,12 @@ def test_catalog_refresh_keeps_previous_registry_when_assignment_write_fails(
     )
     store = plugin_state_store(tmp_path, get_config())
 
-    def fail_assignment(*_args: Any, **_kwargs: Any) -> object:
+    def fail_assignment(
+        _metric_repo_ids: Mapping[str, str],
+        *,
+        default_queue: str,
+    ) -> NoReturn:
+        del default_queue
         msg = "disk full"
         raise RuntimeError(msg)
 
@@ -864,10 +877,12 @@ def test_validate_metric_payload_uses_manifest_json_schema(
     )
     registry.refresh_catalog()
 
-    payload = {
-        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-        "value": 1,
-    }
+    payload = validate_json_object(
+        {
+            "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+            "value": 1,
+        }
+    )
     assert registry.validate_metric_payload("light_metric", payload) == payload
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
@@ -907,10 +922,12 @@ def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
     )
     registry.refresh_catalog()
 
-    valid_payload = {
-        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-        "value": 1,
-    }
+    valid_payload = validate_json_object(
+        {
+            "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+            "value": 1,
+        }
+    )
     assert (
         registry.validate_metric_payload("light_metric", valid_payload) == valid_payload
     )
@@ -1128,16 +1145,18 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
     )
     registry.refresh_catalog()
 
-    payload = {
-        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-        "bounds": {"data_type": "cvegeo_list", "value": ["090020001"]},
-        "value": 1,
-    }
+    payload = validate_json_object(
+        {
+            "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+            "bounds": {"data_type": "cvegeo_list", "value": ["090020001"]},
+            "value": 1,
+        }
+    )
 
     assert registry.validate_metric_payload("light_metric", payload) == payload
 
     info = registry.get_metric_info("light_metric")
     assert info is not None
-    schema_defs = info.request_schema["$defs"]
+    schema_defs = _json_object(info.request_schema["$defs"])
     assert "GeoJSONLocationWrapperV3" in schema_defs
     assert "GeoJSONBoundsWrapperV3" in schema_defs

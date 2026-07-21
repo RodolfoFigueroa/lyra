@@ -25,11 +25,7 @@ build-backend = "hatchling.build"
 packages = ["lyra_app"]
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "lyra_app",
-    "LICENSE",
-    "README.md",
-]
+include = ["lyra_app", "LICENSE", "README.md"]
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -42,7 +38,7 @@ lyra-tui = { workspace = true }
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D", "S104", "PLR0913", "PLR2004", "C901", "ANN401", "COM812"]
+ignore = ["D", "PLR2004", "COM812"]
 per-file-ignores = { "tests/**/*.py" = ["S101"] }
 
 

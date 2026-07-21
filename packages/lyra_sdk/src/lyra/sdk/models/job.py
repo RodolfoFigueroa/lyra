@@ -1,7 +1,19 @@
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Annotated, Any, Literal, Self
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    Self,
+    TypeAlias,
+    TypedDict,
+    TypeGuard,
+    TypeVar,
+    Unpack,
+)
 
 from lyra.sdk.models.plugin_v3 import (
     OutputSpecV3,
@@ -11,6 +23,7 @@ from lyra.sdk.models.plugin_v3 import (
     expand_table_output_columns,
 )
 from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.types import JsonValue
 from pydantic import Field, TypeAdapter, model_validator
 
 JobLifecycleStatus = Literal[
@@ -27,6 +40,32 @@ RawResultFormat = Literal["terminal_json", "jsonl"]
 
 DEFAULT_RESULT_PREVIEW_ROWS = 20
 DEFAULT_RESULT_INDEX_FIELD = "_result_index"
+
+
+class _Stringable(Protocol):
+    def __str__(self) -> str: ...
+
+
+class _MatrixLike(Protocol):
+    def tolist(self) -> list[list[JsonValue]]: ...
+
+
+class DataFrameLike(Protocol):
+    index: Iterable[_Stringable]
+    columns: Iterable[_Stringable]
+
+    def to_numpy(self) -> _MatrixLike: ...
+
+
+class SeriesLike(Protocol):
+    name: str | None
+    index: Iterable[_Stringable]
+
+    def tolist(self) -> list[JsonValue]: ...
+
+
+MappingValueT = TypeVar("MappingValueT")
+AxisValue: TypeAlias = str | int | float | bool
 
 
 class RowIdentityMetadata(StrictBaseModel):
@@ -70,7 +109,7 @@ class JobRunProvenance(StrictBaseModel):
     )
 
 
-def _string_axis_values(values: Iterable[Any], *, axis: str) -> list[str]:
+def _string_axis_values(values: Iterable[_Stringable], *, axis: str) -> list[str]:
     string_values = [str(value) for value in values]
     if len(string_values) != len(set(string_values)):
         msg = f"table {axis} values must be unique after string conversion"
@@ -78,24 +117,36 @@ def _string_axis_values(values: Iterable[Any], *, axis: str) -> list[str]:
     return string_values
 
 
-def _string_keyed_mapping(values: Mapping[Any, Any], *, axis: str) -> dict[str, Any]:
+def _string_keyed_mapping(
+    values: Mapping[str, MappingValueT],
+    *,
+    axis: str,
+) -> dict[str, MappingValueT]:
     string_keys = _string_axis_values(values.keys(), axis=axis)
     return dict(zip(string_keys, values.values(), strict=True))
 
 
-def _is_sequence_values(values: Any) -> bool:
+def _is_sequence_values(
+    values: Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
+) -> bool:
     return isinstance(values, Sequence) and not isinstance(
         values,
         str | bytes | bytearray,
     )
 
 
+def _is_mapping_values(
+    values: Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
+) -> TypeGuard[Mapping[AxisValue, JsonValue]]:
+    return isinstance(values, Mapping)
+
+
 def _mapping_column_values(
     column: str,
-    column_values: Mapping[Any, Any] | Sequence[Any],
-    input_index: Sequence[Any],
-) -> list[Any]:
-    if isinstance(column_values, Mapping):
+    column_values: Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
+    input_index: Sequence[AxisValue],
+) -> list[JsonValue]:
+    if _is_mapping_values(column_values):
         try:
             return [column_values[feature_id] for feature_id in input_index]
         except KeyError as exc:
@@ -170,7 +221,7 @@ class TableJobResult(StrictBaseModel):
     )
 
     @classmethod
-    def from_dataframe(cls, job_id: str, dataframe: Any) -> Self:
+    def from_dataframe(cls, job_id: str, dataframe: DataFrameLike) -> Self:
         """Build a table result from a pandas-like DataFrame."""
 
         return cls(
@@ -184,7 +235,7 @@ class TableJobResult(StrictBaseModel):
     def from_series(
         cls,
         job_id: str,
-        series: Any,
+        series: SeriesLike,
         *,
         name: str | None = None,
     ) -> Self:
@@ -202,9 +253,12 @@ class TableJobResult(StrictBaseModel):
     def from_mapping(
         cls,
         job_id: str,
-        input_index: Iterable[Any],
+        input_index: Iterable[AxisValue],
         columns: Sequence[str],
-        values: Mapping[str, Mapping[Any, Any] | Sequence[Any]],
+        values: Mapping[
+            str,
+            Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
+        ],
     ) -> Self:
         """Build a table result from values keyed by the original input index."""
 
@@ -313,7 +367,7 @@ _TERMINAL_JOB_RESULT_ADAPTER: TypeAdapter[TerminalJobResult] = TypeAdapter(
 )
 
 
-def parse_job_result(payload: Any) -> TerminalJobResult:
+def parse_job_result(payload: JsonValue) -> TerminalJobResult:
     """Parse a terminal job result payload into the discriminated result union."""
 
     return _TERMINAL_JOB_RESULT_ADAPTER.validate_python(payload)
@@ -590,11 +644,11 @@ def build_table_preview(
     )
 
 
-def _is_nullish(value: Any) -> bool:
+def _is_nullish(value: JsonValue) -> bool:
     return value is None or (isinstance(value, float) and not math.isfinite(value))
 
 
-def _is_finite_number(value: Any) -> bool:
+def _is_finite_number(value: JsonValue) -> bool:
     return (
         isinstance(value, int | float)
         and not isinstance(value, bool)
@@ -646,18 +700,29 @@ def build_table_summary(result: TableJobResult) -> ResultSummary:
     )
 
 
+class ResultDescriptorOptions(TypedDict):
+    """Optional provenance, lifetime, and access settings for a result descriptor."""
+
+    completed_at: datetime
+    provenance: NotRequired[JobRunProvenance | None]
+    lifetime: NotRequired[ResultLifetime | None]
+    terminal_json_path: NotRequired[str | None]
+    jsonl_path: NotRequired[str | None]
+    preview_row_limit: NotRequired[int]
+
+
 def build_result_descriptor(
     result: TerminalJobResult,
-    *,
-    completed_at: datetime,
-    provenance: JobRunProvenance | None = None,
-    lifetime: ResultLifetime | None = None,
-    terminal_json_path: str | None = None,
-    jsonl_path: str | None = None,
-    preview_row_limit: int = DEFAULT_RESULT_PREVIEW_ROWS,
+    **options: Unpack[ResultDescriptorOptions],
 ) -> ResultDescriptor:
     """Build an agent-facing descriptor from a terminal result."""
 
+    completed_at = options["completed_at"]
+    provenance = options.get("provenance")
+    lifetime = options.get("lifetime")
+    terminal_json_path = options.get("terminal_json_path")
+    jsonl_path = options.get("jsonl_path")
+    preview_row_limit = options.get("preview_row_limit", DEFAULT_RESULT_PREVIEW_ROWS)
     result_ref = result_ref_for_job(result.job_id)
     resolved_terminal_json_path = terminal_json_path or f"/jobs/{result.job_id}/result"
     resolved_lifetime = lifetime or ResultLifetime()

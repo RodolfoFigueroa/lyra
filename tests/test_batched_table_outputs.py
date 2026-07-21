@@ -1,8 +1,8 @@
+from __future__ import annotations
+
 import importlib
 import json
-from collections.abc import Iterator
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from lyra.sdk.models import JobEnvelope, TableJobResult, expand_table_output_columns
@@ -12,6 +12,13 @@ from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from tests.config_helpers import load_test_config, plugin_state_store
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+    from types import ModuleType
+
+    from lyra_app.worker import WorkerRunContext
 
 
 def _v3_batched_manifest() -> dict[str, Any]:
@@ -126,7 +133,9 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        if nx and key in self.values:
+            return
         self.values[key] = value
         self.expirations.append((key, ex))
 
@@ -168,7 +177,7 @@ def reset_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[N
 
 
 @pytest.fixture
-def worker_module(tmp_path: Path) -> Any:
+def worker_module(tmp_path: Path) -> Iterator[ModuleType]:
     worker = importlib.import_module("lyra_app.worker")
     worker.RUNNER_REGISTRY.clear()
     worker.set_runner_temp_base(tmp_path / "runner-temp")
@@ -178,7 +187,7 @@ def worker_module(tmp_path: Path) -> Any:
 
 
 def _decode_stored_result(
-    worker: Any,
+    worker: ModuleType,
     redis: FakeRedisSync,
     job_id: str,
 ) -> dict[str, Any]:
@@ -238,9 +247,9 @@ def test_sdk_expands_batched_column_descriptions_from_label_or_key() -> None:
 
 def test_batched_table_result_expands_columns_from_key_order(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -296,9 +305,9 @@ def test_batched_table_result_expands_columns_from_key_order(
 
 def test_mixed_static_and_batched_table_result_persists_success(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -364,11 +373,11 @@ def test_mixed_static_and_batched_table_result_persists_success(
 )
 def test_invalid_batched_table_columns_persist_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
     columns: list[str],
     data: list[list[float]],
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -418,10 +427,10 @@ def test_invalid_batched_table_columns_persist_failed_result(
 @pytest.mark.parametrize("value", ["wrong", None])
 def test_invalid_batched_table_values_persist_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
-    value: Any,
+    worker_module: ModuleType,
+    value: str | None,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -476,11 +485,11 @@ def test_invalid_batched_table_values_persist_failed_result(
 )
 def test_invalid_batched_source_values_persist_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
     source_value: dict[str, Any],
     match: str,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -519,9 +528,9 @@ def test_invalid_batched_source_values_persist_failed_result(
 
 def test_batched_table_generated_column_collision_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
-    worker_module: Any,
+    worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: Any) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],

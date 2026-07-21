@@ -6,23 +6,29 @@ import logging
 import os
 import re
 import tempfile
-import tomllib
 from pathlib import Path
-from typing import Any, Literal, Self
+from tomllib import TOMLDecodeError
+from typing import Literal, Self
 from urllib.parse import urlparse, urlsplit
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationError,
     field_validator,
     model_validator,
 )
 
+from lyra_app.toml import (
+    TomlNormalizationError,
+    TomlTable,
+    load_normalized_toml,
+    normalize_toml_table,
+)
+
 LYRA_DATA_DIR = Path("/lyra_data")
 DEFAULT_CONFIG_PATH = LYRA_DATA_DIR / "config" / "lyra.toml"
-DEFAULT_API_HOST = "0.0.0.0"
+DEFAULT_API_HOST = str(ipaddress.IPv4Address(0))
 DEFAULT_API_PORT = 5219
 DEFAULT_FORWARDED_ALLOW_IPS = ["127.0.0.1"]
 DEFAULT_JOB_STORE_TTL_SECONDS = 600
@@ -68,24 +74,10 @@ _CONFIG_CACHE: LyraConfig | None = None
 _CONFIG_CACHE_PATH: Path | None = None
 
 
-def _strip_required_string(value: Any) -> Any:
-    if not isinstance(value, str):
-        return value
-
+def _strip_required_string(value: str) -> str:
     stripped = value.strip()
     if not stripped:
         msg = "value must be a non-empty string"
-        raise ValueError(msg)
-    return stripped
-
-
-def _strip_optional_path(value: Any) -> Any:
-    if value is None or not isinstance(value, str):
-        return value
-
-    stripped = value.strip()
-    if not stripped:
-        msg = "path must be a non-empty string"
         raise ValueError(msg)
     return stripped
 
@@ -97,25 +89,8 @@ def _validate_absolute_path(path: Path | None) -> Path | None:
     return path
 
 
-def _strip_string_list(value: Any) -> Any:
-    if not isinstance(value, list):
-        return value
-
+def _strip_string_list(value: list[str]) -> list[str]:
     return [_strip_required_string(item) for item in value]
-
-
-def _strip_string_mapping(value: Any, *, value_label: str) -> Any:
-    if not isinstance(value, dict):
-        return value
-
-    stripped_items: dict[Any, Any] = {}
-    for raw_key, raw_value in value.items():
-        key = _strip_required_string(raw_key)
-        if key in stripped_items:
-            msg = f"duplicate {value_label} key after trimming whitespace: {key!r}"
-            raise ValueError(msg)
-        stripped_items[key] = _strip_required_string(raw_value)
-    return stripped_items
 
 
 def read_scalar_env_var(env_var: str, *, field_name: str) -> str:
@@ -185,14 +160,14 @@ class ApiConfig(StrictConfigModel):
         description="Proxy IP addresses or CIDRs trusted to set forwarded headers.",
     )
 
-    @field_validator("host", "public_base_url", mode="before")
+    @field_validator("host", "public_base_url")
     @classmethod
-    def normalize_required_strings(cls, value: Any) -> Any:
+    def normalize_required_strings(cls, value: str) -> str:
         return _strip_required_string(value)
 
-    @field_validator("forwarded_allow_ips", mode="before")
+    @field_validator("forwarded_allow_ips")
     @classmethod
-    def normalize_forwarded_allow_ips(cls, value: Any) -> Any:
+    def normalize_forwarded_allow_ips(cls, value: list[str]) -> list[str]:
         return _strip_string_list(value)
 
     @field_validator("public_base_url")
@@ -249,9 +224,9 @@ class RedisConfig(StrictConfigModel):
         description="Redis URL used by Celery and the retained job store.",
     )
 
-    @field_validator("url", mode="before")
+    @field_validator("url")
     @classmethod
-    def normalize_url(cls, value: Any) -> Any:
+    def normalize_url(cls, value: str) -> str:
         return _strip_required_string(value)
 
     @field_validator("url")
@@ -385,9 +360,9 @@ class DatabaseConfig(StrictConfigModel):
         description="Pool settings created inside each worker process.",
     )
 
-    @field_validator("host", "name", "user", "password", mode="before")
+    @field_validator("host", "name", "user", "password")
     @classmethod
-    def validate_required_strings(cls, value: Any) -> Any:
+    def validate_required_strings(cls, value: str) -> str:
         return _strip_required_string(value)
 
     def read_password(self) -> str:
@@ -404,15 +379,10 @@ class EarthEngineConfig(StrictConfigModel):
         description="Absolute path to the Earth Engine service-account JSON.",
     )
 
-    @field_validator("project", mode="before")
+    @field_validator("project")
     @classmethod
-    def validate_project(cls, value: Any) -> Any:
+    def validate_project(cls, value: str) -> str:
         return _strip_required_string(value)
-
-    @field_validator("service_account_file", mode="before")
-    @classmethod
-    def normalize_service_account_file(cls, value: Any) -> Any:
-        return _strip_optional_path(value)
 
     @field_validator("service_account_file")
     @classmethod
@@ -435,9 +405,9 @@ class AdminConfig(StrictConfigModel):
         description="Admin Bearer key supplied by LYRA_ADMIN_API_KEY.",
     )
 
-    @field_validator("api_key", mode="before")
+    @field_validator("api_key")
     @classmethod
-    def normalize_api_key(cls, value: Any) -> Any:
+    def normalize_api_key(cls, value: str) -> str:
         return _strip_required_string(value)
 
     def read_api_key(self) -> str:
@@ -455,9 +425,9 @@ class AgentConfig(StrictConfigModel):
         description="Agent Bearer key supplied by LYRA_AGENT_API_KEY.",
     )
 
-    @field_validator("api_key", mode="before")
+    @field_validator("api_key")
     @classmethod
-    def normalize_api_key(cls, value: Any) -> Any:
+    def normalize_api_key(cls, value: str) -> str:
         return _strip_required_string(value)
 
     def read_api_key(self) -> str:
@@ -474,9 +444,9 @@ class McpConfig(StrictConfigModel):
         description="Absolute URL path at which the MCP server is mounted.",
     )
 
-    @field_validator("mount_path", mode="before")
+    @field_validator("mount_path")
     @classmethod
-    def normalize_mount_path(cls, value: Any) -> Any:
+    def normalize_mount_path(cls, value: str) -> str:
         return _strip_required_string(value)
 
     @field_validator("mount_path")
@@ -501,11 +471,11 @@ class LoggingConfig(StrictConfigModel):
         description="Optional absolute log file; omit to log to standard output.",
     )
 
-    @field_validator("level", mode="before")
+    @field_validator("level")
     @classmethod
-    def normalize_level(cls, value: Any) -> Any:
+    def normalize_level(cls, value: str) -> str:
         value = _strip_required_string(value)
-        return value.upper() if isinstance(value, str) else value
+        return value.upper()
 
     @field_validator("level")
     @classmethod
@@ -515,11 +485,6 @@ class LoggingConfig(StrictConfigModel):
             msg = f"logging.level must be one of: {levels}"
             raise ValueError(msg)
         return value
-
-    @field_validator("file", mode="before")
-    @classmethod
-    def normalize_file(cls, value: Any) -> Any:
-        return _strip_optional_path(value)
 
     @field_validator("file")
     @classmethod
@@ -572,9 +537,9 @@ class PluginsConfig(StrictConfigModel):
         description="Plugin sources seeded only when plugin state is absent.",
     )
 
-    @field_validator("allowed_queues", "initial_repos", mode="before")
+    @field_validator("allowed_queues", "initial_repos")
     @classmethod
-    def normalize_string_lists(cls, value: Any) -> Any:
+    def normalize_string_lists(cls, value: list[str]) -> list[str]:
         return _strip_string_list(value)
 
     @field_validator("initial_repos")
@@ -588,11 +553,6 @@ class PluginsConfig(StrictConfigModel):
         PluginState(repos=[make_repo_record(source) for source in value])
         return value
 
-    @field_validator("catalog_dir", "runner_base_dir", mode="before")
-    @classmethod
-    def normalize_paths(cls, value: Any) -> Any:
-        return _strip_optional_path(value)
-
     @field_validator("catalog_dir", "runner_base_dir")
     @classmethod
     def validate_paths(cls, value: Path) -> Path:
@@ -602,9 +562,9 @@ class PluginsConfig(StrictConfigModel):
             raise ValueError(msg)
         return path
 
-    @field_validator("default_queue", mode="before")
+    @field_validator("default_queue")
     @classmethod
-    def normalize_default_queue(cls, value: Any) -> Any:
+    def normalize_default_queue(cls, value: str) -> str:
         return _strip_required_string(value)
 
     @model_validator(mode="after")
@@ -636,15 +596,10 @@ class WorkerConfig(StrictConfigModel):
         description="Optional absolute per-job temporary-file parent directory.",
     )
 
-    @field_validator("queues", mode="before")
+    @field_validator("queues")
     @classmethod
-    def normalize_queues(cls, value: Any) -> Any:
+    def normalize_queues(cls, value: list[str]) -> list[str]:
         return _strip_string_list(value)
-
-    @field_validator("install_dir", "temp_dir", mode="before")
-    @classmethod
-    def normalize_paths(cls, value: Any) -> Any:
-        return _strip_optional_path(value)
 
     @field_validator("install_dir", "temp_dir")
     @classmethod
@@ -689,36 +644,6 @@ class LyraConfig(StrictConfigModel):
         description="Named worker pool definitions.",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def reject_env_backed_sections(cls, value: Any) -> Any:
-        if isinstance(value, dict):
-            configured_sections = sorted(
-                set(value.keys()) & _ENV_BACKED_CONFIG_SECTIONS
-            )
-            if configured_sections:
-                sections = ", ".join(f"[{section}]" for section in configured_sections)
-                msg = (
-                    f"{sections} settings are configured through environment "
-                    "variables, not lyra.toml"
-                )
-                raise ValueError(msg)
-            database = value.get("database")
-            if isinstance(database, dict):
-                configured_fields = sorted(set(database) & _DATABASE_ENV_BACKED_FIELDS)
-                if configured_fields:
-                    fields = ", ".join(
-                        f"database.{field}" for field in configured_fields
-                    )
-                    msg = f"{fields} are configured through environment variables"
-                    raise ValueError(msg)
-        return value
-
-    @field_validator("workers", mode="before")
-    @classmethod
-    def normalize_workers(cls, value: Any) -> Any:
-        return _strip_string_mapping(value, value_label="worker")
-
     @model_validator(mode="after")
     def validate_worker_queues(self) -> Self:
         allowed_queues = set(self.plugins.allowed_queues)
@@ -744,9 +669,6 @@ class LyraConfig(StrictConfigModel):
 
     def get_worker(self, name: str) -> WorkerConfig:
         worker_name = _strip_required_string(name)
-        if not isinstance(worker_name, str):
-            msg = "worker name must be a string"
-            raise TypeError(msg)
         try:
             return self.workers[worker_name]
         except KeyError as exc:
@@ -755,17 +677,11 @@ class LyraConfig(StrictConfigModel):
 
     def worker_install_dir(self, name: str) -> Path:
         worker_name = _strip_required_string(name)
-        if not isinstance(worker_name, str):
-            msg = "worker name must be a string"
-            raise TypeError(msg)
         worker = self.get_worker(worker_name)
         return worker.install_dir or self.plugins.runner_base_dir / worker_name
 
     def worker_temp_dir(self, name: str) -> Path:
         worker_name = _strip_required_string(name)
-        if not isinstance(worker_name, str):
-            msg = "worker name must be a string"
-            raise TypeError(msg)
         worker = self.get_worker(worker_name)
         return worker.temp_dir or LYRA_DATA_DIR / "cache" / "jobs" / worker_name
 
@@ -794,25 +710,56 @@ def ensure_runtime_directories(config: LyraConfig) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+def _reject_env_backed_config(raw_config: TomlTable) -> None:
+    configured_sections = sorted(set(raw_config) & _ENV_BACKED_CONFIG_SECTIONS)
+    if configured_sections:
+        sections = ", ".join(f"[{section}]" for section in configured_sections)
+        msg = (
+            f"{sections} settings are configured through environment variables, "
+            "not lyra.toml"
+        )
+        raise ValueError(msg)
+
+    database = raw_config.get("database")
+    if not isinstance(database, dict):
+        return
+    configured_fields = sorted(set(database) & _DATABASE_ENV_BACKED_FIELDS)
+    if configured_fields:
+        fields = ", ".join(f"database.{field}" for field in configured_fields)
+        msg = f"{fields} are configured through environment variables"
+        raise ValueError(msg)
+
+
+def parse_config_toml(raw_config: TomlTable) -> LyraConfig:
+    """Normalize and validate one TOML document as the runtime configuration."""
+
+    raw_config = normalize_toml_table(raw_config)
+    _reject_env_backed_config(raw_config)
+    return LyraConfig.model_validate(raw_config)
+
+
 def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
     config_path = Path(path)
     try:
         with config_path.open("rb") as config_file:
-            raw_config = tomllib.load(config_file)
+            raw_config = load_normalized_toml(config_file)
     except FileNotFoundError as exc:
         msg = f"Lyra config file does not exist: {config_path}"
         raise ConfigLoadError(msg) from exc
-    except tomllib.TOMLDecodeError as exc:
+    except TOMLDecodeError as exc:
         msg = f"Lyra config file is not valid TOML: {config_path}: {exc}"
+        raise ConfigLoadError(msg) from exc
+    except TomlNormalizationError as exc:
+        msg = f"Lyra config file failed normalization: {config_path}: {exc}"
         raise ConfigLoadError(msg) from exc
     except OSError as exc:
         msg = f"Lyra config file could not be read: {config_path}"
         raise ConfigLoadError(msg) from exc
 
     try:
-        config = LyraConfig.model_validate(raw_config)
+        config = parse_config_toml(raw_config)
         validate_config_secret_references(config)
-    except ValidationError as exc:
+    except ValueError as exc:
         msg = f"Lyra config file failed validation: {config_path}: {exc}"
         raise ConfigLoadError(msg) from exc
     except ConfigSecretError as exc:

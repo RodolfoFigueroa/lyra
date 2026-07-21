@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, cast
 from uuid import uuid4
 
 from anyio import Path
@@ -44,6 +44,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
+    from lyra_app.job_submission import SubmissionRedisClient
+
+DatabaseRuntimeDependency = Annotated[
+    "ApplicationDatabaseRuntime | None", Depends(get_database_runtime)
+]
 
 router = APIRouter(tags=["Jobs"], dependencies=[Depends(require_agent_key)])
 
@@ -146,7 +151,7 @@ async def create_job(
     try:
         return await submit_job(
             request,
-            client=redis_client,
+            client=cast("SubmissionRedisClient", redis_client),
             dispatcher=celery_app,
             job_id_factory=lambda: uuid4().hex,
             database=database,
@@ -192,7 +197,7 @@ async def create_job(
 )
 async def create_job_route(
     request: JobCreateRequest,
-    database: Annotated[Any, Depends(get_database_runtime)],
+    database: DatabaseRuntimeDependency,
 ) -> JobCreateResponse:
     return await create_job(request, database)
 

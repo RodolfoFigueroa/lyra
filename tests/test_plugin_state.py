@@ -243,7 +243,7 @@ def test_make_repo_record_normalizes_directory_source_and_serializes(
         ),
         (
             {"metric_queues": {" ": "interactive"}},
-            "metric name must be a non-empty string",
+            "valid dictionary",
         ),
         (
             {"metric_queues": {"metric": {"queue": " ", "repo_id": "repo-one"}}},

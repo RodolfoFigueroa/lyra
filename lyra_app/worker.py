@@ -4,9 +4,9 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from celery import Task
+from lyra.sdk.db import LyraDB
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -28,7 +28,9 @@ from lyra.sdk.models.plugin_v3 import (
     expand_runner_table_output_columns,
     expand_table_output_columns,
 )
-from lyra.sdk.plugin import PluginDefinition
+from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.plugin import PluginDefinition, PluginResult
+from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app import job_store
@@ -42,6 +44,7 @@ from lyra_app.plugin_state import (
 )
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
+    SyncedPluginRepo,
     install_runner_plugins,
     sync_plugin_repos,
 )
@@ -52,9 +55,7 @@ logger = logging.getLogger(__name__)
 GENERIC_TASK_NAME = "lyra.run_metric"
 FRACTION_RANGE_TOLERANCE = 1e-9
 
-MetricRunCallable = Callable[
-    [JobEnvelope, "WorkerRunContext"], TerminalJobResult | dict[str, Any]
-]
+MetricRunCallable = Callable[[JobEnvelope, "WorkerRunContext"], PluginResult]
 
 
 @dataclass(frozen=True)
@@ -72,9 +73,9 @@ class WorkerRunContext:
     metric: str
     logger: logging.Logger
     temp_dir: Path
-    db: Any | None
+    db: LyraDB | None
 
-    def emit_event(self, event: str, data: dict[str, Any] | None = None) -> None:
+    def emit_event(self, event: str, data: JsonObject | None = None) -> None:
         job_store.append_job_event(
             self.job_id,
             event,
@@ -150,7 +151,7 @@ def _runner_sync_repos(
     worker_name: str,
     config: LyraConfig,
     state: PluginState,
-) -> list[Any]:
+) -> list[SyncedPluginRepo]:
     raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
     return sync_plugin_repos(
         config.worker_install_dir(worker_name),
@@ -273,7 +274,7 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
     )
 
 
-def _build_db_context() -> Any | None:
+def _build_db_context() -> LyraDB | None:
     try:
         from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
         from lyra_app.db.connection import get_worker_engine  # noqa: PLC0415
@@ -283,7 +284,7 @@ def _build_db_context() -> Any | None:
     return LyraDBImplicit(get_worker_engine())
 
 
-def _job_id_from_payload(payload: Any, fallback: str) -> str:
+def _job_id_from_payload(payload: JsonValue, fallback: str) -> str:
     if isinstance(payload, dict):
         job_id = payload.get("job_id")
         if isinstance(job_id, str) and job_id:
@@ -306,12 +307,12 @@ def _persist_result(
     result: TerminalJobResult,
     *,
     metric: str | None = None,
-) -> dict[str, Any]:
+) -> JsonObject:
     return job_store.save_job_result(result, metric=metric)
 
 
 def _cell_error(
-    value: Any,
+    value: JsonValue,
     column_type: OutputColumnTypeV3,
     *,
     nullable: bool,
@@ -374,6 +375,40 @@ def _validate_table_values(
     return None
 
 
+def _fractional_area_value(
+    source_value: JsonValue,
+    area: float,
+    feature_id: str,
+    column_name: str,
+    job_id: str,
+) -> float | None | FailedJobResult:
+    if source_value is None:
+        return None
+    if not math.isfinite(area) or area <= 0:
+        return _failed_result(
+            job_id,
+            "invalid_result",
+            f"Location area for feature {feature_id!r} must be positive.",
+        )
+    if not isinstance(source_value, int | float | str):
+        return _failed_result(
+            job_id,
+            "invalid_result",
+            f"Source column {column_name!r} must contain numeric values.",
+        )
+    fraction = float(source_value) / area
+    if fraction < -FRACTION_RANGE_TOLERANCE or fraction > 1 + FRACTION_RANGE_TOLERANCE:
+        return _failed_result(
+            job_id,
+            "invalid_result",
+            (
+                f"Derived fraction for feature {feature_id!r}, source "
+                f"column {column_name!r} is outside [0, 1]: {fraction}."
+            ),
+        )
+    return min(1.0, max(0.0, fraction))
+
+
 def _derive_fractional_area_columns(
     result: TableJobResult,
     job: JobEnvelope,
@@ -397,7 +432,7 @@ def _derive_fractional_area_columns(
         )
 
     derived_columns: list[str] = []
-    derived_data: list[list[Any]] = [[] for _ in result.data]
+    derived_data: list[list[JsonValue]] = [[] for _ in result.data]
     for column_position, column in enumerate(runner_columns):
         derived_columns.append(column.name)
         for row_position, row in enumerate(result.data):
@@ -408,32 +443,16 @@ def _derive_fractional_area_columns(
             for row_position, (feature_id, row) in enumerate(
                 zip(result.index, result.data, strict=True)
             ):
-                source_value = row[column_position]
-                if source_value is None:
-                    derived_data[row_position].append(None)
-                    continue
-
-                area = areas[feature_id]
-                if not math.isfinite(area) or area <= 0:
-                    return _failed_result(
-                        job.job_id,
-                        "invalid_result",
-                        f"Location area for feature {feature_id!r} must be positive.",
-                    )
-                fraction = float(source_value) / area
-                if (
-                    fraction < -FRACTION_RANGE_TOLERANCE
-                    or fraction > 1 + FRACTION_RANGE_TOLERANCE
-                ):
-                    return _failed_result(
-                        job.job_id,
-                        "invalid_result",
-                        (
-                            f"Derived fraction for feature {feature_id!r}, source "
-                            f"column {column.name!r} is outside [0, 1]: {fraction}."
-                        ),
-                    )
-                derived_data[row_position].append(min(1.0, max(0.0, fraction)))
+                value = _fractional_area_value(
+                    row[column_position],
+                    areas[feature_id],
+                    feature_id,
+                    column.name,
+                    job.job_id,
+                )
+                if isinstance(value, FailedJobResult):
+                    return value
+                derived_data[row_position].append(value)
 
     return TableJobResult(
         job_id=result.job_id,
@@ -595,13 +614,24 @@ def _validate_success_result(
 
 
 def _normalise_plugin_result(
-    raw_result: Any,
+    raw_result: PluginResult,
     job: JobEnvelope,
     entry: RunnerMetricEntry,
     context: WorkerRunContext,
 ) -> TerminalJobResult:
     try:
-        result = parse_job_result(raw_result)
+        result = (
+            raw_result
+            if isinstance(
+                raw_result,
+                TableJobResult | FileJobResult | FailedJobResult | CancelledJobResult,
+            )
+            else parse_job_result(
+                raw_result.model_dump(mode="json")
+                if isinstance(raw_result, StrictBaseModel)
+                else raw_result
+            )
+        )
     except PydanticValidationError as exc:
         return _failed_result(job.job_id, "invalid_result", str(exc))
 
@@ -614,7 +644,7 @@ def _normalise_plugin_result(
     return _validate_success_result(result, job, entry.output, context)
 
 
-def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
+def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
     fallback_job_id = _job_id_from_payload(envelope_payload, task_id)
     try:
         job = JobEnvelope.model_validate(envelope_payload)
@@ -661,7 +691,7 @@ def execute_job(envelope_payload: Any, *, task_id: str) -> dict[str, Any]:
 
 
 @celery_app.task(name=GENERIC_TASK_NAME, bind=True)
-def run_metric_task(self: Task, envelope_payload: dict[str, Any]) -> dict[str, Any]:
+def run_metric_task(self: Task, envelope_payload: JsonObject) -> JsonObject:
     task_id = str(getattr(self.request, "id", "") or "unknown-job")
     return execute_job(envelope_payload, task_id=task_id)
 

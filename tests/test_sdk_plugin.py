@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import pytest
 from jsonschema.validators import validator_for
@@ -25,6 +25,16 @@ from lyra.sdk.models.plugin_v3 import (
     TableOutputV3,
 )
 from pydantic import AfterValidator, BaseModel, Field
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from lyra.sdk.types import JsonValue
+
+
+def _json_object(value: JsonValue) -> dict[str, JsonValue]:
+    assert isinstance(value, dict)
+    return value
 
 
 def _feature_collection() -> dict[str, Any]:
@@ -183,6 +193,7 @@ def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:
     assert received["mode"] == "fast"
     assert received["threshold"] is None
     assert received["context"] is context
+    assert isinstance(result, TableJobResult)
     assert result.data == [[3]]
 
     description = plugin.describe("example")
@@ -226,7 +237,7 @@ def test_bounds_and_nested_model_compile_and_parse() -> None:
         entrypoint="example.metrics:plugin",
     )
     schema = compiled.metrics[0].request_schema
-    assert any(name.endswith("__YearRange") for name in schema["$defs"])
+    assert any(name.endswith("__YearRange") for name in _json_object(schema["$defs"]))
     validator_for(schema).check_schema(schema)
 
     context = FakeContext(metric="file_like")
@@ -248,6 +259,7 @@ def test_bounds_and_nested_model_compile_and_parse() -> None:
 
     assert isinstance(received["bounds"], SingleGeoJSON)
     assert isinstance(received["options"], Options)
+    assert isinstance(result, TableJobResult)
     assert result.data == [[2]]
 
 
@@ -313,12 +325,16 @@ def test_batch_inputs_generate_contract_and_parse_items() -> None:
         plugin=PluginInfoV3(name="batch-plugin", version="1.0.0"),
         entrypoint="batch.metrics:plugin",
     )
-    batch_schema = compiled.metrics[0].request_schema["properties"]["categories"]
-    assert batch_schema["description"].startswith("Keyed batch values")
-    assert batch_schema["items"]["properties"]["value"]["description"] == (
-        "Category identifier."
-    )
-    assert batch_schema["items"]["properties"]["value"]["examples"] == ["park"]
+    properties = _json_object(compiled.metrics[0].request_schema["properties"])
+    batch_schema = _json_object(properties["categories"])
+    description = batch_schema["description"]
+    assert isinstance(description, str)
+    assert description.startswith("Keyed batch values")
+    items = _json_object(batch_schema["items"])
+    item_properties = _json_object(items["properties"])
+    value_schema = _json_object(item_properties["value"])
+    assert value_schema["description"] == "Category identifier."
+    assert value_schema["examples"] == ["park"]
 
     plugin(
         JobEnvelope(
@@ -542,9 +558,9 @@ def test_input_supports_custom_validators_and_json_schema_metadata() -> None:
         plugin=PluginInfoV3(name="custom-plugin", version="1.0.0"),
         entrypoint="custom.metrics:plugin",
     )
-    assert compiled.metrics[0].request_schema["properties"]["value"]["x-lyra-ui"] == {
-        "widget": "slider"
-    }
+    properties = _json_object(compiled.metrics[0].request_schema["properties"])
+    value_schema = _json_object(properties["value"])
+    assert value_schema["x-lyra-ui"] == {"widget": "slider"}
 
     with pytest.raises(PluginDefinitionError, match="value must be even"):
         plugin(
@@ -577,7 +593,7 @@ def test_input_authoring_models_validate_configuration() -> None:
     ],
 )
 def test_invalid_metric_signatures_fail_at_registration(
-    function: Any,
+    function: Callable[..., JsonValue | tuple[JsonValue, ...]],
     match: str,
 ) -> None:
     plugin = PluginDefinition()

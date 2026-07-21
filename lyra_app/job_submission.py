@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, Unpack, cast
 from uuid import uuid4
 
 from lyra.sdk.models import (
@@ -16,7 +16,7 @@ from lyra.sdk.models import (
     PluginInfoV3,
 )
 from lyra.sdk.models.geometry import GeoJSON
-from lyra.sdk.models.plugin_v3 import TableOutputV3
+from lyra.sdk.models.plugin_v3 import OutputSpecV3, TableOutputV3
 from lyra.utils.geometry import calculate_feature_areas_m2
 from redis.exceptions import RedisError
 
@@ -32,11 +32,14 @@ from lyra_app.spatial_inputs import (
 GENERIC_TASK_NAME = "lyra.run_metric"
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
+    from celery.result import AsyncResult
     from lyra.sdk.models.plugin_v3 import SpatialInputKindV3
+    from lyra.sdk.types import JsonObject, JsonValue
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
+    from lyra_app.registry import MetricRegistryEntry
     from lyra_app.spatial_inputs import SpatialInputResolution
 
 
@@ -45,10 +48,35 @@ class TaskDispatcher(Protocol):
         self,
         name: str,
         *,
-        args: list[dict[str, Any]],
+        args: list[JsonObject],
         queue: str,
         task_id: str,
-    ) -> Any: ...
+    ) -> AsyncResult | None: ...
+
+
+class SubmissionRedisClient(
+    job_store.AsyncIdempotencyClient,
+    job_store.AsyncJobWriter,
+    Protocol,
+):
+    def ping(self) -> Awaitable[bool]: ...
+
+
+class SubmissionOptions(TypedDict):
+    """Infrastructure overrides and caller scope for submitting a job."""
+
+    client: NotRequired[SubmissionRedisClient | None]
+    dispatcher: NotRequired[TaskDispatcher | None]
+    agent_scope: NotRequired[str]
+    job_id_factory: NotRequired[Callable[[], str] | None]
+    database: NotRequired[ApplicationDatabaseRuntime | None]
+
+
+class BuildSubmissionOptions(TypedDict):
+    """Identifiers and computed geometry metadata for persisted job records."""
+
+    job_id: str
+    location_areas_m2: dict[str, float] | None
 
 
 class UnknownMetricError(Exception):
@@ -88,7 +116,7 @@ class IdempotencyConflictError(Exception):
 
 def canonical_request_fingerprint(
     metric: str,
-    request: Mapping[str, Any],
+    request: Mapping[str, JsonValue],
 ) -> str:
     """Digest a metric and validated unresolved request using canonical JSON."""
 
@@ -107,7 +135,7 @@ def job_links(job_id: str) -> JobLinks:
     return JobLinks(self=base, events=f"{base}/events", result=f"{base}/result")
 
 
-async def _ensure_redis_available(client: Any) -> None:
+async def _ensure_redis_available(client: SubmissionRedisClient) -> None:
     try:
         pong = await client.ping()
     except RedisError as exc:
@@ -126,7 +154,7 @@ async def _release_failed_submission(
     reservation: job_store.IdempotencyRecord | None,
     limit_consumed: bool,
     agent_scope: str,
-    client: Any,
+    client: SubmissionRedisClient,
 ) -> None:
     try:
         if limit_consumed:
@@ -142,7 +170,7 @@ async def _release_failed_submission(
 
 
 async def _resolve_spatial_input(
-    validated_input: dict[str, Any],
+    validated_input: JsonObject,
     spatial_inputs: dict[str, SpatialInputKindV3],
     database: ApplicationDatabaseRuntime | None,
 ) -> SpatialInputResolution:
@@ -164,14 +192,14 @@ async def _resolve_spatial_input(
     )
 
 
-def _requires_location_areas(output: Any) -> bool:
+def _requires_location_areas(output: OutputSpecV3) -> bool:
     return isinstance(output, TableOutputV3) and any(
         column.derivations for column in output.columns
     )
 
 
 async def _calculate_location_areas(
-    resolved_input: dict[str, Any],
+    resolved_input: JsonObject,
 ) -> dict[str, float]:
     location = GeoJSON.model_validate(resolved_input["location"])
     try:
@@ -182,19 +210,95 @@ async def _calculate_location_areas(
         ) from exc
 
 
+async def _claim_submission_idempotency(
+    request: JobCreateRequest,
+    validated_input: JsonObject,
+    job_id: str,
+    *,
+    agent_scope: str,
+    client: SubmissionRedisClient,
+) -> tuple[job_store.IdempotencyRecord | None, JobCreateResponse | None]:
+    if request.idempotency_key is None:
+        return None, None
+
+    request_digest = canonical_request_fingerprint(request.metric, validated_input)
+    reservation, acquired = await job_store.claim_idempotency_key_async(
+        request.idempotency_key,
+        request_digest,
+        job_id,
+        agent_scope=agent_scope,
+        client=client,
+    )
+    if acquired:
+        return reservation, None
+    if reservation.request_digest != request_digest:
+        raise IdempotencyConflictError(
+            idempotency_key=request.idempotency_key,
+            job_id=reservation.job_id,
+        )
+    return reservation, JobCreateResponse(
+        job_id=reservation.job_id,
+        metric=request.metric,
+        status="queued",
+        reused=True,
+        links=job_links(reservation.job_id),
+    )
+
+
+async def _consume_submission_limit(client: SubmissionRedisClient) -> None:
+    submission_limit = get_config().agent_submission_limit
+    try:
+        decision = await job_store.consume_agent_submission_limit_async(
+            limit=submission_limit.limit,
+            window_seconds=submission_limit.window_seconds,
+            client=client,
+        )
+    except RedisError as exc:
+        raise SubmissionUnavailableError from exc
+    if not decision.accepted:
+        raise SubmissionRateLimitedError(decision.retry_after_seconds)
+
+
+def _build_submission_records(
+    request: JobCreateRequest,
+    entry: MetricRegistryEntry,
+    validated_input: JsonObject,
+    resolution: SpatialInputResolution,
+    **options: Unpack[BuildSubmissionOptions],
+) -> tuple[JobEnvelope, JobRunProvenance]:
+    job_id = options["job_id"]
+    envelope = JobEnvelope(
+        job_id=job_id,
+        metric=request.metric,
+        input=resolution.input,
+        idempotency_key=request.idempotency_key,
+        location_areas_m2=options["location_areas_m2"],
+    )
+    provenance = JobRunProvenance(
+        metric=request.metric,
+        catalog_fingerprint=entry.catalog_fingerprint,
+        plugin=PluginInfoV3(name=entry.plugin_name, version=entry.plugin_version),
+        input=validated_input,
+        output=entry.metric.output,
+        created_at=datetime.now(UTC),
+        row_identity=resolution.row_identity,
+    )
+    return envelope, provenance
+
+
 async def submit_job(
     request: JobCreateRequest,
-    *,
-    client: Any | None = None,
-    dispatcher: TaskDispatcher | None = None,
-    agent_scope: str = job_store.DEFAULT_AGENT_SCOPE,
-    job_id_factory: Callable[[], str] | None = None,
-    database: ApplicationDatabaseRuntime | None = None,
+    **options: Unpack[SubmissionOptions],
 ) -> JobCreateResponse:
     """Validate, deduplicate, persist, and dispatch one public job request."""
 
+    client = options.get("client")
+    dispatcher = options.get("dispatcher")
+    job_id_factory = options.get("job_id_factory")
+    agent_scope = options.get("agent_scope", job_store.DEFAULT_AGENT_SCOPE)
+    database = options.get("database")
     if client is None:
-        client = redis_client
+        client = cast("SubmissionRedisClient", redis_client)
     if dispatcher is None:
         from lyra_app.celery_app import celery_app  # noqa: PLC0415
 
@@ -209,34 +313,19 @@ async def submit_job(
 
     validated_input = validate_metric_entry_payload(entry, request.input)
     job_id = job_id_factory()
-    reservation: job_store.IdempotencyRecord | None = None
-    if request.idempotency_key is not None:
-        request_digest = canonical_request_fingerprint(request.metric, validated_input)
-        reservation, acquired = await job_store.claim_idempotency_key_async(
-            request.idempotency_key,
-            request_digest,
-            job_id,
-            agent_scope=agent_scope,
-            client=client,
-        )
-        if not acquired:
-            if reservation.request_digest != request_digest:
-                raise IdempotencyConflictError(
-                    idempotency_key=request.idempotency_key,
-                    job_id=reservation.job_id,
-                )
-            return JobCreateResponse(
-                job_id=reservation.job_id,
-                metric=request.metric,
-                status="queued",
-                reused=True,
-                links=job_links(reservation.job_id),
-            )
+    reservation, reused_response = await _claim_submission_idempotency(
+        request,
+        validated_input,
+        job_id,
+        agent_scope=agent_scope,
+        client=client,
+    )
+    if reused_response is not None:
+        return reused_response
 
     dispatched = False
     limit_consumed = False
     try:
-        created_at = datetime.now(UTC)
         resolution = await _resolve_spatial_input(
             validated_input,
             entry.metric.spatial_inputs,
@@ -245,36 +334,15 @@ async def submit_job(
         location_areas_m2 = None
         if _requires_location_areas(entry.metric.output):
             location_areas_m2 = await _calculate_location_areas(resolution.input)
-        submission_limit = get_config().agent_submission_limit
-        try:
-            limit_decision = await job_store.consume_agent_submission_limit_async(
-                limit=submission_limit.limit,
-                window_seconds=submission_limit.window_seconds,
-                client=client,
-            )
-        except RedisError as exc:
-            raise SubmissionUnavailableError from exc
-        if not limit_decision.accepted:
-            raise SubmissionRateLimitedError(limit_decision.retry_after_seconds)
+        await _consume_submission_limit(client)
         limit_consumed = True
-        envelope = JobEnvelope(
+        envelope, provenance = _build_submission_records(
+            request,
+            entry,
+            validated_input,
+            resolution,
             job_id=job_id,
-            metric=request.metric,
-            input=resolution.input,
-            idempotency_key=request.idempotency_key,
             location_areas_m2=location_areas_m2,
-        )
-        provenance = JobRunProvenance(
-            metric=request.metric,
-            catalog_fingerprint=entry.catalog_fingerprint,
-            plugin=PluginInfoV3(
-                name=entry.plugin_name,
-                version=entry.plugin_version,
-            ),
-            input=validated_input,
-            output=entry.metric.output,
-            created_at=created_at,
-            row_identity=resolution.row_identity,
         )
         await job_store.create_job_async(envelope, provenance, client=client)
         dispatcher.send_task(

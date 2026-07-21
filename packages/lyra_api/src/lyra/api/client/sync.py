@@ -1,9 +1,9 @@
+from __future__ import annotations
+
 import json
-import os
 import tempfile
-from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, TypeVar, Unpack
 
 import requests
 from lyra.api.client.base import (
@@ -51,6 +51,12 @@ from lyra.sdk.models import (
 from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV3
 from pydantic import BaseModel
 
+if TYPE_CHECKING:
+    import os
+    from collections.abc import Iterable, Iterator
+
+    import pandas as pd
+
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -78,6 +84,13 @@ def _iter_sse_job_events(lines: Iterable[str | bytes]) -> Iterator[JobEvent]:
         yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
 
 
+class _RequestModelOptions(TypedDict):
+    error_context: str
+    expected_status: NotRequired[int]
+    params: NotRequired[dict[str, Any] | None]
+    json_body: NotRequired[dict[str, Any] | None]
+
+
 class LyraAPIClient(_BaseLyraAPIClient):
     """Synchronous client for the Lyra HTTP job API."""
 
@@ -86,12 +99,12 @@ class LyraAPIClient(_BaseLyraAPIClient):
         method: str,
         path: str,
         response_model: type[_ModelT],
-        *,
-        error_context: str,
-        expected_status: int = 200,
-        params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        **options: Unpack[_RequestModelOptions],
     ) -> _ModelT:
+        error_context = options["error_context"]
+        expected_status = options.get("expected_status", 200)
+        params = options.get("params")
+        json_body = options.get("json_body")
         try:
             response = requests.request(
                 method,
@@ -610,7 +623,7 @@ class LyraAPIClient(_BaseLyraAPIClient):
             err = f"Result download error: {exc}"
             raise DownloadError(err) from exc
 
-    def result_dataframe(self, result_ref_or_job_id: str) -> Any:
+    def result_dataframe(self, result_ref_or_job_id: str) -> pd.DataFrame:
         pandas = _load_pandas()
         with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
             temp_path = Path(temp_file.name)

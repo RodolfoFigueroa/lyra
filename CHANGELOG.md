@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.14.1...lyra-v0.15.0) (2026-07-21)
+
+
+### Features
+
+* Centralize release pipeline ([0eed021](https://github.com/RodolfoFigueroa/lyra/commit/0eed0216427bc4b8a0413ad0783e68e8fb46cd11))
+
 ## [0.14.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.14.0...lyra-app-v0.14.1) (2026-07-21)
 
 

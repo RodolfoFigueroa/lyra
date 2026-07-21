@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-tui-v0.5.0...lyra-tui-v0.6.0) (2026-07-21)
+
+
+### Features
+
+* Centralize release pipeline ([0eed021](https://github.com/RodolfoFigueroa/lyra/commit/0eed0216427bc4b8a0413ad0783e68e8fb46cd11))
+
 ## [0.5.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-tui-v0.4.0...lyra-tui-v0.5.0) (2026-07-21)
 
 

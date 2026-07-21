@@ -33,10 +33,19 @@ JobLifecycleStatus = Literal[
     "failed",
     "cancelled",
 ]
+"""State of a job in Lyra's lifecycle state machine."""
+
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
+"""Lifecycle state that prevents any further job transitions."""
+
 JobMessageLevel = Literal["debug", "info", "warning", "error"]
+"""Severity attached to a durable plugin-authored job message."""
+
 ResultKind = Literal["table", "file", "failed", "cancelled"]
+"""Discriminator identifying the shape of a terminal job result."""
+
 RawResultFormat = Literal["terminal_json", "jsonl"]
+"""Raw representation available for retrieving a retained result."""
 
 DEFAULT_RESULT_PREVIEW_ROWS = 20
 DEFAULT_RESULT_INDEX_FIELD = "_result_index"
@@ -51,6 +60,8 @@ class _MatrixLike(Protocol):
 
 
 class DataFrameLike(Protocol):
+    """Minimal dataframe interface accepted by table-result constructors."""
+
     index: Iterable[_Stringable]
     columns: Iterable[_Stringable]
 
@@ -58,6 +69,8 @@ class DataFrameLike(Protocol):
 
 
 class SeriesLike(Protocol):
+    """Minimal series interface accepted by table-result constructors."""
+
     name: str | None
     index: Iterable[_Stringable]
 
@@ -66,6 +79,7 @@ class SeriesLike(Protocol):
 
 MappingValueT = TypeVar("MappingValueT")
 AxisValue: TypeAlias = str | int | float | bool
+"""Scalar value accepted as a table result's input or output index."""
 
 
 class RowIdentityMetadata(StrictBaseModel):
@@ -196,11 +210,32 @@ class JobProgress(StrictBaseModel):
     """Latest quantitative progress reported by a running metric."""
 
     timestamp: datetime = Field(description="UTC time of this progress update.")
-    stage: str = Field(min_length=1, max_length=128)
-    current: int | float = Field(ge=0)
-    total: int | float | None = Field(default=None, gt=0)
-    unit: str | None = Field(default=None, min_length=1, max_length=64)
-    message: str | None = Field(default=None, min_length=1, max_length=2048)
+    stage: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Stable name of the stage being measured.",
+    )
+    current: int | float = Field(
+        ge=0,
+        description="Non-negative amount completed in the current stage.",
+    )
+    total: int | float | None = Field(
+        default=None,
+        gt=0,
+        description="Positive amount that completes the stage, when known.",
+    )
+    unit: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="Human-readable unit for current and total values.",
+    )
+    message: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        description="Optional concise description of the progress update.",
+    )
 
     @model_validator(mode="after")
     def validate_numbers(self) -> Self:
@@ -221,40 +256,85 @@ class JobMessage(StrictBaseModel):
 
     timestamp: datetime = Field(description="UTC time of this message.")
     level: JobMessageLevel = Field(description="Message severity.")
-    message: str = Field(min_length=1, max_length=2048)
-    fields: dict[str, JsonValue] = Field(default_factory=dict)
+    message: str = Field(
+        min_length=1,
+        max_length=2048,
+        description="Client-facing message text.",
+    )
+    fields: dict[str, JsonValue] = Field(
+        default_factory=dict,
+        description="JSON-compatible structured context for the message.",
+    )
 
 
 class JobLifecycleEvent(StrictBaseModel):
     """A durable job lifecycle transition."""
 
-    kind: Literal["lifecycle"] = "lifecycle"
-    job_id: str = Field(min_length=1)
-    metric: str | None = Field(default=None, min_length=1)
-    timestamp: datetime
-    status: JobLifecycleStatus
-    error: dict[str, Any] | None = None
+    kind: Literal["lifecycle"] = Field(
+        default="lifecycle",
+        description="Event-union discriminator.",
+    )
+    job_id: str = Field(min_length=1, description="Job whose state changed.")
+    metric: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Metric associated with the job, when available.",
+    )
+    timestamp: datetime = Field(description="UTC time of the state transition.")
+    status: JobLifecycleStatus = Field(description="Lifecycle state after the change.")
+    error: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured terminal failure details, when applicable.",
+    )
 
     @property
     def name(self) -> str:
+        """Return the lifecycle status as a concise event name."""
+
         return self.status
 
 
 class JobProgressEvent(StrictBaseModel):
     """A durable quantitative progress update."""
 
-    kind: Literal["progress"] = "progress"
-    job_id: str = Field(min_length=1)
-    metric: str = Field(min_length=1)
-    timestamp: datetime
-    stage: str = Field(min_length=1, max_length=128)
-    current: int | float = Field(ge=0)
-    total: int | float | None = Field(default=None, gt=0)
-    unit: str | None = Field(default=None, min_length=1, max_length=64)
-    message: str | None = Field(default=None, min_length=1, max_length=2048)
+    kind: Literal["progress"] = Field(
+        default="progress",
+        description="Event-union discriminator.",
+    )
+    job_id: str = Field(min_length=1, description="Job reporting progress.")
+    metric: str = Field(min_length=1, description="Metric reporting progress.")
+    timestamp: datetime = Field(description="UTC time of the progress update.")
+    stage: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Stable name of the stage being measured.",
+    )
+    current: int | float = Field(
+        ge=0,
+        description="Non-negative amount completed in the current stage.",
+    )
+    total: int | float | None = Field(
+        default=None,
+        gt=0,
+        description="Positive amount that completes the stage, when known.",
+    )
+    unit: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="Human-readable unit for current and total values.",
+    )
+    message: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        description="Optional concise description of the progress update.",
+    )
 
     @property
     def name(self) -> str:
+        """Return ``"progress"`` as a concise event name."""
+
         return self.kind
 
     @model_validator(mode="after")
@@ -272,6 +352,12 @@ class JobProgressEvent(StrictBaseModel):
         return self
 
     def snapshot(self) -> JobProgress:
+        """Return the status-projection form of this progress event.
+
+        Returns:
+            Progress fields suitable for embedding in a job status snapshot.
+        """
+
         return JobProgress.model_validate(
             self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
         )
@@ -280,19 +366,37 @@ class JobProgressEvent(StrictBaseModel):
 class JobMessageEvent(StrictBaseModel):
     """A durable structured message from a running metric."""
 
-    kind: Literal["message"] = "message"
-    job_id: str = Field(min_length=1)
-    metric: str = Field(min_length=1)
-    timestamp: datetime
-    level: JobMessageLevel
-    message: str = Field(min_length=1, max_length=2048)
-    fields: dict[str, JsonValue] = Field(default_factory=dict)
+    kind: Literal["message"] = Field(
+        default="message",
+        description="Event-union discriminator.",
+    )
+    job_id: str = Field(min_length=1, description="Job publishing the message.")
+    metric: str = Field(min_length=1, description="Metric publishing the message.")
+    timestamp: datetime = Field(description="UTC time the message was published.")
+    level: JobMessageLevel = Field(description="Message severity.")
+    message: str = Field(
+        min_length=1,
+        max_length=2048,
+        description="Client-facing message text.",
+    )
+    fields: dict[str, JsonValue] = Field(
+        default_factory=dict,
+        description="JSON-compatible structured context for the message.",
+    )
 
     @property
     def name(self) -> str:
+        """Return ``"message"`` as a concise event name."""
+
         return self.kind
 
     def snapshot(self) -> JobMessage:
+        """Return the status-projection form of this message event.
+
+        Returns:
+            Message fields suitable for embedding in a job status snapshot.
+        """
+
         return JobMessage.model_validate(
             self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
         )
@@ -302,20 +406,34 @@ JobEvent: TypeAlias = Annotated[
     JobLifecycleEvent | JobProgressEvent | JobMessageEvent,
     Field(discriminator="kind"),
 ]
+"""Typed durable event published for a job, discriminated by ``kind``."""
 
 
 class JobEventRecord(StrictBaseModel):
     """One retained event and its resumable stream cursor."""
 
-    id: str = Field(min_length=1)
-    event: JobEvent
+    id: str = Field(
+        min_length=1,
+        description="Opaque stream cursor used to resume after this event.",
+    )
+    event: JobEvent = Field(description="Validated typed job event.")
 
 
 _JOB_EVENT_ADAPTER: TypeAdapter[JobEvent] = TypeAdapter(JobEvent)
 
 
 def parse_job_event(value: object) -> JobEvent:
-    """Validate one typed job event."""
+    """Validate a value as one member of the typed job event union.
+
+    Args:
+        value: Model instance or mapping containing a supported ``kind``.
+
+    Returns:
+        The validated lifecycle, progress, or message event.
+
+    Raises:
+        pydantic.ValidationError: If the value does not match a supported event.
+    """
 
     return _JOB_EVENT_ADAPTER.validate_python(value)
 
@@ -481,6 +599,8 @@ TerminalJobResult = Annotated[
     TableJobResult | FileJobResult | FailedJobResult | CancelledJobResult,
     Field(discriminator="kind"),
 ]
+"""Typed terminal result of a job, discriminated by ``kind``."""
+
 _TERMINAL_JOB_RESULT_ADAPTER: TypeAdapter[TerminalJobResult] = TypeAdapter(
     TerminalJobResult
 )
@@ -506,6 +626,15 @@ class ResultReference(StrictBaseModel):
 
     @classmethod
     def for_job_id(cls, job_id: str) -> Self:
+        """Build the stable result reference for a job identifier.
+
+        Args:
+            job_id: Identifier of the job that owns the retained result.
+
+        Returns:
+            A reference containing the job identifier and its ``lyra://`` URI.
+        """
+
         return cls(job_id=job_id, uri=result_ref_for_job(job_id))
 
     @model_validator(mode="after")

@@ -12,6 +12,7 @@ from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from tests.config_helpers import load_test_config, plugin_state_store
+from tests.redis_job_scripts import eval_job_script
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -160,6 +161,15 @@ class FakeRedisSync:
         for member, score in list(sorted_set.items()):
             if lower <= score <= max:
                 sorted_set.pop(member, None)
+
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int | str:
+        del script
+        return eval_job_script(self, numkeys, keys_and_args)
 
 
 @pytest.fixture(autouse=True)

@@ -18,7 +18,7 @@ from lyra.sdk import (
     RunContext,
     metric,
 )
-from lyra.sdk.models import JobEnvelope, TableJobResult
+from lyra.sdk.models import JobEnvelope, JobMessageLevel, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 from lyra.sdk.models.plugin_v4 import (
     BatchedTableOutputColumnV4,
@@ -90,8 +90,25 @@ class FakeContext:
     temp_dir: Path = Path()
     db: LyraDB = _FAKE_DB
 
-    def emit_event(self, event: str, data: dict[str, Any] | None = None) -> None:
-        del event, data
+    def report_progress(
+        self,
+        *,
+        stage: str,
+        current: float,
+        total: float | None = None,
+        unit: str | None = None,
+        message: str | None = None,
+    ) -> None:
+        del stage, current, total, unit, message
+
+    def report_message(
+        self,
+        message: str,
+        *,
+        level: JobMessageLevel = "info",
+        fields: dict[str, Any] | None = None,
+    ) -> None:
+        del message, level, fields
 
     def check_cancelled(self) -> None:
         return None

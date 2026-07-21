@@ -58,11 +58,17 @@ project = "your-gee-project-id"
 
 [logging]
 level = "INFO"
-# Set if you want logs written to a file instead of stdout.
+# Lyra writes one JSON object per line. Set file to write there instead of stdout.
 # file = "/lyra_data/logs/lyra.log"
 
 [job_store]
 ttl_seconds = 600
+
+[job_events]
+progress_min_interval_ms = 250
+max_events_per_second = 20
+max_payload_bytes = 16384
+max_stream_events = 1000
 
 [agent_submission_limit]
 # New REST and MCP jobs share this fixed-window quota. Idempotent replays do not

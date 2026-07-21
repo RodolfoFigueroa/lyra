@@ -58,13 +58,13 @@ def test_job_row_uses_text_status_prefix() -> None:
     row = job_row(
         JobStatusInfo(
             job_id="job-1234567890",
-            status="started",
+            status="running",
             updated_at=datetime(2026, 1, 1, tzinfo=UTC),
             metric="very_long_metric_name",
         )
     )
 
-    assert row[1] == "RUN started"
+    assert row[1] == "RUN running"
     assert row[3] == "2026-01-01T00:00:00Z"
 
 
@@ -298,7 +298,7 @@ def _job_list_response() -> JobListResponse:
             ),
             JobStatusInfo(
                 job_id="job-2",
-                status="started",
+                status="running",
                 updated_at=datetime(2026, 1, 1, tzinfo=UTC),
                 metric="metric_b",
             ),

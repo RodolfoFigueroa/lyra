@@ -185,6 +185,17 @@ are normalized by the worker. Unit-test contexts must provide a fake or mocked
 `LyraDB`; a strict fake that rejects unexpected calls is preferred for metrics
 that do not use the database.
 
+Use `context.report_progress(stage=..., current=..., total=..., unit=...)` for
+monotonic quantitative progress within a stage. A new stage may restart at zero;
+within one stage, `current` cannot decrease and `total` and `unit` must remain
+stable. The worker retains the first and final update and coalesces rapid
+intermediate updates.
+
+Use `context.report_message(message, level=..., fields=...)` for durable,
+structured milestones or warnings that clients should see. Continue using
+`context.logger` for diagnostic detail that belongs only in logs. Event payloads
+and rates are bounded by the deployment's `[job_events]` settings.
+
 ## Generated manifest
 
 Manifest schema v4 contains plugin identity, metric identity, compact semantic

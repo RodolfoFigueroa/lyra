@@ -11,6 +11,7 @@ from lyra.sdk.models import (
     FileJobResult,
     JobCreateRequest,
     JobCreateResponse,
+    JobLifecycleEvent,
     JobStatusInfo,
     TableJobResult,
     build_table_preview,
@@ -82,7 +83,7 @@ def _sse_message(stored_event: job_store.StoredJobEvent) -> str:
     data = json.dumps(payload, separators=(",", ":"))
     return (
         f"id: {stored_event.stream_id}\n"
-        f"event: {stored_event.event.event}\n"
+        f"event: {stored_event.event.kind}\n"
         f"data: {data}\n\n"
     )
 
@@ -102,7 +103,28 @@ def _result_status_payload(
     if snapshot.error is not None:
         payload["error"] = snapshot.error
         payload["detail"] = "Job finished without a successful result"
+    if snapshot.progress is not None:
+        payload["progress"] = snapshot.progress.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+    if snapshot.latest_message is not None:
+        payload["latest_message"] = snapshot.latest_message.model_dump(
+            mode="json", exclude_none=True
+        )
     return payload
+
+
+def _is_terminal_event(event: object) -> bool:
+    return isinstance(event, JobLifecycleEvent) and event.status in TERMINAL_EVENTS
+
+
+def _stream_id_parts(value: str) -> tuple[int, int]:
+    try:
+        milliseconds, sequence = value.split("-", maxsplit=1)
+        return int(milliseconds), int(sequence)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid Last-Event-ID") from exc
 
 
 async def _table_jsonl_stream(result: TableJobResult) -> AsyncIterator[str]:
@@ -128,7 +150,7 @@ async def _job_event_stream(
         for event in events:
             next_event_id = event.stream_id
             yield _sse_message(event)
-            if event.event.event in TERMINAL_EVENTS:
+            if _is_terminal_event(event.event):
                 return
 
         if not events:
@@ -150,7 +172,7 @@ async def _job_event_stream(
         for event in events:
             next_event_id = event.stream_id
             yield _sse_message(event)
-            if event.event.event in TERMINAL_EVENTS:
+            if _is_terminal_event(event.event):
                 return
 
 
@@ -234,6 +256,19 @@ async def get_job_events(
     snapshot = await _get_reconciled_job_status(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job expired or not found")
+    if last_event_id is not None and last_event_id != job_store.STREAM_START:
+        earliest = await job_store.read_job_events_async(job_id, count=1)
+        if earliest and _stream_id_parts(last_event_id) < _stream_id_parts(
+            earliest[0].stream_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "event_cursor_gap",
+                    "message": "Requested job event history is no longer retained.",
+                    "earliest_event_id": earliest[0].stream_id,
+                },
+            )
 
     return StreamingResponse(
         _job_event_stream(job_id, request, last_event_id=last_event_id),

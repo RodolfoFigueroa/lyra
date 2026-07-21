@@ -10,6 +10,7 @@ from lyra.sdk.models import FailedJobResult
 from lyra_app import job_store, worker_control
 from lyra_app.config import clear_config_cache
 from tests.config_helpers import load_test_config
+from tests.redis_job_scripts import eval_job_script
 
 
 class FakeRedisSync:
@@ -19,9 +20,14 @@ class FakeRedisSync:
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
-    def set(self, key: str, value: str, *, ex: int) -> None:
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        if nx and key in self.values:
+            return
         self.values[key] = value
         self.expirations.append((key, ex))
+
+    def get(self, key: str) -> str | None:
+        return self.values.get(key)
 
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
@@ -41,6 +47,15 @@ class FakeRedisSync:
         for member, score in list(sorted_set.items()):
             if lower <= score <= max:
                 sorted_set.pop(member, None)
+
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int | str:
+        del script
+        return eval_job_script(self, numkeys, keys_and_args)
 
 
 class FakeCeleryControl:
@@ -159,7 +174,10 @@ def test_notify_interrupted_tasks_persists_failed_job_results(
         },
     }
     assert status["status"] == "failed"
-    assert len(events) == 1
+    assert [json.loads(fields["payload"])["status"] for _, fields in events] == [
+        "queued",
+        "failed",
+    ]
 
 
 def test_persist_unexpected_task_failure_uses_conditional_finalizer(
@@ -189,7 +207,7 @@ def test_reconcile_celery_failure_repairs_nonterminal_job(
     celery = FakeCeleryApp(result_state="FAILURE")
     snapshot = job_store.JobStatusSnapshot(
         job_id="job-1",
-        status="started",
+        status="running",
         updated_at=datetime.now(UTC),
         metric="heavy_metric",
     )
@@ -222,7 +240,7 @@ def test_reconcile_celery_failure_ignores_nonfailure_states(
     celery = FakeCeleryApp(result_state=celery_state)
     snapshot = job_store.JobStatusSnapshot(
         job_id="job-1",
-        status="started",
+        status="running",
         updated_at=datetime.now(UTC),
     )
     monkeypatch.setattr(worker_control, "celery_app", celery)
@@ -238,7 +256,7 @@ def test_reconcile_celery_failure_preserves_status_when_backend_lookup_fails(
 ) -> None:
     snapshot = job_store.JobStatusSnapshot(
         job_id="job-1",
-        status="started",
+        status="running",
         updated_at=datetime.now(UTC),
     )
 

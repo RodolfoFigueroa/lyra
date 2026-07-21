@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
+import random
 import tempfile
+import time
 from contextlib import suppress
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, TypeVar, Unpack
 
@@ -14,7 +19,12 @@ from lyra.api.client.base import (
     _load_pandas,
     service_unavailable_error,
 )
-from lyra.api.exceptions import DownloadError
+from lyra.api.exceptions import (
+    DownloadError,
+    JobEventCursorGapError,
+    JobEventStreamError,
+    JobWaitTimeoutError,
+)
 from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
@@ -27,9 +37,12 @@ from lyra.sdk.models import (
     FileJobResult,
     JobCancelResponse,
     JobCreateResponse,
-    JobEvent,
+    JobEventRecord,
+    JobLifecycleEvent,
     JobLifecycleStatus,
     JobListResponse,
+    JobMessageEvent,
+    JobProgressEvent,
     JobStatusInfo,
     LivenessResponse,
     MetricQueueAssignmentResponse,
@@ -56,7 +69,7 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     import os
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     import pandas as pd
 
@@ -64,26 +77,233 @@ TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
-async def _aiter_sse_job_events(lines: AsyncIterator[str]) -> AsyncIterator[JobEvent]:
-    data_lines: list[str] = []
-    async for line in lines:
+@dataclass
+class _SSEEventBuffer:
+    data_lines: list[str] = field(default_factory=list)
+    event_id: str | None = None
+
+    def flush(self) -> JobEventRecord | None:
+        if not self.data_lines:
+            return None
+        if self.event_id is None:
+            err = "Job event did not include an SSE id."
+            raise DownloadError(err)
+        record = JobEventRecord(
+            id=self.event_id,
+            event=json.loads("\n".join(self.data_lines)),
+        )
+        self.data_lines.clear()
+        self.event_id = None
+        return record
+
+    def add(self, line: str) -> JobEventRecord | None:
         if line == "":
-            if data_lines:
-                yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
-                data_lines = []
-            continue
+            return self.flush()
         if line.startswith(":"):
-            continue
-
-        field, separator, value = line.partition(":")
+            return None
+        field_name, separator, value = line.partition(":")
         if not separator:
-            continue
+            return None
         value = value.removeprefix(" ")
-        if field == "data":
-            data_lines.append(value)
+        if field_name == "data":
+            self.data_lines.append(value)
+        elif field_name == "id":
+            self.event_id = value
+        return None
 
-    if data_lines:
-        yield JobEvent.model_validate(json.loads("\n".join(data_lines)))
+
+async def _aiter_sse_job_events(
+    lines: AsyncIterator[str],
+    *,
+    on_line: Callable[[], None] | None = None,
+) -> AsyncIterator[JobEventRecord]:
+    buffer = _SSEEventBuffer()
+    async for line in lines:
+        if on_line is not None:
+            on_line()
+        record = buffer.add(line)
+        if record is not None:
+            yield record
+    record = buffer.flush()
+    if record is not None:
+        yield record
+
+
+def _terminal_event(record: JobEventRecord) -> bool:
+    event = record.event
+    return isinstance(event, JobLifecycleEvent) and event.status in TERMINAL_EVENTS
+
+
+def _event_wait_deadline(wait_seconds: float | None) -> float | None:
+    return None if wait_seconds is None else time.monotonic() + wait_seconds
+
+
+def _check_event_deadline(
+    deadline: float | None,
+    *,
+    job_id: str,
+    cursor: str | None,
+    attempts: int,
+) -> None:
+    if deadline is None or time.monotonic() < deadline:
+        return
+    err = f"Timed out waiting for events from job {job_id}."
+    raise JobWaitTimeoutError(
+        err,
+        job_id=job_id,
+        last_event_id=cursor,
+        attempts=attempts,
+    )
+
+
+@dataclass
+class _EventDeadlineGuard:
+    deadline: float | None
+    job_id: str
+    cursor: str | None
+    attempts: int
+
+    def __call__(self) -> None:
+        _check_event_deadline(
+            self.deadline,
+            job_id=self.job_id,
+            cursor=self.cursor,
+            attempts=self.attempts,
+        )
+
+
+def _event_retry_delay(
+    deadline: float | None,
+    attempts: int,
+    jitter: random.Random,
+) -> float:
+    cap = min(8.0, 0.5 * (2 ** (attempts - 1)))
+    delay = jitter.uniform(0, cap)
+    if deadline is None:
+        return delay
+    return min(delay, max(0.0, deadline - time.monotonic()))
+
+
+def _event_read_timeout(deadline: float | None, default: float) -> float:
+    if deadline is None:
+        return default
+    return max(0.001, min(default, deadline - time.monotonic()))
+
+
+def _validate_max_reconnect_attempts(max_reconnect_attempts: int) -> None:
+    if max_reconnect_attempts < 0:
+        err = "max_reconnect_attempts must be non-negative"
+        raise ValueError(err)
+
+
+async def _validate_event_response(
+    response: aiohttp.ClientResponse,
+    *,
+    job_id: str,
+    cursor: str | None,
+    attempts: int,
+) -> None:
+    if response.status == 409:
+        err = f"Event history for job {job_id} no longer contains {cursor}."
+        raise JobEventCursorGapError(
+            err,
+            job_id=job_id,
+            last_event_id=cursor,
+            attempts=attempts,
+        )
+    if response.status == 200:
+        return
+    if response.status >= 500:
+        response.raise_for_status()
+    text = await response.text()
+    err = f"Failed to stream job events. HTTP {response.status}: {text}"
+    raise DownloadError(err)
+
+
+class AsyncJobHandle:
+    """Asynchronous observation and result handle for one submitted job."""
+
+    def __init__(
+        self,
+        client: AsyncLyraAPIClient,
+        submission: JobCreateResponse,
+    ) -> None:
+        self._client = client
+        self.submission = submission
+
+    @property
+    def job_id(self) -> str:
+        return self.submission.job_id
+
+    @property
+    def metric(self) -> str:
+        return self.submission.metric
+
+    async def status(self) -> JobStatusInfo:
+        return await self._client.get_job(self.job_id)
+
+    def events(
+        self,
+        *,
+        after_id: str | None = None,
+        kinds: set[str] | None = None,
+        timeout: float | None = None,
+        max_reconnect_attempts: int = 5,
+    ) -> AsyncIterator[JobEventRecord]:
+        return self._client.iter_job_events(
+            self.job_id,
+            last_event_id=after_id,
+            kinds=kinds,
+            timeout=timeout,
+            max_reconnect_attempts=max_reconnect_attempts,
+        )
+
+    async def result(self) -> TerminalJobResult:
+        return await self._client.get_job_result(self.job_id)
+
+    def wait(
+        self,
+        *,
+        timeout: float | None = None,
+        on_event: Callable[[JobEventRecord], object] | None = None,
+        on_progress: Callable[[JobProgressEvent], object] | None = None,
+        on_message: Callable[[JobMessageEvent], object] | None = None,
+    ) -> Awaitable[TerminalJobResult]:
+        return self._wait(
+            wait_seconds=timeout,
+            on_event=on_event,
+            on_progress=on_progress,
+            on_message=on_message,
+        )
+
+    async def _wait(
+        self,
+        *,
+        wait_seconds: float | None,
+        on_event: Callable[[JobEventRecord], object] | None,
+        on_progress: Callable[[JobProgressEvent], object] | None,
+        on_message: Callable[[JobMessageEvent], object] | None,
+    ) -> TerminalJobResult:
+        async for record in self.events(timeout=wait_seconds):
+            callbacks: list[object] = []
+            if on_event is not None:
+                callbacks.append(on_event(record))
+            if isinstance(record.event, JobProgressEvent) and on_progress is not None:
+                callbacks.append(on_progress(record.event))
+            if isinstance(record.event, JobMessageEvent) and on_message is not None:
+                callbacks.append(on_message(record.event))
+            for callback_result in callbacks:
+                if inspect.isawaitable(callback_result):
+                    await callback_result
+            if _terminal_event(record):
+                return await self.result()
+        err = f"Job {self.job_id} event stream ended before a terminal event."
+        raise JobEventStreamError(
+            err,
+            job_id=self.job_id,
+            last_event_id=None,
+            attempts=0,
+        )
 
 
 async def _response_lines(response: aiohttp.ClientResponse) -> AsyncIterator[str]:
@@ -216,6 +436,18 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         except aiohttp.ClientError as exc:
             err = f"Job creation error: {exc}"
             raise DownloadError(err) from exc
+
+    async def submit_job(
+        self,
+        metric: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> AsyncJobHandle:
+        return AsyncJobHandle(
+            self,
+            await self.create_job(metric, payload, idempotency_key=idempotency_key),
+        )
 
     async def get_job(self, job_id: str) -> JobStatusInfo:
         try:
@@ -527,35 +759,102 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
             err = f"Admin queues request error: {exc}"
             raise DownloadError(err) from exc
 
-    async def iter_job_events(
+    def iter_job_events(
         self,
         job_id: str,
         *,
         last_event_id: str | None = None,
-    ) -> AsyncIterator[JobEvent]:
-        headers = dict(self._agent_headers)
-        if last_event_id is not None:
-            headers["Last-Event-ID"] = last_event_id
+        kinds: set[str] | None = None,
+        timeout: float | None = None,
+        max_reconnect_attempts: int = 5,
+    ) -> AsyncIterator[JobEventRecord]:
+        return self._iter_job_events(
+            job_id,
+            last_event_id=last_event_id,
+            kinds=kinds,
+            wait_seconds=timeout,
+            max_reconnect_attempts=max_reconnect_attempts,
+        )
 
-        try:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            async with (
-                aiohttp.ClientSession(timeout=timeout) as session,
-                session.get(
-                    self._http_url(f"jobs/{job_id}/events"),
-                    headers=headers,
-                ) as response,
-            ):
-                if response.status != 200:
-                    text = await response.text()
-                    err = f"Failed to stream job events. HTTP {response.status}: {text}"
-                    raise DownloadError(err)
+    async def _iter_job_events(
+        self,
+        job_id: str,
+        *,
+        last_event_id: str | None,
+        kinds: set[str] | None,
+        wait_seconds: float | None,
+        max_reconnect_attempts: int,
+    ) -> AsyncIterator[JobEventRecord]:
+        _validate_max_reconnect_attempts(max_reconnect_attempts)
+        deadline = _event_wait_deadline(wait_seconds)
+        cursor = last_event_id
+        attempts = 0
+        jitter = random.SystemRandom()
+        while True:
+            _check_event_deadline(
+                deadline,
+                job_id=job_id,
+                cursor=cursor,
+                attempts=attempts,
+            )
+            headers = dict(self._agent_headers)
+            if cursor is not None:
+                headers["Last-Event-ID"] = cursor
+            try:
+                stream_timeout = aiohttp.ClientTimeout(
+                    total=None,
+                    sock_connect=self.timeout,
+                    sock_read=_event_read_timeout(deadline, self.timeout),
+                )
+                async with (
+                    aiohttp.ClientSession(timeout=stream_timeout) as session,
+                    session.get(
+                        self._http_url(f"jobs/{job_id}/events"),
+                        headers=headers,
+                    ) as response,
+                ):
+                    await _validate_event_response(
+                        response,
+                        job_id=job_id,
+                        cursor=cursor,
+                        attempts=attempts,
+                    )
+                    deadline_guard = _EventDeadlineGuard(
+                        deadline=deadline,
+                        job_id=job_id,
+                        cursor=cursor,
+                        attempts=attempts,
+                    )
+                    async for record in _aiter_sse_job_events(
+                        _response_lines(response),
+                        on_line=deadline_guard,
+                    ):
+                        if record.id == cursor:
+                            continue
+                        cursor = record.id
+                        attempts = 0
+                        deadline_guard.cursor = cursor
+                        deadline_guard.attempts = attempts
+                        terminal = _terminal_event(record)
+                        if kinds is None or record.event.kind in kinds:
+                            yield record
+                        if terminal:
+                            return
+            except JobEventCursorGapError:
+                raise
+            except aiohttp.ClientError:
+                pass
 
-                async for event in _aiter_sse_job_events(_response_lines(response)):
-                    yield event
-        except aiohttp.ClientError as exc:
-            err = f"Job event stream error: {exc}"
-            raise DownloadError(err) from exc
+            attempts += 1
+            if attempts > max_reconnect_attempts:
+                err = f"Could not resume the event stream for job {job_id}."
+                raise JobEventStreamError(
+                    err,
+                    job_id=job_id,
+                    last_event_id=cursor,
+                    attempts=attempts,
+                )
+            await asyncio.sleep(_event_retry_delay(deadline, attempts, jitter))
 
     async def get_job_result(self, job_id: str) -> TerminalJobResult:
         try:
@@ -757,13 +1056,6 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
 
         return MetricInfoV4.model_validate(metric)
 
-    async def _wait_for_terminal_event(self, job_id: str) -> JobEvent:
-        async for event in self.iter_job_events(job_id):
-            if event.event in TERMINAL_EVENTS:
-                return event
-        err = f"Job {job_id} event stream ended before a terminal event."
-        raise DownloadError(err)
-
     async def process(
         self,
         metric: str,
@@ -771,13 +1063,12 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         *,
         idempotency_key: str | None = None,
     ) -> TableJobResult:
-        job = await self.create_job(
+        job = await self.submit_job(
             metric,
             payload,
             idempotency_key=idempotency_key,
         )
-        await self._wait_for_terminal_event(job.job_id)
-        result = await self.get_job_result(job.job_id)
+        result = await job.wait()
         if result.status != "succeeded":
             err = (
                 f"Job {job.job_id} finished with status {result.status}: {result.error}"
@@ -796,13 +1087,12 @@ class AsyncLyraAPIClient(_BaseLyraAPIClient):
         *,
         idempotency_key: str | None = None,
     ) -> None:
-        job = await self.create_job(
+        job = await self.submit_job(
             metric,
             payload,
             idempotency_key=idempotency_key,
         )
-        event = await self._wait_for_terminal_event(job.job_id)
-        result = parse_job_result(event.data)
+        result = await job.wait()
         if result.status != "succeeded":
             err = (
                 f"Job {job.job_id} finished with status {result.status}: {result.error}"

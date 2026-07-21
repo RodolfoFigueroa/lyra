@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from lyra.sdk.db import LyraDB
+    from lyra.sdk.models import JobMessageLevel
 
 
 class RunContext(Protocol):
@@ -25,7 +26,23 @@ class RunContext(Protocol):
     @property
     def db(self) -> LyraDB: ...
 
-    def emit_event(self, event: str, data: dict[str, Any] | None = None) -> None: ...
+    def report_progress(
+        self,
+        *,
+        stage: str,
+        current: float,
+        total: float | None = None,
+        unit: str | None = None,
+        message: str | None = None,
+    ) -> None: ...
+
+    def report_message(
+        self,
+        message: str,
+        *,
+        level: JobMessageLevel = "info",
+        fields: dict[str, Any] | None = None,
+    ) -> None: ...
 
     def check_cancelled(self) -> None: ...
 

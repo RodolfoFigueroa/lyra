@@ -1,7 +1,10 @@
 import logging
 import math
+import time
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from celery import Task
@@ -12,6 +15,9 @@ from lyra.sdk.models import (
     FailedJobResult,
     FileJobResult,
     JobEnvelope,
+    JobMessageEvent,
+    JobMessageLevel,
+    JobProgressEvent,
     TableJobResult,
     TerminalJobResult,
     parse_job_result,
@@ -68,21 +74,133 @@ class RunnerMetricEntry:
     run: MetricRunCallable
 
 
-@dataclass(frozen=True)
+@dataclass
 class WorkerRunContext:
     job_id: str
     metric: str
     logger: logging.Logger
     temp_dir: Path
     db: LyraDB
+    _event_times: deque[float] = field(default_factory=deque, init=False, repr=False)
+    _pending_progress: JobProgressEvent | None = field(
+        default=None, init=False, repr=False
+    )
+    _last_reported_progress: JobProgressEvent | None = field(
+        default=None, init=False, repr=False
+    )
+    _last_progress_emit: float | None = field(default=None, init=False, repr=False)
+    _suppressed_messages: int = field(default=0, init=False, repr=False)
 
-    def emit_event(self, event: str, data: JsonObject | None = None) -> None:
-        job_store.append_job_event(
-            self.job_id,
-            event,
-            data,
+    def _reserve_event(self, *, force: bool = False) -> bool:
+        if force:
+            return True
+        now = time.monotonic()
+        while self._event_times and now - self._event_times[0] >= 1:
+            self._event_times.popleft()
+        if len(self._event_times) >= get_config().job_events.max_events_per_second:
+            return False
+        self._event_times.append(now)
+        return True
+
+    def _emit_progress(self, event: JobProgressEvent, *, force: bool = False) -> bool:
+        if not self._reserve_event(force=force):
+            self._pending_progress = event
+            return False
+        job_store.append_job_progress(event)
+        self._last_progress_emit = time.monotonic()
+        self._pending_progress = None
+        return True
+
+    def report_progress(
+        self,
+        *,
+        stage: str,
+        current: float,
+        total: float | None = None,
+        unit: str | None = None,
+        message: str | None = None,
+    ) -> None:
+        event = JobProgressEvent(
+            job_id=self.job_id,
             metric=self.metric,
+            timestamp=datetime.now(UTC),
+            stage=stage,
+            current=current,
+            total=total,
+            unit=unit,
+            message=message,
         )
+        previous = self._last_reported_progress
+        stage_changed = previous is None or previous.stage != stage
+        if previous is not None and not stage_changed:
+            if event.current < previous.current:
+                msg = f"Progress for stage {stage!r} must not decrease."
+                raise ValueError(msg)
+            if previous.total is not None and event.total != previous.total:
+                msg = f"Progress total for stage {stage!r} must remain stable."
+                raise ValueError(msg)
+            if previous.total is None and event.total is not None:
+                pass
+            if previous.unit != event.unit:
+                msg = f"Progress unit for stage {stage!r} must remain stable."
+                raise ValueError(msg)
+        if stage_changed and self._pending_progress is not None:
+            self._emit_progress(self._pending_progress, force=True)
+        self._last_reported_progress = event
+        completed = event.total is not None and event.current == event.total
+        elapsed_ms = (
+            None
+            if self._last_progress_emit is None
+            else (time.monotonic() - self._last_progress_emit) * 1000
+        )
+        if (
+            not stage_changed
+            and not completed
+            and elapsed_ms is not None
+            and elapsed_ms < get_config().job_events.progress_min_interval_ms
+        ):
+            self._pending_progress = event
+            return
+        self._emit_progress(event, force=stage_changed or completed)
+
+    def report_message(
+        self,
+        message: str,
+        *,
+        level: JobMessageLevel = "info",
+        fields: JsonObject | None = None,
+    ) -> None:
+        if self._pending_progress is not None:
+            self._emit_progress(self._pending_progress, force=True)
+        event = JobMessageEvent(
+            job_id=self.job_id,
+            metric=self.metric,
+            timestamp=datetime.now(UTC),
+            level=level,
+            message=message,
+            fields=fields or {},
+        )
+        if not self._reserve_event():
+            self._suppressed_messages += 1
+            return
+        job_store.append_job_message(event)
+
+    def flush_events(self) -> None:
+        if self._pending_progress is not None:
+            self._emit_progress(self._pending_progress, force=True)
+        if self._suppressed_messages:
+            count = self._suppressed_messages
+            self._suppressed_messages = 0
+            job_store.append_job_message(
+                JobMessageEvent(
+                    job_id=self.job_id,
+                    metric=self.metric,
+                    timestamp=datetime.now(UTC),
+                    level="warning",
+                    message=f"Suppressed {count} plugin message event(s).",
+                    fields={"suppressed_count": count},
+                )
+            )
 
     def check_cancelled(self) -> None:
         job_store.raise_if_cancelled(self.job_id)
@@ -298,7 +416,17 @@ def _persist_result(
     *,
     metric: str | None = None,
 ) -> JsonObject:
-    return job_store.save_job_result(result, metric=metric)
+    if job_store.is_job_cancelled(result.job_id):
+        result = _cancelled_result(result.job_id)
+    try:
+        return job_store.save_job_result(result, metric=metric)
+    except RuntimeError:
+        if not job_store.is_job_cancelled(result.job_id):
+            raise
+        return job_store.save_job_result(
+            _cancelled_result(result.job_id),
+            metric=metric,
+        )
 
 
 def _cell_error(
@@ -634,37 +762,41 @@ def _normalise_plugin_result(
     return _validate_success_result(result, job, entry.output, context)
 
 
-def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
-    fallback_job_id = _job_id_from_payload(envelope_payload, task_id)
+def _flush_failed_job_events(
+    context: WorkerRunContext | None,
+    job: JobEnvelope,
+) -> bool:
+    if context is None:
+        return False
     try:
-        job = JobEnvelope.model_validate(envelope_payload)
-    except PydanticValidationError as exc:
-        return _persist_result(
-            _failed_result(fallback_job_id, "invalid_envelope", str(exc))
+        context.flush_events()
+    except job_store.JobCancelledError:
+        return True
+    except Exception:
+        logger.exception(
+            "Could not flush events for failed job %s.",
+            job.job_id,
         )
+    return False
 
-    entry = RUNNER_REGISTRY.get(job.metric)
-    if entry is None:
-        return _persist_result(
-            _failed_result(
-                job.job_id,
-                "unknown_metric",
-                f"Unknown metric: {job.metric}",
-            ),
-            metric=job.metric,
-        )
 
+def _execute_known_job(job: JobEnvelope, entry: RunnerMetricEntry) -> JsonObject:
     if job_store.is_job_cancelled(job.job_id):
         return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
 
-    job_store.set_job_status(job.job_id, "started", metric=job.metric)
-
+    context: WorkerRunContext | None = None
     try:
+        if job_store.get_job_status(job.job_id) is None:
+            job_store.set_job_status(job.job_id, "queued", metric=job.metric)
+        job_store.set_job_status(job.job_id, "running", metric=job.metric)
         context = build_run_context(job)
         raw_result = entry.run(job, context)
+        context.flush_events()
     except job_store.JobCancelledError:
         return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
     except Exception as exc:
+        if _flush_failed_job_events(context, job):
+            return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
         if is_database_unavailable_error(exc):
             logger.warning(
                 "Database unavailable while executing metric %s for job %s.",
@@ -685,6 +817,28 @@ def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
 
     result = _normalise_plugin_result(raw_result, job, entry, context)
     return _persist_result(result, metric=job.metric)
+
+
+def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
+    fallback_job_id = _job_id_from_payload(envelope_payload, task_id)
+    try:
+        job = JobEnvelope.model_validate(envelope_payload)
+    except PydanticValidationError as exc:
+        return _persist_result(
+            _failed_result(fallback_job_id, "invalid_envelope", str(exc))
+        )
+
+    entry = RUNNER_REGISTRY.get(job.metric)
+    if entry is None:
+        return _persist_result(
+            _failed_result(
+                job.job_id,
+                "unknown_metric",
+                f"Unknown metric: {job.metric}",
+            ),
+            metric=job.metric,
+        )
+    return _execute_known_job(job, entry)
 
 
 @celery_app.task(name=GENERIC_TASK_NAME, bind=True)

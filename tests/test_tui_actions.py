@@ -693,7 +693,7 @@ def _jobs() -> list[JobStatusInfo]:
     return [
         JobStatusInfo(
             job_id="job-1",
-            status="started",
+            status="running",
             updated_at=datetime(2026, 1, 1, tzinfo=UTC),
             metric="metric_a",
         )

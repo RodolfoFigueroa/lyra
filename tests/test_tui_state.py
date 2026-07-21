@@ -329,7 +329,7 @@ def _job_list_response() -> JobListResponse:
         jobs=[
             JobStatusInfo(
                 job_id="job-1",
-                status="started",
+                status="running",
                 updated_at=datetime(2026, 1, 1, tzinfo=UTC),
                 metric="smoke_metric",
             )

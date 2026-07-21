@@ -1387,13 +1387,13 @@ def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
 
 def test_mcp_get_job_result_returns_running_continuation() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["started"]
+    backend.job_status_sequence = ["running"]
     client = _ManagedTestClient(
         create_mcp_app(agent_api_key="agent-secret", backend=backend)
     )
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
-        status="started",
+        status="running",
         updated_at=datetime.now(UTC),
         metric="slow_metric",
     )
@@ -1755,10 +1755,10 @@ def test_mcp_wait_ranges_are_rejected_before_polling(
     arguments: dict[str, Any],
 ) -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["started"]
+    backend.job_status_sequence = ["running"]
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
-        status="started",
+        status="running",
         updated_at=datetime.now(UTC),
         metric="slow_metric",
     )
@@ -1783,7 +1783,7 @@ def test_mcp_non_finite_waits_are_rejected_before_polling(
     wait_seconds: float,
 ) -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["started"]
+    backend.job_status_sequence = ["running"]
     client = _ManagedTestClient(
         create_mcp_app(agent_api_key="agent-secret", backend=backend)
     )

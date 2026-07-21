@@ -14,8 +14,7 @@ if TYPE_CHECKING:
 
 JOB_STATUS_PREFIXES = {
     "queued": "WAIT",
-    "started": "RUN",
-    "progress": "RUN",
+    "running": "RUN",
     "succeeded": "DONE",
     "failed": "FAIL",
     "cancelled": "STOP",
@@ -69,7 +68,7 @@ class JobsView(Vertical):
 
 
 def is_active_job_status(status: str) -> bool:
-    return status in {"queued", "started", "progress"}
+    return status in {"queued", "running"}
 
 
 def job_row(job: JobStatusInfo) -> tuple[str, str, str, str, str]:

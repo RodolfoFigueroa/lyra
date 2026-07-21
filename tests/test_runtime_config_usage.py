@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 from typing import TypedDict
@@ -9,6 +10,7 @@ from lyra_app import auth, job_store
 from lyra_app.config import LyraConfig, clear_config_cache, get_config, save_config
 from lyra_app.logging_config import configure_logging
 from tests.config_helpers import load_test_config
+from tests.redis_job_scripts import eval_job_script
 
 
 class _FakeCredentialsValue:
@@ -35,6 +37,9 @@ class FakeRedisSync:
         self.values[key] = value
         self.expirations.append((key, ex))
 
+    def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
 
@@ -53,6 +58,15 @@ class FakeRedisSync:
         for member, score in list(sorted_set.items()):
             if lower <= score <= max:
                 sorted_set.pop(member, None)
+
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int | str:
+        del script
+        return eval_job_script(self, numkeys, keys_and_args)
 
 
 def _reload_test_config(config: LyraConfig, config_path: Path) -> None:
@@ -158,7 +172,11 @@ def test_configure_logging_uses_configured_level_and_file(tmp_path: Path) -> Non
 
         assert configured.level == logging.DEBUG
         assert isinstance(handler, logging.FileHandler)
-        assert log_file.read_text(encoding="utf-8")
+        payload = json.loads(log_file.read_text(encoding="utf-8"))
+        assert payload["level"] == "INFO"
+        assert payload["logger"] == "lyra_app"
+        assert payload["message"] == "runtime config log"
+        assert payload["timestamp"].endswith("+00:00")
     finally:
         for handler in logger.handlers:
             handler.close()

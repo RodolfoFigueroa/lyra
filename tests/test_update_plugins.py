@@ -16,6 +16,7 @@ from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRep
 from lyra_app.registry import CatalogRefreshResult, reset_catalog
 from lyra_app.routes import admin
 from tests.config_helpers import load_test_config
+from tests.redis_job_scripts import eval_job_script
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
     directory_uri,
@@ -87,6 +88,15 @@ class FakeRedisSync:
         for member, score in list(sorted_set.items()):
             if lower <= score <= max:
                 sorted_set.pop(member, None)
+
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int | str:
+        del script
+        return eval_job_script(self, numkeys, keys_and_args)
 
 
 class FailingRedisSync(FakeRedisSync):
@@ -795,10 +805,12 @@ def test_admin_jobs_list_filters_by_status_and_metric(
     redis = FakeRedisSync()
     monkeypatch.setattr(admin.job_store, "redis_client_sync", redis)
     job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-2", "started", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-3", "started", metric="light_metric", client=redis)
+    job_store.set_job_status("job-2", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-2", "running", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-3", "queued", metric="light_metric", client=redis)
+    job_store.set_job_status("job-3", "running", metric="light_metric", client=redis)
 
-    response = admin.list_jobs(limit=10, status="started", metric="heavy_metric")
+    response = admin.list_jobs(limit=10, status="running", metric="heavy_metric")
 
     assert [job.job_id for job in response.jobs] == ["job-2"]
 
@@ -837,7 +849,8 @@ def test_admin_cancel_job_marks_active_job_and_revokes_task(
     revoked: list[str] = []
     monkeypatch.setattr(admin.job_store, "redis_client_sync", redis)
     monkeypatch.setattr(admin, "revoke_job", revoked.append)
-    job_store.set_job_status("job-1", "progress", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "running", metric="heavy_metric", client=redis)
 
     response = admin.cancel_job("job-1")
 
@@ -851,9 +864,10 @@ def test_admin_cancel_job_marks_active_job_and_revokes_task(
     assert stored_snapshot is not None
     assert stored_snapshot.status == "cancelled"
     assert [
-        event.event.event for event in job_store.read_job_events("job-1", client=redis)
+        event.event.name for event in job_store.read_job_events("job-1", client=redis)
     ] == [
-        "progress",
+        "queued",
+        "running",
         "cancelled",
     ]
     assert revoked == ["job-1"]
@@ -867,6 +881,7 @@ def test_admin_cancel_job_rejects_terminal_job(
     revoked: list[str] = []
     monkeypatch.setattr(admin.job_store, "redis_client_sync", redis)
     monkeypatch.setattr(admin, "revoke_job", revoked.append)
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
     job_store.set_job_status("job-1", "succeeded", metric="heavy_metric", client=redis)
 
     failed = _assert_http_error(409, admin.cancel_job, "job-1")

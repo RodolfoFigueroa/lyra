@@ -54,10 +54,17 @@ includes `Retry-After`; wait, then retry with the same key.
 
 ## Follow lifecycle
 
-`GET /jobs/{job_id}` returns `queued`, `started`, `progress`, `succeeded`,
-`failed`, or `cancelled`. The events route is an SSE stream that replays retained
-events, supports `Last-Event-ID`, sends keepalives, and closes after a terminal
-event. Repeat the agent header on polls and reconnects.
+`GET /jobs/{job_id}` returns `queued`, `running`, `succeeded`, `failed`, or
+`cancelled`. Quantitative progress and the latest structured plugin message are
+projections on this status snapshot; they are not lifecycle states.
+
+The events route is an SSE stream of discriminated `lifecycle`, `progress`, and
+`message` objects. Every record has an SSE `id`, a matching `event` kind, and a
+JSON `data` object. Reconnect with `Last-Event-ID` to resume after the last
+processed record. A `409` with code `event_cursor_gap` means that cursor predates
+the retained stream and the client must reconcile from the current status.
+Keepalives start with `:` and do not advance the cursor. The stream closes after
+a terminal lifecycle event. Repeat the agent header on every reconnect.
 
 ## Retrieve results
 
@@ -81,7 +88,7 @@ index field.
 | --- | --- |
 | `401` / `403` | Missing, malformed, or invalid credential. |
 | `404` | Metric, job, or retained result does not exist. |
-| `409` | Idempotency conflict or wrong result-download kind. |
+| `409` | Idempotency conflict, stale event cursor, or wrong result-download kind. |
 | `422` | Input does not match the selected metric schema. |
 | `429` | Shared agent submission limit exceeded. |
 | `503` | Redis, PostGIS, or spatial resolution is unavailable. |

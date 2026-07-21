@@ -5,11 +5,12 @@ from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Self, TypedDict, Unpack, cast
 
 import pytest
+import requests
 from lyra.api import parse_result_ref
 from lyra.api.client.async_ import AsyncLyraAPIClient
 from lyra.api.client.sync import LyraAPIClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
-from lyra.sdk.models import FileJobResult
+from lyra.sdk.models import FileJobResult, JobProgressEvent
 from lyra.sdk.types import JsonValue
 
 from lyra_app.config import DEFAULT_API_HOST
@@ -75,7 +76,7 @@ def _status_response() -> dict[str, Any]:
     return {
         "job_id": "job-1",
         "metric": "heavy_metric",
-        "status": "started",
+        "status": "running",
         "updated_at": "2026-01-01T00:00:00Z",
     }
 
@@ -86,7 +87,7 @@ def _job_list_response() -> dict[str, Any]:
             {
                 "job_id": "job-1",
                 "metric": "heavy_metric",
-                "status": "started",
+                "status": "running",
                 "updated_at": "2026-01-01T00:00:00Z",
             }
         ]
@@ -351,23 +352,35 @@ def _delete_metric_queue_response() -> dict[str, Any]:
     }
 
 
-def _terminal_event_lines() -> list[str]:
+def _terminal_event_lines(event_id: str = "1-0") -> list[str]:
     event = {
+        "kind": "lifecycle",
         "job_id": "job-1",
-        "event": "succeeded",
+        "metric": "heavy_metric",
         "timestamp": "2026-01-01T00:00:00Z",
-        "data": {
-            "kind": "table",
-            "job_id": "job-1",
-            "status": "succeeded",
-            "index": ["area-1"],
-            "columns": ["value"],
-            "data": [[6]],
-        },
+        "status": "succeeded",
     }
     return [
-        "id: 1-0",
-        "event: succeeded",
+        f"id: {event_id}",
+        "event: lifecycle",
+        f"data: {json.dumps(event)}",
+        "",
+    ]
+
+
+def _progress_event_lines(event_id: str = "1-0") -> list[str]:
+    event = {
+        "kind": "progress",
+        "job_id": "job-1",
+        "metric": "heavy_metric",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "stage": "compute",
+        "current": 1,
+        "total": 2,
+    }
+    return [
+        f"id: {event_id}",
+        "event: progress",
         f"data: {json.dumps(event)}",
         "",
     ]
@@ -612,11 +625,68 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert posted[0]["headers"] == {"Authorization": "Bearer agent-secret"}
     assert job.job_id == "job-1"
     assert job.reused is False
-    assert status.status == "started"
-    assert [event.event for event in events] == ["succeeded"]
+    assert status.status == "running"
+    assert [event.event.name for event in events] == ["succeeded"]
     assert result.kind == "table"
     assert result.data == [[6]]
     assert processed.data == [[6]]
+
+
+def test_sync_job_handle_resumes_after_disconnect_and_dispatches_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_headers: list[dict[str, str]] = []
+    progress_events: list[JobProgressEvent] = []
+
+    class DisconnectingResponse(FakeSyncResponse):
+        def iter_lines(self, *, decode_unicode: bool) -> Iterator[str]:
+            del decode_unicode
+            yield from _progress_event_lines()
+            message = "stream disconnected"
+            raise requests.ConnectionError(message)
+
+    responses: Iterator[FakeSyncResponse] = iter(
+        [DisconnectingResponse(), FakeSyncResponse(lines=_terminal_event_lines("2-0"))]
+    )
+
+    def post(
+        url: str,
+        *,
+        json: dict[str, Any],
+        timeout: float,
+        headers: dict[str, str],
+    ) -> FakeSyncResponse:
+        del url, json, timeout, headers
+        return FakeSyncResponse(status_code=202, payload=_job_response())
+
+    def get(
+        url: str,
+        *,
+        timeout: float,
+        headers: dict[str, str],
+        stream: bool = False,
+    ) -> FakeSyncResponse:
+        del timeout, stream
+        if url.endswith("/result"):
+            return FakeSyncResponse(payload=_result_response())
+        seen_headers.append(headers)
+        return next(responses)
+
+    monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
+    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    monkeypatch.setattr("lyra.api.client.sync.time.sleep", lambda _: None)
+    client = LyraAPIClient("example.test", secure=False, agent_api_key="secret")
+
+    result = client.submit_job("heavy_metric", {"value": 3}).wait(
+        on_progress=progress_events.append
+    )
+
+    assert result.status == "succeeded"
+    assert [event.current for event in progress_events] == [1]
+    assert seen_headers == [
+        {"Authorization": "Bearer secret"},
+        {"Authorization": "Bearer secret", "Last-Event-ID": "1-0"},
+    ]
 
 
 def test_sync_client_uses_admin_job_operations(
@@ -655,7 +725,7 @@ def test_sync_client_uses_admin_job_operations(
         admin_api_key="admin-secret",
     )
 
-    jobs = client.list_admin_jobs(limit=10, status="started", metric="heavy_metric")
+    jobs = client.list_admin_jobs(limit=10, status="running", metric="heavy_metric")
     cancelled = client.cancel_admin_job("job-1")
 
     assert requests_seen == [
@@ -663,7 +733,7 @@ def test_sync_client_uses_admin_job_operations(
             "url": "http://example.test/admin/jobs",
             "params": {
                 "limit": 10,
-                "status": "started",
+                "status": "running",
                 "metric": "heavy_metric",
             },
             "timeout": 12.0,
@@ -1411,7 +1481,7 @@ def test_async_client_uses_admin_job_operations(
     )
 
     jobs = asyncio.run(
-        client.list_admin_jobs(limit=10, status="started", metric="heavy_metric")
+        client.list_admin_jobs(limit=10, status="running", metric="heavy_metric")
     )
     cancelled = asyncio.run(client.cancel_admin_job("job-1"))
 
@@ -1422,7 +1492,7 @@ def test_async_client_uses_admin_job_operations(
             "kwargs": {
                 "params": {
                     "limit": 10,
-                    "status": "started",
+                    "status": "running",
                     "metric": "heavy_metric",
                 },
                 "headers": {"Authorization": "Bearer admin-secret"},

@@ -28,13 +28,13 @@ from pydantic import Field, TypeAdapter, model_validator
 
 JobLifecycleStatus = Literal[
     "queued",
-    "started",
-    "progress",
+    "running",
     "succeeded",
     "failed",
     "cancelled",
 ]
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
+JobMessageLevel = Literal["debug", "info", "warning", "error"]
 ResultKind = Literal["table", "file", "failed", "cancelled"]
 RawResultFormat = Literal["terminal_json", "jsonl"]
 
@@ -192,13 +192,132 @@ class JobEnvelope(StrictBaseModel):
     )
 
 
-class JobEvent(StrictBaseModel):
-    """Server-sent event emitted while a job moves through the queue."""
+class JobProgress(StrictBaseModel):
+    """Latest quantitative progress reported by a running metric."""
 
-    job_id: str = Field(min_length=1, description="Job that emitted the event.")
-    event: str = Field(min_length=1, description="Event name such as progress.")
-    timestamp: datetime = Field(description="Event creation timestamp.")
-    data: dict[str, Any] = Field(description="Event-specific JSON payload.")
+    timestamp: datetime = Field(description="UTC time of this progress update.")
+    stage: str = Field(min_length=1, max_length=128)
+    current: int | float = Field(ge=0)
+    total: int | float | None = Field(default=None, gt=0)
+    unit: str | None = Field(default=None, min_length=1, max_length=64)
+    message: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_numbers(self) -> Self:
+        for name, value in (("current", self.current), ("total", self.total)):
+            if value is None:
+                continue
+            if isinstance(value, bool) or not math.isfinite(float(value)):
+                msg = f"progress {name} must be a finite number"
+                raise ValueError(msg)
+        if self.total is not None and self.current > self.total:
+            msg = "progress current must not exceed total"
+            raise ValueError(msg)
+        return self
+
+
+class JobMessage(StrictBaseModel):
+    """Latest durable message reported by a running metric."""
+
+    timestamp: datetime = Field(description="UTC time of this message.")
+    level: JobMessageLevel = Field(description="Message severity.")
+    message: str = Field(min_length=1, max_length=2048)
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class JobLifecycleEvent(StrictBaseModel):
+    """A durable job lifecycle transition."""
+
+    kind: Literal["lifecycle"] = "lifecycle"
+    job_id: str = Field(min_length=1)
+    metric: str | None = Field(default=None, min_length=1)
+    timestamp: datetime
+    status: JobLifecycleStatus
+    error: dict[str, Any] | None = None
+
+    @property
+    def name(self) -> str:
+        return self.status
+
+
+class JobProgressEvent(StrictBaseModel):
+    """A durable quantitative progress update."""
+
+    kind: Literal["progress"] = "progress"
+    job_id: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+    timestamp: datetime
+    stage: str = Field(min_length=1, max_length=128)
+    current: int | float = Field(ge=0)
+    total: int | float | None = Field(default=None, gt=0)
+    unit: str | None = Field(default=None, min_length=1, max_length=64)
+    message: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    @property
+    def name(self) -> str:
+        return self.kind
+
+    @model_validator(mode="after")
+    def validate_numbers(self) -> Self:
+        JobProgress.model_validate(
+            {
+                "timestamp": self.timestamp,
+                "stage": self.stage,
+                "current": self.current,
+                "total": self.total,
+                "unit": self.unit,
+                "message": self.message,
+            }
+        )
+        return self
+
+    def snapshot(self) -> JobProgress:
+        return JobProgress.model_validate(
+            self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
+        )
+
+
+class JobMessageEvent(StrictBaseModel):
+    """A durable structured message from a running metric."""
+
+    kind: Literal["message"] = "message"
+    job_id: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+    timestamp: datetime
+    level: JobMessageLevel
+    message: str = Field(min_length=1, max_length=2048)
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @property
+    def name(self) -> str:
+        return self.kind
+
+    def snapshot(self) -> JobMessage:
+        return JobMessage.model_validate(
+            self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
+        )
+
+
+JobEvent: TypeAlias = Annotated[
+    JobLifecycleEvent | JobProgressEvent | JobMessageEvent,
+    Field(discriminator="kind"),
+]
+
+
+class JobEventRecord(StrictBaseModel):
+    """One retained event and its resumable stream cursor."""
+
+    id: str = Field(min_length=1)
+    event: JobEvent
+
+
+_JOB_EVENT_ADAPTER: TypeAdapter[JobEvent] = TypeAdapter(JobEvent)
+
+
+def parse_job_event(value: object) -> JobEvent:
+    """Validate one typed job event."""
+
+    return _JOB_EVENT_ADAPTER.validate_python(value)
 
 
 class TableJobResult(StrictBaseModel):
@@ -864,6 +983,14 @@ class JobStatusInfo(StrictBaseModel):
         default=None,
         description="Structured failure details when the job failed.",
     )
+    progress: JobProgress | None = Field(
+        default=None,
+        description="Most recently reported quantitative progress.",
+    )
+    latest_message: JobMessage | None = Field(
+        default=None,
+        description="Most recently reported durable plugin message.",
+    )
 
 
 class JobListResponse(StrictBaseModel):
@@ -896,9 +1023,16 @@ __all__ = [
     "JobCreateResponse",
     "JobEnvelope",
     "JobEvent",
+    "JobEventRecord",
+    "JobLifecycleEvent",
     "JobLifecycleStatus",
     "JobLinks",
     "JobListResponse",
+    "JobMessage",
+    "JobMessageEvent",
+    "JobMessageLevel",
+    "JobProgress",
+    "JobProgressEvent",
     "JobRunProvenance",
     "JobStatusInfo",
     "NumericColumnSummary",
@@ -920,6 +1054,7 @@ __all__ = [
     "build_result_descriptor",
     "build_table_preview",
     "build_table_summary",
+    "parse_job_event",
     "parse_job_result",
     "result_ref_for_job",
 ]

@@ -11,14 +11,31 @@ from lyra.sdk.models import (
     FailedJobResult,
     FileJobResult,
     JobEnvelope,
+    JobLifecycleEvent,
+    JobMessageEvent,
+    JobProgressEvent,
     JobRunProvenance,
     ResultReference,
     TableJobResult,
 )
 
 from lyra_app import job_store
-from lyra_app.config import clear_config_cache
+from lyra_app.config import clear_config_cache, get_config
 from tests.config_helpers import load_test_config
+from tests.redis_job_scripts import eval_job_script
+
+
+def _job_transition_error(current: str | None, guard: str) -> str | None:
+    if guard == "missing":
+        return "error:exists" if current is not None else None
+    if current is None:
+        return "error:missing"
+    current_status = json.loads(current)["status"]
+    if current_status in {"succeeded", "failed", "cancelled"}:
+        return f"error:terminal:{current_status}"
+    if guard in {"queued", "running"} and current_status != guard:
+        return f"error:expected-{guard}:{current_status}"
+    return None
 
 
 class FakeRedisSync:
@@ -106,36 +123,9 @@ class FakeRedisSync:
         script: str,
         numkeys: int,
         *keys_and_args: str | float,
-    ) -> int:
+    ) -> int | str:
         del script
-        assert numkeys == 6
-        keys = [str(value) for value in keys_and_args[:numkeys]]
-        args = keys_and_args[numkeys:]
-        current = self.values.get(keys[0])
-        if current is None:
-            return 0
-        if json.loads(current)["status"] in {"succeeded", "failed", "cancelled"}:
-            return 0
-
-        result_payload, status_payload, event_name, event_payload = map(str, args[:4])
-        ttl = int(args[4])
-        score = float(args[5])
-        job_id = str(args[6])
-        cutoff = float(args[7])
-        self.set(keys[1], result_payload, ex=ttl)
-        self.set(keys[0], status_payload, ex=ttl)
-        self.xadd(
-            keys[2],
-            {"event": event_name, "payload": event_payload},
-        )
-        for key in keys[2:5]:
-            self.expire(key, ttl)
-        reservation_key = self.values.get(keys[4])
-        if reservation_key is not None:
-            self.expire(reservation_key, ttl)
-        self.zadd(keys[5], {job_id: score})
-        self.zremrangebyscore(keys[5], "-inf", cutoff)
-        return 1
+        return eval_job_script(self, numkeys, keys_and_args)
 
 
 class FakeRedisAsync:
@@ -182,27 +172,105 @@ class FakeRedisAsync:
 
     async def eval(
         self,
-        _script: str,
-        _numkeys: int,
+        script: str,
+        numkeys: int,
         key: str,
-        *args: str | int,
-    ) -> int | list[int]:
+        *args: str | float,
+    ) -> int | str | list[int]:
+        del script
+        if numkeys == 5:
+            return await self._eval_event_script(key, args)
+        if numkeys == 6:
+            return await self._eval_terminal_script(key, args)
         if not args:
-            current = int(self.values.get(key, "0"))
-            if current <= 0:
-                return 0
-            if current == 1:
-                await self.delete(key)
-            else:
-                self.values[key] = str(current - 1)
-            return 1
+            return await self._eval_release_script(key)
         if len(args) == 1:
-            expected = str(args[0])
-            if self.values.get(key) != expected:
-                return 0
-            await self.delete(key)
-            return 1
+            return await self._eval_compare_delete_script(key, str(args[0]))
+        return self._eval_rate_limit_script(key, args)
 
+    async def _eval_event_script(
+        self,
+        key: str,
+        args: tuple[str | float, ...],
+    ) -> str:
+        keys = [key, *(str(value) for value in args[:4])]
+        script_args = args[4:]
+        error = _job_transition_error(
+            self.values.get(keys[0]),
+            str(script_args[0]),
+        )
+        if error is not None:
+            return error
+        status_payload = str(script_args[1])
+        event_kind = str(script_args[2])
+        event_payload = str(script_args[3])
+        ttl = int(script_args[4])
+        score = float(script_args[5])
+        job_id = str(script_args[6])
+        cutoff = float(script_args[7])
+        await self.set(keys[0], status_payload, ex=ttl)
+        stream_id = await self.xadd(
+            keys[1], {"event": event_kind, "payload": event_payload}
+        )
+        for stream_key in keys[1:4]:
+            await self.expire(stream_key, ttl)
+        reservation_key = self.values.get(keys[3])
+        if reservation_key is not None:
+            await self.expire(reservation_key, ttl)
+        await self.zadd(keys[4], {job_id: score})
+        await self.zremrangebyscore(keys[4], "-inf", cutoff)
+        return stream_id
+
+    async def _eval_terminal_script(
+        self,
+        key: str,
+        args: tuple[str | float, ...],
+    ) -> int:
+        keys = [key, *(str(value) for value in args[:5])]
+        script_args = args[5:]
+        current = self.values.get(keys[0])
+        if current is None:
+            return 0
+        if json.loads(current)["status"] in {"succeeded", "failed", "cancelled"}:
+            return 0
+        result_payload, status_payload, event_kind, event_payload = map(
+            str,
+            script_args[:4],
+        )
+        ttl = int(script_args[4])
+        score = float(script_args[5])
+        job_id = str(script_args[6])
+        cutoff = float(script_args[7])
+        await self.set(keys[1], result_payload, ex=ttl)
+        await self.set(keys[0], status_payload, ex=ttl)
+        await self.xadd(keys[2], {"event": event_kind, "payload": event_payload})
+        for stream_key in keys[2:5]:
+            await self.expire(stream_key, ttl)
+        await self.zadd(keys[5], {job_id: score})
+        await self.zremrangebyscore(keys[5], "-inf", cutoff)
+        return 1
+
+    async def _eval_release_script(self, key: str) -> int:
+        current = int(self.values.get(key, "0"))
+        if current <= 0:
+            return 0
+        if current == 1:
+            await self.delete(key)
+        else:
+            self.values[key] = str(current - 1)
+        return 1
+
+    async def _eval_compare_delete_script(self, key: str, expected: str) -> int:
+        if self.values.get(key) != expected:
+            return 0
+        await self.delete(key)
+        return 1
+
+    def _eval_rate_limit_script(
+        self,
+        key: str,
+        args: tuple[str | float, ...],
+    ) -> list[int]:
         limit, window_seconds = (int(value) for value in args)
         current = int(self.values.get(key, "0"))
         if current >= limit:
@@ -322,11 +390,8 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     assert snapshot.metric == "heavy_metric"
     assert _load_status(redis, "job-1")["status"] == "queued"
     events = job_store.read_job_events("job-1", client=redis)
-    assert [event.event.event for event in events] == ["queued"]
+    assert [event.event.name for event in events] == ["queued"]
     assert (job_store.status_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
-        redis.expirations
-    )
-    assert (job_store.result_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
         redis.expirations
     )
     assert (job_store.events_key("job-1"), job_store.JOB_STORE_TTL_SECONDS) in (
@@ -341,17 +406,16 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     assert "coordinates" not in json.dumps(stored)
 
 
-@pytest.mark.parametrize("active_status", ["queued", "started", "progress"])
+@pytest.mark.parametrize("active_status", ["queued", "running"])
 def test_save_job_result_if_active_atomically_finalizes_active_job(
     active_status: job_store.JobStatus,
 ) -> None:
     redis = FakeRedisSync()
-    job_store.set_job_status(
-        "job-1",
-        active_status,
-        metric="heavy_metric",
-        client=redis,
-    )
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    if active_status == "running":
+        job_store.set_job_status(
+            "job-1", "running", metric="heavy_metric", client=redis
+        )
 
     saved = job_store.save_job_result_if_active(
         FailedJobResult(
@@ -368,7 +432,10 @@ def test_save_job_result_if_active_atomically_finalizes_active_job(
         "failed"
     )
     events = job_store.read_job_events("job-1", client=redis)
-    assert [event.event.event for event in events] == [active_status, "failed"]
+    expected = ["queued", "failed"]
+    if active_status == "running":
+        expected.insert(1, "running")
+    assert [event.event.name for event in events] == expected
 
 
 @pytest.mark.parametrize("terminal_status", ["succeeded", "failed", "cancelled"])
@@ -376,6 +443,7 @@ def test_save_job_result_if_active_does_not_replace_terminal_job(
     terminal_status: job_store.JobStatus,
 ) -> None:
     redis = FakeRedisSync()
+    job_store.set_job_status("job-1", "queued", client=redis)
     job_store.set_job_status("job-1", terminal_status, client=redis)
 
     saved = job_store.save_job_result_if_active(
@@ -386,7 +454,7 @@ def test_save_job_result_if_active_does_not_replace_terminal_job(
     assert saved is False
     assert _load_status(redis, "job-1")["status"] == terminal_status
     assert job_store.result_key("job-1") not in redis.values
-    assert len(job_store.read_job_events("job-1", client=redis)) == 1
+    assert len(job_store.read_job_events("job-1", client=redis)) == 2
 
 
 def test_save_job_result_if_active_does_not_resurrect_missing_job() -> None:
@@ -403,14 +471,15 @@ def test_save_job_result_if_active_does_not_resurrect_missing_job() -> None:
 
 def test_save_job_result_if_active_is_idempotent() -> None:
     redis = FakeRedisSync()
-    job_store.set_job_status("job-1", "started", client=redis)
+    job_store.set_job_status("job-1", "queued", client=redis)
+    job_store.set_job_status("job-1", "running", client=redis)
     result = FailedJobResult(job_id="job-1", error={"type": "worker"})
 
     assert job_store.save_job_result_if_active(result, client=redis) is True
     assert job_store.save_job_result_if_active(result, client=redis) is False
     assert [
-        event.event.event for event in job_store.read_job_events("job-1", client=redis)
-    ] == ["started", "failed"]
+        event.event.name for event in job_store.read_job_events("job-1", client=redis)
+    ] == ["queued", "running", "failed"]
 
 
 def test_idempotency_claim_is_atomic_scoped_and_conditionally_released() -> None:
@@ -526,12 +595,13 @@ def test_job_updates_refresh_idempotency_ttl() -> None:
             client=redis,
         )
     )
+    asyncio.run(job_store.set_job_status_async("job-1", "queued", client=redis))
     redis.expirations.clear()
 
     asyncio.run(
         job_store.set_job_status_async(
             "job-1",
-            "progress",
+            "running",
             client=redis,
         )
     )
@@ -553,7 +623,8 @@ def test_job_provenance_is_immutable_and_supports_async_reads() -> None:
     changed = original.model_copy(update={"catalog_fingerprint": "catalog-2"})
 
     asyncio.run(job_store.create_job_async(job, original, client=redis))
-    asyncio.run(job_store.create_job_async(job, changed, client=redis))
+    with pytest.raises(RuntimeError, match="Invalid job lifecycle transition"):
+        asyncio.run(job_store.create_job_async(job, changed, client=redis))
 
     assert (
         asyncio.run(job_store.get_job_provenance_async("job-1", client=redis))
@@ -572,7 +643,13 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
 
     job_store.set_job_status(
         "job-1",
-        "started",
+        "queued",
+        metric="heavy_metric",
+        client=redis,
+    )
+    job_store.set_job_status(
+        "job-1",
+        "running",
         metric="heavy_metric",
         client=redis,
     )
@@ -596,8 +673,13 @@ def test_status_result_and_structured_failure_are_persisted() -> None:
     assert _load_status(redis, "job-1")["status"] == "failed"
     assert _load_status(redis, "job-1")["error"] == payload["error"]
     events = job_store.read_job_events("job-1", client=redis)
-    assert [event.event.event for event in events] == ["started", "failed"]
-    assert events[-1].event.data == payload
+    assert [event.event.name for event in events] == [
+        "queued",
+        "running",
+        "failed",
+    ]
+    assert isinstance(events[-1].event, JobLifecycleEvent)
+    assert events[-1].event.error == payload["error"]
 
 
 def test_result_reference_uses_v1_job_uri() -> None:
@@ -908,6 +990,7 @@ def test_result_descriptor_uses_ttl_seconds_without_guessing_expiry(
 ) -> None:
     redis = FakeRedisSync()
     monkeypatch.setattr(redis, "pttl", None)
+    job_store.set_job_status("job-1", "queued", client=redis)
     job_store.set_job_status("job-1", "succeeded", client=redis)
     redis.ttl_values[job_store.result_key("job-1")] = 90
     redis.values[job_store.result_key("job-1")] = json.dumps(
@@ -985,6 +1068,7 @@ def test_async_result_descriptor_reads_stored_result_and_lifetime() -> None:
             ).model_dump(mode="json", exclude_none=True)
         )
     )
+    asyncio.run(job_store.set_job_status_async("job-1", "queued", client=redis))
     asyncio.run(job_store.set_job_status_async("job-1", "succeeded", client=redis))
     redis.pttl_values[job_store.result_key("job-1")] = 1_500
 
@@ -1003,23 +1087,25 @@ def test_job_status_index_lists_recent_jobs_newest_first() -> None:
 
     job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
     job_store.set_job_status("job-2", "queued", metric="light_metric", client=redis)
-    job_store.set_job_status("job-1", "progress", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "running", metric="heavy_metric", client=redis)
 
     jobs = job_store.list_job_statuses(client=redis)
 
     assert [job.job_id for job in jobs] == ["job-1", "job-2"]
-    assert jobs[0].status == "progress"
+    assert jobs[0].status == "running"
 
 
 def test_job_status_index_filters_by_status_and_metric() -> None:
     redis = FakeRedisSync()
 
     job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-2", "started", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-3", "started", metric="light_metric", client=redis)
+    job_store.set_job_status("job-2", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-2", "running", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-3", "queued", metric="light_metric", client=redis)
+    job_store.set_job_status("job-3", "running", metric="light_metric", client=redis)
 
     started_heavy = job_store.list_job_statuses(
-        status="started",
+        status="running",
         metric="heavy_metric",
         client=redis,
     )
@@ -1049,7 +1135,8 @@ def test_job_status_index_prunes_old_members_on_status_update() -> None:
 
 def test_cancel_job_marks_active_job_cancelled() -> None:
     redis = FakeRedisSync()
-    job_store.set_job_status("job-1", "started", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "running", metric="heavy_metric", client=redis)
 
     snapshot, cancelled = job_store.cancel_job("job-1", client=redis)
 
@@ -1061,7 +1148,11 @@ def test_cancel_job_marks_active_job_cancelled() -> None:
     assert stored_snapshot is not None
     assert stored_snapshot.status == "cancelled"
     events = job_store.read_job_events("job-1", client=redis)
-    assert [event.event.event for event in events] == ["started", "cancelled"]
+    assert [event.event.name for event in events] == [
+        "queued",
+        "running",
+        "cancelled",
+    ]
 
 
 def test_cancel_job_does_not_overwrite_terminal_result() -> None:
@@ -1089,36 +1180,104 @@ def test_cancel_job_returns_missing_for_unknown_job() -> None:
 
 def test_progress_events_append_in_order_and_resume_after_stream_id() -> None:
     redis = FakeRedisSync()
-
-    first = job_store.append_job_event(
-        "job-1",
-        "tile",
-        {"index": 1},
-        metric="heavy_metric",
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "running", metric="heavy_metric", client=redis)
+    first = job_store.append_job_progress(
+        JobProgressEvent(
+            job_id="job-1",
+            metric="heavy_metric",
+            timestamp=datetime.now(UTC),
+            stage="tile",
+            current=1,
+            total=2,
+        ),
         client=redis,
     )
-    second = job_store.append_job_event(
-        "job-1",
-        "tile",
-        {"index": 2},
-        metric="heavy_metric",
+    second = job_store.append_job_progress(
+        JobProgressEvent(
+            job_id="job-1",
+            metric="heavy_metric",
+            timestamp=datetime.now(UTC),
+            stage="tile",
+            current=2,
+            total=2,
+        ),
         client=redis,
     )
 
     all_events = job_store.read_job_events("job-1", client=redis)
     resumed = job_store.read_job_events("job-1", after_id=first.stream_id, client=redis)
 
-    assert [event.stream_id for event in all_events] == [
+    assert [event.stream_id for event in all_events[-2:]] == [
         first.stream_id,
         second.stream_id,
     ]
-    assert [event.event.data for event in all_events] == [{"index": 1}, {"index": 2}]
+    progress = [
+        event.event for event in all_events if isinstance(event.event, JobProgressEvent)
+    ]
+    assert [event.current for event in progress] == [1, 2]
     assert [event.stream_id for event in resumed] == [second.stream_id]
-    assert _load_status(redis, "job-1")["status"] == "progress"
+    assert _load_status(redis, "job-1")["status"] == "running"
+
+
+def test_message_event_updates_status_projection_and_structured_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    redis = FakeRedisSync()
+    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
+    job_store.set_job_status("job-1", "running", metric="heavy_metric", client=redis)
+    event = JobMessageEvent(
+        job_id="job-1",
+        metric="heavy_metric",
+        timestamp=datetime.now(UTC),
+        level="warning",
+        message="Tile retry scheduled",
+        fields={"tile": 4, "retry": 2},
+    )
+
+    with caplog.at_level("WARNING", logger="lyra_app.job_store"):
+        stored = job_store.append_job_message(event, client=redis)
+
+    snapshot = job_store.get_job_status("job-1", client=redis)
+    assert snapshot is not None
+    assert snapshot.latest_message == event.snapshot()
+    assert stored.event == event
+    record = caplog.records[-1]
+    assert record.__dict__["structured_fields"] == {
+        "event_kind": "message",
+        "job_id": "job-1",
+        "metric": "heavy_metric",
+        "message_level": "warning",
+        "event_fields": {"tile": 4, "retry": 2},
+    }
+
+
+def test_event_payload_limit_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisSync()
+    config = get_config()
+    limited = config.model_copy(
+        update={
+            "job_events": config.job_events.model_copy(update={"max_payload_bytes": 64})
+        }
+    )
+    monkeypatch.setattr(job_store, "get_config", lambda: limited)
+
+    with pytest.raises(ValueError, match="maximum is 64"):
+        job_store.set_job_status(
+            "job-with-an-identifier-long-enough-to-overflow",
+            "queued",
+            metric="heavy_metric",
+            client=redis,
+        )
+
+    assert redis.streams == {}
 
 
 def test_cancelled_status_is_detected_and_raised() -> None:
     redis = FakeRedisSync()
+    job_store.set_job_status("job-1", "queued", client=redis)
     job_store.set_job_status("job-1", "cancelled", client=redis)
 
     assert job_store.is_job_cancelled("job-1", client=redis) is True
@@ -1150,7 +1309,7 @@ def test_async_blocking_event_read_returns_new_stream_entries() -> None:
     redis = FakeRedisAsync()
     asyncio.run(job_store.set_job_status_async("job-1", "queued", client=redis))
     first_id = redis.streams[job_store.events_key("job-1")][0][0]
-    asyncio.run(job_store.set_job_status_async("job-1", "started", client=redis))
+    asyncio.run(job_store.set_job_status_async("job-1", "running", client=redis))
 
     events = asyncio.run(
         job_store.read_new_job_events_async(
@@ -1161,4 +1320,4 @@ def test_async_blocking_event_read_returns_new_stream_entries() -> None:
         )
     )
 
-    assert [event.event.event for event in events] == ["started"]
+    assert [event.event.name for event in events] == ["running"]

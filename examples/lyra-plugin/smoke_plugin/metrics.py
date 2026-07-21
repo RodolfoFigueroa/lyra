@@ -42,7 +42,7 @@ def run_table(
     *,
     context: RunContext,
 ) -> TableJobResult:
-    context.emit_event("progress", {"stage": "table"})
+    context.report_progress(stage="table", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
     return TableJobResult.from_mapping(
@@ -70,7 +70,7 @@ def run_file(
     *,
     context: RunContext,
 ) -> FileJobResult:
-    context.emit_event("progress", {"stage": "file"})
+    context.report_progress(stage="file", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
     output_path = context.temp_dir / "smoke-result.txt"
@@ -99,7 +99,7 @@ def run_cancel(
     *,
     context: RunContext,
 ) -> TableJobResult:
-    context.emit_event("progress", {"stage": "cancel-check"})
+    context.report_progress(stage="cancel-check", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
     return TableJobResult.from_mapping(

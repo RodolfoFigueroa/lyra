@@ -10,6 +10,7 @@ import pytest
 from lyra.sdk.models import (
     FileJobResult,
     JobEnvelope,
+    JobProgressEvent,
     TableJobResult,
     TerminalJobResult,
 )
@@ -22,6 +23,7 @@ from lyra_app.db import connection as database_connection
 from lyra_app.plugin_state import PluginState, make_repo_record
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from tests.config_helpers import load_test_config, plugin_state_store
+from tests.redis_job_scripts import eval_job_script
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
     SMOKE_PLUGIN_DIR,
@@ -203,6 +205,15 @@ class FakeRedisSync:
         for member, score in list(sorted_set.items()):
             if lower <= score <= max:
                 sorted_set.pop(member, None)
+
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int | str:
+        del script
+        return eval_job_script(self, numkeys, keys_and_args)
 
     def xrange(
         self,
@@ -708,7 +719,7 @@ def test_generic_task_executes_factory_and_persists_result(
         "def run(location: LocationInput, value: int, *, context: RunContext):\n"
         "    assert context.metric == 'heavy_metric'\n"
         "    assert hasattr(context, 'db')\n"
-        "    context.emit_event('progress', {'percent': 50})\n"
+        "    context.report_progress(stage='compute', current=50, total=100)\n"
         "    return TableJobResult(\n"
         "        job_id=context.job_id,\n"
         "        index=['area-1'],\n"
@@ -754,13 +765,14 @@ def test_generic_task_executes_factory_and_persists_result(
     assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
     assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "succeeded"
     events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
-    assert [event.event.event for event in events] == [
-        "started",
+    assert [event.event.name for event in events] == [
+        "queued",
+        "running",
         "progress",
         "succeeded",
     ]
-    assert events[1].event.data == {"percent": 50}
-    assert events[-1].event.data == payload
+    assert isinstance(events[2].event, JobProgressEvent)
+    assert events[2].event.current == 50
 
 
 def test_smoke_table_metric_executes_from_directory_fixture(
@@ -800,12 +812,14 @@ def test_smoke_table_metric_executes_from_directory_fixture(
         "job-smoke-table",
         client=fake_redis,
     )
-    assert [event.event.event for event in events] == [
-        "started",
+    assert [event.event.name for event in events] == [
+        "queued",
+        "running",
         "progress",
         "succeeded",
     ]
-    assert events[1].event.data == {"stage": "table"}
+    assert isinstance(events[2].event, JobProgressEvent)
+    assert events[2].event.stage == "table"
 
 
 def test_unknown_metric_persists_failed_result(
@@ -1383,6 +1397,11 @@ def test_smoke_cancel_metric_respects_pre_cancelled_job(
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
     worker_module.job_store.set_job_status(
         "job-smoke-cancel",
+        "queued",
+        metric="smoke_cancel_metric",
+    )
+    worker_module.job_store.set_job_status(
+        "job-smoke-cancel",
         "cancelled",
         metric="smoke_cancel_metric",
     )
@@ -1410,7 +1429,7 @@ def test_smoke_cancel_metric_respects_pre_cancelled_job(
     )
 
 
-def test_run_context_emit_event_writes_progress_event(
+def test_run_context_report_progress_writes_typed_event(
     worker_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1425,8 +1444,61 @@ def test_run_context_emit_event_writes_progress_event(
         db=None,
     )
 
-    context.emit_event("progress", {"percent": 50})
+    worker_module.job_store.set_job_status(
+        "job-1", "queued", metric="metric", client=fake_redis
+    )
+    worker_module.job_store.set_job_status(
+        "job-1", "running", metric="metric", client=fake_redis
+    )
+    context.report_progress(stage="compute", current=50, total=100)
 
     events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
-    assert [event.event.data for event in events] == [{"percent": 50}]
-    assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "progress"
+    assert events[-1].event.name == "progress"
+    assert isinstance(events[-1].event, JobProgressEvent)
+    assert events[-1].event.current == 50
+    assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "running"
+
+
+def test_run_context_coalesces_progress_and_flushes_latest(
+    worker_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_redis = FakeRedisSync()
+    config = get_config()
+    coalescing_config = config.model_copy(
+        update={
+            "job_events": config.job_events.model_copy(
+                update={"progress_min_interval_ms": 1_000}
+            )
+        }
+    )
+    monkeypatch.setattr(worker_module, "get_config", lambda: coalescing_config)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 100.0)
+    context = worker_module.WorkerRunContext(
+        job_id="job-1",
+        metric="metric",
+        logger=worker_module.logger,
+        temp_dir=tmp_path,
+        db=None,
+    )
+    worker_module.job_store.set_job_status(
+        "job-1", "queued", metric="metric", client=fake_redis
+    )
+    worker_module.job_store.set_job_status(
+        "job-1", "running", metric="metric", client=fake_redis
+    )
+
+    context.report_progress(stage="compute", current=0, total=10)
+    context.report_progress(stage="compute", current=1, total=10)
+    context.report_progress(stage="compute", current=2, total=10)
+    context.flush_events()
+
+    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
+    progress = [
+        event.event.current
+        for event in events
+        if isinstance(event.event, JobProgressEvent)
+    ]
+    assert progress == [0, 2]

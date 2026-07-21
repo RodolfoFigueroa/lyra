@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -21,11 +22,18 @@ from typing import (
 from lyra.sdk.models import (
     JobEnvelope,
     JobEvent,
+    JobLifecycleEvent,
+    JobLifecycleStatus,
+    JobMessage,
+    JobMessageEvent,
+    JobProgress,
+    JobProgressEvent,
     JobRunProvenance,
     ResultDescriptor,
     ResultLifetime,
     TerminalJobResult,
     build_result_descriptor,
+    parse_job_event,
     parse_job_result,
 )
 from lyra.sdk.models.strict import StrictBaseModel
@@ -43,14 +51,7 @@ if TYPE_CHECKING:
 
     from lyra.sdk.types import JsonValue
 
-JobStatus: TypeAlias = Literal[
-    "queued",
-    "started",
-    "progress",
-    "succeeded",
-    "failed",
-    "cancelled",
-]
+JobStatus: TypeAlias = JobLifecycleStatus
 
 TerminalJobStatus: TypeAlias = Literal["succeeded", "failed", "cancelled"]
 
@@ -60,9 +61,7 @@ class JobStatusOptions(TypedDict, total=False):
 
     metric: str | None
     error: dict[str, Any] | None
-    event_data: dict[str, Any] | None
-    emit_event: bool
-    client: SyncJobWriter | None
+    client: SyncAtomicJobWriter | None
 
 
 class AsyncJobStatusOptions(TypedDict, total=False):
@@ -70,9 +69,7 @@ class AsyncJobStatusOptions(TypedDict, total=False):
 
     metric: str | None
     error: dict[str, Any] | None
-    event_data: dict[str, Any] | None
-    emit_event: bool
-    client: AsyncJobWriter | None
+    client: AsyncAtomicJobWriter | None
 
 
 JOB_STORE_TTL_SECONDS = DEFAULT_JOB_STORE_TTL_SECONDS
@@ -83,6 +80,49 @@ JOB_INDEX_KEY = "jobs:index"
 TERMINAL_STATUSES: set[TerminalJobStatus] = {"succeeded", "failed", "cancelled"}
 DEFAULT_AGENT_SCOPE = "shared-agent"
 AGENT_SUBMISSION_LIMIT_KEY = "jobs:submission-limit:shared-agent"
+logger = logging.getLogger(__name__)
+
+_APPEND_JOB_EVENT_SCRIPT = """
+local current = redis.call('get', KEYS[1])
+local guard = ARGV[1]
+if guard == 'missing' and current then
+    return 'error:exists'
+end
+if guard ~= 'missing' then
+    if not current then
+        return 'error:missing'
+    end
+    local current_status = cjson.decode(current)['status']
+    if current_status == 'succeeded'
+        or current_status == 'failed'
+        or current_status == 'cancelled' then
+        return 'error:terminal:' .. current_status
+    end
+    if guard == 'queued' and current_status ~= 'queued' then
+        return 'error:expected-queued:' .. current_status
+    end
+    if guard == 'running' and current_status ~= 'running' then
+        return 'error:expected-running:' .. current_status
+    end
+end
+
+local ttl = tonumber(ARGV[5])
+redis.call('set', KEYS[1], ARGV[2], 'EX', ttl)
+local stream_id = redis.call(
+    'xadd', KEYS[2], 'MAXLEN', '~', tonumber(ARGV[9]), '*',
+    'event', ARGV[3], 'payload', ARGV[4]
+)
+redis.call('expire', KEYS[2], ttl)
+redis.call('expire', KEYS[3], ttl)
+local reservation_key = redis.call('get', KEYS[4])
+if reservation_key then
+    redis.call('expire', reservation_key, ttl)
+end
+redis.call('expire', KEYS[4], ttl)
+redis.call('zadd', KEYS[5], ARGV[6], ARGV[7])
+redis.call('zremrangebyscore', KEYS[5], '-inf', ARGV[8])
+return stream_id
+""".strip()
 
 _CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT = """
 local limit = tonumber(ARGV[1])
@@ -143,7 +183,7 @@ local ttl = tonumber(ARGV[5])
 redis.call('set', KEYS[2], ARGV[1], 'EX', ttl)
 redis.call('set', KEYS[1], ARGV[2], 'EX', ttl)
 redis.call(
-    'xadd', KEYS[3], '*',
+    'xadd', KEYS[3], 'MAXLEN', '~', tonumber(ARGV[9]), '*',
     'event', ARGV[3],
     'payload', ARGV[4]
 )
@@ -169,6 +209,7 @@ return 0
 """.strip()
 
 RedisPayload: TypeAlias = str | bytes
+RedisScriptResult: TypeAlias = RedisPayload | int | list[int]
 RedisStreamFields: TypeAlias = Mapping[str, RedisPayload] | Mapping[bytes, RedisPayload]
 RedisStreamRecord: TypeAlias = tuple[RedisPayload, RedisStreamFields]
 
@@ -261,6 +302,28 @@ class AsyncJobWriter(Protocol):
     ) -> Awaitable[int | None]: ...
 
 
+class SyncAtomicJobWriter(SyncJobWriter, SyncKeyReader, Protocol):
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        key: str,
+        /,
+        *keys_and_args: str | float,
+    ) -> RedisScriptResult: ...
+
+
+class AsyncAtomicJobWriter(AsyncJobWriter, AsyncKeyReader, Protocol):
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        key: str,
+        /,
+        *keys_and_args: str | float,
+    ) -> Awaitable[RedisScriptResult]: ...
+
+
 class SyncJobClient(SyncJobWriter, SyncKeyReader, Protocol):
     pass
 
@@ -270,8 +333,10 @@ class SyncConditionalJobWriter(SyncJobClient, Protocol):
         self,
         script: str,
         numkeys: int,
+        key: str,
+        /,
         *keys_and_args: str | float,
-    ) -> int: ...
+    ) -> RedisScriptResult: ...
 
 
 class SyncJobListClient(SyncKeyReader, Protocol):
@@ -331,8 +396,8 @@ class AsyncScriptClient(Protocol):
         numkeys: int,
         key: str,
         /,
-        *args: str | int,
-    ) -> Awaitable[int | list[int]]: ...
+        *args: str | float,
+    ) -> Awaitable[RedisScriptResult]: ...
 
 
 class AsyncIdempotencyClient(
@@ -369,6 +434,8 @@ class JobStatusSnapshot(StrictBaseModel):
     updated_at: datetime
     metric: str | None = Field(default=None, min_length=1)
     error: dict[str, Any] | None = None
+    progress: JobProgress | None = None
+    latest_message: JobMessage | None = None
 
 
 class StoredJobEvent(StrictBaseModel):
@@ -481,7 +548,53 @@ def _now() -> datetime:
 
 
 def _dump_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload)
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _encode_event(event: JobEvent) -> str:
+    payload = _dump_json(event.model_dump(mode="json", exclude_none=True))
+    limit = get_config().job_events.max_payload_bytes
+    size = len(payload.encode())
+    if size > limit:
+        msg = f"Job event payload is {size} bytes; maximum is {limit}."
+        raise ValueError(msg)
+    return payload
+
+
+def _log_job_event(event: JobEvent, *, progress_level: int = logging.DEBUG) -> None:
+    fields: dict[str, Any] = {
+        "event_kind": event.kind,
+        "job_id": event.job_id,
+        "metric": event.metric,
+    }
+    level = logging.INFO
+    message = "Job lifecycle changed"
+    if isinstance(event, JobLifecycleEvent):
+        fields["job_status"] = event.status
+        if event.error is not None:
+            fields["error"] = event.error
+    elif isinstance(event, JobProgressEvent):
+        level = progress_level
+        message = event.message or f"Job progress: {event.stage}"
+        fields.update(
+            {
+                "stage": event.stage,
+                "progress_current": event.current,
+                "progress_total": event.total,
+                "progress_unit": event.unit,
+            }
+        )
+    else:
+        level = {
+            "debug": logging.DEBUG,
+            "info": logging.INFO,
+            "warning": logging.WARNING,
+            "error": logging.ERROR,
+        }[event.level]
+        message = event.message
+        fields["message_level"] = event.level
+        fields["event_fields"] = event.fields
+    logger.log(level, message, extra={"structured_fields": fields})
 
 
 def _json_non_finite_constant(_: str) -> None:
@@ -541,38 +654,6 @@ async def get_result_lifetime_async(
     if isinstance(client, AsyncSecondLifetimeReader):
         return _lifetime_from_ttl_seconds(await client.ttl(key))
     return ResultLifetime()
-
-
-def _apply_ttl_sync(client: SyncJobWriter, job_id: str) -> None:
-    ttl = _job_store_ttl_seconds()
-    client.expire(status_key(job_id), ttl)
-    client.expire(result_key(job_id), ttl)
-    client.expire(events_key(job_id), ttl)
-    client.expire(provenance_key(job_id), ttl)
-    if not isinstance(client, SyncKeyReader):
-        return
-    reservation_key = client.get(job_idempotency_key(job_id))
-    if reservation_key is not None:
-        if isinstance(reservation_key, bytes):
-            reservation_key = reservation_key.decode()
-        client.expire(str(reservation_key), ttl)
-        client.expire(job_idempotency_key(job_id), ttl)
-
-
-async def _apply_ttl_async(client: AsyncJobWriter, job_id: str) -> None:
-    ttl = _job_store_ttl_seconds()
-    await client.expire(status_key(job_id), ttl)
-    await client.expire(result_key(job_id), ttl)
-    await client.expire(events_key(job_id), ttl)
-    await client.expire(provenance_key(job_id), ttl)
-    if not isinstance(client, AsyncKeyReader):
-        return
-    reservation_key = await client.get(job_idempotency_key(job_id))
-    if reservation_key is not None:
-        if isinstance(reservation_key, bytes):
-            reservation_key = reservation_key.decode()
-        await client.expire(str(reservation_key), ttl)
-        await client.expire(job_idempotency_key(job_id), ttl)
 
 
 async def claim_idempotency_key_async(
@@ -639,100 +720,106 @@ def _prune_job_index_sync(
     client.zremrangebyscore(JOB_INDEX_KEY, "-inf", cutoff)
 
 
-async def _prune_job_index_async(
-    client: AsyncJobWriter,
-    *,
-    now: datetime | None = None,
-) -> None:
-    cutoff = (now or _now()).timestamp() - _job_store_ttl_seconds()
-    await client.zremrangebyscore(JOB_INDEX_KEY, "-inf", cutoff)
-
-
-def _index_job_status_sync(client: SyncJobWriter, snapshot: JobStatusSnapshot) -> None:
-    client.zadd(JOB_INDEX_KEY, {snapshot.job_id: snapshot.updated_at.timestamp()})
-    _prune_job_index_sync(client, now=snapshot.updated_at)
-
-
-async def _index_job_status_async(
-    client: AsyncJobWriter,
-    snapshot: JobStatusSnapshot,
-) -> None:
-    await client.zadd(JOB_INDEX_KEY, {snapshot.job_id: snapshot.updated_at.timestamp()})
-    await _prune_job_index_async(client, now=snapshot.updated_at)
-
-
 def _decode_job_index_member(member: RedisPayload) -> str:
     if isinstance(member, bytes):
         return member.decode()
     return str(member)
 
 
-def _append_job_event_record_sync(
-    job_id: str,
-    event: str,
-    data: dict[str, Any],
-    *,
-    client: SyncJobWriter,
-) -> StoredJobEvent:
-    job_event = JobEvent(
-        job_id=job_id,
-        event=event,
-        timestamp=_now(),
-        data=data,
-    )
-    stream_id = client.xadd(
-        events_key(job_id),
-        {
-            "event": event,
-            "payload": _dump_json(job_event.model_dump(mode="json")),
-        },
-    )
-    if isinstance(stream_id, bytes):
-        stream_id = stream_id.decode()
-    _apply_ttl_sync(client, job_id)
-    return StoredJobEvent(stream_id=str(stream_id), event=job_event)
-
-
-async def _append_job_event_record_async(
-    job_id: str,
-    event: str,
-    data: dict[str, Any],
-    *,
-    client: AsyncJobWriter,
-) -> StoredJobEvent:
-    job_event = JobEvent(
-        job_id=job_id,
-        event=event,
-        timestamp=_now(),
-        data=data,
-    )
-    stream_id = await client.xadd(
-        events_key(job_id),
-        {
-            "event": event,
-            "payload": _dump_json(job_event.model_dump(mode="json")),
-        },
-    )
-    if isinstance(stream_id, bytes):
-        stream_id = stream_id.decode()
-    await _apply_ttl_async(client, job_id)
-    return StoredJobEvent(stream_id=str(stream_id), event=job_event)
-
-
-def _status_payload(
+def _build_status_snapshot(
     job_id: str,
     status: JobStatus,
     *,
+    previous: JobStatusSnapshot | None,
     metric: str | None = None,
     error: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> JobStatusSnapshot:
     return JobStatusSnapshot(
         job_id=job_id,
-        metric=metric,
+        metric=metric if metric is not None else getattr(previous, "metric", None),
         status=status,
         updated_at=_now(),
         error=error,
-    ).model_dump(mode="json", exclude_none=True)
+        progress=getattr(previous, "progress", None),
+        latest_message=getattr(previous, "latest_message", None),
+    )
+
+
+def _decode_script_result(result: RedisScriptResult) -> str:
+    if isinstance(result, list):
+        msg = "Job event script returned an unexpected list result."
+        raise TypeError(msg)
+    if isinstance(result, bytes):
+        return result.decode()
+    return str(result)
+
+
+def _event_keys(job_id: str) -> tuple[str, str, str, str, str]:
+    return (
+        status_key(job_id),
+        events_key(job_id),
+        provenance_key(job_id),
+        job_idempotency_key(job_id),
+        job_index_key(),
+    )
+
+
+def _append_event_and_snapshot_sync(
+    snapshot: JobStatusSnapshot,
+    event: JobEvent,
+    *,
+    guard: str,
+    client: SyncAtomicJobWriter,
+) -> StoredJobEvent | None:
+    encoded_event = _encode_event(event)
+    ttl = _job_store_ttl_seconds()
+    result = client.eval(
+        _APPEND_JOB_EVENT_SCRIPT,
+        5,
+        *_event_keys(snapshot.job_id),
+        guard,
+        _dump_json(snapshot.model_dump(mode="json", exclude_none=True)),
+        event.kind,
+        encoded_event,
+        ttl,
+        snapshot.updated_at.timestamp(),
+        snapshot.job_id,
+        snapshot.updated_at.timestamp() - ttl,
+        get_config().job_events.max_stream_events,
+    )
+    value = _decode_script_result(result)
+    if value.startswith("error:"):
+        return None
+    return StoredJobEvent(stream_id=value, event=event)
+
+
+async def _append_event_and_snapshot_async(
+    snapshot: JobStatusSnapshot,
+    event: JobEvent,
+    *,
+    guard: str,
+    client: AsyncAtomicJobWriter,
+) -> StoredJobEvent | None:
+    encoded_event = _encode_event(event)
+    ttl = _job_store_ttl_seconds()
+    result = await client.eval(
+        _APPEND_JOB_EVENT_SCRIPT,
+        5,
+        *_event_keys(snapshot.job_id),
+        guard,
+        _dump_json(snapshot.model_dump(mode="json", exclude_none=True)),
+        event.kind,
+        encoded_event,
+        ttl,
+        snapshot.updated_at.timestamp(),
+        snapshot.job_id,
+        snapshot.updated_at.timestamp() - ttl,
+        get_config().job_events.max_stream_events,
+    )
+    value = _decode_script_result(result)
+    if value.startswith("error:"):
+        return None
+    return StoredJobEvent(stream_id=value, event=event)
 
 
 def _save_job_provenance_sync(
@@ -768,7 +855,7 @@ async def _save_job_provenance_async(
 def create_job(
     job: JobEnvelope,
     provenance: JobRunProvenance | None = None,
-    client: SyncJobWriter | None = None,
+    client: SyncAtomicJobWriter | None = None,
 ) -> JobStatusSnapshot:
     client = _default_sync_client(client)
     if provenance is not None:
@@ -783,22 +870,43 @@ def set_job_status(
 ) -> JobStatusSnapshot:
     metric = options.get("metric")
     error = options.get("error")
-    event_data = options.get("event_data")
-    emit_event = options.get("emit_event", True)
     client = options.get("client")
     client = _default_sync_client(client)
-    payload = _status_payload(job_id, status, metric=metric, error=error)
-    client.set(status_key(job_id), _dump_json(payload), ex=_job_store_ttl_seconds())
-    _apply_ttl_sync(client, job_id)
-    snapshot = JobStatusSnapshot.model_validate(payload)
-    _index_job_status_sync(client, snapshot)
-    if emit_event:
-        _append_job_event_record_sync(
-            job_id,
-            status,
-            event_data or payload,
-            client=client,
-        )
+    current = get_job_status(job_id, client=client)
+    snapshot = _build_status_snapshot(
+        job_id,
+        status,
+        previous=current,
+        metric=metric,
+        error=error,
+    )
+    event = JobLifecycleEvent(
+        job_id=job_id,
+        metric=snapshot.metric,
+        timestamp=snapshot.updated_at,
+        status=status,
+        error=error,
+    )
+    guard = (
+        "missing"
+        if status == "queued"
+        else "queued"
+        if status == "running"
+        else "active"
+    )
+    stored = _append_event_and_snapshot_sync(
+        snapshot,
+        event,
+        guard=guard,
+        client=client,
+    )
+    if stored is None:
+        latest = get_job_status(job_id, client=client)
+        if latest is not None and latest.status == "cancelled":
+            raise JobCancelledError(job_id)
+        msg = f"Invalid job lifecycle transition for {job_id!r} to {status!r}."
+        raise RuntimeError(msg)
+    _log_job_event(event)
     return snapshot
 
 
@@ -806,30 +914,32 @@ def save_job_result(
     result: TerminalJobResult,
     *,
     metric: str | None = None,
-    client: SyncJobWriter | None = None,
+    client: SyncAtomicJobWriter | None = None,
 ) -> dict[str, Any]:
     client = _default_sync_client(client)
     payload = result.model_dump(mode="json", exclude_none=True)
-    client.set(
-        result_key(result.job_id),
-        _dump_json(payload),
-        ex=_job_store_ttl_seconds(),
-    )
-    set_job_status(
-        result.job_id,
-        result.status,
-        metric=metric,
-        error=getattr(result, "error", None),
-        emit_event=False,
-        client=client,
-    )
-    _append_job_event_record_sync(
-        result.job_id,
-        result.status,
-        payload,
-        client=client,
-    )
-    _apply_ttl_sync(client, result.job_id)
+    current = get_job_status(result.job_id, client=client)
+    if current is not None and is_terminal_status(current.status):
+        if current.status != result.status:
+            msg = f"Job {result.job_id!r} already has a different terminal status."
+            raise RuntimeError(msg)
+        client.set(
+            result_key(result.job_id),
+            _dump_json(payload),
+            ex=_job_store_ttl_seconds(),
+            nx=True,
+        )
+        return payload
+    if current is None:
+        set_job_status(
+            result.job_id,
+            "queued",
+            metric=metric,
+            client=client,
+        )
+    if not save_job_result_if_active(result, client=client):
+        msg = f"Job {result.job_id!r} already has a terminal result."
+        raise RuntimeError(msg)
     return payload
 
 
@@ -852,13 +962,17 @@ def save_job_result_if_active(
         updated_at=now,
         metric=snapshot.metric,
         error=getattr(result, "error", None),
+        progress=snapshot.progress,
+        latest_message=snapshot.latest_message,
     ).model_dump(mode="json", exclude_none=True)
-    event_payload = JobEvent(
+    event = JobLifecycleEvent(
         job_id=result.job_id,
-        event=result.status,
+        metric=snapshot.metric,
         timestamp=now,
-        data=result_payload,
-    ).model_dump(mode="json")
+        status=result.status,
+        error=getattr(result, "error", None),
+    )
+    encoded_event = _encode_event(event)
     ttl = _job_store_ttl_seconds()
     saved = client.eval(
         _SAVE_TERMINAL_RESULT_IF_ACTIVE_SCRIPT,
@@ -871,14 +985,18 @@ def save_job_result_if_active(
         job_index_key(),
         _dump_json(result_payload),
         _dump_json(status_payload),
-        result.status,
-        _dump_json(event_payload),
+        event.kind,
+        encoded_event,
         ttl,
         now.timestamp(),
         result.job_id,
         now.timestamp() - ttl,
+        get_config().job_events.max_stream_events,
     )
-    return bool(saved)
+    was_saved = bool(saved)
+    if was_saved:
+        _log_job_event(event)
+    return was_saved
 
 
 def get_job_result(
@@ -988,7 +1106,7 @@ def list_job_statuses(
 def cancel_job(
     job_id: str,
     *,
-    client: SyncJobClient | None = None,
+    client: SyncAtomicJobWriter | None = None,
 ) -> tuple[JobStatusSnapshot | None, bool]:
     client = _default_sync_client(client)
     snapshot = get_job_status(job_id, client=client)
@@ -996,12 +1114,18 @@ def cancel_job(
         return None, False
     if is_terminal_status(snapshot.status):
         return snapshot, False
-    cancelled = set_job_status(
-        job_id,
-        "cancelled",
-        metric=snapshot.metric,
-        client=client,
-    )
+    try:
+        cancelled = set_job_status(
+            job_id,
+            "cancelled",
+            metric=snapshot.metric,
+            client=client,
+        )
+    except (JobCancelledError, RuntimeError):
+        latest = get_job_status(job_id, client=client)
+        if latest is not None and is_terminal_status(latest.status):
+            return latest, False
+        raise
     return cancelled, True
 
 
@@ -1015,23 +1139,82 @@ def raise_if_cancelled(job_id: str, client: SyncKeyReader | None = None) -> None
         raise JobCancelledError(job_id)
 
 
-def append_job_event(
-    job_id: str,
-    event: str,
-    data: dict[str, Any] | None = None,
+def append_job_progress(
+    event: JobProgressEvent,
     *,
-    metric: str | None = None,
-    client: SyncJobWriter | None = None,
+    client: SyncAtomicJobWriter | None = None,
 ) -> StoredJobEvent:
     client = _default_sync_client(client)
-    stored_event = _append_job_event_record_sync(
-        event=event,
-        data=data or {},
-        job_id=job_id,
+    current = get_job_status(event.job_id, client=client)
+    if current is None or current.status != "running":
+        if current is not None and current.status == "cancelled":
+            raise JobCancelledError(event.job_id)
+        msg = f"Job {event.job_id!r} is not running."
+        raise RuntimeError(msg)
+    if current.progress is not None and current.progress.stage == event.stage:
+        if event.current < current.progress.current:
+            msg = f"Progress for stage {event.stage!r} must not decrease."
+            raise ValueError(msg)
+        if current.progress.total is not None and event.total != current.progress.total:
+            msg = f"Progress total for stage {event.stage!r} must remain stable."
+            raise ValueError(msg)
+        if current.progress.unit != event.unit:
+            msg = f"Progress unit for stage {event.stage!r} must remain stable."
+            raise ValueError(msg)
+    progress_level = (
+        logging.INFO
+        if current.progress is None
+        or current.progress.stage != event.stage
+        or (event.total is not None and event.current == event.total)
+        else logging.DEBUG
+    )
+    snapshot = current.model_copy(
+        update={"updated_at": event.timestamp, "progress": event.snapshot()}
+    )
+    stored_event = _append_event_and_snapshot_sync(
+        snapshot,
+        event,
+        guard="running",
         client=client,
     )
-    set_job_status(job_id, "progress", metric=metric, emit_event=False, client=client)
-    _apply_ttl_sync(client, job_id)
+    if stored_event is None:
+        latest = get_job_status(event.job_id, client=client)
+        if latest is not None and latest.status == "cancelled":
+            raise JobCancelledError(event.job_id)
+        msg = f"Job {event.job_id!r} stopped running before progress was stored."
+        raise RuntimeError(msg)
+    _log_job_event(event, progress_level=progress_level)
+    return stored_event
+
+
+def append_job_message(
+    event: JobMessageEvent,
+    *,
+    client: SyncAtomicJobWriter | None = None,
+) -> StoredJobEvent:
+    client = _default_sync_client(client)
+    current = get_job_status(event.job_id, client=client)
+    if current is None or current.status != "running":
+        if current is not None and current.status == "cancelled":
+            raise JobCancelledError(event.job_id)
+        msg = f"Job {event.job_id!r} is not running."
+        raise RuntimeError(msg)
+    snapshot = current.model_copy(
+        update={"updated_at": event.timestamp, "latest_message": event.snapshot()}
+    )
+    stored_event = _append_event_and_snapshot_sync(
+        snapshot,
+        event,
+        guard="running",
+        client=client,
+    )
+    if stored_event is None:
+        latest = get_job_status(event.job_id, client=client)
+        if latest is not None and latest.status == "cancelled":
+            raise JobCancelledError(event.job_id)
+        msg = f"Job {event.job_id!r} stopped running before its message was stored."
+        raise RuntimeError(msg)
+    _log_job_event(event)
     return stored_event
 
 
@@ -1051,7 +1234,7 @@ def read_job_events(
 async def create_job_async(
     job: JobEnvelope,
     provenance: JobRunProvenance | None = None,
-    client: AsyncJobWriter | None = None,
+    client: AsyncAtomicJobWriter | None = None,
 ) -> JobStatusSnapshot:
     client = _default_async_client(client)
     if provenance is not None:
@@ -1071,26 +1254,43 @@ async def set_job_status_async(
 ) -> JobStatusSnapshot:
     metric = options.get("metric")
     error = options.get("error")
-    event_data = options.get("event_data")
-    emit_event = options.get("emit_event", True)
     client = options.get("client")
     client = _default_async_client(client)
-    payload = _status_payload(job_id, status, metric=metric, error=error)
-    await client.set(
-        status_key(job_id),
-        _dump_json(payload),
-        ex=_job_store_ttl_seconds(),
+    current = await get_job_status_async(job_id, client=client)
+    snapshot = _build_status_snapshot(
+        job_id,
+        status,
+        previous=current,
+        metric=metric,
+        error=error,
     )
-    await _apply_ttl_async(client, job_id)
-    snapshot = JobStatusSnapshot.model_validate(payload)
-    await _index_job_status_async(client, snapshot)
-    if emit_event:
-        await _append_job_event_record_async(
-            job_id,
-            status,
-            event_data or payload,
-            client=client,
-        )
+    event = JobLifecycleEvent(
+        job_id=job_id,
+        metric=snapshot.metric,
+        timestamp=snapshot.updated_at,
+        status=status,
+        error=error,
+    )
+    guard = (
+        "missing"
+        if status == "queued"
+        else "queued"
+        if status == "running"
+        else "active"
+    )
+    stored = await _append_event_and_snapshot_async(
+        snapshot,
+        event,
+        guard=guard,
+        client=client,
+    )
+    if stored is None:
+        latest = await get_job_status_async(job_id, client=client)
+        if latest is not None and latest.status == "cancelled":
+            raise JobCancelledError(job_id)
+        msg = f"Invalid job lifecycle transition for {job_id!r} to {status!r}."
+        raise RuntimeError(msg)
+    _log_job_event(event)
     return snapshot
 
 
@@ -1210,7 +1410,7 @@ def _stored_event_from_record(record: RedisStreamRecord) -> StoredJobEvent:
 
     return StoredJobEvent(
         stream_id=str(stream_id),
-        event=JobEvent.model_validate(_loads_json(payload)),
+        event=parse_job_event(_loads_json(payload)),
     )
 
 
@@ -1227,7 +1427,8 @@ __all__ = [
     "JobStatusSnapshot",
     "StoredJobEvent",
     "TerminalJobStatus",
-    "append_job_event",
+    "append_job_message",
+    "append_job_progress",
     "cancel_job",
     "claim_idempotency_key_async",
     "create_job",

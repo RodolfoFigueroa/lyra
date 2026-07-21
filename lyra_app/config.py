@@ -32,6 +32,10 @@ DEFAULT_API_HOST = str(ipaddress.IPv4Address(0))
 DEFAULT_API_PORT = 5219
 DEFAULT_FORWARDED_ALLOW_IPS = ["127.0.0.1"]
 DEFAULT_JOB_STORE_TTL_SECONDS = 600
+DEFAULT_JOB_EVENT_PROGRESS_MIN_INTERVAL_MS = 250
+DEFAULT_JOB_EVENT_MAX_EVENTS_PER_SECOND = 20
+DEFAULT_JOB_EVENT_MAX_PAYLOAD_BYTES = 16384
+DEFAULT_JOB_EVENT_MAX_STREAM_EVENTS = 1000
 DEFAULT_AGENT_SUBMISSION_LIMIT = 10
 DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = 60
 DEFAULT_LOG_LEVEL = "INFO"
@@ -500,6 +504,33 @@ class JobStoreConfig(StrictConfigModel):
     )
 
 
+class JobEventsConfig(StrictConfigModel):
+    progress_min_interval_ms: int = Field(
+        default=DEFAULT_JOB_EVENT_PROGRESS_MIN_INTERVAL_MS,
+        ge=0,
+        strict=True,
+        description="Minimum interval between retained progress events.",
+    )
+    max_events_per_second: int = Field(
+        default=DEFAULT_JOB_EVENT_MAX_EVENTS_PER_SECOND,
+        gt=0,
+        strict=True,
+        description="Maximum plugin-authored events retained per job each second.",
+    )
+    max_payload_bytes: int = Field(
+        default=DEFAULT_JOB_EVENT_MAX_PAYLOAD_BYTES,
+        gt=0,
+        strict=True,
+        description="Maximum UTF-8 encoded payload size for one job event.",
+    )
+    max_stream_events: int = Field(
+        default=DEFAULT_JOB_EVENT_MAX_STREAM_EVENTS,
+        gt=0,
+        strict=True,
+        description="Approximate retained event count limit for each job.",
+    )
+
+
 class AgentSubmissionLimitConfig(StrictConfigModel):
     limit: int = Field(
         default=DEFAULT_AGENT_SUBMISSION_LIMIT,
@@ -634,6 +665,10 @@ class LyraConfig(StrictConfigModel):
     )
     logging: LoggingConfig = Field(description="Application logging settings.")
     job_store: JobStoreConfig = Field(description="Retained job-store settings.")
+    job_events: JobEventsConfig = Field(
+        default_factory=JobEventsConfig,
+        description="Durable job event limits and coalescing settings.",
+    )
     agent_submission_limit: AgentSubmissionLimitConfig = Field(
         default_factory=AgentSubmissionLimitConfig,
         description="Shared REST and MCP submission limit.",
@@ -914,6 +949,19 @@ def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> No
     lines.append("")
 
 
+def _append_job_events_section(lines: list[str], job_events: JobEventsConfig) -> None:
+    lines.append("[job_events]")
+    _append_key(
+        lines,
+        "progress_min_interval_ms",
+        job_events.progress_min_interval_ms,
+    )
+    _append_key(lines, "max_events_per_second", job_events.max_events_per_second)
+    _append_key(lines, "max_payload_bytes", job_events.max_payload_bytes)
+    _append_key(lines, "max_stream_events", job_events.max_stream_events)
+    lines.append("")
+
+
 def _append_agent_submission_limit_section(
     lines: list[str],
     submission_limit: AgentSubmissionLimitConfig,
@@ -961,6 +1009,7 @@ def render_config_toml(config: LyraConfig) -> str:
     _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
+    _append_job_events_section(lines, config.job_events)
     _append_agent_submission_limit_section(lines, config.agent_submission_limit)
     _append_plugins_section(lines, config.plugins)
     _append_workers_section(lines, config.workers)
@@ -999,6 +1048,10 @@ __all__ = [
     "DEFAULT_API_PORT",
     "DEFAULT_CONFIG_PATH",
     "DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE",
+    "DEFAULT_JOB_EVENT_MAX_EVENTS_PER_SECOND",
+    "DEFAULT_JOB_EVENT_MAX_PAYLOAD_BYTES",
+    "DEFAULT_JOB_EVENT_MAX_STREAM_EVENTS",
+    "DEFAULT_JOB_EVENT_PROGRESS_MIN_INTERVAL_MS",
     "DEFAULT_JOB_STORE_TTL_SECONDS",
     "DEFAULT_LOG_DIR",
     "DEFAULT_LOG_LEVEL",
@@ -1022,6 +1075,7 @@ __all__ = [
     "ConfigSecretError",
     "DatabaseConfig",
     "EarthEngineConfig",
+    "JobEventsConfig",
     "JobStoreConfig",
     "LoggingConfig",
     "LyraConfig",

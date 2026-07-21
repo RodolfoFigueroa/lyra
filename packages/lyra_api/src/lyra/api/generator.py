@@ -1207,20 +1207,76 @@ def generate_client(
     return True
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="lyra-client")
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser used by ``lyra-client``."""
+
+    parser = argparse.ArgumentParser(
+        prog="lyra-client",
+        description="Pull metric catalogs and generate typed Python clients.",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
-    catalog = commands.add_parser("catalog")
+    catalog = commands.add_parser(
+        "catalog",
+        help="Manage local metric catalog snapshots.",
+        description="Manage local metric catalog snapshots.",
+    )
     catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
-    pull = catalog_commands.add_parser("pull")
-    pull.add_argument("--host", required=True)
-    pull.add_argument("--insecure", action="store_true")
-    pull.add_argument("--output", type=Path, default=Path("lyra-catalog.json"))
-    generate = commands.add_parser("generate")
-    generate.add_argument("--catalog", required=True, type=Path)
-    generate.add_argument("--package", required=True)
-    generate.add_argument("--output", required=True, type=Path)
-    generate.add_argument("--check", action="store_true")
+    pull = catalog_commands.add_parser(
+        "pull",
+        help="Fetch and validate the public metric catalog.",
+        description=(
+            "Fetch /metrics and write a canonical catalog snapshot for client "
+            "generation."
+        ),
+    )
+    pull.add_argument(
+        "--host",
+        required=True,
+        metavar="HOST",
+        help="Lyra host or base URL; HTTPS is used when no scheme is provided.",
+    )
+    pull.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Use HTTP when --host has no explicit scheme.",
+    )
+    pull.add_argument(
+        "--output",
+        type=Path,
+        default=Path("lyra-catalog.json"),
+        metavar="PATH",
+        help="Catalog snapshot path (default: lyra-catalog.json).",
+    )
+    generate = commands.add_parser(
+        "generate",
+        help="Generate a typed Python package from a catalog snapshot.",
+        description="Generate a typed Python package from a metric catalog snapshot.",
+    )
+    generate.add_argument(
+        "--catalog",
+        required=True,
+        type=Path,
+        metavar="PATH",
+        help="Catalog snapshot created by 'catalog pull'.",
+    )
+    generate.add_argument(
+        "--package",
+        required=True,
+        metavar="NAME",
+        help="Generated package name; must be one valid Python identifier.",
+    )
+    generate.add_argument(
+        "--output",
+        required=True,
+        type=Path,
+        metavar="DIRECTORY",
+        help="Destination directory for the generated package files.",
+    )
+    generate.add_argument(
+        "--check",
+        action="store_true",
+        help="Check for stale output without writing files; exit 1 on drift.",
+    )
     return parser
 
 
@@ -1241,7 +1297,7 @@ def _run_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
     try:
         return _run_command(args)
     except (
@@ -1261,6 +1317,7 @@ if __name__ == "__main__":
 __all__ = [
     "ClientGenerationError",
     "ClientGenerationWarning",
+    "build_parser",
     "canonical_catalog_json",
     "generate_client",
     "main",

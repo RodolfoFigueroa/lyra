@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from lyra.api.generator import build_parser as build_client_parser
 from lyra.sdk.plugin_cli import build_parser as build_plugin_parser
 from lyra.tui.__main__ import build_parser as build_tui_parser
 
@@ -313,6 +314,7 @@ def generate_config_reference() -> dict[str, Any]:
 
 def generate_cli_reference() -> None:
     parsers = (
+        ("lyra-client", build_client_parser()),
         ("lyra-plugin", build_plugin_parser()),
         ("lyra-tui", build_tui_parser()),
         ("worker launcher", build_worker_parser()),

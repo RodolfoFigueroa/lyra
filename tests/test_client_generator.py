@@ -8,6 +8,7 @@ import pytest
 from lyra.api.generator import (
     ClientGenerationError,
     ClientGenerationWarning,
+    build_parser,
     canonical_catalog_json,
     generate_client,
     render_package,
@@ -29,6 +30,28 @@ def _import_generated(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
         if name == "representative_lyra" or name.startswith("representative_lyra."):
             del sys.modules[name]
     return importlib.import_module("representative_lyra")
+
+
+def test_cli_help_describes_catalog_generation_and_check_mode() -> None:
+    help_text = build_parser().format_help()
+
+    assert "Pull metric catalogs and generate typed Python clients." in help_text
+    assert "Manage local metric catalog snapshots." in help_text
+    assert "Generate a typed Python package" in help_text
+
+    generate = build_parser().parse_args(
+        [
+            "generate",
+            "--catalog",
+            "catalog.json",
+            "--package",
+            "acme_lyra",
+            "--output",
+            "src/acme_lyra",
+            "--check",
+        ]
+    )
+    assert generate.check is True
 
 
 def test_catalog_fixture_is_canonical_and_round_trippable() -> None:

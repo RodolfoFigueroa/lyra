@@ -9,6 +9,11 @@ type checking cover every metric call.
 
 ## Pull and generate
 
+The `lyra-client` executable is installed with `lyra-api`. The commands below
+pull the public generation contract and render it as an importable package. See
+the [client generator CLI guide](../client-generator-cli/) for every option,
+exit status, and CI behavior.
+
 ```bash
 uv run lyra-client catalog pull \
   --host lyra.example.com \

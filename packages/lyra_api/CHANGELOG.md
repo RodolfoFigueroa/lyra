@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.6.0...lyra-api-v0.6.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* Fix missing CLI documentation ([8e39843](https://github.com/RodolfoFigueroa/lyra/commit/8e39843669ab7c79aee1f62c089fa17fe592ab85))
+
 ## [0.6.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.5.0...lyra-api-v0.6.0) (2026-07-21)
 
 

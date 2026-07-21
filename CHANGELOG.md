@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.9.0...lyra-app-v0.10.0) (2026-07-21)
+
+
+### Features
+
+* Couple DB with worker state ([4dbcaa8](https://github.com/RodolfoFigueroa/lyra/commit/4dbcaa87e1361fbed970be9a59e300902dce28a3))
+
 ## [0.9.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.8.0...lyra-app-v0.9.0) (2026-07-21)
 
 

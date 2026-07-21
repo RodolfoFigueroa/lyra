@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.26.0",
     "pydantic>=2.13.4",
+    "ruamel-yaml>=0.19.1",
 ]
 
 [project.scripts]

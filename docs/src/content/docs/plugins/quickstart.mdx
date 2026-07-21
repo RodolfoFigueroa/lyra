@@ -61,6 +61,20 @@ uv run lyra-plugin check-manifest
 Commit `lyra.plugin.json`. The API reads it without importing plugin code;
 workers compare it with the imported registry and reject stale artifacts.
 
+To rebuild and validate the manifest before every commit, add the local Lyra
+hook to the plugin repository and install pre-commit's Git integration:
+
+```bash
+uv add --dev pre-commit
+uv run lyra-plugin add-pre-commit-hook
+uv run pre-commit install
+```
+
+The command creates or updates `.pre-commit-config.yaml` without replacing
+existing hooks. If a commit regenerates `lyra.plugin.json`, stage the updated
+file and commit again. Running the command more than once leaves an existing
+Lyra hook, including any local customization, unchanged.
+
 ## Test and connect
 
 Test the decorated function and manifest before publishing:

@@ -37,17 +37,18 @@ lyra-api = { workspace = true }
 lyra-tui = { workspace = true }
 
 [tool.ruff.lint]
+preview = true
 select = ["ALL"]
-ignore = ["PLR2004", "COM812"]
+ignore = ["magic-value-comparison", "missing-trailing-comma"]
 per-file-ignores = { "tests/**/*.py" = [
-    "S101",
-    "D100",
-    "D101",
-    "D102",
-    "D103",
-    "D104",
-    "D105",
-    "D107",
+    "assert",
+    "undocumented-public-module",
+    "undocumented-public-class",
+    "undocumented-public-method",
+    "undocumented-public-function",
+    "undocumented-public-package",
+    "undocumented-magic-method",
+    "undocumented-public-init",
 ] }
 pydocstyle = { "convention" = "google" }
 

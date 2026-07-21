@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.16.0...lyra-v0.17.0) (2026-07-21)
+
+
+### Features
+
+* Add missing docstrings and misc. lint fixes ([2cd9b2b](https://github.com/RodolfoFigueroa/lyra/commit/2cd9b2bf8c91ffaaa146c9e081a741b59215b9b0))
+
 ## [0.16.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.15.0...lyra-v0.16.0) (2026-07-21)
 
 

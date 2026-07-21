@@ -1,9 +1,11 @@
 import asyncio
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from lyra.sdk.models import FailedJobResult
 
 from lyra_app import job_store, worker_control
 from lyra_app.config import clear_config_cache
@@ -57,8 +59,19 @@ class FakeCeleryControl:
 
 
 class FakeCeleryApp:
-    def __init__(self, inspector: object | None = None) -> None:
+    def __init__(
+        self,
+        inspector: object | None = None,
+        *,
+        result_state: str = "PENDING",
+    ) -> None:
         self.control = FakeCeleryControl(inspector)
+        self.result_state = result_state
+        self.result_ids: list[str] = []
+
+    def AsyncResult(self, task_id: str) -> object:  # noqa: N802
+        self.result_ids.append(task_id)
+        return type("FakeAsyncResult", (), {"state": self.result_state})()
 
 
 class FakeInspector:
@@ -147,6 +160,98 @@ def test_notify_interrupted_tasks_persists_failed_job_results(
     }
     assert status["status"] == "failed"
     assert len(events) == 1
+
+
+def test_persist_unexpected_task_failure_uses_conditional_finalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[FailedJobResult] = []
+
+    def save(result: FailedJobResult) -> bool:
+        captured.append(result)
+        return True
+
+    monkeypatch.setattr(worker_control.job_store, "save_job_result_if_active", save)
+
+    assert worker_control.persist_unexpected_task_failure("job-1") is True
+    assert captured[0].job_id == "job-1"
+    assert captured[0].error == {
+        "type": "worker",
+        "message": (
+            "Worker execution ended unexpectedly before Lyra could persist a result."
+        ),
+    }
+
+
+def test_reconcile_celery_failure_repairs_nonterminal_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    celery = FakeCeleryApp(result_state="FAILURE")
+    snapshot = job_store.JobStatusSnapshot(
+        job_id="job-1",
+        status="started",
+        updated_at=datetime.now(UTC),
+        metric="heavy_metric",
+    )
+    repaired = snapshot.model_copy(update={"status": "failed"})
+    persisted: list[str] = []
+
+    async def get_status(_: str) -> job_store.JobStatusSnapshot:
+        return repaired
+
+    monkeypatch.setattr(worker_control, "celery_app", celery)
+    monkeypatch.setattr(
+        worker_control,
+        "persist_unexpected_task_failure",
+        lambda task_id: persisted.append(task_id) or True,
+    )
+    monkeypatch.setattr(worker_control.job_store, "get_job_status_async", get_status)
+
+    result = asyncio.run(worker_control.reconcile_celery_failure(snapshot))
+
+    assert result is repaired
+    assert persisted == ["job-1"]
+    assert celery.result_ids == ["job-1"]
+
+
+@pytest.mark.parametrize("celery_state", ["PENDING", "STARTED", "RETRY", "SUCCESS"])
+def test_reconcile_celery_failure_ignores_nonfailure_states(
+    celery_state: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    celery = FakeCeleryApp(result_state=celery_state)
+    snapshot = job_store.JobStatusSnapshot(
+        job_id="job-1",
+        status="started",
+        updated_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(worker_control, "celery_app", celery)
+
+    result = asyncio.run(worker_control.reconcile_celery_failure(snapshot))
+
+    assert result is snapshot
+    assert celery.result_ids == ["job-1"]
+
+
+def test_reconcile_celery_failure_preserves_status_when_backend_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = job_store.JobStatusSnapshot(
+        job_id="job-1",
+        status="started",
+        updated_at=datetime.now(UTC),
+    )
+
+    class FailingCeleryApp:
+        def AsyncResult(self, _: str) -> object:  # noqa: N802
+            msg = "backend unavailable"
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr(worker_control, "celery_app", FailingCeleryApp())
+
+    result = asyncio.run(worker_control.reconcile_celery_failure(snapshot))
+
+    assert result is snapshot
 
 
 def test_revoke_job_requests_celery_revocation(

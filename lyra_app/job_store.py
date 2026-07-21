@@ -126,6 +126,41 @@ redis.call('decr', KEYS[1])
 return 1
 """.strip()
 
+_SAVE_TERMINAL_RESULT_IF_ACTIVE_SCRIPT = """
+local current = redis.call('get', KEYS[1])
+if not current then
+    return 0
+end
+
+local current_status = cjson.decode(current)['status']
+if current_status == 'succeeded'
+    or current_status == 'failed'
+    or current_status == 'cancelled' then
+    return 0
+end
+
+local ttl = tonumber(ARGV[5])
+redis.call('set', KEYS[2], ARGV[1], 'EX', ttl)
+redis.call('set', KEYS[1], ARGV[2], 'EX', ttl)
+redis.call(
+    'xadd', KEYS[3], '*',
+    'event', ARGV[3],
+    'payload', ARGV[4]
+)
+redis.call('expire', KEYS[3], ttl)
+redis.call('expire', KEYS[4], ttl)
+
+local reservation_key = redis.call('get', KEYS[5])
+if reservation_key then
+    redis.call('expire', reservation_key, ttl)
+end
+redis.call('expire', KEYS[5], ttl)
+
+redis.call('zadd', KEYS[6], ARGV[6], ARGV[7])
+redis.call('zremrangebyscore', KEYS[6], '-inf', ARGV[8])
+return 1
+""".strip()
+
 _RELEASE_IDEMPOTENCY_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -228,6 +263,15 @@ class AsyncJobWriter(Protocol):
 
 class SyncJobClient(SyncJobWriter, SyncKeyReader, Protocol):
     pass
+
+
+class SyncConditionalJobWriter(SyncJobClient, Protocol):
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int: ...
 
 
 class SyncJobListClient(SyncKeyReader, Protocol):
@@ -789,6 +833,54 @@ def save_job_result(
     return payload
 
 
+def save_job_result_if_active(
+    result: TerminalJobResult,
+    *,
+    client: SyncConditionalJobWriter | None = None,
+) -> bool:
+    """Atomically persist a terminal result unless the job already finished."""
+    client = _default_sync_client(client)
+    snapshot = get_job_status(result.job_id, client=client)
+    if snapshot is None or is_terminal_status(snapshot.status):
+        return False
+
+    now = _now()
+    result_payload = result.model_dump(mode="json", exclude_none=True)
+    status_payload = JobStatusSnapshot(
+        job_id=result.job_id,
+        status=result.status,
+        updated_at=now,
+        metric=snapshot.metric,
+        error=getattr(result, "error", None),
+    ).model_dump(mode="json", exclude_none=True)
+    event_payload = JobEvent(
+        job_id=result.job_id,
+        event=result.status,
+        timestamp=now,
+        data=result_payload,
+    ).model_dump(mode="json")
+    ttl = _job_store_ttl_seconds()
+    saved = client.eval(
+        _SAVE_TERMINAL_RESULT_IF_ACTIVE_SCRIPT,
+        6,
+        status_key(result.job_id),
+        result_key(result.job_id),
+        events_key(result.job_id),
+        provenance_key(result.job_id),
+        job_idempotency_key(result.job_id),
+        job_index_key(),
+        _dump_json(result_payload),
+        _dump_json(status_payload),
+        result.status,
+        _dump_json(event_payload),
+        ttl,
+        now.timestamp(),
+        result.job_id,
+        now.timestamp() - ttl,
+    )
+    return bool(saved)
+
+
 def get_job_result(
     job_id: str,
     client: SyncKeyReader | None = None,
@@ -1166,6 +1258,7 @@ __all__ = [
     "release_idempotency_key_async",
     "result_key",
     "save_job_result",
+    "save_job_result_if_active",
     "set_job_status",
     "set_job_status_async",
     "status_key",

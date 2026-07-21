@@ -436,8 +436,14 @@ def _use_repo(
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis: FakeRedisAsync) -> None:
+    async def keep_current_status(
+        snapshot: job_store.JobStatusSnapshot,
+    ) -> job_store.JobStatusSnapshot:
+        return snapshot
+
     monkeypatch.setattr(jobs, "redis_client", redis)
     monkeypatch.setattr(jobs.job_store, "redis_client", redis)
+    monkeypatch.setattr(jobs, "reconcile_celery_failure", keep_current_status)
 
 
 async def _request_app(
@@ -1483,6 +1489,39 @@ def test_job_result_returns_404_before_completion(
         asyncio.run(jobs.get_job_result("job-1"))
 
     assert exc_info.value.status_code == 404
+
+
+def test_job_result_repairs_celery_failure_before_returning_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    asyncio.run(job_store.set_job_status_async("job-1", "started"))
+    failure = FailedJobResult(
+        job_id="job-1",
+        error={"type": "worker", "message": "worker disappeared"},
+    )
+
+    async def repair(
+        snapshot: job_store.JobStatusSnapshot,
+    ) -> job_store.JobStatusSnapshot:
+        payload = failure.model_dump(mode="json", exclude_none=True)
+        await redis.set(
+            job_store.result_key(snapshot.job_id),
+            json.dumps(payload),
+            ex=600,
+        )
+        return await job_store.set_job_status_async(
+            snapshot.job_id,
+            "failed",
+            error=failure.error,
+        )
+
+    monkeypatch.setattr(jobs, "reconcile_celery_failure", repair)
+
+    response = asyncio.run(jobs.get_job_result("job-1"))
+
+    assert json.loads(bytes(response.body)) == failure.model_dump(mode="json")
 
 
 @pytest.mark.parametrize(

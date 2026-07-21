@@ -101,6 +101,42 @@ class FakeRedisSync:
             records = [record for record in records if record[0] >= minimum]
         return records if count is None else records[:count]
 
+    def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str | float,
+    ) -> int:
+        del script
+        assert numkeys == 6
+        keys = [str(value) for value in keys_and_args[:numkeys]]
+        args = keys_and_args[numkeys:]
+        current = self.values.get(keys[0])
+        if current is None:
+            return 0
+        if json.loads(current)["status"] in {"succeeded", "failed", "cancelled"}:
+            return 0
+
+        result_payload, status_payload, event_name, event_payload = map(str, args[:4])
+        ttl = int(args[4])
+        score = float(args[5])
+        job_id = str(args[6])
+        cutoff = float(args[7])
+        self.set(keys[1], result_payload, ex=ttl)
+        self.set(keys[0], status_payload, ex=ttl)
+        self.xadd(
+            keys[2],
+            {"event": event_name, "payload": event_payload},
+        )
+        for key in keys[2:5]:
+            self.expire(key, ttl)
+        reservation_key = self.values.get(keys[4])
+        if reservation_key is not None:
+            self.expire(reservation_key, ttl)
+        self.zadd(keys[5], {job_id: score})
+        self.zremrangebyscore(keys[5], "-inf", cutoff)
+        return 1
+
 
 class FakeRedisAsync:
     def __init__(self, payload: str | None = None) -> None:
@@ -303,6 +339,78 @@ def test_create_job_writes_queued_status_and_ttl() -> None:
     stored = json.loads(redis.values[job_store.provenance_key("job-1")])
     assert stored == provenance.model_dump(mode="json", exclude_none=True)
     assert "coordinates" not in json.dumps(stored)
+
+
+@pytest.mark.parametrize("active_status", ["queued", "started", "progress"])
+def test_save_job_result_if_active_atomically_finalizes_active_job(
+    active_status: job_store.JobStatus,
+) -> None:
+    redis = FakeRedisSync()
+    job_store.set_job_status(
+        "job-1",
+        active_status,
+        metric="heavy_metric",
+        client=redis,
+    )
+
+    saved = job_store.save_job_result_if_active(
+        FailedJobResult(
+            job_id="job-1",
+            error={"type": "worker", "message": "worker disappeared"},
+        ),
+        client=redis,
+    )
+
+    assert saved is True
+    assert _load_status(redis, "job-1")["status"] == "failed"
+    assert _load_status(redis, "job-1")["metric"] == "heavy_metric"
+    assert json.loads(redis.values[job_store.result_key("job-1")])["status"] == (
+        "failed"
+    )
+    events = job_store.read_job_events("job-1", client=redis)
+    assert [event.event.event for event in events] == [active_status, "failed"]
+
+
+@pytest.mark.parametrize("terminal_status", ["succeeded", "failed", "cancelled"])
+def test_save_job_result_if_active_does_not_replace_terminal_job(
+    terminal_status: job_store.JobStatus,
+) -> None:
+    redis = FakeRedisSync()
+    job_store.set_job_status("job-1", terminal_status, client=redis)
+
+    saved = job_store.save_job_result_if_active(
+        FailedJobResult(job_id="job-1", error={"type": "worker"}),
+        client=redis,
+    )
+
+    assert saved is False
+    assert _load_status(redis, "job-1")["status"] == terminal_status
+    assert job_store.result_key("job-1") not in redis.values
+    assert len(job_store.read_job_events("job-1", client=redis)) == 1
+
+
+def test_save_job_result_if_active_does_not_resurrect_missing_job() -> None:
+    redis = FakeRedisSync()
+
+    saved = job_store.save_job_result_if_active(
+        FailedJobResult(job_id="job-1", error={"type": "worker"}),
+        client=redis,
+    )
+
+    assert saved is False
+    assert redis.values == {}
+
+
+def test_save_job_result_if_active_is_idempotent() -> None:
+    redis = FakeRedisSync()
+    job_store.set_job_status("job-1", "started", client=redis)
+    result = FailedJobResult(job_id="job-1", error={"type": "worker"})
+
+    assert job_store.save_job_result_if_active(result, client=redis) is True
+    assert job_store.save_job_result_if_active(result, client=redis) is False
+    assert [
+        event.event.event for event in job_store.read_job_events("job-1", client=redis)
+    ] == ["started", "failed"]
 
 
 def test_idempotency_claim_is_atomic_scoped_and_conditionally_released() -> None:

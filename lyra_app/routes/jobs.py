@@ -39,6 +39,7 @@ from lyra_app.spatial_inputs import (
     SpatialInputResolutionUnavailableError,
     SpatialInputValidationError,
 )
+from lyra_app.worker_control import reconcile_celery_failure
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -65,6 +66,15 @@ async def _ensure_redis_available() -> None:
     if not pong:
         err = "Cannot connect to Redis. Please try again later."
         raise HTTPException(status_code=503, detail=err)
+
+
+async def _get_reconciled_job_status(
+    job_id: str,
+) -> job_store.JobStatusSnapshot | None:
+    snapshot = await job_store.get_job_status_async(job_id)
+    if snapshot is None:
+        return None
+    return await reconcile_celery_failure(snapshot)
 
 
 def _sse_message(stored_event: job_store.StoredJobEvent) -> str:
@@ -122,7 +132,7 @@ async def _job_event_stream(
                 return
 
         if not events:
-            snapshot = await job_store.get_job_status_async(job_id)
+            snapshot = await _get_reconciled_job_status(job_id)
             if snapshot is None or snapshot.status in TERMINAL_EVENTS:
                 return
 
@@ -205,7 +215,7 @@ async def create_job_route(
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str) -> JobStatusInfo:
     await _ensure_redis_available()
-    snapshot = await job_store.get_job_status_async(job_id)
+    snapshot = await _get_reconciled_job_status(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job expired or not found")
     return JobStatusInfo.model_validate(snapshot.model_dump(mode="json"))
@@ -221,7 +231,7 @@ async def get_job_events(
     ] = None,
 ) -> StreamingResponse:
     await _ensure_redis_available()
-    snapshot = await job_store.get_job_status_async(job_id)
+    snapshot = await _get_reconciled_job_status(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job expired or not found")
 
@@ -236,6 +246,9 @@ async def get_job_events(
 async def get_job_result(job_id: str) -> JSONResponse:
     await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
+    if payload is None:
+        await _get_reconciled_job_status(job_id)
+        payload = await job_store.get_job_result_async(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="Result expired or not found")
 
@@ -252,7 +265,13 @@ async def get_job_result_descriptor(job_id: str) -> JSONResponse:
             content=descriptor.model_dump(mode="json", exclude_none=True),
         )
 
-    snapshot = await job_store.get_job_status_async(job_id)
+    snapshot = await _get_reconciled_job_status(job_id)
+    if snapshot is not None and job_store.is_terminal_status(snapshot.status):
+        descriptor = await job_store.get_job_result_descriptor_async(job_id)
+        if descriptor is not None:
+            return JSONResponse(
+                content=descriptor.model_dump(mode="json", exclude_none=True),
+            )
     if snapshot is None or snapshot.status == "succeeded":
         raise HTTPException(status_code=404, detail="Result expired or not found")
 

@@ -32,7 +32,11 @@ and asks Celery to revoke the task. Cancellation is cooperative after plugin
 code begins. Terminal results win races and are not overwritten.
 
 Worker interruption and plugin failure are normalized into terminal result
-records so consumers keep using the same result endpoint.
+records so consumers keep using the same result endpoint. Unexpected Celery
+task failures are recorded by the surviving worker parent. Job reads also
+repair nonterminal Lyra state when Celery's result backend already reports a
+failure. A complete worker or host loss that leaves Celery without a terminal
+state is not inferred automatically.
 
 ## Common response
 

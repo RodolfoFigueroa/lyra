@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 
+from celery import states
 from lyra.sdk.models import FailedJobResult
 from lyra.sdk.types import JsonObject, JsonValue
 
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 _INTERRUPTED_TASK_MESSAGE = (
     "This task was interrupted because plugins were updated. Please retry."
+)
+_UNEXPECTED_TASK_FAILURE_MESSAGE = (
+    "Worker execution ended unexpectedly before Lyra could persist a result."
 )
 DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS = 0.5
 WORKER_INSPECT_CACHE_TTL_SECONDS = 1.0
@@ -323,6 +327,71 @@ def notify_interrupted_tasks(task_ids: list[str]) -> None:
             )
         )
         logger.info("Notified task %s of interruption.", task_id)
+
+
+def persist_unexpected_task_failure(task_id: str) -> bool:
+    """Persist a Celery-level failure without replacing a terminal Lyra job."""
+    return job_store.save_job_result_if_active(
+        FailedJobResult(
+            job_id=task_id,
+            error={
+                "type": "worker",
+                "message": _UNEXPECTED_TASK_FAILURE_MESSAGE,
+            },
+        )
+    )
+
+
+def notify_unexpected_task_failure(task_id: str) -> None:
+    """Best-effort signal receiver entry point for unexpected task failures."""
+    try:
+        saved = persist_unexpected_task_failure(task_id)
+    except Exception:  # Celery signal handlers must not escape
+        logger.exception("Could not persist unexpected failure for task %s.", task_id)
+        return
+    if saved:
+        logger.info("Persisted unexpected failure for task %s.", task_id)
+
+
+async def reconcile_celery_failure(
+    snapshot: job_store.JobStatusSnapshot,
+) -> job_store.JobStatusSnapshot:
+    """Repair a nonterminal Lyra job when Celery has a terminal failure."""
+    if job_store.is_terminal_status(snapshot.status):
+        return snapshot
+
+    try:
+        celery_state = await asyncio.to_thread(
+            lambda: celery_app.AsyncResult(snapshot.job_id).state
+        )
+    except Exception:  # noqa: BLE001  # Result backends fail independently
+        logger.warning(
+            "Could not reconcile Celery state for task %s.",
+            snapshot.job_id,
+            exc_info=True,
+        )
+        return snapshot
+
+    if celery_state != states.FAILURE:
+        return snapshot
+
+    try:
+        saved = await asyncio.to_thread(
+            persist_unexpected_task_failure,
+            snapshot.job_id,
+        )
+        repaired = await job_store.get_job_status_async(snapshot.job_id)
+    except Exception:  # noqa: BLE001  # Preserve the last readable Lyra state
+        logger.warning(
+            "Could not persist reconciled failure for task %s.",
+            snapshot.job_id,
+            exc_info=True,
+        )
+        return snapshot
+
+    if saved:
+        logger.info("Reconciled Celery failure for task %s.", snapshot.job_id)
+    return repaired or snapshot
 
 
 def revoke_job(job_id: str) -> None:

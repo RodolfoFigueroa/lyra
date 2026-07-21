@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from celery import Task
+from celery.signals import task_failure
 from lyra.sdk.db import LyraDB
 from lyra.sdk.models import (
     CancelledJobResult,
@@ -690,6 +691,21 @@ def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
 def run_metric_task(self: Task, envelope_payload: JsonObject) -> JsonObject:
     task_id = str(getattr(self.request, "id", "") or "unknown-job")
     return execute_job(envelope_payload, task_id=task_id)
+
+
+@task_failure.connect(sender=run_metric_task)
+def _notify_unexpected_task_failure(
+    task_id: str | None = None,
+    **_: object,
+) -> None:
+    if not task_id:
+        logger.error("Celery reported a task failure without a task ID.")
+        return
+    from lyra_app.worker_control import (  # noqa: PLC0415
+        notify_unexpected_task_failure,
+    )
+
+    notify_unexpected_task_failure(task_id)
 
 
 __all__ = [

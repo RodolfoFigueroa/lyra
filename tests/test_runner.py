@@ -16,6 +16,7 @@ from lyra.sdk.models import (
 from lyra.sdk.models.plugin_v4 import FileOutputV4, TableOutputV4
 from sqlalchemy.exc import OperationalError
 
+from lyra_app import worker_control
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.db import connection as database_connection
 from lyra_app.plugin_state import PluginState, make_repo_record
@@ -346,6 +347,22 @@ def test_worker_registers_only_generic_task(worker_module: ModuleType) -> None:
     assert worker_module.GENERIC_TASK_NAME in worker_module.celery_app.tasks
     assert "light_metric" not in worker_module.celery_app.tasks
     assert "heavy_metric" not in worker_module.celery_app.tasks
+
+
+def test_worker_task_failure_signal_notifies_by_task_id(
+    worker_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notified: list[str] = []
+    monkeypatch.setattr(
+        worker_control,
+        "notify_unexpected_task_failure",
+        notified.append,
+    )
+
+    worker_module._notify_unexpected_task_failure(task_id="job-1")  # noqa: SLF001
+
+    assert notified == ["job-1"]
 
 
 def test_runner_loads_only_configured_queue(

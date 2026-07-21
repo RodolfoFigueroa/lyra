@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.11.0...lyra-app-v0.12.0) (2026-07-21)
+
+
+### Features
+
+* Add pre-commit integration ([d1b366c](https://github.com/RodolfoFigueroa/lyra/commit/d1b366ce2484f2f3f1e65e24fe9361076cbf0eda))
+
 ## [0.11.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.10.0...lyra-app-v0.11.0) (2026-07-21)
 
 

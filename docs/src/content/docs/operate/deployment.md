@@ -30,6 +30,12 @@ Each worker launcher receives a name from `[workers.<name>]`. That table control
 queues and concurrency; optional paths default below `/lyra_data`. Every metric
 executes through `lyra.run_metric` on its server-assigned queue.
 
+Before loading plugins or starting Celery, each worker opens a temporary database
+connection and executes `SELECT 1` with its worker pool configuration. A failed
+probe terminates startup so the process supervisor can retry it. Engines used by
+metric execution are still created inside worker processes; a database outage
+after startup is recorded as a retryable `database_unavailable` job failure.
+
 ## State and files
 
 ```text

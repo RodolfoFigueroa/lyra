@@ -14,8 +14,10 @@ from lyra.sdk.models import (
     TerminalJobResult,
 )
 from lyra.sdk.models.plugin_v3 import FileOutputV3, TableOutputV3
+from sqlalchemy.exc import OperationalError
 
 from lyra_app.config import clear_config_cache, get_config
+from lyra_app.db import connection as database_connection
 from lyra_app.plugin_state import PluginState, make_repo_record
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from tests.config_helpers import load_test_config, plugin_state_store
@@ -545,6 +547,27 @@ def test_runner_uses_configured_worker_temp_dir(
 
     assert context.temp_dir == tmp_path / "worker-temp" / "job-temp"
     assert context.temp_dir.is_dir()
+    assert context.db is not None
+
+
+def test_runner_propagates_database_context_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: ModuleType,
+) -> None:
+    def fail() -> None:
+        msg = "database context unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(database_connection, "get_worker_engine", fail)
+
+    with pytest.raises(RuntimeError, match="database context unavailable"):
+        worker_module.build_run_context(
+            JobEnvelope(
+                job_id="job-database-context",
+                metric="heavy_metric",
+                input={"location": _feature_collection()},
+            ),
+        )
 
 
 def test_runner_fails_when_metric_queue_assignment_is_missing(
@@ -815,6 +838,39 @@ def test_plugin_exception_persists_failed_result(
     assert result["status"] == "failed"
     assert result["error"] == {"type": "worker", "message": "boom"}
     assert _decode_stored_result(worker_module, fake_redis, "job-bad") == result
+
+
+def test_database_exception_persists_retryable_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: ModuleType,
+) -> None:
+    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+        statement = "SELECT 1"
+        message = "unavailable"
+        raise OperationalError(statement, {}, Exception(message))
+
+    worker_module.RUNNER_REGISTRY["database_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="database_metric",
+        queue="heavy",
+        entrypoint="database_plugin:run",
+        output=_table_output(),
+        run=fail,
+    )
+    fake_redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+
+    result = worker_module.execute_job(
+        {"job_id": "job-database", "metric": "database_metric", "input": {}},
+        task_id="task-id",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"] == {
+        "type": "database_unavailable",
+        "message": "The database is temporarily unavailable.",
+        "retryable": True,
+    }
+    assert _decode_stored_result(worker_module, fake_redis, "job-database") == result
 
 
 @pytest.mark.parametrize(

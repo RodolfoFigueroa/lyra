@@ -158,10 +158,16 @@ and return `FileJobResult`.
 ## Runtime context
 
 `RunContext` provides the job and metric names, logger, temporary directory,
-optional database helper, durable progress events, and cooperative cancellation.
+database helper, durable progress events, and cooperative cancellation. Every
+worker validates database connectivity before accepting jobs, so plugins may use
+`context.db` directly without a `None` check. A later database outage becomes a
+retryable `database_unavailable` job failure.
+
 Call `context.check_cancelled()` around expensive stages. Expected domain
 failures may return `FailedJobResult`; unexpected exceptions and invalid results
-are normalized by the worker.
+are normalized by the worker. Unit-test contexts must provide a fake or mocked
+`LyraDB`; a strict fake that rejects unexpected calls is preferred for metrics
+that do not use the database.
 
 ## Generated manifest
 

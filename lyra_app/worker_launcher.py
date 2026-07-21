@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from lyra_app.auth import initialize_earth_engine
 from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
+from lyra_app.db.connection import probe_worker_database
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 from lyra_app.plugin_state import PluginStateStore
@@ -49,6 +50,7 @@ def launch_worker(
         )
         raise RuntimeError(msg)
 
+    probe_worker_database(config)
     initialize_earth_engine(config)
 
     from lyra_app.celery_app import celery_app, configure_celery  # noqa: PLC0415

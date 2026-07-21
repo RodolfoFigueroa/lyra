@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 import pytest
 from jsonschema.validators import validator_for
@@ -12,6 +12,7 @@ from lyra.sdk import (
     BoundsInput,
     Input,
     LocationInput,
+    LyraDB,
     PluginDefinition,
     PluginDefinitionError,
     RunContext,
@@ -77,13 +78,16 @@ def _table_output() -> TableOutputV3:
     )
 
 
+_FAKE_DB = cast("LyraDB", object())
+
+
 @dataclass
 class FakeContext:
     job_id: str = "job-1"
     metric: str = "example"
     logger: Any = None
     temp_dir: Path = Path()
-    db: Any = None
+    db: LyraDB = _FAKE_DB
 
     def emit_event(self, event: str, data: dict[str, Any] | None = None) -> None:
         del event, data
@@ -107,6 +111,12 @@ def _require_even(value: int) -> int:
         msg = "value must be even"
         raise ValueError(msg)
     return value
+
+
+def test_run_context_database_is_non_nullable() -> None:
+    getter = RunContext.db.fget
+    assert getter is not None
+    assert getter.__annotations__["return"] == "LyraDB"
 
 
 def test_typed_metric_generates_manifest_and_receives_parsed_values() -> None:

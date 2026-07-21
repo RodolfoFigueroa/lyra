@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 from fastapi import HTTPException
@@ -93,6 +93,71 @@ def test_worker_engine_is_recreated_after_process_fork(
     assert engines[0].dispose_calls == [False]
     connection.dispose_worker_engine()
     assert engines[1].dispose_calls == [True]
+
+
+def test_worker_database_probe_executes_query_and_disposes_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    statements: list[str] = []
+    disposed: list[bool] = []
+
+    class FakeConnection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def execute(self, statement: object) -> None:
+            statements.append(str(statement))
+
+    class FakeEngine:
+        def connect(self) -> FakeConnection:
+            return FakeConnection()
+
+        def dispose(self) -> None:
+            disposed.append(True)
+
+    monkeypatch.setattr(
+        connection,
+        "create_sync_database_engine",
+        lambda _pool, _runtime_config: cast("Engine", FakeEngine()),
+    )
+
+    connection.probe_worker_database(config)
+
+    assert statements == ["SELECT 1"]
+    assert disposed == [True]
+
+
+def test_worker_database_probe_disposes_engine_when_connection_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    disposed: list[bool] = []
+
+    class FailedEngine:
+        def connect(self) -> None:
+            statement = "connect"
+            message = "unavailable"
+            raise OperationalError(statement, {}, Exception(message))
+
+        def dispose(self) -> None:
+            disposed.append(True)
+
+    monkeypatch.setattr(
+        connection,
+        "create_sync_database_engine",
+        lambda _pool, _runtime_config: cast("Engine", FailedEngine()),
+    )
+
+    with pytest.raises(OperationalError):
+        connection.probe_worker_database(config)
+
+    assert disposed == [True]
 
 
 def test_met_zone_lookup_returns_retryable_503_for_database_failure(

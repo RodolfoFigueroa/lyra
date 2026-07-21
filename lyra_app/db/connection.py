@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
+from sqlalchemy import text
 from sqlalchemy.engine import URL, Engine, create_engine
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
@@ -177,6 +178,17 @@ def get_worker_engine(config: LyraConfig | None = None) -> Engine:
     return _worker_engine
 
 
+def probe_worker_database(config: LyraConfig) -> None:
+    """Verify worker database connectivity without retaining a pre-fork engine."""
+
+    engine = create_sync_database_engine(config.database.worker, config)
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    finally:
+        engine.dispose()
+
+
 def dispose_worker_engine() -> None:
     global _worker_engine, _worker_engine_pid  # noqa: PLW0603
 
@@ -209,4 +221,5 @@ __all__ = [
     "dispose_worker_engine",
     "get_worker_engine",
     "is_database_unavailable_error",
+    "probe_worker_database",
 ]

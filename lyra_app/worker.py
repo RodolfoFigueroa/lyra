@@ -35,7 +35,8 @@ from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
-from lyra_app.config import ConfigLoadError, LyraConfig, get_config
+from lyra_app.config import LyraConfig, get_config
+from lyra_app.db.connection import is_database_unavailable_error
 from lyra_app.plugin_state import (
     PluginState,
     PluginStateStore,
@@ -73,7 +74,7 @@ class WorkerRunContext:
     metric: str
     logger: logging.Logger
     temp_dir: Path
-    db: LyraDB | None
+    db: LyraDB
 
     def emit_event(self, event: str, data: JsonObject | None = None) -> None:
         job_store.append_job_event(
@@ -274,13 +275,10 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
     )
 
 
-def _build_db_context() -> LyraDB | None:
-    try:
-        from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
-        from lyra_app.db.connection import get_worker_engine  # noqa: PLC0415
-    except (ConfigLoadError, KeyError) as exc:
-        logger.info("DB context unavailable: %s.", exc)
-        return None
+def _build_db_context() -> LyraDB:
+    from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
+    from lyra_app.db.connection import get_worker_engine  # noqa: PLC0415
+
     return LyraDBImplicit(get_worker_engine())
 
 
@@ -296,6 +294,17 @@ def _failed_result(job_id: str, error_type: str, message: str) -> FailedJobResul
     return FailedJobResult(
         job_id=job_id,
         error={"type": error_type, "message": message},
+    )
+
+
+def _database_unavailable_result(job_id: str) -> FailedJobResult:
+    return FailedJobResult(
+        job_id=job_id,
+        error={
+            "type": "database_unavailable",
+            "message": "The database is temporarily unavailable.",
+            "retryable": True,
+        },
     )
 
 
@@ -675,16 +684,23 @@ def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
     except job_store.JobCancelledError:
         return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
     except Exception as exc:
-        logger.exception(
-            "Generic task %s failed while executing metric %s for job %s.",
-            GENERIC_TASK_NAME,
-            job.metric,
-            job.job_id,
-        )
-        return _persist_result(
-            _failed_result(job.job_id, "worker", str(exc)),
-            metric=job.metric,
-        )
+        if is_database_unavailable_error(exc):
+            logger.warning(
+                "Database unavailable while executing metric %s for job %s.",
+                job.metric,
+                job.job_id,
+                exc_info=True,
+            )
+            failure = _database_unavailable_result(job.job_id)
+        else:
+            logger.exception(
+                "Generic task %s failed while executing metric %s for job %s.",
+                GENERIC_TASK_NAME,
+                job.metric,
+                job.job_id,
+            )
+            failure = _failed_result(job.job_id, "worker", str(exc))
+        return _persist_result(failure, metric=job.metric)
 
     result = _normalise_plugin_result(raw_result, job, entry, context)
     return _persist_result(result, metric=job.metric)

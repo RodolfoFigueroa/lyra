@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.12.0...lyra-app-v0.13.0) (2026-07-21)
+
+
+### Features
+
+* Centralize job event handling ([0dd9ece](https://github.com/RodolfoFigueroa/lyra/commit/0dd9ecef298504af47547a84450595b4c44f429a))
+
+
+### Bug Fixes
+
+* Fix worker crash detection ([4c06d23](https://github.com/RodolfoFigueroa/lyra/commit/4c06d2354f84d67f15215ac67e0ff8d9b47099bc))
+
 ## [0.12.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.11.0...lyra-app-v0.12.0) (2026-07-21)
 
 

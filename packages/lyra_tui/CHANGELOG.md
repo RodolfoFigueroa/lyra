@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-tui-v0.3.0...lyra-tui-v0.4.0) (2026-07-21)
+
+
+### Features
+
+* Centralize job event handling ([0dd9ece](https://github.com/RodolfoFigueroa/lyra/commit/0dd9ecef298504af47547a84450595b4c44f429a))
+
 ## [0.3.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-tui-v0.2.0...lyra-tui-v0.3.0) (2026-07-21)
 
 

@@ -103,6 +103,8 @@ def _patch_repository(
 def test_current_release_configuration_is_consistent() -> None:
     release.validate_repository()
     assert version("lyra-app") == APP_VERSION
+    config = json.loads((ROOT / release.CONFIG_PATH).read_text())
+    assert config["group-pull-request-title-pattern"] == ("chore: release v${version}")
 
 
 def test_plan_release_emits_aggregate_manifest_and_outputs(
@@ -135,7 +137,17 @@ def test_plan_release_emits_aggregate_manifest_and_outputs(
         if component["changed"]
     }
     assert changed == {"lyra-app", "lyra-api"}
-    assert "| `lyra-api` | `0.6.2` | Changed |" in plan.notes_path.read_text()
+    notes = plan.notes_path.read_text()
+    assert notes.startswith("## Component versions\n\n")
+    assert "# Lyra v0.14.2" not in notes
+    assert "| Component | Version |\n| --- | --- |" in notes
+    assert "| `lyra-app` | `0.14.1 -> 0.14.2` |" in notes
+    assert "| `lyra-sdk` | `0.11.0` |" in notes
+    assert "| `lyra-api` | `0.6.1 -> 0.6.2` |" in notes
+    assert "| `lyra-utils` | `0.2.0` |" in notes
+    assert "| `lyra-tui` | `0.5.0` |" in notes
+    assert "Status" not in notes
+    assert "Unchanged" not in notes
     assert "product_tag=lyra-v0.14.2" in github_output.read_text()
 
 

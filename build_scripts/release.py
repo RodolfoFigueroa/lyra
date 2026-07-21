@@ -371,17 +371,16 @@ def plan_release(
     manifest_path.write_text(f"{json.dumps(manifest, indent=2)}\n", encoding="utf-8")
 
     notes_path = output_directory / "release-notes.md"
-    rows = ["| Component | Version | Status |", "| --- | --- | --- |"]
+    rows = ["| Component | Version |", "| --- | --- |"]
     rows.extend(
-        f"| `{component.name}` | `{component.version}` | "
-        f"{'Changed' if component.changed else 'Unchanged'} |"
+        f"| `{component.name}` | `{before[component.path]} -> {component.version}` |"
+        if component.changed
+        else f"| `{component.name}` | `{component.version}` |"
         for component in components
     )
     notes_path.write_text(
         "\n".join(
             [
-                f"# Lyra v{product.version}",
-                "",
                 "## Component versions",
                 "",
                 *rows,

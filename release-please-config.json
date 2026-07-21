@@ -3,6 +3,7 @@
   "release-type": "python",
   "include-component-in-tag": true,
   "separate-pull-requests": false,
+  "group-pull-request-title-pattern": "chore: release v${version}",
   "skip-github-release": true,
   "bump-minor-pre-major": true,
   "packages": {

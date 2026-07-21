@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.13.1...lyra-app-v0.13.2) (2026-07-21)
+
+
+### Bug Fixes
+
+* Misc. image build fixes ([c5bcb42](https://github.com/RodolfoFigueroa/lyra/commit/c5bcb42c24f5bf11a561ef18355b1dc9bad4ff88))
+
 ## [0.13.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-app-v0.13.0...lyra-app-v0.13.1) (2026-07-21)
 
 

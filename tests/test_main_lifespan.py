@@ -15,10 +15,10 @@ def test_lifespan_starts_and_stops_worker_inspect_collector(
 ) -> None:
     calls: list[str] = []
 
-    async def start_worker_inspect_collector() -> None:
+    def start_worker_inspect_collector() -> None:
         calls.append("start")
 
-    async def stop_worker_inspect_collector() -> None:
+    async def stop_worker_inspect_collector() -> None:  # ruff: ignore[unused-async]
         calls.append("stop")
 
     async def run_lifespan() -> None:
@@ -46,10 +46,10 @@ def test_lifespan_owns_mounted_mcp_session_manager(
 ) -> None:
     calls: list[str] = []
 
-    async def start_worker_inspect_collector() -> None:
+    def start_worker_inspect_collector() -> None:
         calls.append("worker-start")
 
-    async def stop_worker_inspect_collector() -> None:
+    async def stop_worker_inspect_collector() -> None:  # ruff: ignore[unused-async]
         calls.append("worker-stop")
 
     @asynccontextmanager
@@ -86,16 +86,18 @@ def test_lifespan_owns_database_runtime(monkeypatch: pytest.MonkeyPatch) -> None
     calls: list[str] = []
 
     class FakeDatabaseRuntime:
-        async def start(self) -> None:
+        @staticmethod
+        async def start() -> None:
             calls.append("database-start")
 
-        async def close(self) -> None:
+        @staticmethod
+        async def close() -> None:
             calls.append("database-close")
 
-    async def start_worker_inspect_collector() -> None:
+    def start_worker_inspect_collector() -> None:
         calls.append("worker-start")
 
-    async def stop_worker_inspect_collector() -> None:
+    async def stop_worker_inspect_collector() -> None:  # ruff: ignore[unused-async]
         calls.append("worker-stop")
 
     app = FastAPI()

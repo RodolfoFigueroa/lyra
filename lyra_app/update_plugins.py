@@ -1,3 +1,5 @@
+"""Command-line workflow for updating installed plugins."""
+
 import argparse
 import logging
 

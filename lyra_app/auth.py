@@ -1,3 +1,5 @@
+"""API-key validation and authorization dependencies."""
+
 import logging
 
 import ee
@@ -9,6 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 def initialize_earth_engine(config: LyraConfig | None = None) -> None:
+    """Authenticate and initialize Earth Engine from runtime configuration.
+
+    Raises:
+        FileNotFoundError: If the configured service-account file does not exist.
+    """
     config = get_config() if config is None else config
     service_account_file = config.earth_engine.service_account_file
 

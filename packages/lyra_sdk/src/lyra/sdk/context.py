@@ -1,3 +1,5 @@
+"""Runtime context supplied to metric implementations."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
@@ -15,27 +17,27 @@ class RunContext(Protocol):
 
     @property
     def job_id(self) -> str:
-        """Return the stable identifier of the job being executed."""
+        """The stable identifier of the job being executed."""
         ...
 
     @property
     def metric(self) -> str:
-        """Return the public name of the metric being executed."""
+        """The public name of the metric being executed."""
         ...
 
     @property
     def logger(self) -> logging.Logger:
-        """Return the logger for diagnostic, non-client-facing run details."""
+        """The logger for diagnostic, non-client-facing run details."""
         ...
 
     @property
     def temp_dir(self) -> Path:
-        """Return the job-scoped directory for temporary files and outputs."""
+        """The job-scoped directory for temporary files and outputs."""
         ...
 
     @property
     def db(self) -> LyraDB:
-        """Return the read-only Lyra database client for this worker process."""
+        """The read-only Lyra database client for this worker process."""
         ...
 
     def report_progress(

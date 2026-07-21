@@ -1,3 +1,5 @@
+"""Widgets for displaying connection, loading, and action status."""
+
 from __future__ import annotations
 
 from lyra.tui.state import TuiSnapshot
@@ -5,6 +7,11 @@ from textual.widgets import Static
 
 
 def format_snapshot_status(snapshot: TuiSnapshot) -> str:
+    """Summarize snapshot health, authorization, and current errors.
+
+    Returns:
+        A compact connection-status line.
+    """
     if snapshot.phase == "idle":
         return "Waiting for first refresh."
     if snapshot.phase == "loading":
@@ -36,6 +43,8 @@ def format_snapshot_status(snapshot: TuiSnapshot) -> str:
 
 
 class ConnectionStatus(Static):
+    """Live one-line summary of API and administrative connectivity."""
+
     def __init__(
         self,
         snapshot: TuiSnapshot | None = None,
@@ -44,15 +53,19 @@ class ConnectionStatus(Static):
         classes: str | None = None,
         disabled: bool = False,
     ) -> None:
+        """Initialize the widget from an optional service snapshot."""
         self.message = format_snapshot_status(snapshot or TuiSnapshot())
         super().__init__(self.message, id=widget_id, classes=classes, disabled=disabled)
 
     def update_snapshot(self, snapshot: TuiSnapshot) -> None:
+        """Replace the displayed connection summary."""
         self.message = format_snapshot_status(snapshot)
         self.update(self.message)
 
 
 class LoadingState(Static):
+    """Reusable message shown while an operation is in progress."""
+
     def __init__(
         self,
         message: str = "Loading...",
@@ -61,11 +74,14 @@ class LoadingState(Static):
         classes: str | None = None,
         disabled: bool = False,
     ) -> None:
+        """Initialize a loading message widget."""
         self.message = message
         super().__init__(message, id=widget_id, classes=classes, disabled=disabled)
 
 
 class EmptyState(Static):
+    """Reusable message shown when a collection has no rows."""
+
     def __init__(
         self,
         message: str = "No data available.",
@@ -74,15 +90,19 @@ class EmptyState(Static):
         classes: str | None = None,
         disabled: bool = False,
     ) -> None:
+        """Initialize an empty-state message widget."""
         self.message = message
         super().__init__(message, id=widget_id, classes=classes, disabled=disabled)
 
     def set_message(self, message: str) -> None:
+        """Replace the displayed empty-state message."""
         self.message = message
         self.update(message)
 
 
 class ActionMessage(Static):
+    """Status line for the most recent operator action."""
+
     def __init__(
         self,
         *,
@@ -90,9 +110,11 @@ class ActionMessage(Static):
         classes: str | None = None,
         disabled: bool = False,
     ) -> None:
+        """Initialize an empty action-status widget."""
         self.message = ""
         super().__init__("", id=widget_id, classes=classes, disabled=disabled)
 
     def show_message(self, message: str) -> None:
+        """Display the latest operator-action outcome."""
         self.message = message
         self.update(message)

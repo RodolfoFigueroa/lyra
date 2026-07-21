@@ -1,3 +1,5 @@
+"""Import and validate plugin definitions from installed distributions."""
+
 from __future__ import annotations
 
 import importlib
@@ -17,7 +19,14 @@ class PluginLoadError(RuntimeError):
 
 
 def load_plugin_definition(factory_ref: str) -> PluginDefinition:
-    """Import and invoke one synchronous, parameterless plugin factory."""
+    """Import and invoke one synchronous, parameterless plugin factory.
+
+    Returns:
+        The plugin definition produced by the referenced factory.
+
+    Raises:
+        PluginLoadError: If the reference, factory, or returned definition is invalid.
+    """
     match = _FACTORY_PATTERN.fullmatch(factory_ref)
     if match is None:
         msg = f"Plugin factory must use 'module:attribute' format: {factory_ref!r}"

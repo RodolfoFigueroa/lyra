@@ -1,3 +1,5 @@
+"""Connection and request options for Lyra API clients."""
+
 from dataclasses import dataclass
 
 

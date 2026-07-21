@@ -27,12 +27,16 @@ SEARCH_PATHS = (
 
 @dataclass(frozen=True)
 class SymbolRef:
+    """Identify a public symbol by importable module and member name."""
+
     module: str
     name: str
 
 
 @dataclass(frozen=True)
 class PageSpec:
+    """Describe one generated API reference page and its exported symbols."""
+
     slug: str
     title: str
     description: str
@@ -43,6 +47,11 @@ class PageSpec:
 
 
 def sym(module: str, name: str) -> SymbolRef:
+    """Create a concise symbol reference for a page specification.
+
+    Returns:
+        A reference containing the importable module and member name.
+    """
     return SymbolRef(module=module, name=name)
 
 
@@ -222,12 +231,14 @@ _MODULE_CACHE: dict[str, griffe.Module] = {}
 
 
 def main() -> None:
+    """Generate every configured Python API reference page."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     generate_api_docs()
     LOGGER.info("Generated API reference pages in %s", OUTPUT_DIR.relative_to(ROOT))
 
 
 def generate_api_docs() -> None:
+    """Replace the generated API reference tree with freshly rendered pages."""
     ensure_safe_output_dir()
     if OUTPUT_DIR.exists():
         shutil.rmtree(OUTPUT_DIR)
@@ -245,6 +256,11 @@ def generate_api_docs() -> None:
 
 
 def ensure_safe_output_dir() -> None:
+    """Refuse generation when the output directory escapes the docs tree.
+
+    Raises:
+        RuntimeError: If the configured output directory is outside docs content.
+    """
     docs_root = ROOT / "docs" / "src" / "content" / "docs"
     if docs_root not in OUTPUT_DIR.parents:
         msg = f"refusing to generate outside the docs content tree: {OUTPUT_DIR}"
@@ -252,10 +268,16 @@ def ensure_safe_output_dir() -> None:
 
 
 def write_page(path: Path, content: str) -> None:
+    """Write a generated Markdown page with one trailing newline."""
     path.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
 
 def render_landing_page() -> str:
+    """Render the API reference overview and page index.
+
+    Returns:
+        The landing page frontmatter and Markdown body.
+    """
     lines = [
         frontmatter(
             title="API Reference",
@@ -265,11 +287,15 @@ def render_landing_page() -> str:
             sidebar_label="Overview",
             order=1,
         ),
-        "These pages are generated from Python source signatures, type hints, "
-        "docstrings, and Pydantic field metadata.",
+        (
+            "These pages are generated from Python source signatures, type hints, "
+            "docstrings, and Pydantic field metadata."
+        ),
         "",
-        "Use the hand-written package guides for workflows and examples, and "
-        "use this reference for exact symbols, fields, and method signatures.",
+        (
+            "Use the hand-written package guides for workflows and examples, and "
+            "use this reference for exact symbols, fields, and method signatures."
+        ),
         "",
         "| Page | Contents |",
         "| --- | --- |",
@@ -282,6 +308,11 @@ def render_landing_page() -> str:
 
 
 def render_reference_page(page: PageSpec) -> str:
+    """Render one API reference page from its configured symbols.
+
+    Returns:
+        The page frontmatter, introduction, and rendered symbols as Markdown.
+    """
     lines = [
         frontmatter(
             title=page.title,
@@ -291,8 +322,10 @@ def render_reference_page(page: PageSpec) -> str:
         ),
         page.intro,
         "",
-        "> Generated from Python source. Edit the package docstrings, type hints, "
-        "or Pydantic field metadata, then rerun the docs build.",
+        (
+            "> Generated from Python source. Edit the package docstrings, type hints, "
+            "or Pydantic field metadata, then rerun the docs build."
+        ),
         "",
     ]
 
@@ -311,6 +344,11 @@ def frontmatter(
     sidebar_label: str,
     order: int,
 ) -> str:
+    """Render Starlight frontmatter for a generated reference page.
+
+    Returns:
+        A YAML frontmatter block configured for the Starlight sidebar.
+    """
     return "\n".join(
         (
             "---",
@@ -327,6 +365,14 @@ def frontmatter(
 
 
 def resolve_symbol(symbol: SymbolRef) -> griffe.Object:
+    """Resolve a configured symbol reference to its final Griffe object.
+
+    Returns:
+        The referenced member after resolving any aliases.
+
+    Raises:
+        RuntimeError: If the configured member does not exist in its module.
+    """
     module = load_module(symbol.module)
     member = module.members.get(symbol.name)
     if member is None:
@@ -336,6 +382,14 @@ def resolve_symbol(symbol: SymbolRef) -> griffe.Object:
 
 
 def load_module(module_name: str) -> griffe.Module:
+    """Load and cache a source module for documentation introspection.
+
+    Returns:
+        The cached or newly parsed source module.
+
+    Raises:
+        RuntimeError: If Griffe does not resolve the name to a module.
+    """
     if module_name not in _MODULE_CACHE:
         loaded = griffe.load(
             module_name,
@@ -358,10 +412,16 @@ def load_module(module_name: str) -> griffe.Module:
 
 
 def resolve_alias(obj: griffe.Object | griffe.Alias) -> griffe.Object:
+    """Return the final target for an alias or the original object."""
     return obj.final_target if isinstance(obj, griffe.Alias) else obj
 
 
 def render_symbol(obj: griffe.Object) -> list[str]:
+    """Render a supported Griffe object as Markdown lines.
+
+    Returns:
+        The object reference section, specialized by object kind when supported.
+    """
     if isinstance(obj, griffe.Class):
         return render_class(obj)
     if isinstance(obj, griffe.Function):
@@ -377,6 +437,11 @@ def render_symbol(obj: griffe.Object) -> list[str]:
 
 
 def render_class(obj: griffe.Class) -> list[str]:
+    """Render a class, its public attributes, and its public methods.
+
+    Returns:
+        Markdown lines describing the class and its public interface.
+    """
     bases = f"({', '.join(str(base) for base in obj.bases)})" if obj.bases else ""
     lines = [
         f"## `{obj.name}`",
@@ -409,6 +474,11 @@ def render_class(obj: griffe.Class) -> list[str]:
 
 
 def render_function(*, obj: griffe.Function, level: int) -> list[str]:
+    """Render a function signature and structured docstring metadata.
+
+    Returns:
+        Markdown lines for the signature, prose, parameters, returns, and raises.
+    """
     prefix = "#" * level
     lines = [
         f"{prefix} `{obj.name}`",
@@ -441,6 +511,11 @@ def render_function(*, obj: griffe.Function, level: int) -> list[str]:
 
 
 def render_attribute(*, obj: griffe.Attribute, level: int) -> list[str]:
+    """Render an attribute declaration and description.
+
+    Returns:
+        Markdown lines for the declaration and available descriptive prose.
+    """
     prefix = "#" * level
     lines = [
         f"{prefix} `{obj.name}`",
@@ -459,6 +534,7 @@ def render_attribute(*, obj: griffe.Attribute, level: int) -> list[str]:
 
 
 def public_attributes(obj: griffe.Class) -> list[griffe.Attribute]:
+    """Return public attributes declared on a class."""
     return [
         member
         for name, member in obj.members.items()
@@ -467,6 +543,7 @@ def public_attributes(obj: griffe.Class) -> list[griffe.Attribute]:
 
 
 def public_methods(obj: griffe.Class) -> list[griffe.Function]:
+    """Return public non-validator methods declared on a class."""
     return [
         member
         for name, member in obj.members.items()
@@ -477,6 +554,7 @@ def public_methods(obj: griffe.Class) -> list[griffe.Function]:
 
 
 def is_pydantic_validator(obj: griffe.Function) -> bool:
+    """Return whether a function carries a Pydantic validator decorator."""
     validators = ("field_validator(", "model_validator(")
     return any(
         any(marker in str(decorator.value) for marker in validators)
@@ -485,6 +563,11 @@ def is_pydantic_validator(obj: griffe.Function) -> bool:
 
 
 def render_attribute_table(attributes: list[griffe.Attribute]) -> list[str]:
+    """Render public attributes as a Markdown table.
+
+    Returns:
+        Markdown table lines containing names, types, defaults, and descriptions.
+    """
     lines = [
         "**Attributes**",
         "",
@@ -505,6 +588,11 @@ def render_attribute_table(attributes: list[griffe.Attribute]) -> list[str]:
 
 
 def parameter_table_rows(obj: griffe.Function) -> list[str]:
+    """Render documented function parameters as Markdown table rows.
+
+    Returns:
+        A complete parameter table, or an empty list when there are no parameters.
+    """
     descriptions = docstring_parameter_descriptions(obj.docstring)
     rows = ["| Name | Type | Default | Description |", "| --- | --- | --- | --- |"]
     for parameter in obj.parameters:
@@ -521,6 +609,11 @@ def parameter_table_rows(obj: griffe.Function) -> list[str]:
 
 
 def return_table_rows(obj: griffe.Function) -> list[str]:
+    """Render a function's return annotation and description as table rows.
+
+    Returns:
+        A return-value table, or an empty list when no return metadata exists.
+    """
     returns = stringify(obj.returns)
     description = docstring_return_description(obj.docstring)
     if not returns and not description:
@@ -533,6 +626,11 @@ def return_table_rows(obj: griffe.Function) -> list[str]:
 
 
 def raises_table_rows(obj: griffe.Function) -> list[str]:
+    """Render documented exceptions as Markdown table rows.
+
+    Returns:
+        An exception table, or an empty list when none are documented.
+    """
     rows = ["| Type | Description |", "| --- | --- |"]
     for annotation, description in docstring_raises(obj.docstring):
         rows.append(f"| {code_cell(annotation)} | {table_cell(description)} |")
@@ -540,11 +638,21 @@ def raises_table_rows(obj: griffe.Function) -> list[str]:
 
 
 def format_function_signature(obj: griffe.Function) -> str:
+    """Format a complete synchronous or asynchronous function signature.
+
+    Returns:
+        A Python declaration using the appropriate ``def`` qualifier.
+    """
     qualifier = "async def" if "async" in obj.labels else "def"
     return f"{qualifier} {obj.signature()}"
 
 
 def format_attribute_assignment(obj: griffe.Attribute) -> str:
+    """Format an attribute's name, annotation, and optional assigned value.
+
+    Returns:
+        A Python-style attribute declaration containing all available parts.
+    """
     annotation = attribute_annotation(obj)
     value = stringify(obj.value)
     if annotation and value:
@@ -557,10 +665,16 @@ def format_attribute_assignment(obj: griffe.Attribute) -> str:
 
 
 def attribute_annotation(obj: griffe.Attribute) -> str:
+    """Return an attribute annotation as displayable text."""
     return stringify(obj.annotation)
 
 
 def attribute_default(obj: griffe.Attribute) -> str:
+    """Render an attribute default and visible Pydantic constraints.
+
+    Returns:
+        Display text for the default or constraints, or ``Required`` when absent.
+    """
     value = obj.value
     if value is None:
         return "Required"
@@ -580,6 +694,11 @@ def attribute_default(obj: griffe.Attribute) -> str:
 
 
 def attribute_description(obj: griffe.Attribute) -> str:
+    """Resolve an attribute description from its docstring or Field metadata.
+
+    Returns:
+        The attribute prose, preferring its docstring over field metadata.
+    """
     docstring = render_docstring_text(obj.docstring)
     if docstring:
         return docstring
@@ -587,6 +706,11 @@ def attribute_description(obj: griffe.Attribute) -> str:
 
 
 def field_call_arguments(value: str | griffe.Expr | None) -> list[str] | None:
+    """Extract rendered arguments from a Pydantic Field call expression.
+
+    Returns:
+        The rendered positional and keyword arguments, or ``None`` for non-fields.
+    """
     if not isinstance(value, griffe.ExprCall) or stringify(value.function) != "Field":
         return None
     return [
@@ -600,6 +724,11 @@ def field_call_arguments(value: str | griffe.Expr | None) -> list[str] | None:
 
 
 def field_description(value: str | griffe.Expr | None) -> str:
+    """Extract a human-readable description from a Pydantic Field call.
+
+    Returns:
+        The decoded ``description`` argument, or an empty string when unavailable.
+    """
     if not isinstance(value, griffe.ExprCall) or stringify(value.function) != "Field":
         return ""
 
@@ -618,6 +747,11 @@ def field_description(value: str | griffe.Expr | None) -> str:
 
 
 def render_docstring_text(docstring: griffe.Docstring | None) -> str:
+    """Render the prose sections of a parsed docstring.
+
+    Returns:
+        Text sections joined by blank lines, or an empty string without prose.
+    """
     if docstring is None:
         return ""
     sections = docstring.parse()
@@ -631,6 +765,11 @@ def render_docstring_text(docstring: griffe.Docstring | None) -> str:
 def docstring_parameter_descriptions(
     docstring: griffe.Docstring | None,
 ) -> dict[str, str]:
+    """Map documented parameter names to their descriptions.
+
+    Returns:
+        A mapping from each documented parameter name to its prose description.
+    """
     if docstring is None:
         return {}
 
@@ -644,6 +783,11 @@ def docstring_parameter_descriptions(
 
 
 def docstring_return_description(docstring: griffe.Docstring | None) -> str:
+    """Combine the documented return descriptions from a docstring.
+
+    Returns:
+        All return-item descriptions joined into one sentence-like string.
+    """
     if docstring is None:
         return ""
 
@@ -658,6 +802,11 @@ def docstring_return_description(docstring: griffe.Docstring | None) -> str:
 
 
 def docstring_raises(docstring: griffe.Docstring | None) -> list[tuple[str, str]]:
+    """Return documented exception annotations and descriptions.
+
+    Returns:
+        Pairs containing each exception annotation and its description.
+    """
     if docstring is None:
         return []
 
@@ -674,24 +823,44 @@ def docstring_raises(docstring: griffe.Docstring | None) -> list[tuple[str, str]
 
 
 def parameter_default(parameter: griffe.Parameter) -> str:
+    """Render a parameter default or mark the parameter as required.
+
+    Returns:
+        Inline-code default text, or ``Required`` when no default is defined.
+    """
     if parameter.default is None:
         return "Required"
     return code_cell(stringify(parameter.default))
 
 
 def stringify(value: str | griffe.Expr | None) -> str:
+    """Convert a Griffe expression to single-line display text.
+
+    Returns:
+        The expression with newlines replaced by spaces, or an empty string.
+    """
     if value is None:
         return ""
     return str(value).replace("\n", " ")
 
 
 def code_cell(value: str) -> str:
+    """Wrap nonblank content in an escaped Markdown inline-code cell.
+
+    Returns:
+        Escaped inline code, or an empty string for blank content.
+    """
     if not value:
         return ""
     return f"`{table_cell(value)}`"
 
 
 def table_cell(value: str) -> str:
+    """Escape text for safe inclusion in a Markdown table cell.
+
+    Returns:
+        Text with pipes escaped and newlines converted to HTML breaks.
+    """
     return value.replace("|", "\\|").replace("\n", "<br>")
 
 

@@ -1,3 +1,5 @@
+"""Plugin definition, metric declaration, and registration interfaces."""
+
 from __future__ import annotations
 
 import inspect
@@ -97,6 +99,11 @@ class Input:
     json_schema_extra: JsonObject | None = None
 
     def __post_init__(self) -> None:
+        """Validate the human-readable input declaration.
+
+        Raises:
+            ValueError: If the description or supplied examples are empty.
+        """
         if not self.description.strip():
             msg = "Input.description must be a non-empty string"
             raise ValueError(msg)
@@ -114,6 +121,11 @@ class BatchInput:
     allow_labels: bool = False
 
     def __post_init__(self) -> None:
+        """Validate the batch size constraint.
+
+        Raises:
+            ValueError: If ``max_items`` is less than one.
+        """
         if self.max_items < 1:
             msg = "BatchInput.max_items must be at least 1"
             raise ValueError(msg)
@@ -250,7 +262,11 @@ def metric(
     output: OutputSpecV4,
     inputs: Mapping[str, Input | BatchInput] | None = None,
 ) -> Callable[[Callable[..., ResultT]], Callable[..., ResultT]]:
-    """Declare a typed metric while returning its function unchanged."""
+    """Declare a typed metric while returning its function unchanged.
+
+    Returns:
+        A decorator that validates and attaches the metric definition.
+    """
 
     def decorator(function: Callable[..., ResultT]) -> Callable[..., ResultT]:
         if hasattr(function, _METRIC_DEFINITION_ATTRIBUTE):
@@ -275,6 +291,11 @@ class PluginDefinition:
     """Immutable collection of typed metric functions and runtime dispatcher."""
 
     def __init__(self, *, metrics: Sequence[Callable[..., Any]]) -> None:
+        """Initialize a plugin from explicitly registered metric handlers.
+
+        Raises:
+            PluginDefinitionError: If handlers are absent, invalid, or duplicated.
+        """
         if not metrics:
             msg = (
                 "PluginDefinition requires at least one decorated metric. "
@@ -298,10 +319,18 @@ class PluginDefinition:
 
     @property
     def metric_names(self) -> tuple[str, ...]:
+        """The registered public metric names in declaration order."""
         return tuple(self._metrics)
 
     def describe(self, name: str) -> MetricDescription:
-        """Return structured authoring information for one registered metric."""
+        """Return structured authoring information for one registered metric.
+
+        Returns:
+            The metric's function signature, inputs, and output declaration.
+
+        Raises:
+            PluginDefinitionError: If the metric name is not registered.
+        """
         try:
             metric = self._metrics[name]
         except KeyError as exc:
@@ -316,6 +345,11 @@ class PluginDefinition:
         plugin: PluginInfoV4,
         factory: str,
     ) -> PluginManifestV4:
+        """Build the authoring manifest for this plugin.
+
+        Returns:
+            A schema v4 manifest containing every registered metric.
+        """
         return PluginManifestV4(
             schema_version=4,
             plugin=plugin,
@@ -331,9 +365,22 @@ class PluginDefinition:
         plugin: PluginInfoV4,
         factory: str,
     ) -> CompiledPluginManifestV4:
+        """Build the compiled runtime manifest for this plugin.
+
+        Returns:
+            The compiled schema v4 plugin manifest.
+        """
         return compile_plugin_manifest(self.manifest(plugin=plugin, factory=factory))
 
     def __call__(self, job: JobEnvelope, context: RunContext) -> PluginResult:
+        """Dispatch a job to its registered metric handler.
+
+        Returns:
+            The metric handler's table or file result.
+
+        Raises:
+            PluginDefinitionError: If the requested metric is not registered.
+        """
         try:
             metric = self._metrics[job.metric]
         except KeyError as exc:

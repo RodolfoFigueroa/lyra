@@ -1,3 +1,5 @@
+"""Dashboard screen summarizing Lyra service health and activity."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -6,28 +8,40 @@ from lyra.tui.screens.formatting import join_values, timestamp_label, truncate
 from lyra.tui.state import TuiSnapshot
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
 
 class DashboardView(Vertical):
+    """Service-wide health and configuration summary panel."""
+
     def __init__(self, snapshot: TuiSnapshot | None = None) -> None:
+        """Initialize the dashboard with an optional snapshot."""
         super().__init__()
         self.snapshot = snapshot or TuiSnapshot()
         self._ready = False
 
+    @override
     def compose(self) -> ComposeResult:
+        """Compose the dashboard summary and details table.
+
+        Yields:
+            The summary label and service-details table.
+        """
         yield Static("", id="dashboard-summary", classes="panel-summary")
         yield DataTable(id="dashboard-table")
 
     def on_mount(self) -> None:
+        """Configure the details table and render the initial snapshot."""
         table = self.query_one("#dashboard-table", DataTable)
         table.add_columns("Field", "Value")
         self._ready = True
         self.update_snapshot(self.snapshot)
 
     def update_snapshot(self, snapshot: TuiSnapshot) -> None:
+        """Replace the displayed service snapshot."""
         self.snapshot = snapshot
         if not self._ready:
             return
@@ -39,6 +53,11 @@ class DashboardView(Vertical):
 
 
 def dashboard_rows(snapshot: TuiSnapshot) -> list[tuple[str, str]]:
+    """Build labeled dashboard values from available snapshot sections.
+
+    Returns:
+        Ordered field and display-value pairs for the dashboard table.
+    """
     rows: list[tuple[str, str]] = [("Snapshot", snapshot.phase)]
     if snapshot.readiness is not None:
         rows.extend(

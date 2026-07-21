@@ -1,3 +1,5 @@
+"""Public interfaces for developing and running Lyra plugins."""
+
 from lyra.sdk.context import RunContext
 from lyra.sdk.db import LyraDB
 from lyra.sdk.db_types import Bounds

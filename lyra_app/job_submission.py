@@ -1,7 +1,10 @@
+"""Job validation, preparation, and submission workflows."""
+
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, Unpack, cast
@@ -44,6 +47,8 @@ if TYPE_CHECKING:
 
 
 class TaskDispatcher(Protocol):
+    """Dispatch serialized job envelopes to a named task queue."""
+
     def send_task(
         self,
         name: str,
@@ -51,7 +56,9 @@ class TaskDispatcher(Protocol):
         args: list[JsonObject],
         queue: str,
         task_id: str,
-    ) -> AsyncResult | None: ...
+    ) -> AsyncResult | None:
+        """Send one task with an explicit queue and stable task identifier."""
+        ...
 
 
 class SubmissionRedisClient(
@@ -80,34 +87,48 @@ class BuildSubmissionOptions(TypedDict):
 
 
 class UnknownMetricError(Exception):
+    """Indicate that a submission names no metric in the active catalog."""
+
     def __init__(self, metric: str) -> None:
+        """Initialize the error with the unknown metric name."""
         self.metric = metric
         super().__init__(f"Unknown metric: {metric}")
 
 
 class SubmissionUnavailableError(Exception):
+    """Indicate that submission cannot proceed because Redis is unavailable."""
+
     def __init__(self) -> None:
+        """Initialize the standard temporary-unavailability error."""
         super().__init__("Cannot connect to Redis. Please try again later.")
 
 
 class SubmissionRateLimitedError(Exception):
+    """Indicate that the shared agent submission window has no capacity."""
+
     def __init__(self, retry_after_seconds: int) -> None:
+        """Initialize the error with the minimum retry delay."""
         self.retry_after_seconds = retry_after_seconds
         super().__init__("Agent job submission limit exceeded. Please try again later.")
 
     @property
     def details(self) -> dict[str, int]:
+        """The structured retry metadata exposed by the HTTP and MCP layers."""
         return {"retry_after_seconds": self.retry_after_seconds}
 
 
 class IdempotencyConflictError(Exception):
+    """Indicate that an idempotency key belongs to a different request."""
+
     def __init__(self, *, idempotency_key: str, job_id: str) -> None:
+        """Initialize the conflict with the key and its existing job."""
         self.idempotency_key = idempotency_key
         self.job_id = job_id
         super().__init__("The idempotency key is already bound to a different request.")
 
     @property
     def details(self) -> dict[str, str]:
+        """The conflicting idempotency key and existing job identifier."""
         return {
             "idempotency_key": self.idempotency_key,
             "job_id": self.job_id,
@@ -118,7 +139,11 @@ def canonical_request_fingerprint(
     metric: str,
     request: Mapping[str, JsonValue],
 ) -> str:
-    """Digest a metric and validated unresolved request using canonical JSON."""
+    """Digest a metric and validated unresolved request using canonical JSON.
+
+    Returns:
+        The lowercase SHA-256 hexadecimal digest of the canonical request.
+    """
     encoded = json.dumps(
         {"metric": metric, "input": request},
         allow_nan=False,
@@ -130,6 +155,11 @@ def canonical_request_fingerprint(
 
 
 def job_links(job_id: str) -> JobLinks:
+    """Build relative API links for a job and its event and result resources.
+
+    Returns:
+        The canonical link set rooted at the job resource.
+    """
     base = f"/jobs/{job_id}"
     return JobLinks(self=base, events=f"{base}/events", result=f"{base}/result")
 
@@ -180,9 +210,8 @@ async def _resolve_spatial_input(
             spatial_inputs,
         )
 
-    from lyra_app.converters import build_converter_map  # noqa: PLC0415
-
-    converter_map = build_converter_map(database.require_spatial_engine())
+    converters = importlib.import_module("lyra_app.converters")
+    converter_map = converters.build_converter_map(database.require_spatial_engine())
     return await database.run_spatial(
         resolve_spatial_inputs_with_metadata,
         validated_input,
@@ -285,22 +314,32 @@ def _build_submission_records(
     return envelope, provenance
 
 
+def _submission_dispatcher(options: SubmissionOptions) -> TaskDispatcher:
+    dispatcher = options.get("dispatcher")
+    if dispatcher is not None:
+        return dispatcher
+    module = importlib.import_module("lyra_app.celery_app")
+    return cast("TaskDispatcher", module.celery_app)
+
+
 async def submit_job(
     request: JobCreateRequest,
     **options: Unpack[SubmissionOptions],
 ) -> JobCreateResponse:
-    """Validate, deduplicate, persist, and dispatch one public job request."""
+    """Validate, deduplicate, persist, and dispatch one public job request.
+
+    Returns:
+        The queued job metadata, or the prior job when idempotency reuses it.
+
+    Raises:
+        UnknownMetricError: If the active catalog does not contain the metric.
+    """
     client = options.get("client")
-    dispatcher = options.get("dispatcher")
     job_id_factory = options.get("job_id_factory")
     agent_scope = options.get("agent_scope", job_store.DEFAULT_AGENT_SCOPE)
     database = options.get("database")
     if client is None:
         client = cast("SubmissionRedisClient", redis_client)
-    if dispatcher is None:
-        from lyra_app.celery_app import celery_app  # noqa: PLC0415
-
-        dispatcher = celery_app
     if job_id_factory is None:
         job_id_factory = _new_job_id
 
@@ -343,7 +382,7 @@ async def submit_job(
             location_areas_m2=location_areas_m2,
         )
         await job_store.create_job_async(envelope, provenance, client=client)
-        dispatcher.send_task(
+        _submission_dispatcher(options).send_task(
             GENERIC_TASK_NAME,
             args=[envelope.model_dump(mode="json")],
             queue=entry.queue,

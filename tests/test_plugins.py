@@ -1,5 +1,5 @@
 import json
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] -- test doubles
 from pathlib import Path
 
 import pytest
@@ -16,8 +16,8 @@ from tests.smoke_plugin_helpers import directory_uri
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(  # noqa: S603
-        ["git", "-C", str(repo), *args],  # noqa: S607
+    return subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true]
+        ["git", "-C", str(repo), *args],  # ruff:ignore[start-process-with-partial-path]
         check=True,
         capture_output=True,
         text=True,

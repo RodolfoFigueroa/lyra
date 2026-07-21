@@ -1,3 +1,5 @@
+"""TOML parsing and serialization helpers for Lyra configuration."""
+
 from __future__ import annotations
 
 import tomllib
@@ -47,7 +49,15 @@ def normalize_toml_table(
     *,
     location: str = "TOML document",
 ) -> TomlTable:
-    """Trim TOML keys and strings while preserving its recursive value types."""
+    """Trim TOML keys and strings while preserving its recursive value types.
+
+    Returns:
+        A recursively normalized copy of the TOML table.
+
+    Raises:
+        TomlNormalizationError: If a key or string is blank or normalized keys
+            collide.
+    """
     normalized: TomlTable = {}
     for raw_key, raw_value in table.items():
         key = _normalized_string(raw_key, location=f"{location} key")
@@ -62,13 +72,21 @@ def normalize_toml_table(
 
 
 def load_normalized_toml(source: BinaryIO) -> TomlTable:
-    """Parse and normalize one TOML document at the untyped library boundary."""
+    """Parse and normalize one TOML document at the untyped library boundary.
+
+    Returns:
+        The parsed recursively normalized TOML table.
+    """
     parsed = cast("TomlTable", tomllib.load(source))
     return normalize_toml_table(parsed)
 
 
 def loads_normalized_toml(source: str) -> TomlTable:
-    """Parse and normalize TOML text at the untyped library boundary."""
+    """Parse and normalize TOML text at the untyped library boundary.
+
+    Returns:
+        The parsed recursively normalized TOML table.
+    """
     parsed = cast("TomlTable", tomllib.loads(source))
     return normalize_toml_table(parsed)
 

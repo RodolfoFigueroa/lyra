@@ -20,7 +20,7 @@ from typing import (
 )
 
 import requests
-from lyra.api.client.base import _BaseTransport, _load_pandas, service_unavailable_error
+from lyra.api.client.base import BaseTransport, load_pandas, service_unavailable_error
 from lyra.api.exceptions import (
     DownloadError,
     JobEventCursorGapError,
@@ -106,7 +106,7 @@ class _SSEEventBuffer:
         return record
 
     def add(self, line: str) -> JobEventRecord | None:
-        if line == "":
+        if not line:
             return self.flush()
         if line.startswith(":"):
             return None
@@ -245,17 +245,18 @@ class JobHandle(Generic[_SuccessResultT]):
         client: _SyncTransport,
         submission: JobCreateResponse,
     ) -> None:
+        """Initialize a handle for an existing job submission."""
         self._client = client
         self.submission = submission
 
     @property
     def job_id(self) -> str:
-        """Return the submitted job's identifier."""
+        """The submitted job's identifier."""
         return self.submission.job_id
 
     @property
     def metric(self) -> str:
-        """Return the name of the submitted metric."""
+        """The name of the submitted metric."""
         return self.submission.metric
 
     def status(self) -> JobStatusInfo:
@@ -263,9 +264,6 @@ class JobHandle(Generic[_SuccessResultT]):
 
         Returns:
             The latest status reported by the API.
-
-        Raises:
-            DownloadError: If the status request fails or returns an error response.
 
         """
         return self._client.get_job(self.job_id)
@@ -291,14 +289,8 @@ class JobHandle(Generic[_SuccessResultT]):
             max_reconnect_attempts: Number of consecutive reconnection attempts
                 allowed after the initial connection.
 
-        Yields:
-            Job event records in server order.
-
-        Raises:
-            ValueError: If ``max_reconnect_attempts`` is negative.
-            JobEventCursorGapError: If the requested event is no longer retained.
-            JobEventStreamError: If the stream cannot be resumed.
-            JobWaitTimeoutError: If ``timeout`` expires.
+        Returns:
+            An iterator of job event records in server order.
 
         """
         return self._client.iter_job_events(
@@ -317,7 +309,6 @@ class JobHandle(Generic[_SuccessResultT]):
 
         Raises:
             MetricRunError: If the job failed or was cancelled.
-            DownloadError: If the result request fails or returns an error response.
 
         """
         result = self._client.get_job_result(self.job_id)
@@ -346,10 +337,7 @@ class JobHandle(Generic[_SuccessResultT]):
             The table or file result produced by the job.
 
         Raises:
-            MetricRunError: If the job failed or was cancelled.
-            JobEventStreamError: If the event stream ends or cannot be resumed.
-            JobEventCursorGapError: If event history needed to resume was discarded.
-            JobWaitTimeoutError: If ``timeout`` expires.
+            JobEventStreamError: If the event stream ends before a terminal event.
 
         """
         for record in self.events(timeout=timeout):
@@ -378,7 +366,27 @@ class _RequestModelOptions(TypedDict):
     json_body: NotRequired[dict[str, Any] | None]
 
 
-class _SyncTransport(_BaseTransport):
+def _write_download_response(
+    response: requests.Response,
+    output_path: Path,
+    *,
+    failure_context: str,
+    job_id: str | None = None,
+) -> None:
+    if response.status_code != 200:
+        err = f"{failure_context}. HTTP {response.status_code}: {response.text}"
+        raise DownloadError(err)
+    if job_id is not None and "application/json" in response.headers.get(
+        "content-type", ""
+    ):
+        result = parse_job_result(response.json())
+        err = f"Job {job_id} returned {result.status} JSON result, not a file."
+        raise DownloadError(err)
+    with output_path.open("wb") as file:
+        file.writelines(response.iter_content(chunk_size=65536))
+
+
+class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -- API surface
     """Private synchronous HTTP implementation used by resource clients."""
 
     def _request_model(
@@ -819,7 +827,7 @@ class _SyncTransport(_BaseTransport):
             headers = dict(self._auth_headers)
             if cursor is not None:
                 headers["Last-Event-ID"] = cursor
-            try:
+            try:  # ruff: ignore[too-many-statements-in-try-clause] -- live stream
                 with requests.get(
                     self._http_url(f"jobs/{job_id}/events"),
                     timeout=_event_read_timeout(deadline, self.timeout),
@@ -904,23 +912,12 @@ class _SyncTransport(_BaseTransport):
                 headers=self._auth_headers,
                 stream=True,
             ) as response:
-                if response.status_code != 200:
-                    err = (
-                        "Failed to download job result. "
-                        f"HTTP {response.status_code}: {response.text}"
-                    )
-                    raise DownloadError(err)
-
-                if "application/json" in response.headers.get("content-type", ""):
-                    result = parse_job_result(response.json())
-                    err = (
-                        f"Job {job_id} returned {result.status} JSON result, "
-                        "not a file."
-                    )
-                    raise DownloadError(err)
-
-                with output_path.open("wb") as file:
-                    file.writelines(response.iter_content(chunk_size=65536))
+                _write_download_response(
+                    response,
+                    output_path,
+                    failure_context="Failed to download job result",
+                    job_id=job_id,
+                )
         except requests.RequestException as exc:
             err = f"Job result download error: {exc}"
             raise DownloadError(err) from exc
@@ -939,7 +936,7 @@ class _SyncTransport(_BaseTransport):
         result_ref_or_job_id: str,
         path: str | os.PathLike[str],
         *,
-        format: str = "jsonl",  # noqa: A002
+        format: str = "jsonl",  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
         if format != "jsonl":
             err = "Only JSONL result downloads are supported. Use format='jsonl'."
@@ -954,21 +951,17 @@ class _SyncTransport(_BaseTransport):
                 headers=self._auth_headers,
                 stream=True,
             ) as response:
-                if response.status_code != 200:
-                    err = (
-                        "Failed to download result. "
-                        f"HTTP {response.status_code}: {response.text}"
-                    )
-                    raise DownloadError(err)
-
-                with output_path.open("wb") as file:
-                    file.writelines(response.iter_content(chunk_size=65536))
+                _write_download_response(
+                    response,
+                    output_path,
+                    failure_context="Failed to download result",
+                )
         except requests.RequestException as exc:
             err = f"Result download error: {exc}"
             raise DownloadError(err) from exc
 
     def result_dataframe(self, result_ref_or_job_id: str) -> pd.DataFrame:
-        pandas = _load_pandas()
+        pandas = load_pandas()
         with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
             temp_path = Path(temp_file.name)
 
@@ -1113,7 +1106,7 @@ class _ResultsResource:
         ref: str,
         path: str | os.PathLike[str],
         *,
-        format: str = "jsonl",  # noqa: A002
+        format: str = "jsonl",  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
         self._transport.download_result(ref, path, format=format)
 
@@ -1337,6 +1330,7 @@ class LyraClient:
         agent_api_key: str | None = None,
         secure: bool = True,
     ) -> None:
+        """Initialize a synchronous consumer client and its endpoint resources."""
         transport = _SyncTransport(
             host,
             timeout,
@@ -1398,6 +1392,7 @@ class LyraAdminClient:
         admin_api_key: str | None = None,
         secure: bool = True,
     ) -> None:
+        """Initialize a synchronous administrator client and its resources."""
         transport = _SyncAdminTransport(
             host,
             timeout,
@@ -1427,9 +1422,6 @@ class LyraAdminClient:
         Returns:
             API, storage, catalog, queue, and worker configuration status.
 
-        Raises:
-            DownloadError: If the status request fails or returns an error response.
-
         """
         return self._transport.get_admin_status()
 
@@ -1438,9 +1430,6 @@ class LyraAdminClient:
 
         Returns:
             The API, queue, worker, job-store, and plugin path configuration.
-
-        Raises:
-            DownloadError: If the request fails or returns an error response.
 
         """
         return self._transport.get_admin_config_summary()

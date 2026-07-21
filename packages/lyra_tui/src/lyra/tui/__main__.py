@@ -1,3 +1,5 @@
+"""Command-line entry point for the Lyra terminal interface."""
+
 from __future__ import annotations
 
 import argparse
@@ -40,6 +42,11 @@ def _api_host(value: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the terminal interface command-line parser.
+
+    Returns:
+        The configured connection and refresh argument parser.
+    """
     parser = argparse.ArgumentParser(
         prog="lyra-tui",
         formatter_class=_HelpFormatter,
@@ -104,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> TuiConfig:
+    """Resolve command-line and environment settings into TUI configuration.
+
+    Returns:
+        The effective terminal-interface configuration.
+    """
     return TuiConfig(
         host=args.host,
         secure=args.secure,
@@ -114,6 +126,11 @@ def config_from_args(args: argparse.Namespace) -> TuiConfig:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the Lyra terminal operator console.
+
+    Returns:
+        Zero after the application exits normally.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     app = LyraTuiApp(config_from_args(args))

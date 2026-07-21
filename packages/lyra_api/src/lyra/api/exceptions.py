@@ -27,6 +27,7 @@ class JobEventStreamError(DownloadError):
         last_event_id: str | None,
         attempts: int,
     ) -> None:
+        """Initialize an event-stream failure with resumability context."""
         super().__init__(message)
         self.job_id = job_id
         self.last_event_id = last_event_id
@@ -52,6 +53,7 @@ class ServiceUnavailableError(LyraAPIError):
         retryable: bool,
         retry_after_seconds: int | None,
     ) -> None:
+        """Initialize an unavailable-service error with retry guidance."""
         super().__init__(message)
         self.code = code
         self.retryable = retryable
@@ -62,6 +64,7 @@ class MetricRunError(LyraAPIError):
     """A submitted metric reached a failed or cancelled terminal state."""
 
     def __init__(self, result: FailedJobResult | CancelledJobResult) -> None:
+        """Initialize the error from a failed or cancelled terminal result."""
         detail = result.error
         super().__init__(
             f"Metric job {result.job_id} finished with status {result.status}: {detail}"

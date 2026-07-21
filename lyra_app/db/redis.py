@@ -1,3 +1,5 @@
+"""Redis-backed coordination and caching helpers."""
+
 from collections.abc import Awaitable, Callable
 from typing import TypeAlias
 
@@ -7,14 +9,14 @@ import redis.asyncio as aioredis
 from lyra_app.config import LyraConfig, get_config
 
 RedisValue: TypeAlias = (
-    None
-    | bool
+    bool
     | int
     | float
     | str
     | bytes
     | list["RedisValue"]
     | dict[str | bytes, "RedisValue"]
+    | None
 )
 AsyncRedisMethod: TypeAlias = Callable[..., Awaitable[RedisValue]]
 SyncRedisMethod: TypeAlias = Callable[..., RedisValue]
@@ -24,12 +26,22 @@ _redis_client_sync: redis.Redis | None = None
 
 
 def get_redis_url(config: LyraConfig | None = None) -> str:
+    """Return the validated Redis URL from explicit or process configuration.
+
+    Returns:
+        The Redis connection URL shared by coordination clients.
+    """
     config = get_config() if config is None else config
     return config.redis.url
 
 
 def configure_redis(config: LyraConfig | None = None) -> str:
-    global _redis_client, _redis_client_sync  # noqa: PLW0603
+    """Replace process-wide synchronous and asynchronous Redis clients.
+
+    Returns:
+        The Redis URL used to create both clients.
+    """
+    global _redis_client, _redis_client_sync  # ruff:ignore[global-statement]
 
     redis_url = get_redis_url(config)
     _redis_client = aioredis.from_url(

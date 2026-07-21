@@ -149,7 +149,8 @@ def test_generated_metric_validates_before_verification(
     metrics = importlib.import_module("representative_lyra._metrics")
 
     class NeverVerify:
-        def verify(self) -> None:
+        @staticmethod
+        def verify() -> None:
             msg = "verification must follow local argument validation"
             raise AssertionError(msg)
 

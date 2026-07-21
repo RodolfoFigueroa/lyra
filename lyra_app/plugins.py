@@ -1,3 +1,5 @@
+"""Plugin discovery, loading, validation, and registration."""
+
 import fnmatch
 import hashlib
 import importlib
@@ -6,7 +8,7 @@ import os
 import re
 import shutil
 import site
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] -- invokes Git/uv
 import sys
 import tempfile
 from collections.abc import Iterable
@@ -41,6 +43,8 @@ class PluginSyncError(RuntimeError):
 
 @dataclass(frozen=True)
 class PluginRepoEntry:
+    """Describe a normalized GitHub, local Git, or directory plugin source."""
+
     raw: str
     clone_url: str
     owner: str
@@ -51,6 +55,7 @@ class PluginRepoEntry:
 
     @property
     def display_name(self) -> str:
+        """The human-readable source name used in logs and API responses."""
         if self.source_kind == "local" and self.source_path is not None:
             return f"local:{self.source_path}"
         if self.source_kind == "directory" and self.source_path is not None:
@@ -59,6 +64,7 @@ class PluginRepoEntry:
 
     @property
     def target_name(self) -> str:
+        """The collision-resistant directory name for the managed snapshot."""
         if self.source_kind in {"directory", "local"}:
             hash_source = str(self.source_path or self.clone_url)
             path_hash = hashlib.sha256(hash_source.encode()).hexdigest()[:12]
@@ -73,6 +79,8 @@ class PluginRepoEntry:
 
 @dataclass(frozen=True)
 class SyncedPluginRepo:
+    """Pair a normalized source with its managed path and change status."""
+
     entry: PluginRepoEntry
     path: Path
     changed: bool
@@ -168,7 +176,7 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
     if cwd is not None:
         cmd += ["-C", str(cwd)]
     cmd += list(args)
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true]
         cmd,
         check=True,
         capture_output=True,
@@ -177,6 +185,14 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
 
 
 def parse_repo_entry(entry: str) -> PluginRepoEntry:
+    """Parse and normalize a supported plugin source string.
+
+    Returns:
+        Repository metadata suitable for synchronization and persistence.
+
+    Raises:
+        ValueError: If the source is malformed or uses an unsupported URI form.
+    """
     raw = entry.strip().rstrip("/")
     if raw.lower().startswith("file:"):
         return _parse_local_repo_entry(raw)
@@ -204,6 +220,11 @@ def parse_repo_entry(entry: str) -> PluginRepoEntry:
 def iter_plugin_entries(
     raw_entries: Iterable[str] | None = None,
 ) -> Iterable[PluginRepoEntry]:
+    """Parse configured plugin sources while skipping malformed entries.
+
+    Returns:
+        Valid normalized entries in their configured order.
+    """
     if raw_entries is None:
         return []
 
@@ -296,18 +317,7 @@ def _directory_fingerprint(source: Path) -> str:
 
         relative_name = relative_path.as_posix()
         try:
-            if path.is_symlink():
-                entry_type = "symlink"
-                entry_value = path.readlink().as_posix()
-            elif path.is_dir():
-                entry_type = "directory"
-                entry_value = ""
-            elif path.is_file():
-                entry_type = "file"
-                entry_value = _hash_file(path)
-            else:
-                msg = f"Directory plugin source contains unsupported entry: {path}"
-                raise PluginSyncError(msg)
+            entry_type, entry_value = _directory_entry_fingerprint(path)
         except OSError as exc:
             msg = f"Directory plugin source entry could not be read: {path}"
             raise PluginSyncError(msg) from exc
@@ -320,6 +330,17 @@ def _directory_fingerprint(source: Path) -> str:
         fingerprint.update(b"\0")
 
     return fingerprint.hexdigest()
+
+
+def _directory_entry_fingerprint(path: Path) -> tuple[str, str]:
+    if path.is_symlink():
+        return "symlink", path.readlink().as_posix()
+    if path.is_dir():
+        return "directory", ""
+    if path.is_file():
+        return "file", _hash_file(path)
+    msg = f"Directory plugin source contains unsupported entry: {path}"
+    raise PluginSyncError(msg)
 
 
 def _remove_managed_path(path: Path) -> None:
@@ -387,6 +408,17 @@ def sync_plugin_repos(
     *,
     raise_on_error: bool = False,
 ) -> list[SyncedPluginRepo]:
+    """Synchronize a collection of plugin sources into managed snapshots.
+
+    Returns:
+        Successfully synchronized repositories in source order.
+
+    Raises:
+        subprocess.CalledProcessError: If Git synchronization fails while
+            ``raise_on_error`` is enabled.
+        PluginSyncError: If a non-Git source fails while ``raise_on_error`` is
+            enabled.
+    """
     entries = list(iter_plugin_entries(raw_entries))
     if not entries:
         return []
@@ -440,6 +472,11 @@ def sync_plugin_repos(
 
 
 def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
+    """Synchronize one plugin source into its managed snapshot.
+
+    Returns:
+        The normalized source, snapshot path, and whether its content changed.
+    """
     entry = parse_repo_entry(raw_entry)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / entry.target_name
@@ -448,6 +485,7 @@ def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
 
 
 def remove_plugin_snapshot(target_dir: Path, raw_entry: str) -> None:
+    """Remove one managed plugin snapshot and its directory fingerprint."""
     entry = parse_repo_entry(raw_entry)
     target = target_dir / entry.target_name
     fingerprint_path = target_dir / f".{target.name}.fingerprint"
@@ -465,7 +503,7 @@ def _check_compatible(plugin_dir: Path) -> bool:
         "--dry-run",
         str(plugin_dir),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # ruff:ignore[subprocess-without-shell-equals-true]
     if result.returncode != 0:
         logger.warning(
             "Plugin %s failed compatibility check and will be skipped. Reason: %s.",
@@ -477,9 +515,10 @@ def _check_compatible(plugin_dir: Path) -> bool:
 
 
 def install_plugin(plugin_dir: Path) -> None:
+    """Install one compatible runner plugin editably into the current environment."""
     logger.info("Installing plugin %s (editable).", plugin_dir.name)
-    subprocess.run(  # noqa: S603
-        ["uv", "pip", "install", "--python", sys.executable, "-e", str(plugin_dir)],  # noqa: S607
+    subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true]
+        ["uv", "pip", "install", "--python", sys.executable, "-e", str(plugin_dir)],  # ruff:ignore[start-process-with-partial-path]
         check=True,
         capture_output=True,
         text=True,
@@ -490,6 +529,11 @@ def install_plugin(plugin_dir: Path) -> None:
 
 
 def install_runner_plugins(repos: Iterable[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+    """Compatibility-check and install each synchronized runner plugin.
+
+    Returns:
+        Repositories whose compatibility check and installation both succeeded.
+    """
     installed: list[SyncedPluginRepo] = []
     for repo in repos:
         if not _check_compatible(repo.path):
@@ -515,6 +559,11 @@ def format_update_message(
     catalog_fingerprint: str,
     workers_restarting: bool = True,
 ) -> str:
+    """Summarize plugin, catalog, fingerprint, and worker-restart changes.
+
+    Returns:
+        A concise status message suitable for administrative responses.
+    """
     if updated:
         names = ", ".join(updated)
         prefix = f"Updated {len(updated)} plugin repo(s): {names}."

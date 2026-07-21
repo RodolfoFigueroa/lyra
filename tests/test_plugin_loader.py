@@ -74,7 +74,7 @@ def test_loader_rejects_invalid_factories(
 
 
 def test_loader_rejects_async_factory(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def create_plugin() -> PluginDefinition:
+    async def create_plugin() -> PluginDefinition:  # ruff: ignore[unused-async]
         return _definition()
 
     _install_factory(monkeypatch, create_plugin)

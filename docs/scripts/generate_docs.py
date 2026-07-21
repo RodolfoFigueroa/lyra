@@ -71,6 +71,8 @@ class DocumentationGenerationError(ValueError):
 
 @dataclass(frozen=True)
 class ConfigRow:
+    """Describe one leaf configuration field for the generated reference table."""
+
     path: str
     type_name: str
     required: bool
@@ -80,6 +82,7 @@ class ConfigRow:
 
 
 def main() -> None:
+    """Generate all source-derived documentation pages and public contracts."""
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
     generate_api_docs()
@@ -111,19 +114,31 @@ def main() -> None:
 
 
 def write_text(path: Path, content: str) -> None:
+    """Write UTF-8 text after normalizing it to one trailing newline."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
 
 def write_json(path: Path, content: object) -> None:
+    """Serialize an object as deterministic, indented JSON."""
     write_text(path, json.dumps(content, indent=2, sort_keys=True))
 
 
 def frontmatter(title: str, description: str) -> str:
+    """Build the required frontmatter for a generated documentation page.
+
+    Returns:
+        A YAML frontmatter block containing the title and description.
+    """
     return f"---\ntitle: {title}\ndescription: {description}\n---\n"
 
 
 def create_openapi_app() -> FastAPI:
+    """Create a schema-only FastAPI application containing every public router.
+
+    Returns:
+        An application suitable for generating the complete OpenAPI document.
+    """
     app = FastAPI(title="Lyra API", version=APP_VERSION)
     for router in (
         admin.router,
@@ -138,6 +153,11 @@ def create_openapi_app() -> FastAPI:
 
 
 def generate_http_reference() -> dict[str, Any]:
+    """Generate the route summary page and its complete OpenAPI schema.
+
+    Returns:
+        The generated OpenAPI schema written alongside the Markdown reference.
+    """
     schema = create_openapi_app().openapi()
     lines = [
         frontmatter(
@@ -145,8 +165,10 @@ def generate_http_reference() -> dict[str, Any]:
             "Generated routes, authentication boundaries, and OpenAPI operations.",
         ),
         "This page is generated from the FastAPI routers. Download the complete ",
-        "[`openapi.json`](../../../openapi.json) contract for request and response "
-        "schemas.",
+        (
+            "[`openapi.json`](../../../openapi.json) contract for request and response "
+            "schemas."
+        ),
         "",
         "| Method | Path | Authentication | Operation |",
         "| --- | --- | --- | --- |",
@@ -168,6 +190,15 @@ def generate_http_reference() -> dict[str, Any]:
 
 
 def resolve_schema(schema: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a local JSON Schema reference against its root document.
+
+    Returns:
+        The referenced definition, or ``schema`` itself when it is inline.
+
+    Raises:
+        DocumentationGenerationError: If the reference is not a supported local
+            definition reference.
+    """
     reference = schema.get("$ref")
     if reference is None:
         return schema
@@ -179,6 +210,11 @@ def resolve_schema(schema: dict[str, Any], root: dict[str, Any]) -> dict[str, An
 
 
 def schema_type(schema: dict[str, Any]) -> str:
+    """Render a JSON Schema's effective type as compact display text.
+
+    Returns:
+        A type name or union assembled from the schema structure.
+    """
     if "type" in schema:
         value = schema["type"]
         return " | ".join(value) if isinstance(value, list) else str(value)
@@ -190,6 +226,11 @@ def schema_type(schema: dict[str, Any]) -> str:
 
 
 def schema_constraints(schema: dict[str, Any]) -> str:
+    """Render supported validation constraints from a JSON Schema field.
+
+    Returns:
+        A comma-separated list of constraint assignments.
+    """
     names = (
         "minimum",
         "maximum",
@@ -211,6 +252,14 @@ def config_rows(
     prefix: str = "",
     parent_required: bool = True,
 ) -> list[ConfigRow]:
+    """Flatten nested configuration schema fields into documentation rows.
+
+    Returns:
+        Leaf configuration fields with inherited requiredness and metadata.
+
+    Raises:
+        DocumentationGenerationError: If a leaf field has no description.
+    """
     resolved = resolve_schema(schema, root)
     properties = resolved.get("properties", {})
     required = set(resolved.get("required", []))
@@ -264,6 +313,15 @@ def config_rows(
 
 
 def generate_config_reference() -> dict[str, Any]:
+    """Generate the TOML and environment configuration reference.
+
+    Returns:
+        The complete JSON Schema generated from ``LyraConfig``.
+
+    Raises:
+        DocumentationGenerationError: If an environment-owned field is absent
+            from the configuration schema.
+    """
     schema = LyraConfig.model_json_schema()
     rows = config_rows(schema, root=schema)
     known_paths = {row.path for row in rows}
@@ -313,6 +371,7 @@ def generate_config_reference() -> dict[str, Any]:
 
 
 def generate_cli_reference() -> None:
+    """Generate formatted help for every supported command-line interface."""
     parsers = (
         ("lyra-client", build_client_parser()),
         ("lyra-plugin", build_plugin_parser()),
@@ -340,6 +399,7 @@ def generate_cli_reference() -> None:
 
 
 def generate_mcp_reference() -> None:
+    """Generate MCP server instructions and JSON schemas for every tool."""
     lines = [
         frontmatter(
             "MCP Reference",
@@ -382,6 +442,15 @@ def generate_mcp_reference() -> None:
 
 
 def read_frontmatter(path: Path) -> tuple[str, str, str]:
+    """Read a page's required metadata and Markdown body.
+
+    Returns:
+        The page title, description, and stripped body.
+
+    Raises:
+        DocumentationGenerationError: If frontmatter is missing, malformed, or
+            lacks a title or description.
+    """
     content = path.read_text(encoding="utf-8")
     match = re.match(r"^---\n(.*?)\n---\n(.*)$", content, flags=re.DOTALL)
     if match is None:
@@ -406,6 +475,14 @@ def read_frontmatter(path: Path) -> tuple[str, str, str]:
 
 
 def navigation_pages() -> list[Path]:
+    """Resolve navigation entries to their source documentation pages.
+
+    Returns:
+        Pages in navigation order, with generated sections expanded by filename.
+
+    Raises:
+        DocumentationGenerationError: If a configured page does not exist.
+    """
     navigation = json.loads(NAVIGATION_PATH.read_text(encoding="utf-8"))
     pages: list[Path] = []
     for group in navigation:
@@ -425,6 +502,11 @@ def navigation_pages() -> list[Path]:
 
 
 def page_slug(path: Path) -> str:
+    """Convert a documentation source path to its site-relative URL slug.
+
+    Returns:
+        The normalized slug, or an empty string for the site index.
+    """
     relative = path.relative_to(CONTENT_DIR).with_suffix("")
     value = relative.as_posix()
     if value == "index":
@@ -433,6 +515,11 @@ def page_slug(path: Path) -> str:
 
 
 def normalize_mdx(body: str) -> str:
+    """Convert supported MDX-only constructs into portable Markdown.
+
+    Returns:
+        Markdown with imports removed and code examples expanded from source.
+    """
     body = re.sub(r"^import .*?;\n", "", body, flags=re.MULTILINE)
 
     def expand_code(match: re.Match[str]) -> str:
@@ -452,6 +539,7 @@ def normalize_mdx(body: str) -> str:
 
 
 def generate_llm_files() -> None:
+    """Generate the concise and full-text LLM documentation exports."""
     base = os.environ.get("LYRA_DOCS_BASE", DEFAULT_BASE).rstrip("/")
     pages = navigation_pages()
     index_lines = [

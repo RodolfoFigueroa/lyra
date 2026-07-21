@@ -1,3 +1,5 @@
+"""Screen for inspecting and controlling worker processes."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -6,6 +8,7 @@ from lyra.tui.screens.formatting import bool_label, count_label, join_values
 from lyra.tui.state import TuiSnapshot
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from lyra.sdk.models import WorkerSummary
@@ -13,16 +16,26 @@ if TYPE_CHECKING:
 
 
 class WorkersView(Vertical):
+    """Configured and observed worker-process status panel."""
+
     def __init__(self, snapshot: TuiSnapshot | None = None) -> None:
+        """Initialize the workers view with an optional snapshot."""
         super().__init__()
         self.snapshot = snapshot or TuiSnapshot()
         self._ready = False
 
+    @override
     def compose(self) -> ComposeResult:
+        """Compose the worker summary and details table.
+
+        Yields:
+            The worker summary label and worker details table.
+        """
         yield Static("", id="workers-summary", classes="panel-summary")
         yield DataTable(id="workers-table")
 
     def on_mount(self) -> None:
+        """Configure the worker table and render the initial snapshot."""
         table = self.query_one("#workers-table", DataTable)
         table.add_columns(
             "Worker",
@@ -38,6 +51,7 @@ class WorkersView(Vertical):
         self.update_snapshot(self.snapshot)
 
     def update_snapshot(self, snapshot: TuiSnapshot) -> None:
+        """Replace the displayed worker snapshot."""
         self.snapshot = snapshot
         if not self._ready:
             return
@@ -56,6 +70,11 @@ class WorkersView(Vertical):
 
 
 def worker_row(worker: WorkerSummary) -> tuple[str, str, str, str, str, str, str, str]:
+    """Format worker state and task counts for display.
+
+    Returns:
+        Worker identity, state, queue, and task-count cells.
+    """
     return (
         worker.name,
         worker_status_label(worker.status),
@@ -69,6 +88,11 @@ def worker_row(worker: WorkerSummary) -> tuple[str, str, str, str, str, str, str
 
 
 def worker_status_label(status: str) -> str:
+    """Add a compact visual prefix to a worker status.
+
+    Returns:
+        The prefixed worker status label.
+    """
     prefixes = {
         "online": "OK",
         "offline": "OFF",

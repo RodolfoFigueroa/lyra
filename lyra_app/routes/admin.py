@@ -1,6 +1,8 @@
+"""Administrative HTTP endpoints for managing a Lyra deployment."""
+
 import hmac
 import logging
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] -- diagnostics
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -136,6 +138,11 @@ _JOB_LIMIT_QUERY = Query(
 
 
 def get_plugin_state_path() -> Path:
+    """Return the durable plugin-state path used by administrative operations.
+
+    Returns:
+        The configured default plugin-state file path.
+    """
     return DEFAULT_PLUGIN_STATE_PATH
 
 
@@ -174,21 +181,6 @@ def _load_state(store: PluginStateStore) -> PluginState:
             status_code=500,
             detail=f"Plugin state could not be loaded: {exc}",
         ) from exc
-
-
-def _validation_error(exc: Exception) -> HTTPException:
-    return HTTPException(status_code=422, detail=str(exc))
-
-
-def _not_found_error(exc: Exception) -> HTTPException:
-    return HTTPException(status_code=404, detail=str(exc))
-
-
-def _redis_unavailable_error() -> HTTPException:
-    return HTTPException(
-        status_code=503,
-        detail="Cannot connect to Redis. Please try again later.",
-    )
 
 
 def _redis_health() -> RedisHealth:
@@ -467,6 +459,11 @@ def _all_worker_names(config: LyraConfig, snapshot: WorkerInspectSnapshot) -> li
 
 @router.get("/plugin-repos")
 def list_plugin_repos() -> PluginRepoListResponse:
+    """List all configured plugin repository records.
+
+    Returns:
+        Repository metadata in persisted order.
+    """
     store = _state_store()
     state = _load_state(store)
     return PluginRepoListResponse(repos=[_repo_response(repo) for repo in state.repos])
@@ -474,6 +471,14 @@ def list_plugin_repos() -> PluginRepoListResponse:
 
 @router.post("/plugin-repos")
 def create_plugin_repo(request: CreatePluginRepoRequest) -> CreatePluginRepoResponse:
+    """Persist a new plugin repository and refresh the active catalog.
+
+    Returns:
+        The normalized repository and catalog-refresh status.
+
+    Raises:
+        HTTPException: If the repository record fails validation.
+    """
     store = _state_store()
     try:
         repo = store.add_repo(
@@ -482,7 +487,7 @@ def create_plugin_repo(request: CreatePluginRepoRequest) -> CreatePluginRepoResp
             enabled=request.enabled,
         )
     except (PluginStateValidationError, ValueError) as exc:
-        raise _validation_error(exc) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return CreatePluginRepoResponse(
         repo=_repo_response(repo),
         catalog_refresh=_refresh_catalog_status(store),
@@ -494,6 +499,14 @@ def update_plugin_repo(
     repo_id: str,
     request: UpdatePluginRepoRequest,
 ) -> UpdatePluginRepoResponse:
+    """Update a plugin repository and refresh the active catalog.
+
+    Returns:
+        The updated repository and catalog-refresh status.
+
+    Raises:
+        HTTPException: If the repository is absent or the update is invalid.
+    """
     store = _state_store()
     try:
         repo = store.update_repo(
@@ -502,9 +515,9 @@ def update_plugin_repo(
             enabled=request.enabled,
         )
     except PluginStateNotFoundError as exc:
-        raise _not_found_error(exc) from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (PluginStateValidationError, ValueError) as exc:
-        raise _validation_error(exc) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return UpdatePluginRepoResponse(
         repo=_repo_response(repo),
         catalog_refresh=_refresh_catalog_status(store),
@@ -513,6 +526,14 @@ def update_plugin_repo(
 
 @router.delete("/plugin-repos/{repo_id}")
 def delete_plugin_repo(repo_id: str) -> DeletePluginRepoResponse:
+    """Delete a plugin repository, its routes, and its managed snapshot.
+
+    Returns:
+        Deletion metadata and the resulting catalog-refresh status.
+
+    Raises:
+        HTTPException: If the repository does not exist.
+    """
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
@@ -528,7 +549,7 @@ def delete_plugin_repo(repo_id: str) -> DeletePluginRepoResponse:
     try:
         result = store.delete_repo(repo_id)
     except ValueError as exc:
-        raise _validation_error(exc) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not result.deleted:
         raise HTTPException(
             status_code=404,
@@ -546,6 +567,14 @@ def delete_plugin_repo(repo_id: str) -> DeletePluginRepoResponse:
 
 @router.post("/plugin-repos/{repo_id}/sync")
 def sync_plugin_repo(repo_id: str) -> SyncPluginRepoResponse:
+    """Synchronize one enabled plugin source and refresh the active catalog.
+
+    Returns:
+        Source synchronization and catalog-refresh metadata.
+
+    Raises:
+        HTTPException: If the repository is absent, disabled, or cannot be synced.
+    """
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
@@ -580,6 +609,14 @@ def sync_plugin_repo(repo_id: str) -> SyncPluginRepoResponse:
 
 @router.post("/plugin-catalog/refresh")
 def refresh_plugin_catalog() -> PluginCatalogRefreshResponse:
+    """Rebuild the active metric catalog from durable plugin state.
+
+    Returns:
+        Catalog changes, routing updates, and restart guidance.
+
+    Raises:
+        HTTPException: If a source cannot be synced or plugin state is invalid.
+    """
     config = _load_config()
     store = _state_store(config)
     try:
@@ -596,6 +633,11 @@ def refresh_plugin_catalog() -> PluginCatalogRefreshResponse:
 
 @router.get("/status")
 def get_status() -> AdminStatusResponse:
+    """Summarize deployment health and active runtime configuration.
+
+    Returns:
+        API, Redis, catalog, queue, worker, and retention status.
+    """
     config = _load_config()
     return AdminStatusResponse(
         api_version=APP_VERSION,
@@ -611,6 +653,11 @@ def get_status() -> AdminStatusResponse:
 
 @router.get("/config-summary")
 def get_config_summary() -> ConfigSummaryResponse:
+    """Expose a non-secret summary of the validated runtime configuration.
+
+    Returns:
+        Listener, queue, worker, retention, and plugin-path settings.
+    """
     config = _load_config()
     return ConfigSummaryResponse(
         api_host=config.api.host,
@@ -630,6 +677,11 @@ def get_config_summary() -> ConfigSummaryResponse:
 
 @router.get("/catalog")
 def get_catalog() -> CatalogSummaryResponse:
+    """Summarize the loaded catalog, plugin sources, and metric routing.
+
+    Returns:
+        Catalog identity, metric names, sources, and effective queue assignments.
+    """
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
@@ -645,6 +697,11 @@ def get_catalog() -> CatalogSummaryResponse:
 
 @router.get("/workers")
 def list_workers() -> WorkersResponse:
+    """List configured and observed workers from the latest inspect snapshot.
+
+    Returns:
+        Worker summaries and freshness metadata for the background inspection.
+    """
     config = _load_config()
     state = get_worker_inspect_state()
     snapshot = state.snapshot
@@ -660,6 +717,14 @@ def list_workers() -> WorkersResponse:
 
 @router.get("/workers/{worker_name}")
 def get_worker(worker_name: str) -> WorkerDetail:
+    """Return task, queue, and runtime details for one worker pool.
+
+    Returns:
+        The worker summary, tasks, statistics, and inspection metadata.
+
+    Raises:
+        HTTPException: If the worker is neither configured nor observed.
+    """
     config = _load_config()
     state = get_worker_inspect_state()
     snapshot = state.snapshot
@@ -670,6 +735,11 @@ def get_worker(worker_name: str) -> WorkerDetail:
 
 @router.get("/queues")
 def list_queues() -> QueuesResponse:
+    """Summarize metric assignments and worker consumers for allowed queues.
+
+    Returns:
+        Queue assignment counts and configured and observed consumers.
+    """
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
@@ -717,6 +787,11 @@ def list_queues() -> QueuesResponse:
 def restart_workers(
     timeout: Annotated[float, _TIMEOUT_QUERY] = 30.0,
 ) -> WorkerRestartResponse:
+    """Request a graceful restart of every Celery worker.
+
+    Returns:
+        Confirmation containing the requested drain timeout.
+    """
     graceful_worker_restart(timeout=timeout)
     return WorkerRestartResponse(
         requested=True,
@@ -731,6 +806,14 @@ def list_jobs(
     status: JobLifecycleStatus | None = None,
     metric: str | None = None,
 ) -> JobListResponse:
+    """List recent retained jobs with optional lifecycle and metric filters.
+
+    Returns:
+        Matching jobs in reverse chronological order.
+
+    Raises:
+        HTTPException: If Redis is unavailable.
+    """
     try:
         snapshots = job_store.list_job_statuses(
             limit=limit,
@@ -738,7 +821,10 @@ def list_jobs(
             metric=metric,
         )
     except RedisError as exc:
-        raise _redis_unavailable_error() from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot connect to Redis. Please try again later.",
+        ) from exc
     return JobListResponse(
         jobs=[
             JobStatusInfo.model_validate(snapshot.model_dump(mode="json"))
@@ -749,10 +835,21 @@ def list_jobs(
 
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str) -> JobCancelResponse:
+    """Cancel a nonterminal job and request Celery task revocation.
+
+    Returns:
+        Confirmation that the Lyra state and Celery revocation were requested.
+
+    Raises:
+        HTTPException: If the job is absent or already terminal.
+    """
     try:
         snapshot, cancelled = job_store.cancel_job(job_id)
     except RedisError as exc:
-        raise _redis_unavailable_error() from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot connect to Redis. Please try again later.",
+        ) from exc
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job expired or not found")
     if not cancelled:
@@ -771,6 +868,11 @@ def cancel_job(job_id: str) -> JobCancelResponse:
 
 @router.get("/plugin-routing")
 def list_plugin_routing() -> PluginRoutingResponse:
+    """Return persisted metric queue assignments and queue defaults.
+
+    Returns:
+        Explicit metric routes, allowed queues, and the default queue.
+    """
     config = _load_config()
     store = _state_store(config)
     state = _load_state(store)
@@ -786,6 +888,14 @@ def set_plugin_routing(
     metric_name: str,
     request: SetMetricQueueRequest,
 ) -> MetricQueueAssignmentResponse:
+    """Assign a known metric to an allowed worker queue.
+
+    Returns:
+        The normalized metric name and persisted queue assignment.
+
+    Raises:
+        HTTPException: If the metric is not present in the active catalog.
+    """
     store = _state_store()
     stripped_metric_name = metric_name.strip()
     entry = get_metric_entry(stripped_metric_name)
@@ -801,15 +911,23 @@ def set_plugin_routing(
             repo_id=entry.repo_id,
         )
     except (PluginStateValidationError, ValueError) as exc:
-        raise _validation_error(exc) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return MetricQueueAssignmentResponse(metric_name=stripped_metric_name, queue=queue)
 
 
 @router.delete("/plugin-routing/{metric_name}")
 def delete_plugin_routing(metric_name: str) -> DeleteMetricQueueResponse:
+    """Remove a metric's explicit queue assignment when present.
+
+    Returns:
+        The normalized metric name and whether an assignment was deleted.
+
+    Raises:
+        HTTPException: If the metric name is invalid.
+    """
     store = _state_store()
     try:
         deleted = store.delete_metric_queue(metric_name)
     except ValueError as exc:
-        raise _validation_error(exc) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return DeleteMetricQueueResponse(deleted=deleted, metric_name=metric_name.strip())

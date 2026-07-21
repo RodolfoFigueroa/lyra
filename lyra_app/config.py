@@ -1,3 +1,5 @@
+"""Typed configuration models and environment-backed settings for Lyra."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -50,7 +52,7 @@ LYRA_POSTGRES_HOST_ENV = "LYRA_POSTGRES_HOST"
 LYRA_POSTGRES_PORT_ENV = "LYRA_POSTGRES_PORT"
 LYRA_POSTGRES_DB_ENV = "LYRA_POSTGRES_DB"
 LYRA_POSTGRES_USER_ENV = "LYRA_POSTGRES_USER"
-LYRA_POSTGRES_PASSWORD_ENV = "LYRA_POSTGRES_PASSWORD"  # noqa: S105
+LYRA_POSTGRES_PASSWORD_ENV = "LYRA_POSTGRES_PASSWORD"  # ruff:ignore[hardcoded-password-string]
 LYRA_ADMIN_API_KEY_ENV = "LYRA_ADMIN_API_KEY"
 LYRA_AGENT_API_KEY_ENV = "LYRA_AGENT_API_KEY"
 DEFAULT_MCP_MOUNT_PATH = "/mcp"
@@ -98,6 +100,14 @@ def _strip_string_list(value: list[str]) -> list[str]:
 
 
 def read_scalar_env_var(env_var: str, *, field_name: str) -> str:
+    """Read a required, nonblank string value from an environment variable.
+
+    Returns:
+        The environment value with surrounding whitespace removed.
+
+    Raises:
+        ConfigSecretError: If the variable is unset or contains only whitespace.
+    """
     raw_value = os.environ.get(env_var)
     if raw_value is None:
         msg = f"{field_name} environment variable is not set: {env_var}"
@@ -111,6 +121,14 @@ def read_scalar_env_var(env_var: str, *, field_name: str) -> str:
 
 
 def read_int_env_var(env_var: str, *, field_name: str) -> int:
+    """Read a required integer from an environment variable.
+
+    Returns:
+        The base-10 integer represented by the environment value.
+
+    Raises:
+        ConfigSecretError: If the variable is absent, blank, or not an integer.
+    """
     raw_value = read_scalar_env_var(env_var, field_name=field_name)
     try:
         return int(raw_value)
@@ -120,6 +138,14 @@ def read_int_env_var(env_var: str, *, field_name: str) -> int:
 
 
 def read_scalar_secret_file(path: Path, *, field_name: str) -> str:
+    """Read and validate a nonblank scalar secret from a UTF-8 file.
+
+    Returns:
+        The file contents with surrounding whitespace removed.
+
+    Raises:
+        ConfigSecretError: If the file cannot be read or is empty.
+    """
     try:
         value = path.read_text(encoding="utf-8").strip()
     except OSError as exc:
@@ -133,6 +159,12 @@ def read_scalar_secret_file(path: Path, *, field_name: str) -> str:
 
 
 def require_nonempty_file(path: Path, *, field_name: str) -> None:
+    """Require a path to identify a readable file with non-whitespace content.
+
+    Raises:
+        ConfigSecretError: If the file cannot be read or has no non-whitespace
+            bytes.
+    """
     try:
         value = path.read_bytes()
     except OSError as exc:
@@ -145,6 +177,8 @@ def require_nonempty_file(path: Path, *, field_name: str) -> None:
 
 
 class ApiConfig(StrictConfigModel):
+    """Configure the HTTP server listener, public URL, and trusted proxies."""
+
     host: str = Field(
         default=DEFAULT_API_HOST,
         description="Interface address on which the API server listens.",
@@ -167,16 +201,36 @@ class ApiConfig(StrictConfigModel):
     @field_validator("host", "public_base_url")
     @classmethod
     def normalize_required_strings(cls, value: str) -> str:
+        """Strip whitespace and reject blank API string settings.
+
+        Returns:
+            The normalized, nonblank setting value.
+        """
         return _strip_required_string(value)
 
     @field_validator("forwarded_allow_ips")
     @classmethod
     def normalize_forwarded_allow_ips(cls, value: list[str]) -> list[str]:
+        """Strip and validate every trusted proxy address or CIDR.
+
+        Returns:
+            A list containing the normalized proxy entries.
+        """
         return _strip_string_list(value)
 
     @field_validator("public_base_url")
     @classmethod
     def validate_public_base_url(cls, value: str) -> str:
+        """Validate and normalize the externally reachable HTTP base URL.
+
+        Returns:
+            The validated base URL without a trailing slash.
+
+        Raises:
+            ValueError: If the URL is malformed, contains credentials or URL
+                suffixes, uses an internal hostname, or uses insecure HTTP for a
+                non-loopback host.
+        """
         parsed = urlsplit(value)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             msg = "api.public_base_url must be an absolute http:// or https:// URL"
@@ -223,6 +277,8 @@ class ApiConfig(StrictConfigModel):
 
 
 class RedisConfig(StrictConfigModel):
+    """Configure the Redis endpoint used for queues and retained job state."""
+
     url: str = Field(
         min_length=1,
         description="Redis URL used by Celery and the retained job store.",
@@ -231,11 +287,25 @@ class RedisConfig(StrictConfigModel):
     @field_validator("url")
     @classmethod
     def normalize_url(cls, value: str) -> str:
+        """Strip surrounding whitespace from the Redis URL.
+
+        Returns:
+            The normalized, nonblank Redis URL.
+        """
         return _strip_required_string(value)
 
     @field_validator("url")
     @classmethod
     def validate_url(cls, value: str) -> str:
+        """Require a complete Redis URL with a supported scheme.
+
+        Returns:
+            The validated Redis URL unchanged.
+
+        Raises:
+            ValueError: If the URL lacks a host or does not use ``redis`` or
+                ``rediss``.
+        """
         parsed = urlparse(value)
         if parsed.scheme not in _ALLOWED_REDIS_SCHEMES or not parsed.netloc:
             msg = "redis.url must be a redis:// or rediss:// URL"
@@ -244,6 +314,8 @@ class RedisConfig(StrictConfigModel):
 
 
 class DatabasePoolConfig(StrictConfigModel):
+    """Configure connection-pool limits and PostgreSQL timeouts."""
+
     pool_size: int = Field(ge=1, description="Persistent connections per process.")
     max_overflow: int = Field(
         default=0,
@@ -299,6 +371,8 @@ def _worker_database_pool() -> DatabasePoolConfig:
 
 
 class DatabaseConfig(StrictConfigModel):
+    """Configure PostgreSQL credentials, readiness, and workload pools."""
+
     host: str = Field(
         default_factory=lambda: read_scalar_env_var(
             LYRA_POSTGRES_HOST_ENV,
@@ -367,13 +441,25 @@ class DatabaseConfig(StrictConfigModel):
     @field_validator("host", "name", "user", "password")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
+        """Strip and reject blank database connection fields.
+
+        Returns:
+            The normalized, nonblank connection value.
+        """
         return _strip_required_string(value)
 
     def read_password(self) -> str:
+        """Return the resolved PostgreSQL password.
+
+        Returns:
+            The password loaded from the process environment.
+        """
         return self.password
 
 
 class EarthEngineConfig(StrictConfigModel):
+    """Configure the Earth Engine project and service-account file."""
+
     project: str = Field(
         min_length=1,
         description="Google Earth Engine project identifier.",
@@ -386,11 +472,24 @@ class EarthEngineConfig(StrictConfigModel):
     @field_validator("project")
     @classmethod
     def validate_project(cls, value: str) -> str:
+        """Strip and reject a blank Earth Engine project identifier.
+
+        Returns:
+            The normalized, nonblank project identifier.
+        """
         return _strip_required_string(value)
 
     @field_validator("service_account_file")
     @classmethod
     def validate_service_account_file(cls, value: Path) -> Path:
+        """Require an absolute service-account file path.
+
+        Returns:
+            The validated absolute path.
+
+        Raises:
+            ValueError: If no service-account path is supplied.
+        """
         path = _validate_absolute_path(value)
         if path is None:
             msg = "earth_engine.service_account_file is required"
@@ -399,6 +498,8 @@ class EarthEngineConfig(StrictConfigModel):
 
 
 class AdminConfig(StrictConfigModel):
+    """Configure the environment-owned administrator credential."""
+
     api_key: str = Field(
         default_factory=lambda: read_scalar_env_var(
             LYRA_ADMIN_API_KEY_ENV,
@@ -412,13 +513,25 @@ class AdminConfig(StrictConfigModel):
     @field_validator("api_key")
     @classmethod
     def normalize_api_key(cls, value: str) -> str:
+        """Strip and reject a blank administrator API key.
+
+        Returns:
+            The normalized, nonblank administrator key.
+        """
         return _strip_required_string(value)
 
     def read_api_key(self) -> str:
+        """Return the resolved administrator API key.
+
+        Returns:
+            The administrator key loaded from the process environment.
+        """
         return self.api_key
 
 
 class AgentConfig(StrictConfigModel):
+    """Configure the environment-owned agent credential."""
+
     api_key: str = Field(
         default_factory=lambda: read_scalar_env_var(
             LYRA_AGENT_API_KEY_ENV,
@@ -432,13 +545,25 @@ class AgentConfig(StrictConfigModel):
     @field_validator("api_key")
     @classmethod
     def normalize_api_key(cls, value: str) -> str:
+        """Strip and reject a blank agent API key.
+
+        Returns:
+            The normalized, nonblank agent key.
+        """
         return _strip_required_string(value)
 
     def read_api_key(self) -> str:
+        """Return the resolved agent API key.
+
+        Returns:
+            The agent key loaded from the process environment.
+        """
         return self.api_key
 
 
 class McpConfig(StrictConfigModel):
+    """Configure whether and where the MCP server is mounted."""
+
     enabled: bool = Field(
         default=False,
         description="Whether to mount the Streamable HTTP MCP server.",
@@ -451,11 +576,24 @@ class McpConfig(StrictConfigModel):
     @field_validator("mount_path")
     @classmethod
     def normalize_mount_path(cls, value: str) -> str:
+        """Strip and reject a blank MCP mount path.
+
+        Returns:
+            The normalized, nonblank mount path.
+        """
         return _strip_required_string(value)
 
     @field_validator("mount_path")
     @classmethod
     def validate_mount_path(cls, value: str) -> str:
+        """Require an absolute mount path without a trailing slash.
+
+        Returns:
+            The validated mount path unchanged.
+
+        Raises:
+            ValueError: If the path is not absolute or has a trailing slash.
+        """
         if not value.startswith("/"):
             msg = "mcp.mount_path must start with /"
             raise ValueError(msg)
@@ -466,6 +604,8 @@ class McpConfig(StrictConfigModel):
 
 
 class LoggingConfig(StrictConfigModel):
+    """Configure application log severity and optional file output."""
+
     level: str = Field(
         default=DEFAULT_LOG_LEVEL,
         description="Application logging level.",
@@ -478,12 +618,25 @@ class LoggingConfig(StrictConfigModel):
     @field_validator("level")
     @classmethod
     def normalize_level(cls, value: str) -> str:
+        """Normalize a logging level name to uppercase.
+
+        Returns:
+            The stripped, uppercase logging level name.
+        """
         value = _strip_required_string(value)
         return value.upper()
 
     @field_validator("level")
     @classmethod
     def validate_level(cls, value: str) -> str:
+        """Require a logging level recognized by the standard library.
+
+        Returns:
+            The recognized logging level name unchanged.
+
+        Raises:
+            ValueError: If the standard library does not recognize the level.
+        """
         if value not in _ALLOWED_LOG_LEVELS:
             levels = ", ".join(sorted(_ALLOWED_LOG_LEVELS))
             msg = f"logging.level must be one of: {levels}"
@@ -493,10 +646,17 @@ class LoggingConfig(StrictConfigModel):
     @field_validator("file")
     @classmethod
     def validate_file(cls, value: Path | None) -> Path | None:
+        """Require the optional log file path to be absolute.
+
+        Returns:
+            The absolute log path, or ``None`` when file logging is disabled.
+        """
         return _validate_absolute_path(value)
 
 
 class JobStoreConfig(StrictConfigModel):
+    """Configure retention for persisted job data."""
+
     ttl_seconds: int = Field(
         default=DEFAULT_JOB_STORE_TTL_SECONDS,
         gt=0,
@@ -505,6 +665,8 @@ class JobStoreConfig(StrictConfigModel):
 
 
 class JobEventsConfig(StrictConfigModel):
+    """Configure durable job-event throttling, size, and retention limits."""
+
     progress_min_interval_ms: int = Field(
         default=DEFAULT_JOB_EVENT_PROGRESS_MIN_INTERVAL_MS,
         ge=0,
@@ -532,6 +694,8 @@ class JobEventsConfig(StrictConfigModel):
 
 
 class AgentSubmissionLimitConfig(StrictConfigModel):
+    """Configure the shared fixed-window agent submission limit."""
+
     limit: int = Field(
         default=DEFAULT_AGENT_SUBMISSION_LIMIT,
         gt=0,
@@ -547,6 +711,8 @@ class AgentSubmissionLimitConfig(StrictConfigModel):
 
 
 class PluginsConfig(StrictConfigModel):
+    """Configure plugin storage locations, sources, and routing queues."""
+
     catalog_dir: Path = Field(
         default=DEFAULT_PLUGIN_CATALOG_DIR,
         description="Absolute directory for API-side plugin catalog snapshots.",
@@ -571,12 +737,22 @@ class PluginsConfig(StrictConfigModel):
     @field_validator("allowed_queues", "initial_repos")
     @classmethod
     def normalize_string_lists(cls, value: list[str]) -> list[str]:
+        """Strip and reject blank values in plugin string lists.
+
+        Returns:
+            A list containing the normalized, nonblank values.
+        """
         return _strip_string_list(value)
 
     @field_validator("initial_repos")
     @classmethod
     def validate_initial_repos(cls, value: list[str]) -> list[str]:
-        from lyra_app.plugin_state import (  # noqa: PLC0415
+        """Validate initial repository sources through the plugin-state model.
+
+        Returns:
+            The validated repository source strings unchanged.
+        """
+        from lyra_app.plugin_state import (  # ruff:ignore[import-outside-top-level]
             PluginState,
             make_repo_record,
         )
@@ -587,6 +763,14 @@ class PluginsConfig(StrictConfigModel):
     @field_validator("catalog_dir", "runner_base_dir")
     @classmethod
     def validate_paths(cls, value: Path) -> Path:
+        """Require plugin catalog and runner directories to be absolute.
+
+        Returns:
+            The validated absolute directory path.
+
+        Raises:
+            ValueError: If a required plugin directory is absent.
+        """
         path = _validate_absolute_path(value)
         if path is None:
             msg = "plugin path fields are required"
@@ -596,10 +780,23 @@ class PluginsConfig(StrictConfigModel):
     @field_validator("default_queue")
     @classmethod
     def normalize_default_queue(cls, value: str) -> str:
+        """Strip and reject a blank default queue name.
+
+        Returns:
+            The normalized, nonblank queue name.
+        """
         return _strip_required_string(value)
 
     @model_validator(mode="after")
     def validate_queues(self) -> Self:
+        """Require the default queue to be included among allowed queues.
+
+        Returns:
+            This configuration after validating its queue relationship.
+
+        Raises:
+            ValueError: If the default queue is not an allowed queue.
+        """
         allowed_queues = set(self.allowed_queues)
         if self.default_queue not in allowed_queues:
             msg = "plugins.default_queue must appear in plugins.allowed_queues"
@@ -609,6 +806,8 @@ class PluginsConfig(StrictConfigModel):
 
 
 class WorkerConfig(StrictConfigModel):
+    """Configure one named worker pool and its runtime directories."""
+
     queues: list[str] = Field(
         min_length=1,
         description="Queues imported and consumed by this worker pool.",
@@ -630,15 +829,27 @@ class WorkerConfig(StrictConfigModel):
     @field_validator("queues")
     @classmethod
     def normalize_queues(cls, value: list[str]) -> list[str]:
+        """Strip and reject blank worker queue names.
+
+        Returns:
+            A list containing the normalized, nonblank queue names.
+        """
         return _strip_string_list(value)
 
     @field_validator("install_dir", "temp_dir")
     @classmethod
     def validate_paths(cls, value: Path | None) -> Path | None:
+        """Require optional worker directories to be absolute.
+
+        Returns:
+            The absolute directory path, or ``None`` when no override is set.
+        """
         return _validate_absolute_path(value)
 
 
 class LyraConfig(StrictConfigModel):
+    """Represent the complete validated runtime configuration for Lyra."""
+
     schema_version: Literal[1] = Field(
         description="Server configuration schema version."
     )
@@ -681,6 +892,14 @@ class LyraConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def validate_worker_queues(self) -> Self:
+        """Require every worker queue to be declared in the plugin settings.
+
+        Returns:
+            This configuration after validating every worker queue.
+
+        Raises:
+            ValueError: If any worker consumes a queue that is not allowed.
+        """
         allowed_queues = set(self.plugins.allowed_queues)
         invalid: dict[str, list[str]] = {}
         for worker_name, worker in self.workers.items():
@@ -703,6 +922,14 @@ class LyraConfig(StrictConfigModel):
         return self
 
     def get_worker(self, name: str) -> WorkerConfig:
+        """Return a named worker configuration or raise for an unknown name.
+
+        Returns:
+            The configuration registered under the normalized worker name.
+
+        Raises:
+            KeyError: If the configuration has no worker with that name.
+        """
         worker_name = _strip_required_string(name)
         try:
             return self.workers[worker_name]
@@ -711,17 +938,28 @@ class LyraConfig(StrictConfigModel):
             raise KeyError(msg) from exc
 
     def worker_install_dir(self, name: str) -> Path:
+        """Resolve the effective plugin installation directory for a worker.
+
+        Returns:
+            The worker-specific override or its directory below the runner base.
+        """
         worker_name = _strip_required_string(name)
         worker = self.get_worker(worker_name)
         return worker.install_dir or self.plugins.runner_base_dir / worker_name
 
     def worker_temp_dir(self, name: str) -> Path:
+        """Resolve the effective per-job temporary directory for a worker.
+
+        Returns:
+            The worker-specific override or its default job-cache directory.
+        """
         worker_name = _strip_required_string(name)
         worker = self.get_worker(worker_name)
         return worker.temp_dir or LYRA_DATA_DIR / "cache" / "jobs" / worker_name
 
 
 def validate_config_secret_references(config: LyraConfig) -> None:
+    """Resolve and validate all runtime-owned secrets referenced by a config."""
     config.database.read_password()
     config.admin.read_api_key()
     config.agent.read_api_key()
@@ -766,13 +1004,26 @@ def _reject_env_backed_config(raw_config: TomlTable) -> None:
 
 
 def parse_config_toml(raw_config: TomlTable) -> LyraConfig:
-    """Normalize and validate one TOML document as the runtime configuration."""
+    """Normalize and validate one TOML document as the runtime configuration.
+
+    Returns:
+        The fully validated runtime configuration.
+    """
     raw_config = normalize_toml_table(raw_config)
     _reject_env_backed_config(raw_config)
     return LyraConfig.model_validate(raw_config)
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
+    """Load, normalize, validate, and resolve secrets for a TOML config file.
+
+    Returns:
+        The validated configuration loaded from ``path``.
+
+    Raises:
+        ConfigLoadError: If the file cannot be read, parsed, normalized, validated,
+            or resolved against runtime secrets.
+    """
     config_path = Path(path)
     try:
         with config_path.open("rb") as config_file:
@@ -804,7 +1055,12 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> LyraConfig:
 
 
 def get_config(path: str | Path | None = None) -> LyraConfig:
-    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
+    """Return the cached runtime config, loading it when necessary.
+
+    Returns:
+        The cached configuration for ``path`` or the default configuration path.
+    """
+    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # ruff:ignore[global-statement]
 
     config_path = Path(path) if path is not None else _CONFIG_CACHE_PATH
     if config_path is None:
@@ -816,11 +1072,21 @@ def get_config(path: str | Path | None = None) -> LyraConfig:
 
 
 def get_config_path() -> Path:
+    """Return the path associated with the cached runtime configuration.
+
+    Returns:
+        The cached source path, or the default path before a config is loaded.
+    """
     return _CONFIG_CACHE_PATH or DEFAULT_CONFIG_PATH
 
 
 def reload_config(path: str | Path | None = None) -> LyraConfig:
-    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
+    """Reload the runtime configuration and replace the process cache.
+
+    Returns:
+        The newly loaded and cached runtime configuration.
+    """
+    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # ruff:ignore[global-statement]
 
     config_path = Path(path) if path is not None else _CONFIG_CACHE_PATH
     if config_path is None:
@@ -832,7 +1098,8 @@ def reload_config(path: str | Path | None = None) -> LyraConfig:
 
 
 def clear_config_cache() -> None:
-    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # noqa: PLW0603
+    """Discard the cached configuration and its source path."""
+    global _CONFIG_CACHE, _CONFIG_CACHE_PATH  # ruff:ignore[global-statement]
 
     _CONFIG_CACHE = None
     _CONFIG_CACHE_PATH = None
@@ -935,8 +1202,7 @@ def _append_logging_section(lines: list[str], logging_config: LoggingConfig) -> 
 
 
 def _append_mcp_section(lines: list[str], mcp: McpConfig) -> None:
-    lines.append("[mcp]")
-    lines.append(f"enabled = {str(mcp.enabled).lower()}")
+    lines.extend(("[mcp]", f"enabled = {str(mcp.enabled).lower()}"))
     if mcp.mount_path != DEFAULT_MCP_MOUNT_PATH:
         _append_key(lines, "mount_path", mcp.mount_path)
     lines.append("")
@@ -1000,6 +1266,11 @@ def _append_workers_section(
 
 
 def render_config_toml(config: LyraConfig) -> str:
+    """Serialize a validated runtime configuration as canonical TOML.
+
+    Returns:
+        A deterministic TOML document ending in a newline.
+    """
     lines: list[str] = ["schema_version = 1", ""]
     _append_api_section(lines, config.api)
     _append_redis_section(lines, config.redis)
@@ -1016,6 +1287,7 @@ def render_config_toml(config: LyraConfig) -> str:
 
 
 def save_config(config: LyraConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> None:
+    """Atomically write a validated runtime configuration as TOML."""
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = render_config_toml(config)

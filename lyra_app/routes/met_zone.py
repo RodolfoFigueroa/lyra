@@ -1,3 +1,5 @@
+"""HTTP endpoint for resolving meteorological zones."""
+
 from fastapi import APIRouter, HTTPException
 from lyra.sdk.models import MetZoneCodeResponse
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,6 +19,17 @@ async def get_met_zone_code(
     name: str,
     database: DatabaseRuntimeDependency,
 ) -> MetZoneCodeResponse:
+    """Resolve a metropolitan-zone name through the application database.
+
+    Returns:
+        The canonical metropolitan-zone code and official name.
+
+    Raises:
+        RuntimeError: If the application database runtime is unavailable.
+        SQLAlchemyError: If a non-availability database error occurs.
+        HTTPException: If the database is temporarily unavailable or no zone
+            matches the name.
+    """
     if database is None:
         msg = "Application database runtime is unavailable."
         raise RuntimeError(msg)
@@ -26,7 +39,8 @@ async def get_met_zone_code(
     except SQLAlchemyError as exc:
         if not is_database_unavailable_error(exc):
             raise
-        raise database_unavailable_http_exception(database.config) from exc
+        error = database_unavailable_http_exception(database.config)
+        raise error from exc
 
     if result is None:
         raise HTTPException(

@@ -1,3 +1,5 @@
+"""Structured logging configuration for application processes."""
+
 import json
 import logging
 from datetime import UTC, datetime
@@ -10,6 +12,11 @@ class JsonLineFormatter(logging.Formatter):
     """Render application records as one machine-readable JSON object."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Serialize a log record and optional structured fields as compact JSON.
+
+        Returns:
+            A single-line JSON object containing the normalized log record.
+        """
         payload: dict[str, object] = {
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
@@ -42,6 +49,11 @@ def _logging_config(config: LyraConfig | None) -> tuple[str, Path | None]:
 
 
 def configure_logging(config: LyraConfig | None = None) -> logging.Logger:
+    """Configure the application logger once for JSON console or file output.
+
+    Returns:
+        The configured ``lyra_app`` logger.
+    """
     logger = logging.getLogger("lyra_app")
     level, log_file = _logging_config(config)
     logger.setLevel(level.upper())

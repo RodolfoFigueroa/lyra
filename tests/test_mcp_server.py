@@ -42,10 +42,11 @@ from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from lyra_app import main
+from lyra_app import main, registry
 from lyra_app.mcp import SERVER_INSTRUCTIONS
 from lyra_app.mcp import create_mcp_app as _create_mcp_app
 from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME
+from lyra_app.mcp.server import ToolCallError
 from tests.config_helpers import load_test_config
 
 _COMPLETED_AT = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
@@ -201,15 +202,16 @@ def _app_with_mcp(
         main, "bootstrap_runtime", lambda runtime_config: runtime_config
     )
 
-    from lyra_app import registry  # noqa: PLC0415
-
     monkeypatch.setattr(registry, "ensure_catalog_loaded", lambda: None)
 
-    async def noop() -> None:
+    def noop_start() -> None:
         return None
 
-    monkeypatch.setattr(main, "start_worker_inspect_collector", noop)
-    monkeypatch.setattr(main, "stop_worker_inspect_collector", noop)
+    async def noop_stop() -> None:  # ruff: ignore[unused-async] -- lifecycle double
+        return None
+
+    monkeypatch.setattr(main, "start_worker_inspect_collector", noop_start)
+    monkeypatch.setattr(main, "stop_worker_inspect_collector", noop_stop)
     return _ManagedTestClient(main.create_app(config))
 
 
@@ -358,8 +360,6 @@ class FakeMCPBackend:
 
     @staticmethod
     def _tool_error(code: str, message: str, details: JsonValue) -> Exception:
-        from lyra_app.mcp.server import ToolCallError  # noqa: PLC0415
-
         return ToolCallError(code, message, details)
 
 
@@ -979,82 +979,33 @@ def test_official_client_supports_met_zone_lookup_and_normalized_discovery() -> 
         ):
             await session.initialize()
             tools = await session.list_tools()
-            canonical = await session.call_tool(
-                "lyra_lookup_met_zone",
-                {"name": "Mexico City"},
+            calls = (
+                ("lyra_lookup_met_zone", {"name": "Mexico City"}),
+                ("lyra_lookup_met_zone", {"name": "Mexcio City"}),
+                ("lyra_lookup_met_zone", {"name": "Atlantis"}),
+                ("lyra_search_metrics", {"query": "tree coverage"}),
+                ("lyra_search_metrics", {"query": "heat risk"}),
+                ("lyra_search_metrics", {"query": "population density"}),
+                ("lyra_search_metrics", {"query": "arboles"}),
+                ("lyra_search_metrics", {"query": "value value"}),
+                ("lyra_search_metrics", {"query": "value value"}),
+                ("lyra_search_metrics", {"query": "value"}),
             )
-            fuzzy = await session.call_tool(
-                "lyra_lookup_met_zone",
-                {"name": "Mexcio City"},
-            )
-            missing = await session.call_tool(
-                "lyra_lookup_met_zone",
-                {"name": "Atlantis"},
-            )
-            snake = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "tree coverage"},
-            )
-            kebab = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "heat risk"},
-            )
-            camel = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "population density"},
-            )
-            accent = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "arboles"},
-            )
-            repeated = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "value value"},
-            )
-            repeated_again = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "value value"},
-            )
-            single = await session.call_tool(
-                "lyra_search_metrics",
-                {"query": "value"},
-            )
-            return (
-                tools,
-                canonical,
-                fuzzy,
-                missing,
-                snake,
-                kebab,
-                camel,
-                accent,
-                repeated,
-                repeated_again,
-                single,
-            )
+            results = [
+                await session.call_tool(name, arguments) for name, arguments in calls
+            ]
+            return (tools, *results)
 
-    (
-        tools,
-        canonical,
-        fuzzy,
-        missing,
-        snake,
-        kebab,
-        camel,
-        accent,
-        repeated,
-        repeated_again,
-        single,
-    ) = asyncio.run(exercise_discovery())
+    results = asyncio.run(exercise_discovery())
 
     expected_lookup = {"cve_met": "09.01", "nom_met": "Valle de México"}
-    assert canonical.structuredContent == expected_lookup
-    assert fuzzy.structuredContent == expected_lookup
+    assert results[1].structuredContent == expected_lookup
+    assert results[2].structuredContent == expected_lookup
     assert backend.met_zone_queries == ["Mexico City", "Mexcio City", "Atlantis"]
 
-    assert missing.isError is True
-    assert missing.structuredContent is not None
-    error = missing.structuredContent["error"]
+    assert results[3].isError is True
+    assert results[3].structuredContent is not None
+    error = results[3].structuredContent["error"]
     assert error["code"] == "unknown_met_zone"
     assert error["details"] == {
         "name": "Atlantis",
@@ -1062,10 +1013,10 @@ def test_official_client_supports_met_zone_lookup_and_normalized_discovery() -> 
     }
 
     for result, expected_metric in (
-        (snake, "tree_coverage"),
-        (kebab, "heat-risk-index"),
-        (camel, "populationDensity"),
-        (accent, "tree_coverage"),
+        (results[4], "tree_coverage"),
+        (results[5], "heat-risk-index"),
+        (results[6], "populationDensity"),
+        (results[7], "tree_coverage"),
     ):
         assert result.isError is False
         assert result.structuredContent is not None
@@ -1075,12 +1026,12 @@ def test_official_client_supports_met_zone_lookup_and_normalized_discovery() -> 
             in result.structuredContent["candidates"][0]["reason"]
         )
 
-    assert repeated.structuredContent is not None
-    assert repeated_again.structuredContent is not None
-    assert single.structuredContent is not None
-    repeated_candidates = repeated.structuredContent["candidates"]
-    assert repeated_candidates == repeated_again.structuredContent["candidates"]
-    assert repeated_candidates == single.structuredContent["candidates"]
+    assert results[8].structuredContent is not None
+    assert results[9].structuredContent is not None
+    assert results[10].structuredContent is not None
+    repeated_candidates = results[8].structuredContent["candidates"]
+    assert repeated_candidates == results[9].structuredContent["candidates"]
+    assert repeated_candidates == results[10].structuredContent["candidates"]
     assert [candidate["metric"] for candidate in repeated_candidates] == [
         "heat-risk-index",
         "populationDensity",
@@ -1088,10 +1039,10 @@ def test_official_client_supports_met_zone_lookup_and_normalized_discovery() -> 
     ]
 
     lookup_tool = next(
-        tool for tool in tools.tools if tool.name == "lyra_lookup_met_zone"
+        tool for tool in results[0].tools if tool.name == "lyra_lookup_met_zone"
     )
     search_tool = next(
-        tool for tool in tools.tools if tool.name == "lyra_search_metrics"
+        tool for tool in results[0].tools if tool.name == "lyra_search_metrics"
     )
     for tool in (lookup_tool, search_tool):
         assert tool.inputSchema["additionalProperties"] is False

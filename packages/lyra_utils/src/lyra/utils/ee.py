@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Iterator
 
 import ee
-import geopandas as gpd
+import geopandas
 import pandas as pd
 import shapely
 from lyra.sdk.types import ExplicitLocationAPI
@@ -26,7 +26,7 @@ def convert_polygon_to_ee(polygon: shapely.Polygon) -> ee.Geometry:
     return ee.Geometry.Polygon(list(polygon.exterior.coords))
 
 
-def convert_gdf_to_ee(gdf: gpd.GeoDataFrame) -> ee.FeatureCollection:
+def convert_gdf_to_ee(gdf: geopandas.GeoDataFrame) -> ee.FeatureCollection:
     """Convert a GeoDataFrame to an Earth Engine FeatureCollection.
 
     Args:
@@ -34,6 +34,9 @@ def convert_gdf_to_ee(gdf: gpd.GeoDataFrame) -> ee.FeatureCollection:
 
     Returns:
         An ``ee.FeatureCollection`` built from the input GeoDataFrame.
+
+    Raises:
+        ValueError: If the GeoDataFrame does not use EPSG:4326.
 
     """
     if not gdf.crs or gdf.crs.to_epsg() != 4326:
@@ -72,7 +75,7 @@ def get_reducer_name(reducer: ee.Reducer) -> str:
 
 def compute_gdf(
     img: ee.Image,
-    gdf: gpd.GeoDataFrame,
+    gdf: geopandas.GeoDataFrame,
     *,
     reducer: ee.Reducer,
     scale: float,
@@ -106,9 +109,9 @@ def compute_gdf(
 
 
 def chunk_gdf(
-    gdf: gpd.GeoDataFrame,
+    gdf: geopandas.GeoDataFrame,
     chunk_size: int = 1000,
-) -> Iterator[gpd.GeoDataFrame]:
+) -> Iterator[geopandas.GeoDataFrame]:
     """Yield successive row-slices of a GeoDataFrame.
 
     Args:
@@ -158,7 +161,7 @@ def reduce_ee_image_over_gdf_factory(
         try:
             return compute_gdf(img, df, reducer=reducer, scale=scale).to_dict()
         except ee.EEException as e:
-            if re.match(r"Request payload size exceeds the limit", str(e)):
+            if str(e).startswith(r"Request payload size exceeds the limit"):
                 processed_chunks = [
                     compute_gdf(img, chunk, reducer=reducer, scale=scale)
                     for chunk in chunk_gdf(df)

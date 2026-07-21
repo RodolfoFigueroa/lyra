@@ -1,3 +1,5 @@
+"""Persistent state and synchronization for installed plugins."""
+
 from __future__ import annotations
 
 import json
@@ -62,6 +64,8 @@ class StrictPluginStateModel(BaseModel):
 
 @dataclass(frozen=True)
 class NormalizedRepoSource:
+    """Capture the canonical source, ref, kind, and generated repository ID."""
+
     source: str
     ref: str | None
     source_kind: RepoSourceKind
@@ -70,12 +74,16 @@ class NormalizedRepoSource:
 
 @dataclass(frozen=True)
 class DeletePluginRepoResult:
+    """Report repository deletion and metric routes removed with it."""
+
     deleted: bool
     removed_metric_queues: list[str]
 
 
 @dataclass(frozen=True)
 class MetricQueueSyncResult:
+    """Report metric routes assigned or removed during catalog synchronization."""
+
     assigned: list[str]
     removed: list[str]
 
@@ -123,6 +131,14 @@ def _toml_key(value: str) -> str:
 
 
 def normalize_repo_source(raw_source: str) -> NormalizedRepoSource:
+    """Parse a repository source into its canonical persisted representation.
+
+    Returns:
+        The canonical source, optional ref, source kind, and generated ID.
+
+    Raises:
+        ValueError: If a local or directory source cannot be resolved to a path.
+    """
     entry = parse_repo_entry(raw_source)
     if entry.source_kind == "local":
         if entry.source_path is None:
@@ -154,16 +170,28 @@ def normalize_repo_source(raw_source: str) -> NormalizedRepoSource:
 
 
 def generate_repo_id(source: str) -> str:
+    """Generate the default stable repository identifier for a source.
+
+    Returns:
+        The identifier derived from the normalized repository source.
+    """
     return normalize_repo_source(source).generated_id
 
 
 def repo_record_to_source(repo: PluginRepoRecord) -> str:
+    """Reconstruct a loadable source string from a persisted repository record.
+
+    Returns:
+        The repository source with its revision appended when one is stored.
+    """
     if repo.ref is None:
         return repo.source
     return f"{repo.source}@{repo.ref}"
 
 
 class PluginRepoRecord(StrictPluginStateModel):
+    """Represent one normalized plugin repository in persistent state."""
+
     id: str = Field(min_length=1)
     source: str = Field(min_length=1)
     ref: str | None = None
@@ -172,11 +200,24 @@ class PluginRepoRecord(StrictPluginStateModel):
     @field_validator("id")
     @classmethod
     def normalize_id(cls, value: str) -> str:
+        """Strip and reject a blank repository identifier.
+
+        Returns:
+            The normalized, nonblank repository identifier.
+        """
         return _strip_required_string(value, field_name="repos.id")
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, value: str) -> str:
+        """Require a repository identifier safe for state keys and paths.
+
+        Returns:
+            The validated repository identifier unchanged.
+
+        Raises:
+            ValueError: If the identifier contains an unsupported character.
+        """
         if not _REPO_ID_PATTERN.fullmatch(value):
             msg = "repos.id may only contain A-Z, a-z, 0-9, underscore, dot, or dash"
             raise ValueError(msg)
@@ -185,15 +226,34 @@ class PluginRepoRecord(StrictPluginStateModel):
     @field_validator("source")
     @classmethod
     def normalize_source(cls, value: str) -> str:
+        """Strip and reject a blank repository source.
+
+        Returns:
+            The normalized, nonblank repository source.
+        """
         return _strip_required_string(value, field_name="repos.source")
 
     @field_validator("ref")
     @classmethod
     def normalize_ref(cls, value: str | None) -> str | None:
+        """Strip and validate an optional repository revision.
+
+        Returns:
+            The normalized revision, or ``None`` when no revision is pinned.
+        """
         return _strip_optional_string(value, field_name="repos.ref")
 
     @model_validator(mode="after")
     def validate_normalized_source(self) -> Self:
+        """Require the source and ref to match the canonical storage form.
+
+        Returns:
+            This record after validating its normalized source and revision.
+
+        Raises:
+            ValueError: If the source is malformed or noncanonical, or a local
+                source has a revision.
+        """
         try:
             normalized = normalize_repo_source(self.source)
         except ValueError as exc:
@@ -220,21 +280,35 @@ class PluginRepoRecord(StrictPluginStateModel):
 
 
 class MetricQueueRecord(StrictPluginStateModel):
+    """Persist a metric's assigned queue and owning repository."""
+
     queue: str = Field(min_length=1)
     repo_id: str = Field(min_length=1)
 
     @field_validator("queue")
     @classmethod
     def normalize_queue(cls, value: str) -> str:
+        """Strip and reject a blank queue name.
+
+        Returns:
+            The normalized, nonblank queue name.
+        """
         return _strip_required_string(value, field_name="queue name")
 
     @field_validator("repo_id")
     @classmethod
     def normalize_repo_id(cls, value: str) -> str:
+        """Strip and reject a blank owning repository identifier.
+
+        Returns:
+            The normalized, nonblank owning repository identifier.
+        """
         return _strip_required_string(value, field_name="repo_id")
 
 
 class PluginState(StrictPluginStateModel):
+    """Represent the complete versioned plugin repository and routing state."""
+
     schema_version: Literal[1] = PLUGIN_STATE_SCHEMA_VERSION
     repos: list[PluginRepoRecord] = Field(default_factory=list)
     metric_queues: dict[str, MetricQueueRecord] = Field(default_factory=dict)
@@ -245,10 +319,23 @@ class PluginState(StrictPluginStateModel):
         cls,
         value: dict[str, MetricQueueRecord],
     ) -> dict[str, MetricQueueRecord]:
+        """Normalize metric names used as queue-mapping keys.
+
+        Returns:
+            A mapping keyed by stripped, nonblank metric names.
+        """
         return _strip_mapping_keys(value, key_label="metric name")
 
     @model_validator(mode="after")
     def validate_repos(self) -> Self:
+        """Reject duplicate repository IDs and enabled sources.
+
+        Returns:
+            This state after checking repository uniqueness.
+
+        Raises:
+            ValueError: If IDs repeat or multiple enabled records use one source.
+        """
         seen_ids: set[str] = set()
         duplicate_ids: set[str] = set()
         enabled_sources: set[str] = set()
@@ -278,6 +365,14 @@ class PluginState(StrictPluginStateModel):
 
     @model_validator(mode="after")
     def validate_metric_queue_repos(self) -> Self:
+        """Require every metric route to reference a configured repository.
+
+        Returns:
+            This state after validating route ownership.
+
+        Raises:
+            ValueError: If any metric route names an unknown repository.
+        """
         repo_ids = {repo.id for repo in self.repos}
         unknown_repo_ids = sorted(
             {record.repo_id for record in self.metric_queues.values()} - repo_ids
@@ -290,6 +385,11 @@ class PluginState(StrictPluginStateModel):
 
     @classmethod
     def empty(cls) -> PluginState:
+        """Create plugin state containing no repositories or metric routes.
+
+        Returns:
+            A valid state with empty repository and metric-route collections.
+        """
         return cls()
 
 
@@ -299,6 +399,11 @@ def make_repo_record(
     repo_id: str | None = None,
     enabled: bool = True,
 ) -> PluginRepoRecord:
+    """Build a validated repository record from a user-facing source string.
+
+    Returns:
+        A repository record containing the normalized source and selected ID.
+    """
     normalized = normalize_repo_source(source)
     selected_id = repo_id if repo_id is not None else normalized.generated_id
     return PluginRepoRecord(
@@ -314,6 +419,12 @@ def validate_plugin_state(
     *,
     allowed_queues: Iterable[str],
 ) -> None:
+    """Require every persisted metric route to target an allowed queue.
+
+    Raises:
+        PluginStateValidationError: If a route targets a queue outside the
+            configured allowlist.
+    """
     allowed = set(allowed_queues)
     invalid_queues = sorted(
         {
@@ -348,6 +459,11 @@ def _validated_state(payload: dict[str, Any]) -> PluginState:
 
 
 def metric_queue_mapping(state: PluginState) -> dict[str, str]:
+    """Return sorted metric-to-queue assignments without repository metadata.
+
+    Returns:
+        A metric-to-queue mapping ordered by metric name.
+    """
     return {
         metric_name: record.queue
         for metric_name, record in sorted(state.metric_queues.items())
@@ -355,29 +471,45 @@ def metric_queue_mapping(state: PluginState) -> dict[str, str]:
 
 
 def render_plugin_state_toml(state: PluginState) -> str:
+    """Serialize plugin repository and routing state as canonical TOML.
+
+    Returns:
+        A deterministic TOML document ending in a newline.
+    """
     lines = [f"schema_version = {PLUGIN_STATE_SCHEMA_VERSION}", ""]
 
     for repo in state.repos:
-        lines.append("[[repos]]")
-        lines.append(f"id = {_toml_string(repo.id)}")
-        lines.append(f"source = {_toml_string(repo.source)}")
+        lines.extend(
+            (
+                "[[repos]]",
+                f"id = {_toml_string(repo.id)}",
+                f"source = {_toml_string(repo.source)}",
+            )
+        )
         if repo.ref is not None:
             lines.append(f"ref = {_toml_string(repo.ref)}")
-        lines.append(f"enabled = {str(repo.enabled).lower()}")
-        lines.append("")
+        lines.extend((f"enabled = {str(repo.enabled).lower()}", ""))
 
     lines.append("[metric_queues]")
     for metric_name, record in sorted(state.metric_queues.items()):
-        lines.append("")
-        lines.append(f"[metric_queues.{_toml_key(metric_name)}]")
-        lines.append(f"queue = {_toml_string(record.queue)}")
-        lines.append(f"repo_id = {_toml_string(record.repo_id)}")
+        lines.extend(
+            (
+                "",
+                f"[metric_queues.{_toml_key(metric_name)}]",
+                f"queue = {_toml_string(record.queue)}",
+                f"repo_id = {_toml_string(record.repo_id)}",
+            )
+        )
 
     return "\n".join(lines).rstrip() + "\n"
 
 
 def parse_plugin_state_toml(raw_state: TomlTable) -> PluginState:
-    """Normalize and validate one TOML document as persisted plugin state."""
+    """Normalize and validate one TOML document as persisted plugin state.
+
+    Returns:
+        The normalized and validated plugin state.
+    """
     return PluginState.model_validate(normalize_toml_table(raw_state))
 
 
@@ -386,6 +518,15 @@ def load_plugin_state(
     *,
     allowed_queues: Iterable[str],
 ) -> PluginState:
+    """Load and validate persisted plugin state, returning empty state if absent.
+
+    Returns:
+        The validated stored state, or an empty state when ``path`` is absent.
+
+    Raises:
+        PluginStateLoadError: If the file cannot be read, parsed, normalized, or
+            validated.
+    """
     state_path = Path(path)
     try:
         with state_path.open("rb") as state_file:
@@ -420,6 +561,7 @@ def save_plugin_state(
     *,
     allowed_queues: Iterable[str],
 ) -> None:
+    """Validate and atomically persist plugin state as TOML."""
     validate_plugin_state(state, allowed_queues=allowed_queues)
 
     state_path = Path(path)
@@ -447,22 +589,36 @@ def save_plugin_state(
 
 
 class PluginStateStore:
+    """Provide durable repository and metric-routing state mutations."""
+
     def __init__(
         self,
         path: str | Path = DEFAULT_PLUGIN_STATE_PATH,
         *,
         allowed_queues: Iterable[str],
     ) -> None:
+        """Initialize a store path and the queues allowed in persisted routes."""
         self.path = Path(path)
         self.allowed_queues = tuple(allowed_queues)
 
     def load(self) -> PluginState:
+        """Load and validate the current plugin state.
+
+        Returns:
+            The state currently stored at this store's path.
+        """
         return load_plugin_state(self.path, allowed_queues=self.allowed_queues)
 
     def reload(self) -> PluginState:
+        """Reload and return plugin state from durable storage.
+
+        Returns:
+            The freshly loaded state from this store's path.
+        """
         return self.load()
 
     def save(self, state: PluginState) -> None:
+        """Validate and atomically save plugin state."""
         save_plugin_state(state, self.path, allowed_queues=self.allowed_queues)
 
     def add_repo(
@@ -472,6 +628,15 @@ class PluginStateStore:
         repo_id: str | None = None,
         enabled: bool = True,
     ) -> PluginRepoRecord:
+        """Add a uniquely identified plugin repository and persist the result.
+
+        Returns:
+            The normalized repository record added to the state.
+
+        Raises:
+            PluginStateValidationError: If the selected repository ID is already
+                present.
+        """
         state = self.load()
         repo = make_repo_record(source, repo_id=repo_id, enabled=enabled)
         if any(existing.id == repo.id for existing in state.repos):
@@ -491,6 +656,15 @@ class PluginStateStore:
         source: str | None = None,
         enabled: bool | None = None,
     ) -> PluginRepoRecord:
+        """Update an existing repository's source or enabled state.
+
+        Returns:
+            The validated repository record after applying the requested updates.
+
+        Raises:
+            TypeError: If ``repo_id`` is not a string.
+            PluginStateNotFoundError: If no repository has the requested ID.
+        """
         repo_id = _strip_required_string(repo_id, field_name="repo_id")
         if not isinstance(repo_id, str):
             msg = "repo_id must be a string"
@@ -520,6 +694,14 @@ class PluginStateStore:
         raise PluginStateNotFoundError(msg)
 
     def delete_repo(self, repo_id: str) -> DeletePluginRepoResult:
+        """Delete a repository and any metric routes owned by it.
+
+        Returns:
+            The deletion status and names of metric routes removed with the repo.
+
+        Raises:
+            TypeError: If ``repo_id`` is not a string.
+        """
         repo_id = _strip_required_string(repo_id, field_name="repo_id")
         if not isinstance(repo_id, str):
             msg = "repo_id must be a string"
@@ -550,6 +732,14 @@ class PluginStateStore:
         )
 
     def set_metric_queue(self, metric_name: str, queue: str, *, repo_id: str) -> str:
+        """Persist a queue assignment and owner for one metric.
+
+        Returns:
+            The normalized queue name assigned to the metric.
+
+        Raises:
+            TypeError: If the metric name, queue, or repository ID is not a string.
+        """
         metric_name = _strip_required_string(metric_name, field_name="metric name")
         queue = _strip_required_string(queue, field_name="queue name")
         repo_id = _strip_required_string(repo_id, field_name="repo_id")
@@ -567,6 +757,14 @@ class PluginStateStore:
         return queue
 
     def delete_metric_queue(self, metric_name: str) -> bool:
+        """Delete a metric's explicit queue assignment if present.
+
+        Returns:
+            ``True`` when an assignment was removed, otherwise ``False``.
+
+        Raises:
+            TypeError: If ``metric_name`` is not a string.
+        """
         metric_name = _strip_required_string(metric_name, field_name="metric name")
         if not isinstance(metric_name, str):
             msg = "metric_name must be a string"
@@ -590,6 +788,15 @@ class PluginStateStore:
         *,
         default_queue: str,
     ) -> MetricQueueSyncResult:
+        """Reconcile metric routes with the active catalog and ownership map.
+
+        Returns:
+            Metric names whose routes were assigned or removed.
+
+        Raises:
+            TypeError: If the default queue, a metric name, or a repository ID is
+                not a string.
+        """
         default_queue = _strip_required_string(
             default_queue,
             field_name="default queue",

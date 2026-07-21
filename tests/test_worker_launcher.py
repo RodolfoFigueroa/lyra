@@ -83,7 +83,8 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
         def __init__(self) -> None:
             self.conf: dict[str, str] = {}
 
-        def worker_main(self, args: list[str]) -> None:
+        @staticmethod
+        def worker_main(args: list[str]) -> None:
             launched.append(args)
 
     fake_celery = FakeCelery()

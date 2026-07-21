@@ -1,3 +1,5 @@
+"""Persistent job-state access and transition operations."""
+
 from __future__ import annotations
 
 import hashlib
@@ -429,6 +431,8 @@ def _default_async_client(client: RedisClientT | None) -> RedisClientT:
 
 
 class JobStatusSnapshot(StrictBaseModel):
+    """Capture the latest persisted lifecycle state and observations for a job."""
+
     job_id: str = Field(min_length=1)
     status: JobStatus
     updated_at: datetime
@@ -439,11 +443,15 @@ class JobStatusSnapshot(StrictBaseModel):
 
 
 class StoredJobEvent(StrictBaseModel):
+    """Pair a decoded job event with its Redis stream cursor."""
+
     stream_id: str
     event: JobEvent
 
 
 class IdempotencyRecord(StrictBaseModel):
+    """Bind a caller request digest to the job created for that request."""
+
     request_digest: str = Field(min_length=1)
     job_id: str = Field(min_length=1)
 
@@ -455,24 +463,31 @@ class AgentSubmissionLimitDecision(StrictBaseModel):
 
 
 class JobCancelledError(RuntimeError):
+    """Indicate that an operation cannot continue because its job was cancelled."""
+
     def __init__(self, job_id: str) -> None:
+        """Initialize the error for a cancelled job identifier."""
         super().__init__(f"Job {job_id!r} was cancelled.")
         self.job_id = job_id
 
 
 def status_key(job_id: str) -> str:
+    """Return the Redis key containing a job's status snapshot."""
     return f"job:{job_id}:status"
 
 
 def result_key(job_id: str) -> str:
+    """Return the Redis key containing a job's terminal result."""
     return f"job:{job_id}:result"
 
 
 def events_key(job_id: str) -> str:
+    """Return the Redis stream key containing a job's events."""
     return f"job:{job_id}:events"
 
 
 def provenance_key(job_id: str) -> str:
+    """Return the Redis key containing a job's execution provenance."""
     return f"job:{job_id}:provenance"
 
 
@@ -481,6 +496,11 @@ def idempotency_key(
     *,
     agent_scope: str = DEFAULT_AGENT_SCOPE,
 ) -> str:
+    """Derive a non-secret Redis reservation key from caller key and scope.
+
+    Returns:
+        A namespaced key containing the SHA-256 digest of the scope and caller key.
+    """
     digest = hashlib.sha256(
         f"{agent_scope}\0{caller_key}".encode(),
     ).hexdigest()
@@ -488,10 +508,12 @@ def idempotency_key(
 
 
 def job_idempotency_key(job_id: str) -> str:
+    """Return the Redis key linking a job to its idempotency reservation."""
     return f"job:{job_id}:idempotency"
 
 
 def job_index_key() -> str:
+    """Return the Redis sorted-set key indexing retained jobs."""
     return JOB_INDEX_KEY
 
 
@@ -506,7 +528,14 @@ async def consume_agent_submission_limit_async(
     window_seconds: int,
     client: AsyncScriptClient | None = None,
 ) -> AgentSubmissionLimitDecision:
-    """Atomically consume capacity from the shared agent fixed window."""
+    """Atomically consume capacity from the shared agent fixed window.
+
+    Returns:
+        Whether the request was accepted, the current count, and retry delay.
+
+    Raises:
+        RuntimeError: If Redis returns a malformed script response.
+    """
     client = _default_async_client(client)
     raw_decision = await client.eval(
         _CONSUME_AGENT_SUBMISSION_LIMIT_SCRIPT,
@@ -630,6 +659,11 @@ def get_result_lifetime(
     *,
     client: SyncKeyReader | None = None,
 ) -> ResultLifetime:
+    """Read the remaining retention lifetime of a synchronous job result.
+
+    Returns:
+        Available expiration metadata, or an empty lifetime when unsupported.
+    """
     client = _default_sync_client(client)
     key = result_key(job_id)
     if isinstance(client, SyncMillisecondLifetimeReader) and callable(client.pttl):
@@ -644,6 +678,11 @@ async def get_result_lifetime_async(
     *,
     client: AsyncKeyReader | None = None,
 ) -> ResultLifetime:
+    """Read the remaining retention lifetime of an asynchronous job result.
+
+    Returns:
+        Available expiration metadata, or an empty lifetime when unsupported.
+    """
     client = _default_async_client(client)
     key = result_key(job_id)
     if isinstance(client, AsyncMillisecondLifetimeReader):
@@ -661,7 +700,11 @@ async def claim_idempotency_key_async(
     agent_scope: str = DEFAULT_AGENT_SCOPE,
     client: AsyncIdempotencyClient | None = None,
 ) -> tuple[IdempotencyRecord, bool]:
-    """Atomically bind one caller key to a request digest and job identity."""
+    """Atomically bind one caller key to a request digest and job identity.
+
+    Returns:
+        The stored reservation and whether this call acquired it.
+    """
     client = _default_async_client(client)
     key = idempotency_key(caller_key, agent_scope=agent_scope)
     record = IdempotencyRecord(request_digest=request_digest, job_id=job_id)
@@ -696,7 +739,11 @@ async def release_idempotency_key_async(
     agent_scope: str = DEFAULT_AGENT_SCOPE,
     client: AsyncIdempotencyClient | None = None,
 ) -> bool:
-    """Release only the exact reservation owned by ``record``."""
+    """Release only the exact reservation owned by ``record``.
+
+    Returns:
+        ``True`` if the matching reservation was removed, otherwise ``False``.
+    """
     client = _default_async_client(client)
     key = idempotency_key(caller_key, agent_scope=agent_scope)
     encoded = _dump_json(record.model_dump(mode="json"))
@@ -852,6 +899,11 @@ def create_job(
     provenance: JobRunProvenance | None = None,
     client: SyncAtomicJobWriter | None = None,
 ) -> JobStatusSnapshot:
+    """Persist optional provenance and create a synchronously queued job.
+
+    Returns:
+        The initial queued status snapshot.
+    """
     client = _default_sync_client(client)
     if provenance is not None:
         _save_job_provenance_sync(job.job_id, provenance, client=client)
@@ -863,6 +915,15 @@ def set_job_status(
     status: JobStatus,
     **options: Unpack[JobStatusOptions],
 ) -> JobStatusSnapshot:
+    """Atomically apply a valid synchronous job lifecycle transition.
+
+    Returns:
+        The newly persisted lifecycle snapshot.
+
+    Raises:
+        JobCancelledError: If cancellation won a concurrent transition.
+        RuntimeError: If the requested transition is invalid for the current state.
+    """
     metric = options.get("metric")
     error = options.get("error")
     client = options.get("client")
@@ -911,6 +972,15 @@ def save_job_result(
     metric: str | None = None,
     client: SyncAtomicJobWriter | None = None,
 ) -> dict[str, Any]:
+    """Persist a terminal result and its matching lifecycle transition.
+
+    Returns:
+        The JSON-compatible terminal result payload written to Redis.
+
+    Raises:
+        RuntimeError: If the job already has a different terminal status or a
+            concurrent operation finishes it first.
+    """
     client = _default_sync_client(client)
     payload = result.model_dump(mode="json", exclude_none=True)
     current = get_job_status(result.job_id, client=client)
@@ -943,7 +1013,11 @@ def save_job_result_if_active(
     *,
     client: SyncConditionalJobWriter | None = None,
 ) -> bool:
-    """Atomically persist a terminal result unless the job already finished."""
+    """Atomically persist a terminal result unless the job already finished.
+
+    Returns:
+        ``True`` when the result was stored, or ``False`` for a terminal job.
+    """
     client = _default_sync_client(client)
     snapshot = get_job_status(result.job_id, client=client)
     if snapshot is None or is_terminal_status(snapshot.status):
@@ -998,6 +1072,14 @@ def get_job_result(
     job_id: str,
     client: SyncKeyReader | None = None,
 ) -> dict[str, Any] | None:
+    """Return a decoded terminal job result when one is retained.
+
+    Returns:
+        The decoded result object, or ``None`` when no result is retained.
+
+    Raises:
+        TypeError: If the stored JSON value is not an object.
+    """
     client = _default_sync_client(client)
     payload = client.get(result_key(job_id))
     if payload is None:
@@ -1013,6 +1095,7 @@ def get_job_provenance(
     job_id: str,
     client: SyncKeyReader | None = None,
 ) -> JobRunProvenance | None:
+    """Return the execution provenance retained for a job."""
     client = _default_sync_client(client)
     payload = client.get(provenance_key(job_id))
     if payload is None:
@@ -1025,6 +1108,11 @@ def get_job_result_descriptor(
     *,
     client: SyncKeyReader | None = None,
 ) -> ResultDescriptor | None:
+    """Build a terminal result descriptor with provenance and lifetime.
+
+    Returns:
+        A descriptor for a retained terminal result, or ``None`` if unavailable.
+    """
     client = _default_sync_client(client)
     payload = get_job_result(job_id, client=client)
     if payload is None:
@@ -1044,6 +1132,7 @@ def get_job_status(
     job_id: str,
     client: SyncKeyReader | None = None,
 ) -> JobStatusSnapshot | None:
+    """Return the latest retained status snapshot for a job."""
     client = _default_sync_client(client)
     payload = client.get(status_key(job_id))
     if payload is None:
@@ -1052,6 +1141,7 @@ def get_job_status(
 
 
 def is_terminal_status(status: JobStatus) -> bool:
+    """Return whether a lifecycle status prevents further transitions."""
     return status in TERMINAL_STATUSES
 
 
@@ -1062,6 +1152,11 @@ def list_job_statuses(
     metric: str | None = None,
     client: SyncJobListClient | None = None,
 ) -> list[JobStatusSnapshot]:
+    """List recent retained job snapshots with optional status and metric filters.
+
+    Returns:
+        Up to ``limit`` matching snapshots in reverse chronological order.
+    """
     client = _default_sync_client(client)
     _prune_job_index_sync(client)
     jobs: list[JobStatusSnapshot] = []
@@ -1103,6 +1198,17 @@ def cancel_job(
     *,
     client: SyncAtomicJobWriter | None = None,
 ) -> tuple[JobStatusSnapshot | None, bool]:
+    """Cancel an active job and report whether this call changed its state.
+
+    Returns:
+        The latest snapshot and whether this call performed the cancellation.
+
+    Raises:
+        JobCancelledError: If cancellation races with another cancellation and the
+            latest terminal state cannot be recovered.
+        RuntimeError: If the lifecycle transition fails without reaching a terminal
+            state.
+    """
     client = _default_sync_client(client)
     snapshot = get_job_status(job_id, client=client)
     if snapshot is None:
@@ -1125,11 +1231,17 @@ def cancel_job(
 
 
 def is_job_cancelled(job_id: str, client: SyncKeyReader | None = None) -> bool:
+    """Return whether a retained job is currently marked cancelled."""
     snapshot = get_job_status(job_id, client)
     return snapshot is not None and snapshot.status == "cancelled"
 
 
 def raise_if_cancelled(job_id: str, client: SyncKeyReader | None = None) -> None:
+    """Raise ``JobCancelledError`` when a retained job was cancelled.
+
+    Raises:
+        JobCancelledError: If the retained job status is ``cancelled``.
+    """
     if is_job_cancelled(job_id, client):
         raise JobCancelledError(job_id)
 
@@ -1139,6 +1251,17 @@ def append_job_progress(
     *,
     client: SyncAtomicJobWriter | None = None,
 ) -> StoredJobEvent:
+    """Validate and atomically append progress for a running job.
+
+    Returns:
+        The stored progress event and its Redis stream cursor.
+
+    Raises:
+        JobCancelledError: If the job is cancelled before the event is stored.
+        RuntimeError: If the job is not running or stops running concurrently.
+        ValueError: If progress decreases or changes its total or unit within a
+            stage.
+    """
     client = _default_sync_client(client)
     current = get_job_status(event.job_id, client=client)
     if current is None or current.status != "running":
@@ -1187,6 +1310,15 @@ def append_job_message(
     *,
     client: SyncAtomicJobWriter | None = None,
 ) -> StoredJobEvent:
+    """Atomically append a plugin message to a running job.
+
+    Returns:
+        The stored message event and its Redis stream cursor.
+
+    Raises:
+        JobCancelledError: If the job is cancelled before the event is stored.
+        RuntimeError: If the job is not running or stops running concurrently.
+    """
     client = _default_sync_client(client)
     current = get_job_status(event.job_id, client=client)
     if current is None or current.status != "running":
@@ -1220,6 +1352,11 @@ def read_job_events(
     count: int | None = None,
     client: SyncEventReader | None = None,
 ) -> list[StoredJobEvent]:
+    """Read retained job events after an optional Redis stream cursor.
+
+    Returns:
+        Decoded retained events in stream order.
+    """
     client = _default_sync_client(client)
     start_id = STREAM_START if after_id is None else f"({after_id}"
     records = client.xrange(events_key(job_id), start_id, count=count) or []
@@ -1231,6 +1368,11 @@ async def create_job_async(
     provenance: JobRunProvenance | None = None,
     client: AsyncAtomicJobWriter | None = None,
 ) -> JobStatusSnapshot:
+    """Persist optional provenance and asynchronously create a queued job.
+
+    Returns:
+        The initial queued status snapshot.
+    """
     client = _default_async_client(client)
     if provenance is not None:
         await _save_job_provenance_async(job.job_id, provenance, client=client)
@@ -1247,6 +1389,15 @@ async def set_job_status_async(
     status: JobStatus,
     **options: Unpack[AsyncJobStatusOptions],
 ) -> JobStatusSnapshot:
+    """Atomically apply a valid asynchronous job lifecycle transition.
+
+    Returns:
+        The newly persisted lifecycle snapshot.
+
+    Raises:
+        JobCancelledError: If cancellation won a concurrent transition.
+        RuntimeError: If the requested transition is invalid for the current state.
+    """
     metric = options.get("metric")
     error = options.get("error")
     client = options.get("client")
@@ -1293,6 +1444,11 @@ async def get_job_status_async(
     job_id: str,
     client: AsyncKeyReader | None = None,
 ) -> JobStatusSnapshot | None:
+    """Asynchronously return the latest retained status snapshot for a job.
+
+    Returns:
+        The decoded status snapshot, or ``None`` when it is not retained.
+    """
     client = _default_async_client(client)
     payload = await client.get(status_key(job_id))
     if payload is None:
@@ -1304,6 +1460,14 @@ async def get_job_result_async(
     job_id: str,
     client: AsyncKeyReader | None = None,
 ) -> dict[str, Any] | None:
+    """Asynchronously return a decoded terminal result when retained.
+
+    Returns:
+        The decoded result object, or ``None`` when no result is retained.
+
+    Raises:
+        TypeError: If the stored JSON value is not an object.
+    """
     client = _default_async_client(client)
     payload = await client.get(result_key(job_id))
     if payload is None:
@@ -1319,6 +1483,11 @@ async def get_job_provenance_async(
     job_id: str,
     client: AsyncKeyReader | None = None,
 ) -> JobRunProvenance | None:
+    """Asynchronously return the execution provenance retained for a job.
+
+    Returns:
+        The decoded provenance, or ``None`` when it is not retained.
+    """
     client = _default_async_client(client)
     payload = await client.get(provenance_key(job_id))
     if payload is None:
@@ -1331,6 +1500,11 @@ async def get_job_result_descriptor_async(
     *,
     client: AsyncKeyReader | None = None,
 ) -> ResultDescriptor | None:
+    """Asynchronously build a terminal result descriptor and retention metadata.
+
+    Returns:
+        A descriptor for a retained terminal result, or ``None`` if unavailable.
+    """
     client = _default_async_client(client)
     payload = await get_job_result_async(job_id, client=client)
     if payload is None:
@@ -1350,6 +1524,7 @@ async def delete_job_result_async(
     job_id: str,
     client: AsyncDeleteClient | None = None,
 ) -> None:
+    """Delete a retained terminal result without removing other job state."""
     client = _default_async_client(client)
     await client.delete(result_key(job_id))
 
@@ -1361,6 +1536,11 @@ async def read_job_events_async(
     count: int | None = None,
     client: AsyncEventReader | None = None,
 ) -> list[StoredJobEvent]:
+    """Asynchronously read retained events after an optional stream cursor.
+
+    Returns:
+        Decoded retained events in stream order.
+    """
     client = _default_async_client(client)
     start_id = STREAM_START if after_id is None else f"({after_id}"
     records = await client.xrange(events_key(job_id), start_id, count=count) or []
@@ -1375,6 +1555,11 @@ async def read_new_job_events_async(
     count: int | None = None,
     client: AsyncNewEventReader | None = None,
 ) -> list[StoredJobEvent]:
+    """Block for and return job events newer than a stream cursor.
+
+    Returns:
+        Decoded events received before the blocking read completes.
+    """
     client = _default_async_client(client)
     response = await client.xread(
         {events_key(job_id): after_id},

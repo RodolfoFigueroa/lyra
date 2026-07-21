@@ -92,7 +92,9 @@ def test_readiness_reports_healthy_dependencies(
 ) -> None:
     monkeypatch.setattr(health, "redis_client", FakeRedisAsync())
 
-    async def database_health(*_: object) -> DatabaseHealth:
+    async def database_health(  # ruff: ignore[unused-async] -- awaited double
+        *_: object,
+    ) -> DatabaseHealth:
         return DatabaseHealth(status="ok")
 
     monkeypatch.setattr(health, "database_health", database_health)
@@ -118,7 +120,9 @@ def test_readiness_reports_healthy_dependencies(
 def test_readiness_reports_unavailable_redis(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(health, "redis_client", FakeRedisAsync(fail=True))
 
-    async def database_health(*_: object) -> DatabaseHealth:
+    async def database_health(  # ruff: ignore[unused-async] -- awaited double
+        *_: object,
+    ) -> DatabaseHealth:
         return DatabaseHealth(status="ok")
 
     monkeypatch.setattr(health, "database_health", database_health)
@@ -152,7 +156,8 @@ def test_stalled_database_check_does_not_block_liveness() -> None:
         async def __aexit__(self, *_: object) -> None:
             return None
 
-        async def execute(self, *_: object) -> None:
+        @staticmethod
+        async def execute(*_: object) -> None:
             return None
 
     database = cast(

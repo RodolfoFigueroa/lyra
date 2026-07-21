@@ -1,3 +1,5 @@
+"""Reusable widgets and dialogs for the Lyra terminal interface."""
+
 from lyra.tui.widgets.dialogs import (
     ConfirmDialog,
     PluginRepoDialog,

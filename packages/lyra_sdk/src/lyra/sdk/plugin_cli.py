@@ -1,3 +1,5 @@
+"""Command-line entry points for inspecting and validating plugins."""
+
 from __future__ import annotations
 
 import argparse
@@ -84,7 +86,11 @@ def _load_definition(project_root: Path, factory: str) -> PluginDefinition:
 
 
 def render_manifest(project_root: Path) -> str:
-    """Build the canonical manifest text for one plugin project."""
+    """Build the canonical manifest text for one plugin project.
+
+    Returns:
+        The validated authoring manifest as newline-terminated JSON.
+    """
     project_root = project_root.resolve()
     name, version, factory = _project_configuration(project_root)
     definition = _load_definition(project_root, factory)
@@ -120,6 +126,11 @@ def _write_atomic(path: Path, content: str) -> None:
 
 
 def build_manifest(project_root: Path) -> Path:
+    """Write the canonical plugin manifest when its contents have changed.
+
+    Returns:
+        The path to the project's generated manifest.
+    """
     content = render_manifest(project_root)
     manifest_path = project_root.resolve() / MANIFEST_FILENAME
     if (
@@ -210,7 +221,11 @@ def _inspect_pre_commit_repositories(
 
 
 def add_pre_commit_hook(project_root: Path) -> tuple[Path, bool]:
-    """Add the Lyra manifest hook to a plugin project's pre-commit config."""
+    """Add the Lyra manifest hook to a plugin project's pre-commit config.
+
+    Returns:
+        The configuration path and whether the hook was added.
+    """
     config_path = project_root.resolve() / PRE_COMMIT_CONFIG_FILENAME
     yaml = _pre_commit_yaml()
     configuration = _load_pre_commit_configuration(config_path, yaml)
@@ -239,6 +254,11 @@ def add_pre_commit_hook(project_root: Path) -> tuple[Path, bool]:
 
 
 def check_manifest(project_root: Path) -> tuple[bool, str]:
+    """Compare a checked-in plugin manifest with its canonical rendering.
+
+    Returns:
+        A match flag and an empty string or unified diff describing changes.
+    """
     expected = render_manifest(project_root)
     manifest_path = project_root.resolve() / MANIFEST_FILENAME
     actual = (
@@ -261,7 +281,11 @@ def describe_plugin(
     project_root: Path,
     metric_name: str | None = None,
 ) -> list[MetricDescription]:
-    """Load and describe one or all metrics in a plugin project."""
+    """Load and describe one or all metrics in a plugin project.
+
+    Returns:
+        Authoring descriptions for the selected registered metrics.
+    """
     project_root = project_root.resolve()
     _name, _version, factory = _project_configuration(project_root)
     definition = _load_definition(project_root, factory)
@@ -275,7 +299,11 @@ def render_description(
     *,
     json_output: bool = False,
 ) -> str:
-    """Render deterministic author-facing metric information."""
+    """Render deterministic author-facing metric information.
+
+    Returns:
+        Newline-terminated JSON or human-readable metric details.
+    """
     descriptions = describe_plugin(project_root, metric_name)
     if json_output:
         payload = {
@@ -416,6 +444,11 @@ def _output_summary(output: OutputSpecV4) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for plugin authoring operations.
+
+    Returns:
+        The configured top-level argument parser.
+    """
     parser = argparse.ArgumentParser(
         prog="lyra-plugin",
         description="Build, verify, and inspect Lyra plugin definitions.",
@@ -451,34 +484,43 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the plugin authoring command-line interface.
+
+    Returns:
+        Zero on success or two for an invalid plugin or command operation.
+    """
     args = build_parser().parse_args(argv)
     try:
-        if args.command == "build-manifest":
-            path = build_manifest(args.project)
-            sys.stdout.write(f"{path}\n")
-            return 0
-        if args.command == "add-pre-commit-hook":
-            path, added = add_pre_commit_hook(args.project)
-            action = (
-                "Added Lyra plugin manifest hook to"
-                if added
-                else "Lyra plugin manifest hook already exists in"
-            )
-            sys.stdout.write(f"{action} {path}\n")
-            return 0
-        if args.command == "describe":
-            sys.stdout.write(
-                render_description(
-                    args.project,
-                    args.metric,
-                    json_output=args.json_output,
-                )
-            )
-            return 0
-        valid, diff = check_manifest(args.project)
+        return _run_command(args)
     except (PluginBuildError, OSError, ValueError) as exc:
         sys.stderr.write(f"lyra-plugin: {exc}\n")
         return 2
+
+
+def _run_command(args: argparse.Namespace) -> int:
+    if args.command == "build-manifest":
+        path = build_manifest(args.project)
+        sys.stdout.write(f"{path}\n")
+        return 0
+    if args.command == "add-pre-commit-hook":
+        path, added = add_pre_commit_hook(args.project)
+        action = (
+            "Added Lyra plugin manifest hook to"
+            if added
+            else "Lyra plugin manifest hook already exists in"
+        )
+        sys.stdout.write(f"{action} {path}\n")
+        return 0
+    if args.command == "describe":
+        sys.stdout.write(
+            render_description(
+                args.project,
+                args.metric,
+                json_output=args.json_output,
+            )
+        )
+        return 0
+    valid, diff = check_manifest(args.project)
     if valid:
         return 0
     sys.stderr.write(diff)

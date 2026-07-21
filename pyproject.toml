@@ -52,6 +52,8 @@ per-file-ignores = { "tests/**/*.py" = [
     "undocumented-public-function",
     "undocumented-public-package",
     "undocumented-magic-method",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
     "undocumented-public-init",
 ] }
 pydocstyle = { "convention" = "google" }

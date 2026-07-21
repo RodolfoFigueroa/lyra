@@ -1,9 +1,12 @@
+"""Metric registry construction and routing metadata management."""
+
 import hashlib
 import json
 import logging
 import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, field
+from operator import itemgetter
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +46,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MetricRegistryEntry:
+    """Bundle a compiled metric with validation, routing, and catalog metadata."""
+
     metric: CompiledMetricManifestV4
     plugin_name: str
     plugin_version: str
@@ -55,6 +60,8 @@ class MetricRegistryEntry:
 
 @dataclass(frozen=True)
 class CatalogRefreshResult:
+    """Summarize repository updates and routing changes from a catalog refresh."""
+
     updated_plugins: list[str]
     previous_catalog_fingerprint: str | None
     catalog_fingerprint: str
@@ -64,7 +71,10 @@ class CatalogRefreshResult:
 
 
 class MetricPayloadValidationError(Exception):
+    """Report structured validation failures for a metric request payload."""
+
     def __init__(self, errors: list[dict[str, Any]]) -> None:
+        """Initialize the exception with API-compatible validation errors."""
         self.errors = errors
         super().__init__("metric payload validation failed")
 
@@ -93,7 +103,7 @@ def _normalised_manifest_payload(
         data["repo_id"] = repo_id
         for metric in data["metrics"]:
             metric["queue"] = metric_queues[metric["name"]]
-        data["metrics"] = sorted(data["metrics"], key=lambda item: item["name"])
+        data["metrics"] = sorted(data["metrics"], key=itemgetter("name"))
         payload.append(data)
     return sorted(
         payload,
@@ -102,6 +112,14 @@ def _normalised_manifest_payload(
 
 
 def load_plugin_manifest(path: Path) -> CompiledPluginManifestV4:
+    """Load, validate, and compile a repository's version 4 plugin manifest.
+
+    Returns:
+        The compiled runtime manifest from the repository root.
+
+    Raises:
+        RuntimeError: If the manifest is missing, malformed, or invalid.
+    """
     manifest_path = path / MANIFEST_FILENAME
     if not manifest_path.exists():
         msg = f"Plugin repo {path} is missing required {MANIFEST_FILENAME}."
@@ -166,6 +184,11 @@ def _build_registry(
 
 
 def sync_catalog_state_repos(config: LyraConfig, state: PluginState) -> list[Any]:
+    """Synchronize enabled state repositories into the local plugin catalog.
+
+    Returns:
+        Synchronization results for every enabled repository source.
+    """
     raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
     return sync_plugin_repos(
         config.plugins.catalog_dir,
@@ -193,7 +216,12 @@ def refresh_catalog(
     *,
     config: LyraConfig | None = None,
 ) -> CatalogRefreshResult:
-    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
+    """Synchronize plugins, reconcile routes, and atomically replace the registry.
+
+    Returns:
+        Repository updates, catalog identity changes, and routing changes.
+    """
+    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # ruff:ignore[global-statement]
 
     previous_fingerprint = _CATALOG_FINGERPRINT
     config = get_config() if config is None else config
@@ -224,13 +252,11 @@ def refresh_catalog(
         state = state_store.reload()
     metric_queues = metric_queue_mapping(state)
 
-    registry = _build_registry(manifests, metric_queues)
-
     fingerprint = _fingerprint_payload(
         _normalised_manifest_payload(manifests, metric_queues)
     )
     TASK_REGISTRY.clear()
-    TASK_REGISTRY.update(registry)
+    TASK_REGISTRY.update(_build_registry(manifests, metric_queues))
     _CATALOG_FINGERPRINT = fingerprint
     _CATALOG_LOADED = True
 
@@ -255,6 +281,11 @@ def refresh_catalog(
 def refresh_catalog_from_state(
     store: PluginStateStore | None = None,
 ) -> CatalogRefreshResult:
+    """Refresh the metric catalog using persisted plugin state.
+
+    Returns:
+        Repository, catalog, and routing changes from the refresh.
+    """
     return refresh_catalog(store)
 
 
@@ -263,6 +294,11 @@ def initialize_catalog(
     *,
     store: PluginStateStore | None = None,
 ) -> CatalogRefreshResult:
+    """Seed missing plugin state and load the initial metric catalog.
+
+    Returns:
+        Repository, catalog, and routing changes from initial loading.
+    """
     config = get_config() if config is None else config
     state_store = store or PluginStateStore(
         allowed_queues=config.plugins.allowed_queues,
@@ -301,16 +337,19 @@ def initialize_catalog(
 
 
 def ensure_catalog_loaded() -> None:
+    """Initialize the catalog on first access."""
     if not _CATALOG_LOADED:
         initialize_catalog()
 
 
 def get_catalog_fingerprint() -> str:
+    """Return the internal fingerprint after ensuring the catalog is loaded."""
     ensure_catalog_loaded()
     return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
 
 
 def get_loaded_catalog_fingerprint() -> str:
+    """Return the current internal fingerprint without loading the catalog."""
     return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
 
 
@@ -322,6 +361,11 @@ def _public_metric_payload(metrics: list[MetricInfoV4]) -> list[dict[str, Any]]:
 
 
 def public_catalog_fingerprint(metrics: list[MetricInfoV4]) -> str:
+    """Compute a stable fingerprint of the public metric catalog contract.
+
+    Returns:
+        The SHA-256 digest of the sorted public catalog payload.
+    """
     return _fingerprint_payload(
         {
             "client_schema_version": CLIENT_SCHEMA_VERSION,
@@ -332,29 +376,35 @@ def public_catalog_fingerprint(metrics: list[MetricInfoV4]) -> str:
 
 
 def get_public_catalog_fingerprint() -> str:
+    """Return the fingerprint of the currently exposed public metric catalog."""
     return public_catalog_fingerprint(get_metrics_info())
 
 
 def is_catalog_loaded() -> bool:
+    """Return whether the process has initialized its metric registry."""
     return _CATALOG_LOADED
 
 
 def get_loaded_metric_names() -> list[str]:
+    """Return sorted metric names without triggering catalog initialization."""
     return sorted(TASK_REGISTRY)
 
 
 def get_loaded_metric_queues() -> dict[str, str]:
+    """Return loaded metric-to-queue assignments without initializing state."""
     return {
         metric_name: entry.queue for metric_name, entry in sorted(TASK_REGISTRY.items())
     }
 
 
 def get_metric_entry(name: str) -> MetricRegistryEntry | None:
+    """Return a metric registry entry after ensuring the catalog is loaded."""
     ensure_catalog_loaded()
     return TASK_REGISTRY.get(name)
 
 
 def get_metric_info(name: str) -> MetricInfoV4 | None:
+    """Return public metadata for a named metric when it exists."""
     entry = get_metric_entry(name)
     if entry is None:
         return None
@@ -362,6 +412,7 @@ def get_metric_info(name: str) -> MetricInfoV4 | None:
 
 
 def get_metrics_info() -> list[MetricInfoV4]:
+    """Return public metadata for all registered metrics in name order."""
     ensure_catalog_loaded()
     return [
         _metric_info_from_entry(entry) for _name, entry in sorted(TASK_REGISTRY.items())
@@ -369,6 +420,11 @@ def get_metrics_info() -> list[MetricInfoV4]:
 
 
 def get_metric_search_text(name: str) -> str | None:
+    """Build normalized discovery text for a registered metric.
+
+    Returns:
+        Searchable text for the metric, or ``None`` when it is unknown.
+    """
     info = get_metric_info(name)
     if info is None:
         return None
@@ -376,6 +432,11 @@ def get_metric_search_text(name: str) -> str | None:
 
 
 def get_metric_catalog() -> MetricCatalogResponse:
+    """Build the complete versioned public metric catalog response.
+
+    Returns:
+        Catalog schema metadata, fingerprint, and all public metrics.
+    """
     metrics = get_metrics_info()
     return MetricCatalogResponse(
         client_schema_version=CLIENT_SCHEMA_VERSION,
@@ -386,6 +447,14 @@ def get_metric_catalog() -> MetricCatalogResponse:
 
 
 def validate_metric_payload(metric_name: str, payload: JsonValue) -> JsonObject:
+    """Validate and defensively copy a request for a named metric.
+
+    Returns:
+        A deep copy of the validated JSON object.
+
+    Raises:
+        KeyError: If no registered metric has the requested name.
+    """
     entry = get_metric_entry(metric_name)
     if entry is None:
         msg = f"Unknown metric: {metric_name!r}"
@@ -397,7 +466,15 @@ def validate_metric_entry_payload(
     entry: MetricRegistryEntry,
     payload: JsonValue,
 ) -> JsonObject:
-    """Validate a payload against one captured registry contract."""
+    """Validate a payload against one captured registry contract.
+
+    Returns:
+        A deep copy of the validated JSON object.
+
+    Raises:
+        MetricPayloadValidationError: If the value is not an object, violates the
+            request schema, or repeats a batch key.
+    """
     if not isinstance(payload, dict):
         raise MetricPayloadValidationError(
             [{"loc": [], "msg": "Input must be a JSON object.", "type": "type"}],
@@ -467,11 +544,13 @@ def _metric_info_from_manifest(metric: CompiledMetricManifestV4) -> MetricInfoV4
 
 
 def reload_tasks() -> None:
+    """Refresh task metadata from current plugin state."""
     refresh_catalog()
 
 
 def reset_catalog() -> None:
-    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # noqa: PLW0603
+    """Clear all loaded metrics and catalog initialization state."""
+    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # ruff:ignore[global-statement]
 
     TASK_REGISTRY.clear()
     _CATALOG_FINGERPRINT = None

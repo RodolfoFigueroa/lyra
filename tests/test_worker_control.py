@@ -41,7 +41,7 @@ class FakeRedisSync:
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
         for member, score in list(sorted_set.items()):
@@ -84,7 +84,7 @@ class FakeCeleryApp:
         self.result_state = result_state
         self.result_ids: list[str] = []
 
-    def AsyncResult(self, task_id: str) -> object:  # noqa: N802
+    def AsyncResult(self, task_id: str) -> object:  # ruff:ignore[invalid-function-name]
         self.result_ids.append(task_id)
         return type("FakeAsyncResult", (), {"state": self.result_state})()
 
@@ -214,7 +214,9 @@ def test_reconcile_celery_failure_repairs_nonterminal_job(
     repaired = snapshot.model_copy(update={"status": "failed"})
     persisted: list[str] = []
 
-    async def get_status(_: str) -> job_store.JobStatusSnapshot:
+    async def get_status(  # ruff: ignore[unused-async] -- awaited lookup double
+        _: str,
+    ) -> job_store.JobStatusSnapshot:
         return repaired
 
     monkeypatch.setattr(worker_control, "celery_app", celery)
@@ -261,7 +263,8 @@ def test_reconcile_celery_failure_preserves_status_when_backend_lookup_fails(
     )
 
     class FailingCeleryApp:
-        def AsyncResult(self, _: str) -> object:  # noqa: N802
+        @staticmethod
+        def AsyncResult(_: str) -> object:  # ruff:ignore[invalid-function-name]
             msg = "backend unavailable"
             raise RuntimeError(msg)
 
@@ -558,7 +561,7 @@ def test_worker_inspect_collector_starts_updates_and_stops(
         return expected
 
     async def run_collector() -> None:
-        await worker_control.start_worker_inspect_collector()
+        worker_control.start_worker_inspect_collector()
         for _ in range(50):
             state = worker_control.get_worker_inspect_state()
             if state.snapshot is expected:

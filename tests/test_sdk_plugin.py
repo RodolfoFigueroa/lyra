@@ -90,8 +90,8 @@ class FakeContext:
     temp_dir: Path = Path()
     db: LyraDB = _FAKE_DB
 
+    @staticmethod
     def report_progress(
-        self,
         *,
         stage: str,
         current: float,
@@ -101,8 +101,8 @@ class FakeContext:
     ) -> None:
         del stage, current, total, unit, message
 
+    @staticmethod
     def report_message(
-        self,
         message: str,
         *,
         level: JobMessageLevel = "info",
@@ -110,7 +110,8 @@ class FakeContext:
     ) -> None:
         del message, level, fields
 
-    def check_cancelled(self) -> None:
+    @staticmethod
+    def check_cancelled() -> None:
         return None
 
 

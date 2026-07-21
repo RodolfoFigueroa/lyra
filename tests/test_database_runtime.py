@@ -52,7 +52,7 @@ def test_engine_factory_applies_bounded_pool_and_postgres_timeouts(
     assert result is sentinel
     assert captured["pool_size"] == 2
     assert captured["max_overflow"] == 0
-    assert captured["pool_timeout"] == 2.0
+    assert captured["pool_timeout"] == pytest.approx(2.0)
     assert captured["pool_pre_ping"] is True
     assert captured["connect_args"] == {
         "connect_timeout": 5,
@@ -110,14 +110,17 @@ def test_worker_database_probe_executes_query_and_disposes_engine(
         def __exit__(self, *_: object) -> None:
             return None
 
-        def execute(self, statement: object) -> None:
+        @staticmethod
+        def execute(statement: object) -> None:
             statements.append(str(statement))
 
     class FakeEngine:
-        def connect(self) -> FakeConnection:
+        @staticmethod
+        def connect() -> FakeConnection:
             return FakeConnection()
 
-        def dispose(self) -> None:
+        @staticmethod
+        def dispose() -> None:
             disposed.append(True)
 
     monkeypatch.setattr(
@@ -140,12 +143,14 @@ def test_worker_database_probe_disposes_engine_when_connection_fails(
     disposed: list[bool] = []
 
     class FailedEngine:
-        def connect(self) -> None:
+        @staticmethod
+        def connect() -> None:
             statement = "connect"
             message = "unavailable"
             raise OperationalError(statement, {}, Exception(message))
 
-        def dispose(self) -> None:
+        @staticmethod
+        def dispose() -> None:
             disposed.append(True)
 
     monkeypatch.setattr(

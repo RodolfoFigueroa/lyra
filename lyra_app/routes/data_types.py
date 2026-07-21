@@ -1,3 +1,5 @@
+"""HTTP endpoints that describe supported metric data types."""
+
 from typing import Literal, get_args, get_origin
 
 from fastapi import APIRouter
@@ -14,6 +16,14 @@ router = APIRouter(tags=["Catalog"])
 
 
 def extract_data_type(model_class: type[StrictBaseModel]) -> str:
+    """Extract the single literal data-type discriminator from a wrapper model.
+
+    Returns:
+        The wrapper's literal ``data_type`` value.
+
+    Raises:
+        RuntimeError: If the model lacks a single-string literal discriminator.
+    """
     field_info = model_class.model_fields.get("data_type")
     if field_info is None:
         err = f"Missing 'data_type' field in wrapper {model_class.__name__}."
@@ -33,6 +43,14 @@ def extract_data_type(model_class: type[StrictBaseModel]) -> str:
 
 
 def extract_data_type_description(model_class: type[StrictBaseModel]) -> str:
+    """Extract the required human-readable description from a wrapper model.
+
+    Returns:
+        The stripped data-type description.
+
+    Raises:
+        RuntimeError: If no nonblank description is declared.
+    """
     description = getattr(model_class, "DATA_TYPE_DESCRIPTION", None)
     if isinstance(description, str) and description.strip():
         return description.strip()
@@ -47,6 +65,11 @@ def extract_data_type_description(model_class: type[StrictBaseModel]) -> str:
 def build_data_type_info(
     model_class: type[StrictBaseModel],
 ) -> DataTypeSchemaInfo:
+    """Build public discriminator, description, and schema metadata for a wrapper.
+
+    Returns:
+        The complete public data-type schema record.
+    """
     return DataTypeSchemaInfo(
         data_type=extract_data_type(model_class),
         description=extract_data_type_description(model_class),
@@ -56,6 +79,11 @@ def build_data_type_info(
 
 @router.get("/data-types")
 async def list_data_types() -> DataTypesResponse:
+    """List supported location and bounds wrapper contracts.
+
+    Returns:
+        Data-type schemas grouped by spatial input kind.
+    """
     return DataTypesResponse(
         location=[
             build_data_type_info(CVEGEOList),

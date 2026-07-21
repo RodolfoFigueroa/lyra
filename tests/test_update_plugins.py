@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] -- test doubles
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NotRequired, TypedDict, Unpack
@@ -82,7 +82,7 @@ class FakeRedisSync:
         for member in members:
             sorted_set.pop(member, None)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
         for member, score in list(sorted_set.items()):
@@ -101,6 +101,7 @@ class FakeRedisSync:
 
 class FailingRedisSync(FakeRedisSync):
     def zremrangebyscore(self, *_args: object, **_kwargs: object) -> None:
+        assert isinstance(self, FailingRedisSync)
         raise RedisError
 
 
@@ -280,10 +281,10 @@ def test_plugin_repo_endpoints_manage_state(
 
 
 def test_delete_plugin_repo_removes_owned_metric_routes(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = admin._state_store()  # noqa: SLF001
+    store = admin._state_store()  # ruff:ignore[private-member-access]
     store.add_repo("owner/example-plugin", repo_id="example")
     store.add_repo("owner/other-plugin", repo_id="other")
     store.set_metric_queue("walkability_score", "batch", repo_id="example")
@@ -312,10 +313,10 @@ def test_delete_plugin_repo_removes_owned_metric_routes(
 
 
 def test_delete_plugin_repo_clears_loaded_catalog_when_refresh_fails(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = admin._state_store()  # noqa: SLF001
+    store = admin._state_store()  # ruff:ignore[private-member-access]
     store.add_repo("owner/example-plugin", repo_id="example")
     store.set_metric_queue("walkability_score", "batch", repo_id="example")
     reset_calls: list[None] = []
@@ -346,7 +347,7 @@ def test_delete_plugin_repo_clears_loaded_catalog_when_refresh_fails(
 
 
 def test_create_plugin_repo_refreshes_catalog_and_exposes_metrics(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
 ) -> None:
     created = admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(id="smoke", source=smoke_plugin_uri())
@@ -365,7 +366,7 @@ def test_create_plugin_repo_refreshes_catalog_and_exposes_metrics(
 
 
 def test_update_plugin_repo_refreshes_catalog_and_prunes_disabled_metrics(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
 ) -> None:
     admin.create_plugin_repo(
         admin.CreatePluginRepoRequest(id="smoke", source=smoke_plugin_uri())
@@ -386,7 +387,7 @@ def test_update_plugin_repo_refreshes_catalog_and_prunes_disabled_metrics(
 
 
 def test_create_plugin_repo_reports_refresh_failure_without_rollback(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reset_calls: list[None] = []
@@ -422,10 +423,10 @@ def test_create_plugin_repo_reports_refresh_failure_without_rollback(
 
 
 def test_update_plugin_repo_reports_refresh_failure_without_rollback(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = admin._state_store()  # noqa: SLF001
+    store = admin._state_store()  # ruff:ignore[private-member-access]
     store.add_repo("owner/example-plugin", repo_id="example")
     reset_calls: list[None] = []
 
@@ -449,7 +450,7 @@ def test_update_plugin_repo_reports_refresh_failure_without_rollback(
 
 
 def test_plugin_repo_endpoints_manage_directory_source(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -513,7 +514,7 @@ def test_plugin_repo_endpoints_manage_directory_source(
 
 
 def test_plugin_repo_update_can_switch_to_directory_source(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -550,7 +551,7 @@ def test_plugin_repo_update_can_switch_to_directory_source(
 
 
 def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -579,7 +580,7 @@ def test_plugin_repo_endpoints_reject_duplicate_ids_and_enabled_sources(
 
 
 def test_sync_plugin_repo_syncs_enabled_repo(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[Path, str]] = []
@@ -617,10 +618,10 @@ def test_sync_plugin_repo_syncs_enabled_repo(
 
 
 def test_sync_plugin_repo_reports_refresh_failure_after_successful_sync(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = admin._state_store()  # noqa: SLF001
+    store = admin._state_store()  # ruff:ignore[private-member-access]
     store.add_repo("owner/example-plugin@main", repo_id="example")
     reset_calls: list[None] = []
 
@@ -645,7 +646,7 @@ def test_sync_plugin_repo_reports_refresh_failure_after_successful_sync(
 
 
 def test_sync_plugin_repo_returns_contract_errors(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -682,7 +683,7 @@ def test_sync_plugin_repo_returns_contract_errors(
 
 
 def test_sync_plugin_repo_reports_directory_sync_failures(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -705,7 +706,7 @@ def test_sync_plugin_repo_reports_directory_sync_failures(
 
 
 def test_refresh_plugin_catalog_uses_state_refresh_without_restarting_workers(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = CatalogRefreshResult(
@@ -744,7 +745,7 @@ def test_refresh_plugin_catalog_uses_state_refresh_without_restarting_workers(
 
 
 def test_refresh_plugin_catalog_does_not_recommend_restart_when_unchanged(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = CatalogRefreshResult(
@@ -788,7 +789,7 @@ def test_restart_workers_calls_worker_control_with_timeout(
 
 
 def test_admin_jobs_list_returns_empty_response(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(admin.job_store, "redis_client_sync", FakeRedisSync())
@@ -799,7 +800,7 @@ def test_admin_jobs_list_returns_empty_response(
 
 
 def test_admin_jobs_list_filters_by_status_and_metric(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = FakeRedisSync()
@@ -816,7 +817,7 @@ def test_admin_jobs_list_filters_by_status_and_metric(
 
 
 def test_admin_jobs_list_returns_503_when_redis_is_unavailable(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(admin.job_store, "redis_client_sync", FailingRedisSync())
@@ -842,7 +843,7 @@ def test_admin_jobs_limit_validation_is_documented_in_openapi() -> None:
 
 
 def test_admin_cancel_job_marks_active_job_and_revokes_task(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = FakeRedisSync()
@@ -874,7 +875,7 @@ def test_admin_cancel_job_marks_active_job_and_revokes_task(
 
 
 def test_admin_cancel_job_rejects_terminal_job(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = FakeRedisSync()
@@ -894,7 +895,7 @@ def test_admin_cancel_job_rejects_terminal_job(
 
 
 def test_admin_cancel_job_returns_404_for_unknown_job(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(admin.job_store, "redis_client_sync", FakeRedisSync())
@@ -905,7 +906,7 @@ def test_admin_cancel_job_returns_404_for_unknown_job(
 
 
 def test_refresh_plugin_catalog_reports_git_failures(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     restarted: list[float] = []
@@ -931,7 +932,7 @@ def test_refresh_plugin_catalog_reports_git_failures(
 
 
 def test_refresh_plugin_catalog_reports_directory_sync_failures(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -956,10 +957,10 @@ def test_refresh_plugin_catalog_reports_directory_sync_failures(
 
 
 def test_plugin_routing_endpoints_manage_state(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = admin._state_store()  # noqa: SLF001
+    store = admin._state_store()  # ruff:ignore[private-member-access]
     store.add_repo("owner/example-plugin", repo_id="example")
     monkeypatch.setattr(
         admin,
@@ -1006,7 +1007,7 @@ def test_plugin_routing_endpoints_manage_state(
 
 
 def test_plugin_routing_rejects_unknown_metric(
-    admin_context: Path,  # noqa: ARG001
+    admin_context: Path,  # ruff:ignore[unused-function-argument]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(admin, "get_metric_entry", lambda _metric_name: None)

@@ -1,6 +1,9 @@
+"""Worker process command construction and launch orchestration."""
+
 from __future__ import annotations
 
 import argparse
+import importlib
 from typing import TYPE_CHECKING
 
 from lyra_app.auth import initialize_earth_engine
@@ -15,6 +18,11 @@ if TYPE_CHECKING:
 
 
 def build_celery_worker_args(config: LyraConfig, worker_name: str) -> list[str]:
+    """Build Celery worker arguments from one named worker configuration.
+
+    Returns:
+        Arguments selecting hostname, logging, concurrency, and consumed queues.
+    """
     worker = config.get_worker(worker_name)
     return [
         "worker",
@@ -35,6 +43,11 @@ def launch_worker(
     config: LyraConfig | None = None,
     store: PluginStateStore | None = None,
 ) -> None:
+    """Initialize dependencies, load plugins, and enter the Celery worker process.
+
+    Raises:
+        RuntimeError: If durable plugin state has not been initialized by the API.
+    """
     config = get_config() if config is None else config
     config.get_worker(worker_name)
     ensure_runtime_directories(config)
@@ -53,16 +66,23 @@ def launch_worker(
     probe_worker_database(config)
     initialize_earth_engine(config)
 
-    from lyra_app.celery_app import celery_app, configure_celery  # noqa: PLC0415
-    from lyra_app.worker import refresh_runner_registry  # noqa: PLC0415
-
-    configure_celery(config)
-    refresh_runner_registry(worker_name, config=config, store=state_store)
-    celery_app.worker_main(build_celery_worker_args(config, worker_name))
+    celery_module = importlib.import_module("lyra_app.celery_app")
+    worker_module = importlib.import_module("lyra_app.worker")
+    celery_module.configure_celery(config)
+    worker_module.refresh_runner_registry(
+        worker_name,
+        config=config,
+        store=state_store,
+    )
+    celery_module.celery_app.worker_main(build_celery_worker_args(config, worker_name))
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the supported worker-launcher argument parser."""
+    """Build the supported worker-launcher argument parser.
+
+    Returns:
+        The parser requiring a configured worker name.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m lyra_app.worker_launcher",
         description="Launch a Lyra Celery worker from /lyra_data/config/lyra.toml.",
@@ -72,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Launch a configured worker from command-line arguments."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

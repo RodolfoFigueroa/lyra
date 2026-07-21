@@ -1,3 +1,5 @@
+"""Type definitions for plugin database queries and results."""
+
 from typing import NamedTuple
 
 

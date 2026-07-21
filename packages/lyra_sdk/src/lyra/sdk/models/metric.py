@@ -1,3 +1,5 @@
+"""Core metric metadata and invocation models."""
+
 import unicodedata
 from typing import Literal
 
@@ -97,7 +99,11 @@ class MetricInfoV4(StrictBaseModel):
 
 
 def build_metric_search_text(metric: MetricInfoV4) -> str:
-    """Build deterministic lexical text from public metric catalog fields."""
+    """Build deterministic lexical text from public metric catalog fields.
+
+    Returns:
+        De-duplicated searchable terms in their original field order.
+    """
     parts: list[str] = [metric.name, metric.description]
     properties = metric.request_schema.get("properties")
     if isinstance(properties, dict):

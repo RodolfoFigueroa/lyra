@@ -1,3 +1,5 @@
+"""Shared request construction and response handling for API clients."""
+
 import importlib
 import logging
 from types import ModuleType
@@ -10,6 +12,11 @@ def service_unavailable_error(
     payload: object,
     retry_after: str | None,
 ) -> ServiceUnavailableError | None:
+    """Decode a structured service-unavailable response when present.
+
+    Returns:
+        A typed service error, or ``None`` for an unrecognized payload.
+    """
     if not isinstance(payload, dict):
         return None
     detail = payload.get("detail")
@@ -35,7 +42,11 @@ def service_unavailable_error(
 
 
 def parse_result_ref(result_ref_or_job_id: str) -> str:
-    """Return the job id from a Lyra result reference or raw job id."""
+    """Return the job id from a Lyra result reference or raw job id.
+
+    Raises:
+        DownloadError: If the value is empty or uses an invalid reference URI.
+    """
     value = result_ref_or_job_id.strip()
     if not value:
         err = "Result reference or job id must be a non-empty string."
@@ -43,15 +54,17 @@ def parse_result_ref(result_ref_or_job_id: str) -> str:
 
     if value.startswith("lyra://"):
         parsed = urlparse(value)
+        valid_path = (
+            parsed.path.startswith("/")
+            and parsed.path != "/"
+            and "/" not in parsed.path.removeprefix("/")
+        )
+        has_suffix = any((parsed.params, parsed.query, parsed.fragment))
         if (
             parsed.scheme != "lyra"
             or parsed.netloc != "results"
-            or not parsed.path.startswith("/")
-            or parsed.path == "/"
-            or "/" in parsed.path.removeprefix("/")
-            or parsed.params
-            or parsed.query
-            or parsed.fragment
+            or not valid_path
+            or has_suffix
         ):
             err = "Invalid Lyra result reference. Expected 'lyra://results/{job_id}'."
             raise DownloadError(err)
@@ -64,7 +77,15 @@ def parse_result_ref(result_ref_or_job_id: str) -> str:
     return value
 
 
-def _load_pandas() -> ModuleType:
+def load_pandas() -> ModuleType:
+    """Load pandas for optional DataFrame result hydration.
+
+    Returns:
+        The imported pandas module.
+
+    Raises:
+        DownloadError: If pandas is not installed.
+    """
     try:
         return importlib.import_module("pandas")
     except ImportError as exc:
@@ -75,7 +96,7 @@ def _load_pandas() -> ModuleType:
         raise DownloadError(err) from exc
 
 
-class _BaseTransport:
+class BaseTransport:
     """Base class for Lyra API clients, containing shared logic and configuration."""
 
     def __init__(
@@ -112,5 +133,6 @@ class _BaseTransport:
         protocol = "https" if self.secure else "http"
         return f"{protocol}://{self.host}/{path.lstrip('/')}"
 
-    def _job_id_from_result_ref(self, result_ref_or_job_id: str) -> str:
+    @staticmethod
+    def _job_id_from_result_ref(result_ref_or_job_id: str) -> str:
         return parse_result_ref(result_ref_or_job_id)

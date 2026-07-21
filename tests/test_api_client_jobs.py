@@ -94,10 +94,10 @@ class FakeSyncResponse:
         assert self._payload is not None
         return self._payload
 
-    def iter_lines(self, *, decode_unicode: bool) -> Iterator[str]:  # noqa: ARG002
+    def iter_lines(self, *, decode_unicode: bool) -> Iterator[str]:  # ruff:ignore[unused-method-argument]
         yield from self._lines
 
-    def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:  # noqa: ARG002
+    def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:  # ruff:ignore[unused-method-argument]
         yield from self._chunks
 
 
@@ -636,9 +636,9 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
-        stream: bool = False,  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
+        stream: bool = False,  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         if url.endswith("/events"):
             return FakeSyncResponse(lines=_terminal_event_lines())
@@ -686,6 +686,7 @@ def test_sync_job_handle_resumes_after_disconnect_and_dispatches_callbacks(
 
     class DisconnectingResponse(FakeSyncResponse):
         def iter_lines(self, *, decode_unicode: bool) -> Iterator[str]:
+            assert self.status_code == 200
             del decode_unicode
             yield from _progress_event_lines()
             message = "stream disconnected"
@@ -814,7 +815,7 @@ def test_sync_client_uses_observability_routes(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
         headers: dict[str, str],
     ) -> FakeSyncResponse:
         seen.append(url)
@@ -849,7 +850,7 @@ def test_sync_client_uses_observability_routes(
     assert workers.workers[0].status == "online"
     assert workers.inspect_metadata.stale is False
     assert worker.active_tasks[0].id == "job-1"
-    assert worker.inspect_metadata.age_seconds == 0.25
+    assert worker.inspect_metadata.age_seconds == pytest.approx(0.25)
     assert queues.queues[0].pending_depth_unknown is True
 
 
@@ -1042,7 +1043,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
     assert synced.changed is True
     assert synced.catalog_refresh.refreshed is True
     assert refreshed.workers_restart_recommended is True
-    assert restarted.timeout == 12.5
+    assert restarted.timeout == pytest.approx(12.5)
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
     assert assignment.queue == "batch"
     assert routing_deleted.deleted is True
@@ -1073,8 +1074,8 @@ def test_sync_client_returns_grouped_data_type_schemas(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         assert url == "http://example.test/data-types"
         return FakeSyncResponse(payload=_data_types_response())
@@ -1092,8 +1093,8 @@ def test_sync_client_returns_v4_metric_catalog(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         assert url == "http://example.test/metrics"
         return FakeSyncResponse(payload=_metric_catalog_response())
@@ -1123,8 +1124,8 @@ def test_sync_client_returns_one_v4_metric(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         assert url == "http://example.test/metrics/accessibility_by_destination"
         return FakeSyncResponse(payload=_metric_response())
@@ -1141,10 +1142,10 @@ def test_sync_client_rejects_invalid_data_type_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
-        url: str,  # noqa: ARG001
+        url: str,  # ruff:ignore[unused-function-argument]
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         return FakeSyncResponse(payload={"location": []})
 
@@ -1161,8 +1162,8 @@ def test_sync_client_downloads_file_result(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
         stream: bool,
     ) -> FakeSyncResponse:
         assert url == "http://example.test/jobs/job-1/result/download"
@@ -1189,8 +1190,8 @@ def test_sync_client_fetches_file_result_metadata(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         assert url == "http://example.test/jobs/job-1/result"
         return FakeSyncResponse(payload=_file_result_response())
@@ -1254,7 +1255,7 @@ def test_sync_client_downloads_jsonl_result_from_raw_job_id(
     def get(
         url: str,
         *,
-        timeout: float,  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
         headers: dict[str, str],
         stream: bool,
     ) -> FakeSyncResponse:
@@ -1283,11 +1284,11 @@ def test_sync_client_reports_result_download_http_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
-        url: str,  # noqa: ARG001
+        url: str,  # ruff:ignore[unused-function-argument]
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
-        stream: bool,  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
+        stream: bool,  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         return FakeSyncResponse(status_code=409, text="result is not a table")
 
@@ -1324,18 +1325,21 @@ def test_sync_client_hydrates_result_dataframe(
         @staticmethod
         def read_json(path: Path, *, lines: bool) -> dict[str, Any]:
             assert lines is True
-            return {"path_exists": path.exists(), "content": path.read_text()}
+            return {
+                "path_exists": path.exists(),
+                "content": path.read_text(encoding="utf-8"),
+            }
 
     def import_module(name: str) -> object:
         assert name == "pandas"
         return FakePandas
 
     def get(
-        url: str,  # noqa: ARG001
+        url: str,  # ruff:ignore[unused-function-argument]
         *,
-        timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
-        stream: bool,  # noqa: ARG001
+        timeout: float,  # ruff:ignore[unused-function-argument]
+        headers: dict[str, str],  # ruff:ignore[unused-function-argument]
+        stream: bool,  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
         return FakeSyncResponse(chunks=[b'{"_result_index":"area-1","value":6}\n'])
 
@@ -1371,7 +1375,7 @@ class FakeContent:
 
     async def iter_chunked(
         self,
-        chunk_size: int,  # noqa: ARG002
+        chunk_size: int,  # ruff:ignore[unused-method-argument]
     ) -> AsyncIterator[bytes]:
         for chunk in self.chunks:
             yield chunk
@@ -1634,7 +1638,7 @@ def test_async_client_uses_observability_routes(
     assert workers.workers[0].status == "online"
     assert workers.inspect_metadata.stale is False
     assert worker.active_tasks[0].id == "job-1"
-    assert worker.inspect_metadata.age_seconds == 0.25
+    assert worker.inspect_metadata.age_seconds == pytest.approx(0.25)
     assert queues.queues[0].pending_depth_unknown is True
 
 
@@ -1846,7 +1850,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
     assert synced.changed is True
     assert synced.catalog_refresh.refreshed is True
     assert refreshed.workers_restart_recommended is True
-    assert restarted.timeout == 12.5
+    assert restarted.timeout == pytest.approx(12.5)
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
     assert assignment.queue == "batch"
     assert routing_deleted.deleted is True
@@ -1856,7 +1860,9 @@ def test_async_client_reports_operator_route_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingSession(FakeSession):
-        def request(self, *args: object, **kwargs: object) -> FakeAsyncResponse:  # noqa: ARG002
+        def request(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+            assert isinstance(self, RecordingSession)
+            del args, kwargs
             return FakeAsyncResponse(status=409, text="plugin disabled")
 
     monkeypatch.setattr(
@@ -2095,6 +2101,7 @@ def test_async_client_reports_result_download_http_errors(
 ) -> None:
     class ErrorSession(FakeSession):
         def get(self, *_: object, **__: object) -> FakeAsyncResponse:
+            assert isinstance(self, ErrorSession)
             return FakeAsyncResponse(status=409, text="result is not a table")
 
     monkeypatch.setattr(

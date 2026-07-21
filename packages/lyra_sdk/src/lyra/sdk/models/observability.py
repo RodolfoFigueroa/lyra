@@ -1,3 +1,5 @@
+"""Models for service health, readiness, and runtime observations."""
+
 from datetime import datetime
 from typing import Any, Literal
 
@@ -10,19 +12,27 @@ WorkerObservedStatus = Literal["online", "offline", "unknown"]
 
 
 class RedisHealth(StrictBaseModel):
+    """Redis readiness observation."""
+
     status: ReadinessStatus = Field(description="Redis readiness state.")
 
 
 class DatabaseHealth(StrictBaseModel):
+    """PostgreSQL readiness observation."""
+
     status: ReadinessStatus = Field(description="PostgreSQL readiness state.")
 
 
 class LivenessResponse(StrictBaseModel):
+    """API process liveness response."""
+
     status: Literal["ok"] = Field(description="API process liveness state.")
     api_version: str = Field(min_length=1, description="Running Lyra API version.")
 
 
 class ReadinessResponse(StrictBaseModel):
+    """Aggregate readiness response for the API and its dependencies."""
+
     status: ServiceReadinessStatus = Field(description="Overall API readiness state.")
     api_version: str = Field(min_length=1, description="Running Lyra API version.")
     redis: RedisHealth = Field(description="Redis readiness details.")
@@ -30,6 +40,8 @@ class ReadinessResponse(StrictBaseModel):
 
 
 class WorkerConfigSummary(StrictBaseModel):
+    """Configured worker process settings."""
+
     name: str = Field(min_length=1)
     queues: list[str] = Field(min_length=1)
     concurrency: int = Field(gt=0)
@@ -38,6 +50,8 @@ class WorkerConfigSummary(StrictBaseModel):
 
 
 class ConfigSummaryResponse(StrictBaseModel):
+    """Effective service and worker configuration summary."""
+
     api_host: str = Field(min_length=1)
     api_port: int = Field(ge=1, le=65535)
     allowed_queues: list[str] = Field(min_length=1)
@@ -50,6 +64,8 @@ class ConfigSummaryResponse(StrictBaseModel):
 
 
 class PluginSourceSummary(StrictBaseModel):
+    """Configured source of plugin definitions."""
+
     id: str = Field(min_length=1)
     source: str = Field(min_length=1)
     source_kind: Literal["github", "local", "directory"]
@@ -58,6 +74,8 @@ class PluginSourceSummary(StrictBaseModel):
 
 
 class CatalogSummaryResponse(StrictBaseModel):
+    """Plugin catalog contents and routing summary."""
+
     metric_count: int = Field(ge=0)
     metric_names: list[str]
     catalog_fingerprint: str
@@ -66,6 +84,8 @@ class CatalogSummaryResponse(StrictBaseModel):
 
 
 class WorkerTaskSummary(StrictBaseModel):
+    """Task observed by Celery worker inspection."""
+
     id: str | None = None
     name: str | None = None
     worker: str | None = None
@@ -74,6 +94,8 @@ class WorkerTaskSummary(StrictBaseModel):
 
 
 class WorkerSummary(StrictBaseModel):
+    """Configured and observed state of a worker."""
+
     name: str = Field(min_length=1)
     configured: bool
     observed: bool
@@ -85,6 +107,8 @@ class WorkerSummary(StrictBaseModel):
 
 
 class WorkerInspectMetadata(StrictBaseModel):
+    """Freshness and availability metadata for worker inspection."""
+
     observed_at: datetime | None = None
     age_seconds: float | None = Field(default=None, ge=0)
     stale: bool = True
@@ -92,6 +116,8 @@ class WorkerInspectMetadata(StrictBaseModel):
 
 
 class WorkerDetail(WorkerSummary):
+    """Worker state with inspected tasks and runtime statistics."""
+
     active_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
     reserved_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
     scheduled_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
@@ -102,6 +128,8 @@ class WorkerDetail(WorkerSummary):
 
 
 class WorkersResponse(StrictBaseModel):
+    """Worker summaries and inspection availability."""
+
     inspect_available: bool
     inspect_metadata: WorkerInspectMetadata = Field(
         default_factory=WorkerInspectMetadata
@@ -110,6 +138,8 @@ class WorkersResponse(StrictBaseModel):
 
 
 class QueueSummary(StrictBaseModel):
+    """Configured routing and observed capacity for a queue."""
+
     name: str = Field(min_length=1)
     is_default: bool
     assigned_metric_count: int = Field(ge=0)
@@ -120,6 +150,8 @@ class QueueSummary(StrictBaseModel):
 
 
 class QueuesResponse(StrictBaseModel):
+    """Queue summaries and their worker-inspection metadata."""
+
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
     inspect_metadata: WorkerInspectMetadata = Field(
@@ -129,6 +161,8 @@ class QueuesResponse(StrictBaseModel):
 
 
 class AdminStatusResponse(StrictBaseModel):
+    """High-level operational status for the Lyra service."""
+
     api_version: str = Field(min_length=1)
     redis: RedisHealth
     metric_count: int = Field(ge=0)

@@ -1,3 +1,5 @@
+"""Textual application and screen coordination for the Lyra TUI."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
@@ -44,7 +46,7 @@ CATALOG_TAB_REQUIRED_MESSAGE = (
 )
 
 
-class LyraTuiApp(App[None]):
+class LyraTuiApp(App[None]):  # ruff: ignore[too-many-public-methods] -- Textual actions
     """Minimal Lyra operator console shell."""
 
     CSS = """
@@ -155,6 +157,7 @@ class LyraTuiApp(App[None]):
         state: LyraTuiState | None = None,
         poll_on_mount: bool = True,
     ) -> None:
+        """Initialize the TUI with its configuration, state, and polling policy."""
         super().__init__()
         self.config = config
         self.state = state or LyraTuiState(
@@ -167,6 +170,11 @@ class LyraTuiApp(App[None]):
         self._refresh_worker: Worker[None] | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose the status bar, tabbed operational views, and footer.
+
+        Yields:
+            Widgets forming the application shell and operational tabs.
+        """
         yield Header(show_clock=False)
         yield ConnectionStatus(self.state.snapshot, widget_id="status")
         yield ActionMessage(widget_id="action-message")
@@ -184,6 +192,7 @@ class LyraTuiApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        """Start immediate and periodic snapshot refreshes when polling is enabled."""
         if not self.poll_on_mount:
             return
         self.request_refresh()
@@ -194,6 +203,7 @@ class LyraTuiApp(App[None]):
         )
 
     def on_unmount(self) -> None:
+        """Stop polling and cancel outstanding refresh and action workers."""
         if self._refresh_timer is not None:
             self._refresh_timer.stop()
         self.workers.cancel_group(self, "refresh")
@@ -203,6 +213,7 @@ class LyraTuiApp(App[None]):
         self,
         _event: TabbedContent.TabActivated,
     ) -> None:
+        """Refresh available key bindings after the active tab changes."""
         self.call_after_refresh(self.screen.refresh_bindings)
 
     def _check_operator_action(self, action: str) -> bool | None:
@@ -229,30 +240,32 @@ class LyraTuiApp(App[None]):
         return None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Return whether an action is currently available for the UI state."""
         del parameters
-        result: bool | None = None
         try:
-            if action == "quit_app":
-                result = True
-            elif action == "focus_active_tab_content":
-                result = (
-                    self._tab_strip_is_focused()
-                    and self._active_tab_focus_target() is not None
-                )
-            elif action == "focus_tab_strip":
-                result = self._table_is_focused()
-            elif action in {"focus_next_table", "focus_previous_table"}:
-                result = self._table_is_focused() and len(self._active_tab_tables()) > 1
-            elif action == "cancel_job":
-                job = self._selected_job()
-                result = job is not None and is_active_job_status(job.status)
-            else:
-                result = self._check_operator_action(action)
-        except Exception:  # noqa: BLE001
-            result = None
-        return result
+            return self._resolve_action_state(action)
+        except Exception:  # ruff:ignore[blind-except]
+            return None
+
+    def _resolve_action_state(self, action: str) -> bool | None:
+        if action == "quit_app":
+            return True
+        if action == "focus_active_tab_content":
+            return (
+                self._tab_strip_is_focused()
+                and self._active_tab_focus_target() is not None
+            )
+        if action == "focus_tab_strip":
+            return self._table_is_focused()
+        if action in {"focus_next_table", "focus_previous_table"}:
+            return self._table_is_focused() and len(self._active_tab_tables()) > 1
+        if action == "cancel_job":
+            job = self._selected_job()
+            return job is not None and is_active_job_status(job.status)
+        return self._check_operator_action(action)
 
     def request_refresh(self) -> None:
+        """Start one snapshot refresh unless a prior refresh is still running."""
         if self._refresh_worker is not None and not self._refresh_worker.is_finished:
             return
         self.show_snapshot(_loading_snapshot(self.state.snapshot))
@@ -264,12 +277,15 @@ class LyraTuiApp(App[None]):
         )
 
     def action_refresh(self) -> None:
+        """Request an immediate service-state refresh."""
         self.request_refresh()
 
     def action_quit_app(self) -> None:
+        """Exit the terminal application."""
         self.exit()
 
     def action_focus_active_tab_content(self) -> None:
+        """Move focus from the tab strip into the active tab's primary control."""
         if not self._tab_strip_is_focused():
             return
         focus_target = self._active_tab_focus_target()
@@ -277,16 +293,20 @@ class LyraTuiApp(App[None]):
             focus_target.focus()
 
     def action_focus_tab_strip(self) -> None:
+        """Move focus from a data table back to the tab strip."""
         if self._table_is_focused():
             self.query_one(Tabs).focus()
 
     def action_focus_next_table(self) -> None:
+        """Move focus cyclically to the next table in the active tab."""
         self._focus_relative_table(1)
 
     def action_focus_previous_table(self) -> None:
+        """Move focus cyclically to the previous table in the active tab."""
         self._focus_relative_table(-1)
 
     def action_cancel_job(self) -> None:
+        """Confirm cancellation of the selected active job."""
         job = self._selected_job()
         if job is None:
             self.show_action_message("No job selected.")
@@ -307,12 +327,14 @@ class LyraTuiApp(App[None]):
         )
 
     def action_restart_workers(self) -> None:
+        """Open the worker restart form."""
         self.push_screen(
             RestartWorkersDialog(timeout=30.0),
             callback=self._restart_workers_after_dialog,
         )
 
     def action_refresh_catalog(self) -> None:
+        """Confirm synchronization and refresh of the plugin catalog."""
         if not self._require_catalog_tab():
             return
         self.push_screen(
@@ -327,6 +349,7 @@ class LyraTuiApp(App[None]):
         )
 
     def action_add_plugin_repo(self) -> None:
+        """Open the form for adding a plugin repository."""
         if not self._require_catalog_tab():
             return
         self.push_screen(
@@ -335,6 +358,7 @@ class LyraTuiApp(App[None]):
         )
 
     def action_toggle_plugin_repo(self) -> None:
+        """Confirm enabling or disabling the selected plugin repository."""
         if not self._require_catalog_tab():
             return
         repo = self._selected_repo()
@@ -355,6 +379,7 @@ class LyraTuiApp(App[None]):
         )
 
     def action_delete_plugin_repo(self) -> None:
+        """Confirm deletion of the selected plugin repository."""
         if not self._require_catalog_tab():
             return
         repo = self._selected_repo()
@@ -374,6 +399,7 @@ class LyraTuiApp(App[None]):
         )
 
     def action_sync_plugin_repo(self) -> None:
+        """Confirm synchronization of the selected plugin repository."""
         if not self._require_catalog_tab():
             return
         repo = self._selected_repo()
@@ -393,6 +419,7 @@ class LyraTuiApp(App[None]):
         )
 
     def action_assign_route(self) -> None:
+        """Open a form to assign the selected metric to an allowed queue."""
         if not self._require_catalog_tab():
             return
         allowed_queues = self._allowed_queues()
@@ -410,6 +437,7 @@ class LyraTuiApp(App[None]):
         )
 
     def action_delete_route(self) -> None:
+        """Confirm deletion of the selected explicit metric route."""
         if not self._require_catalog_tab():
             return
         route = self._selected_route()
@@ -430,10 +458,12 @@ class LyraTuiApp(App[None]):
         )
 
     async def refresh_once(self) -> None:
+        """Fetch one state snapshot and apply it to every view."""
         snapshot = await self.state.refresh()
         self.show_snapshot(snapshot)
 
     def show_snapshot(self, snapshot: TuiSnapshot) -> None:
+        """Store a snapshot and propagate it to status and tab views."""
         self.state.snapshot = snapshot
         self.query_one(ConnectionStatus).update_snapshot(snapshot)
         for view in self.query(DashboardView):
@@ -448,6 +478,7 @@ class LyraTuiApp(App[None]):
             view.update_snapshot(snapshot)
 
     def show_action_message(self, message: str) -> None:
+        """Display feedback from the latest administrative action."""
         self.query_one(ActionMessage).show_message(message)
 
     def _run_action(self, awaitable: Awaitable[ActionResult]) -> None:

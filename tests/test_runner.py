@@ -199,7 +199,7 @@ class FakeRedisSync:
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
         for member, score in list(sorted_set.items()):
@@ -371,7 +371,7 @@ def test_worker_task_failure_signal_notifies_by_task_id(
         notified.append,
     )
 
-    worker_module._notify_unexpected_task_failure(task_id="job-1")  # noqa: SLF001
+    worker_module._notify_unexpected_task_failure(task_id="job-1")  # ruff:ignore[private-member-access]
 
     assert notified == ["job-1"]
 
@@ -428,7 +428,7 @@ def test_runner_syncs_enabled_state_repos_only(
 
     monkeypatch.setattr(worker_module, "sync_plugin_repos", sync_repos)
 
-    synced = worker_module._runner_sync_repos("heavy", config, state)  # noqa: SLF001
+    synced = worker_module._runner_sync_repos("heavy", config, state)  # ruff:ignore[private-member-access]
 
     assert synced == []
     assert calls == [
@@ -862,7 +862,7 @@ def test_plugin_exception_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         msg = "boom"
         raise RuntimeError(msg)
 
@@ -889,7 +889,7 @@ def test_database_exception_persists_retryable_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         statement = "SELECT 1"
         message = "unavailable"
         raise OperationalError(statement, {}, Exception(message))
@@ -994,7 +994,7 @@ def test_invalid_table_result_persists_failed_result(
     worker_module: ModuleType,
     plugin_result: TableJobResult,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return plugin_result
 
     worker_module.RUNNER_REGISTRY["invalid_table_metric"] = (
@@ -1028,7 +1028,7 @@ def test_worker_appends_fractional_area_column(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1064,7 +1064,7 @@ def test_worker_normalizes_fraction_within_range_tolerance(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1101,7 +1101,7 @@ def test_worker_rejects_fraction_outside_unit_interval(
     worker_module: ModuleType,
     source_value: float,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1137,7 +1137,7 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -1181,7 +1181,7 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],

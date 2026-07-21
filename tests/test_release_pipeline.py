@@ -83,10 +83,10 @@ def _repository_files(after: dict[str, str]) -> dict[tuple[str, str], str]:
             package_name=name,
             changelog_path="CHANGELOG.md",
         )
-        files[(HEAD_SHA, package.pyproject_path)] = _pyproject(
+        files[HEAD_SHA, package.pyproject_path] = _pyproject(
             name, after[path], dependencies
         )
-        files[(HEAD_SHA, package.repository_changelog_path)] = _changelog(after[path])
+        files[HEAD_SHA, package.repository_changelog_path] = _changelog(after[path])
     return files
 
 
@@ -94,7 +94,7 @@ def _patch_repository(
     monkeypatch: pytest.MonkeyPatch, files: dict[tuple[str, str], str]
 ) -> None:
     def read_text(_root: Path, ref: str, path: str) -> str:
-        return files[(ref, path)]
+        return files[ref, path]
 
     monkeypatch.setattr(release, "_repository_text", read_text)
     monkeypatch.setattr(release, "_repository_sha", lambda _root, _ref: HEAD_SHA)
@@ -104,7 +104,9 @@ def test_current_release_configuration_is_consistent() -> None:
     release.validate_repository()
     assert version("lyra-app") == APP_VERSION
     config = json.loads((ROOT / release.CONFIG_PATH).read_text())
-    assert config["group-pull-request-title-pattern"] == ("chore: release v${version}")
+    assert config["group-pull-request-title-pattern"] == (
+        "chore: release v${{version}}".format()
+    )
 
 
 def test_plan_release_emits_aggregate_manifest_and_outputs(
@@ -182,7 +184,7 @@ def test_plan_release_requires_changed_component_changelog(
 ) -> None:
     after = {**CURRENT_VERSIONS, ".": "0.14.2", "packages/lyra_utils": "0.2.1"}
     files = _repository_files(after)
-    files[(HEAD_SHA, "packages/lyra_utils/CHANGELOG.md")] = "# Changelog\n"
+    files[HEAD_SHA, "packages/lyra_utils/CHANGELOG.md"] = "# Changelog\n"
     _patch_repository(monkeypatch, files)
 
     with pytest.raises(

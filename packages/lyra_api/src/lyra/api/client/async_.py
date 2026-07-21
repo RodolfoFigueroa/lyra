@@ -8,7 +8,7 @@ import json
 import random
 import tempfile
 import time
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -25,7 +25,7 @@ from typing import (
 import aiofiles
 import aiofiles.os
 import aiohttp
-from lyra.api.client.base import _BaseTransport, _load_pandas, service_unavailable_error
+from lyra.api.client.base import BaseTransport, load_pandas, service_unavailable_error
 from lyra.api.exceptions import (
     DownloadError,
     JobEventCursorGapError,
@@ -111,7 +111,7 @@ class _SSEEventBuffer:
         return record
 
     def add(self, line: str) -> JobEventRecord | None:
-        if line == "":
+        if not line:
             return self.flush()
         if line.startswith(":"):
             return None
@@ -250,17 +250,18 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         client: _AsyncTransport,
         submission: JobCreateResponse,
     ) -> None:
+        """Initialize a handle for an existing asynchronous job submission."""
         self._client = client
         self.submission = submission
 
     @property
     def job_id(self) -> str:
-        """Return the submitted job's identifier."""
+        """The submitted job's identifier."""
         return self.submission.job_id
 
     @property
     def metric(self) -> str:
-        """Return the name of the submitted metric."""
+        """The name of the submitted metric."""
         return self.submission.metric
 
     async def status(self) -> JobStatusInfo:
@@ -268,9 +269,6 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
 
         Returns:
             The latest status reported by the API.
-
-        Raises:
-            DownloadError: If the status request fails or returns an error response.
 
         """
         return await self._client.get_job(self.job_id)
@@ -296,14 +294,8 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
             max_reconnect_attempts: Number of consecutive reconnection attempts
                 allowed after the initial connection.
 
-        Yields:
-            Job event records in server order.
-
-        Raises:
-            ValueError: If ``max_reconnect_attempts`` is negative.
-            JobEventCursorGapError: If the requested event is no longer retained.
-            JobEventStreamError: If the stream cannot be resumed.
-            JobWaitTimeoutError: If ``timeout`` expires.
+        Returns:
+            An asynchronous iterator of job event records in server order.
 
         """
         return self._client.iter_job_events(
@@ -322,7 +314,6 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
 
         Raises:
             MetricRunError: If the job failed or was cancelled.
-            DownloadError: If the result request fails or returns an error response.
 
         """
         result = await self._client.get_job_result(self.job_id)
@@ -352,12 +343,6 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
 
         Returns:
             An awaitable resolving to the table or file result produced by the job.
-
-        Raises:
-            MetricRunError: If the job failed or was cancelled.
-            JobEventStreamError: If the event stream ends or cannot be resumed.
-            JobEventCursorGapError: If event history needed to resume was discarded.
-            JobWaitTimeoutError: If ``timeout`` expires.
 
         """
         return self._wait(
@@ -410,7 +395,16 @@ class _RequestModelOptions(TypedDict):
     json_body: NotRequired[dict[str, Any] | None]
 
 
-class _AsyncTransport(_BaseTransport):
+@asynccontextmanager
+async def _translate_client_errors(message: str) -> AsyncIterator[None]:
+    try:
+        yield
+    except aiohttp.ClientError as exc:
+        err = f"{message}: {exc}"
+        raise DownloadError(err) from exc
+
+
+class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -- API surface
     """Private asynchronous HTTP implementation used by resource clients."""
 
     async def _request_model(
@@ -425,7 +419,7 @@ class _AsyncTransport(_BaseTransport):
         expected_status = options.get("expected_status", 200)
         params = options.get("params")
         json_body = options.get("json_body")
-        try:
+        async with _translate_client_errors(f"{error_context} request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -449,12 +443,9 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to {error_context}. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return response_model.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"{error_context} request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_liveness(self) -> LivenessResponse:
-        try:
+        async with _translate_client_errors("Liveness request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -468,12 +459,9 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to fetch liveness. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return LivenessResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Liveness request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_readiness(self) -> ReadinessResponse:
-        try:
+        async with _translate_client_errors("Readiness request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -487,9 +475,6 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to fetch readiness. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return ReadinessResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Readiness request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_met_zone_code(self, name: str) -> MetZoneCodeResponse:
         return await self._request_model(
@@ -512,7 +497,7 @@ class _AsyncTransport(_BaseTransport):
         if idempotency_key is not None:
             body["idempotency_key"] = idempotency_key
 
-        try:
+        async with _translate_client_errors("Job creation error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -527,9 +512,6 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to create job. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return JobCreateResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Job creation error: {exc}"
-            raise DownloadError(err) from exc
 
     async def submit_job(
         self,
@@ -544,7 +526,7 @@ class _AsyncTransport(_BaseTransport):
         )
 
     async def get_job(self, job_id: str) -> JobStatusInfo:
-        try:
+        async with _translate_client_errors("Job status error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -558,9 +540,6 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to fetch job. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return JobStatusInfo.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Job status error: {exc}"
-            raise DownloadError(err) from exc
 
     async def list_admin_jobs(
         self,
@@ -574,7 +553,7 @@ class _AsyncTransport(_BaseTransport):
             params["status"] = status
         if metric is not None:
             params["metric"] = metric
-        try:
+        async with _translate_client_errors("Admin job list error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -589,12 +568,9 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to list admin jobs. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return JobListResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin job list error: {exc}"
-            raise DownloadError(err) from exc
 
     async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
-        try:
+        async with _translate_client_errors("Admin job cancellation error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -608,9 +584,6 @@ class _AsyncTransport(_BaseTransport):
                     err = f"Failed to cancel admin job. HTTP {response.status}: {text}"
                     raise DownloadError(err)
                 return JobCancelResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin job cancellation error: {exc}"
-            raise DownloadError(err) from exc
 
     async def list_plugin_repos(self) -> PluginRepoListResponse:
         return await self._request_model(
@@ -683,7 +656,7 @@ class _AsyncTransport(_BaseTransport):
     async def restart_workers(
         self,
         *,
-        timeout: float = 30.0,  # noqa: ASYNC109
+        timeout: float = 30.0,  # ruff:ignore[async-function-with-timeout]
     ) -> WorkerRestartResponse:
         return await self._request_model(
             "POST",
@@ -727,7 +700,7 @@ class _AsyncTransport(_BaseTransport):
         )
 
     async def get_admin_status(self) -> AdminStatusResponse:
-        try:
+        async with _translate_client_errors("Admin status request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -743,12 +716,9 @@ class _AsyncTransport(_BaseTransport):
                     )
                     raise DownloadError(err)
                 return AdminStatusResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin status request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_admin_config_summary(self) -> ConfigSummaryResponse:
-        try:
+        async with _translate_client_errors("Admin config summary request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -765,12 +735,9 @@ class _AsyncTransport(_BaseTransport):
                     )
                     raise DownloadError(err)
                 return ConfigSummaryResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin config summary request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_admin_catalog(self) -> CatalogSummaryResponse:
-        try:
+        async with _translate_client_errors("Admin catalog request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -786,12 +753,9 @@ class _AsyncTransport(_BaseTransport):
                     )
                     raise DownloadError(err)
                 return CatalogSummaryResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin catalog request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_admin_workers(self) -> WorkersResponse:
-        try:
+        async with _translate_client_errors("Admin workers request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -807,12 +771,9 @@ class _AsyncTransport(_BaseTransport):
                     )
                     raise DownloadError(err)
                 return WorkersResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin workers request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_admin_worker(self, worker_name: str) -> WorkerDetail:
-        try:
+        async with _translate_client_errors("Admin worker request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -828,12 +789,9 @@ class _AsyncTransport(_BaseTransport):
                     )
                     raise DownloadError(err)
                 return WorkerDetail.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin worker request error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_admin_queues(self) -> QueuesResponse:
-        try:
+        async with _translate_client_errors("Admin queues request error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -849,9 +807,6 @@ class _AsyncTransport(_BaseTransport):
                     )
                     raise DownloadError(err)
                 return QueuesResponse.model_validate(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Admin queues request error: {exc}"
-            raise DownloadError(err) from exc
 
     def iter_job_events(
         self,
@@ -894,7 +849,7 @@ class _AsyncTransport(_BaseTransport):
             headers = dict(self._auth_headers)
             if cursor is not None:
                 headers["Last-Event-ID"] = cursor
-            try:
+            try:  # ruff: ignore[too-many-statements-in-try-clause] -- live stream
                 stream_timeout = aiohttp.ClientTimeout(
                     total=None,
                     sock_connect=self.timeout,
@@ -931,7 +886,7 @@ class _AsyncTransport(_BaseTransport):
                         deadline_guard.attempts = attempts
                         terminal = _terminal_event(record)
                         if kinds is None or record.event.kind in kinds:
-                            yield record
+                            yield record  # ruff: ignore[yield-in-context-manager-in-async-generator] -- live response
                         if terminal:
                             return
             except JobEventCursorGapError:
@@ -951,7 +906,7 @@ class _AsyncTransport(_BaseTransport):
             await asyncio.sleep(_event_retry_delay(deadline, attempts, jitter))
 
     async def get_job_result(self, job_id: str) -> TerminalJobResult:
-        try:
+        async with _translate_client_errors("Job result error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -968,9 +923,6 @@ class _AsyncTransport(_BaseTransport):
                     err = "Job result response was not JSON."
                     raise DownloadError(err)
                 return parse_job_result(await response.json())
-        except aiohttp.ClientError as exc:
-            err = f"Job result error: {exc}"
-            raise DownloadError(err) from exc
 
     async def download_job_result_to_file(
         self,
@@ -978,7 +930,7 @@ class _AsyncTransport(_BaseTransport):
         path: str | os.PathLike[str],
     ) -> None:
         output_path = Path(path)
-        try:
+        async with _translate_client_errors("Job result download error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -1005,9 +957,6 @@ class _AsyncTransport(_BaseTransport):
                 async with aiofiles.open(output_path, "wb") as file:
                     async for chunk in response.content.iter_chunked(65536):
                         await file.write(chunk)
-        except aiohttp.ClientError as exc:
-            err = f"Job result download error: {exc}"
-            raise DownloadError(err) from exc
 
     async def get_result_descriptor(
         self,
@@ -1026,7 +975,7 @@ class _AsyncTransport(_BaseTransport):
         result_ref_or_job_id: str,
         path: str | os.PathLike[str],
         *,
-        format: str = "jsonl",  # noqa: A002
+        format: str = "jsonl",  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
         if format != "jsonl":
             err = "Only JSONL result downloads are supported. Use format='jsonl'."
@@ -1034,7 +983,7 @@ class _AsyncTransport(_BaseTransport):
 
         job_id = self._job_id_from_result_ref(result_ref_or_job_id)
         output_path = Path(path)
-        try:
+        async with _translate_client_errors("Result download error"):
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -1051,12 +1000,9 @@ class _AsyncTransport(_BaseTransport):
                 async with aiofiles.open(output_path, "wb") as file:
                     async for chunk in response.content.iter_chunked(65536):
                         await file.write(chunk)
-        except aiohttp.ClientError as exc:
-            err = f"Result download error: {exc}"
-            raise DownloadError(err) from exc
 
     async def result_dataframe(self, result_ref_or_job_id: str) -> pd.DataFrame:
-        pandas = _load_pandas()
+        pandas = load_pandas()
         with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
             temp_path = Path(temp_file.name)
 
@@ -1228,7 +1174,7 @@ class _ResultsResource:
         ref: str,
         path: str | os.PathLike[str],
         *,
-        format: str = "jsonl",  # noqa: A002
+        format: str = "jsonl",  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
         await self._transport.download_result(ref, path, format=format)
 
@@ -1470,6 +1416,7 @@ class AsyncLyraClient:
         agent_api_key: str | None = None,
         secure: bool = True,
     ) -> None:
+        """Initialize an asynchronous consumer client and its resources."""
         transport = _AsyncTransport(
             host,
             timeout,
@@ -1535,6 +1482,7 @@ class AsyncLyraAdminClient:
         admin_api_key: str | None = None,
         secure: bool = True,
     ) -> None:
+        """Initialize an asynchronous administrator client and its resources."""
         transport = _AsyncAdminTransport(
             host,
             timeout,
@@ -1564,9 +1512,6 @@ class AsyncLyraAdminClient:
         Returns:
             API, storage, catalog, queue, and worker configuration status.
 
-        Raises:
-            DownloadError: If the status request fails or returns an error response.
-
         """
         return await self._transport.get_admin_status()
 
@@ -1575,9 +1520,6 @@ class AsyncLyraAdminClient:
 
         Returns:
             The API, queue, worker, job-store, and plugin path configuration.
-
-        Raises:
-            DownloadError: If the request fails or returns an error response.
 
         """
         return await self._transport.get_admin_config_summary()

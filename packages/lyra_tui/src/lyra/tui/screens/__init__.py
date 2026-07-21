@@ -1,3 +1,5 @@
+"""Interactive screens presented by the Lyra terminal interface."""
+
 from lyra.tui.screens.dashboard import DashboardView, dashboard_rows
 from lyra.tui.screens.jobs import JobsView, job_detail_text, job_row
 from lyra.tui.screens.plugins import (

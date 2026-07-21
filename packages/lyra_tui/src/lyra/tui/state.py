@@ -1,8 +1,11 @@
+"""Snapshot and refresh state for the Lyra terminal interface."""
+
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar, cast
 
 from lyra.api import DownloadError
 
@@ -29,11 +32,18 @@ _T = TypeVar("_T")
 
 @dataclass(frozen=True, slots=True)
 class TuiError:
+    """Categorized error suitable for display in the operator console."""
+
     kind: ErrorKind
     message: str
 
     @classmethod
     def from_exception(cls, exc: Exception, *, context: str) -> TuiError:
+        """Classify an exception and attach operation context.
+
+        Returns:
+            A display-ready authentication, connection, API, or unexpected error.
+        """
         message = str(exc) or exc.__class__.__name__
         lower_message = message.lower()
         if isinstance(exc, DownloadError):
@@ -50,6 +60,8 @@ class TuiError:
 
 @dataclass(frozen=True, slots=True)
 class TuiSnapshot:
+    """Point-in-time collection of service data rendered by the TUI."""
+
     phase: SnapshotPhase = "idle"
     readiness: ReadinessResponse | None = None
     admin_status: AdminStatusResponse | None = None
@@ -65,20 +77,29 @@ class TuiSnapshot:
 
     @property
     def has_admin_data(self) -> bool:
+        """Whether authenticated administrative status was retrieved."""
         return self.admin_status is not None
 
     @property
     def has_errors(self) -> bool:
+        """Whether any snapshot request failed."""
         return bool(self.errors)
 
 
 @dataclass(slots=True)
 class LyraTuiState:
+    """Mutable application state holding the latest service snapshot."""
+
     client: LyraTuiReadClient
     has_admin_key: bool
     snapshot: TuiSnapshot = field(default_factory=TuiSnapshot)
 
     async def refresh(self) -> TuiSnapshot:
+        """Fetch and store a fresh service snapshot.
+
+        Returns:
+            The newly stored snapshot.
+        """
         self.snapshot = await refresh_snapshot(
             self.client,
             has_admin_key=self.has_admin_key,
@@ -91,6 +112,11 @@ async def refresh_snapshot(
     *,
     has_admin_key: bool,
 ) -> TuiSnapshot:
+    """Fetch public and authorized administrative state concurrently.
+
+    Returns:
+        A complete, partial, authentication-required, or failed snapshot.
+    """
     refreshed_at = datetime.now(UTC)
     readiness, readiness_error = await _capture(
         client.get_readiness(),
@@ -102,6 +128,7 @@ async def refresh_snapshot(
             errors=(readiness_error,),
             last_updated=refreshed_at,
         )
+    readiness = cast("ReadinessResponse", readiness)
 
     if not has_admin_key:
         return TuiSnapshot(
@@ -127,60 +154,62 @@ async def refresh_snapshot(
             errors=(admin_status_error,),
             last_updated=refreshed_at,
         )
+    admin_status = cast("AdminStatusResponse", admin_status)
 
-    config_summary, config_error = await _capture(
-        client.get_admin_config_summary(),
-        context="Fetch config summary",
+    return await _refresh_admin_snapshot(
+        client,
+        readiness=readiness,
+        admin_status=admin_status,
+        refreshed_at=refreshed_at,
     )
-    catalog, catalog_error = await _capture(
-        client.get_admin_catalog(),
-        context="Fetch catalog",
+
+
+async def _refresh_admin_snapshot(
+    client: LyraTuiReadClient,
+    *,
+    readiness: ReadinessResponse,
+    admin_status: AdminStatusResponse,
+    refreshed_at: datetime,
+) -> TuiSnapshot:
+    (
+        config_result,
+        catalog_result,
+        workers_result,
+        queues_result,
+        jobs_result,
+        repos_result,
+        routing_result,
+    ) = await asyncio.gather(
+        _capture(client.get_admin_config_summary(), context="Fetch config summary"),
+        _capture(client.get_admin_catalog(), context="Fetch catalog"),
+        _capture(client.get_admin_workers(), context="Fetch workers"),
+        _capture(client.get_admin_queues(), context="Fetch queues"),
+        _capture(client.list_admin_jobs(), context="Fetch jobs"),
+        _capture(client.list_plugin_repos(), context="Fetch plugin repos"),
+        _capture(client.list_plugin_routing(), context="Fetch plugin routing"),
     )
-    workers, workers_error = await _capture(
-        client.get_admin_workers(),
-        context="Fetch workers",
+    captured = (
+        config_result,
+        catalog_result,
+        workers_result,
+        queues_result,
+        jobs_result,
+        repos_result,
+        routing_result,
     )
-    queues, queues_error = await _capture(
-        client.get_admin_queues(),
-        context="Fetch queues",
-    )
-    jobs, jobs_error = await _capture(
-        client.list_admin_jobs(),
-        context="Fetch jobs",
-    )
-    plugin_repos, repos_error = await _capture(
-        client.list_plugin_repos(),
-        context="Fetch plugin repos",
-    )
-    plugin_routing, routing_error = await _capture(
-        client.list_plugin_routing(),
-        context="Fetch plugin routing",
-    )
-    errors = tuple(
-        error
-        for error in (
-            config_error,
-            catalog_error,
-            workers_error,
-            queues_error,
-            jobs_error,
-            repos_error,
-            routing_error,
-        )
-        if error is not None
-    )
+    errors = tuple(error for _, error in captured if error is not None)
 
     return TuiSnapshot(
         phase="partial" if errors else "ready",
         readiness=readiness,
         admin_status=admin_status,
-        config_summary=config_summary,
-        catalog=catalog,
-        workers=workers,
-        queues=queues,
-        jobs=jobs,
-        plugin_repos=plugin_repos,
-        plugin_routing=plugin_routing,
+        config_summary=cast("ConfigSummaryResponse | None", config_result[0]),
+        catalog=cast("CatalogSummaryResponse | None", catalog_result[0]),
+        workers=cast("WorkersResponse | None", workers_result[0]),
+        queues=cast("QueuesResponse | None", queues_result[0]),
+        jobs=cast("JobListResponse | None", jobs_result[0]),
+        plugin_repos=cast("PluginRepoListResponse | None", repos_result[0]),
+        plugin_routing=cast("PluginRoutingResponse | None", routing_result[0]),
         errors=errors,
         last_updated=refreshed_at,
     )
@@ -193,5 +222,5 @@ async def _capture(
 ) -> tuple[_T | None, TuiError | None]:
     try:
         return await awaitable, None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # ruff:ignore[blind-except]
         return None, TuiError.from_exception(exc, context=context)

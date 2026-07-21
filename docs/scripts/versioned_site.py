@@ -8,7 +8,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] -- invokes Git/npm
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,19 +24,28 @@ class VersionedSiteError(ValueError):
 
 @dataclass(frozen=True, order=True)
 class Release:
+    """Identify one supported product release by semantic version and Git tag."""
+
     version: tuple[int, int, int]
     tag: str
 
     @property
     def label(self) -> str:
+        """The release version formatted as ``major.minor.patch``."""
         return ".".join(str(part) for part in self.version)
 
     @property
     def base(self) -> str:
+        """The GitHub Pages base path reserved for this release."""
         return f"/lyra/versions/{self.label}"
 
 
 def parse_release(tag: str) -> Release | None:
+    """Parse a supported Lyra product tag into release metadata.
+
+    Returns:
+        The parsed release, or ``None`` for unrelated or unsupported tags.
+    """
     match = TAG_PATTERN.fullmatch(tag)
     if match is None:
         return None
@@ -48,8 +57,13 @@ def parse_release(tag: str) -> Release | None:
 
 
 def discover_releases() -> list[Release]:
+    """Discover supported product releases from the repository's Git tags.
+
+    Returns:
+        Releases in newest-first order, preferring current ``lyra-v`` tag names.
+    """
     result = subprocess.run(
-        ["git", "tag", "--list", "lyra-v*", "lyra-app-v*"],  # noqa: S607
+        ["git", "tag", "--list", "lyra-v*", "lyra-app-v*"],  # ruff:ignore[start-process-with-partial-path]
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -69,7 +83,12 @@ def discover_releases() -> list[Release]:
 def run(
     *command: str, cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 -- commands are constructed only in this module
+    """Run a checked command in a selected directory and environment.
+
+    Returns:
+        The successfully completed subprocess result.
+    """
+    return subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true] -- commands are constructed only in this module
         command,
         cwd=cwd,
         env=env,
@@ -81,6 +100,11 @@ def run(
 
 
 def patch_historical_base(config_path: Path, base: str) -> None:
+    """Patch an older Astro config that predates environment-based base paths.
+
+    Raises:
+        VersionedSiteError: If the expected historical base declaration is absent.
+    """
     content = config_path.read_text(encoding="utf-8")
     if "LYRA_DOCS_BASE" in content:
         return
@@ -97,6 +121,7 @@ def patch_historical_base(config_path: Path, base: str) -> None:
 
 
 def build_ref(ref: str, base: str, destination: Path, worktrees: Path) -> None:
+    """Build documentation from one Git ref in an isolated temporary worktree."""
     checkout = worktrees / re.sub(r"[^a-zA-Z0-9.-]", "-", ref)
     run("git", "worktree", "add", "--detach", str(checkout), ref, cwd=ROOT)
     try:
@@ -111,6 +136,14 @@ def build_ref(ref: str, base: str, destination: Path, worktrees: Path) -> None:
 
 
 def version_manifest(releases: list[Release]) -> list[dict[str, str]]:
+    """Build selector metadata for stable, development, and historical sites.
+
+    Returns:
+        Ordered version labels, identifiers, and URL bases for the selector.
+
+    Raises:
+        VersionedSiteError: If no supported product release is available.
+    """
     if not releases:
         message = "No supported Lyra product release tags exist"
         raise VersionedSiteError(message)
@@ -129,6 +162,11 @@ def version_manifest(releases: list[Release]) -> list[dict[str, str]]:
 
 
 def selector_markup(manifest: list[dict[str, str]], current_base: str) -> str:
+    """Render the documentation version selector for one site tree.
+
+    Returns:
+        Self-contained HTML, CSS, and JavaScript for selecting a version.
+    """
     options = []
     for item in manifest:
         selected = " selected" if item["base"] == current_base else ""
@@ -158,6 +196,11 @@ def selector_markup(manifest: list[dict[str, str]], current_base: str) -> str:
 def inject_selector(
     site: Path, manifest: list[dict[str, str]], current_base: str
 ) -> None:
+    """Inject the version selector immediately inside every HTML body.
+
+    Raises:
+        VersionedSiteError: If a generated HTML page has no body element.
+    """
     markup = selector_markup(manifest, current_base)
     for page in site.rglob("*.html"):
         content = page.read_text(encoding="utf-8")
@@ -171,6 +214,7 @@ def inject_selector(
 
 
 def assemble(output: Path, dev_ref: str) -> None:
+    """Assemble development, stable, and historical builds into one site tree."""
     releases = discover_releases()
     manifest = version_manifest(releases)
     with tempfile.TemporaryDirectory(prefix="lyra-docs-") as temporary:
@@ -208,6 +252,11 @@ def assemble(output: Path, dev_ref: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the versioned-site command-line parser.
+
+    Returns:
+        The parser for output-path and development-ref options.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dev-ref", default="HEAD")
@@ -215,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """Build the versioned documentation tree from command-line arguments."""
     arguments = build_parser().parse_args()
     assemble(arguments.output.resolve(), arguments.dev_ref)
 

@@ -155,7 +155,7 @@ class FakeRedisSync:
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
         for member, score in list(sorted_set.items()):
@@ -259,7 +259,7 @@ def test_batched_table_result_expands_columns_from_key_order(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -316,7 +316,7 @@ def test_mixed_static_and_batched_table_result_persists_success(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -385,7 +385,7 @@ def test_invalid_batched_table_columns_persist_failed_result(
     columns: list[str],
     data: list[list[float]],
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -437,7 +437,7 @@ def test_invalid_batched_table_values_persist_failed_result(
     worker_module: ModuleType,
     value: str | None,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -495,7 +495,7 @@ def test_invalid_batched_source_values_persist_failed_result(
     source_value: dict[str, Any],
     match: str,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],
@@ -535,7 +535,7 @@ def test_batched_table_generated_column_collision_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # noqa: ARG001
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
             job_id=job.job_id,
             index=["area-1"],

@@ -2,13 +2,13 @@
 
 import math
 
-import geopandas as gpd
+import geopandas
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 
 AREA_CRS = "EPSG:6372"
 
 
-def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame:
+def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> geopandas.GeoDataFrame:
     """Convert a GeoJSON or SingleGeoJSON object to a GeoDataFrame.
 
     The resulting GeoDataFrame uses the CRS declared in the GeoJSON object and
@@ -23,7 +23,7 @@ def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame
         the CRS set from the GeoJSON's CRS property.
 
     """
-    out = gpd.GeoDataFrame.from_features(
+    out = geopandas.GeoDataFrame.from_features(
         [feature.model_dump(mode="json") for feature in geojson.features],
         crs=geojson.crs.properties.name,
     )
@@ -33,7 +33,14 @@ def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame
 
 
 def calculate_feature_areas_m2(geojson: GeoJSON) -> dict[str, float]:
-    """Calculate valid polygon feature areas in Lyra's canonical Mexico CRS."""
+    """Calculate valid polygon feature areas in Lyra's canonical Mexico CRS.
+
+    Returns:
+        Square-metre areas keyed by input feature identifier.
+
+    Raises:
+        ValueError: If feature IDs or geometries cannot produce valid areas.
+    """
     feature_ids = [str(feature.id) for feature in geojson.features]
     if len(feature_ids) != len(set(feature_ids)):
         msg = "Location feature IDs must be unique to calculate areas."

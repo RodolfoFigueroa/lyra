@@ -349,8 +349,8 @@ class FakeRedisAsync:
     async def zremrangebyscore(
         self,
         key: str,
-        min: str | float,  # noqa: A002
-        max: float,  # noqa: A002
+        min: str | float,  # ruff:ignore[builtin-argument-shadowing]
+        max: float,  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
@@ -378,7 +378,7 @@ class FakeRedisAsync:
         self,
         streams: dict[str, str],
         *,
-        block: int,  # noqa: ARG002
+        block: int,  # ruff:ignore[unused-method-argument]
         count: int | None = None,
     ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
         key, after_id = next(iter(streams.items()))
@@ -394,6 +394,7 @@ class FakeRedisAsync:
 
 class FailingPingRedisAsync(FakeRedisAsync):
     async def ping(self) -> bool:
+        assert isinstance(self, FailingPingRedisAsync)
         raise RedisError
 
 
@@ -450,7 +451,8 @@ class ConcurrentFakeRedisAsync(FakeRedisAsync):
 
 
 class FakeRequest:
-    async def is_disconnected(self) -> bool:
+    @staticmethod
+    async def is_disconnected() -> bool:
         return False
 
 
@@ -477,7 +479,7 @@ def reset_catalog(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> Iterator[None]:
-    async def run_inline(
+    async def run_inline(  # ruff: ignore[unused-async] -- to_thread test double
         func: Callable[Parameters, ReturnT],
         /,
         *args: Parameters.args,
@@ -525,7 +527,7 @@ def _use_repo(
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis: FakeRedisAsync) -> None:
-    async def keep_current_status(
+    async def keep_current_status(  # ruff: ignore[unused-async] -- awaited double
         snapshot: job_store.JobStatusSnapshot,
     ) -> job_store.JobStatusSnapshot:
         return snapshot
@@ -649,7 +651,7 @@ def test_discovery_and_lookup_routes_remain_public(
     authorization: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from lyra_app.routes import met_zone  # noqa: PLC0415
+    from lyra_app.routes import met_zone  # ruff:ignore[import-outside-top-level]
 
     monkeypatch.setattr(health, "redis_client", FakeRedisAsync())
     monkeypatch.setattr(
@@ -663,7 +665,9 @@ def test_discovery_and_lookup_routes_remain_public(
         ),
     )
 
-    async def lookup_met_zone(_name: str, *, conn: object) -> tuple[str, str]:
+    async def lookup_met_zone(  # ruff: ignore[unused-async] -- awaited double
+        _name: str, *, conn: object
+    ) -> tuple[str, str]:
         assert conn is not None
         return "09.01", "Valle de México"
 
@@ -674,7 +678,8 @@ def test_discovery_and_lookup_routes_remain_public(
     )
 
     class FakeConnection:
-        async def execute(self, *_: object) -> None:
+        @staticmethod
+        async def execute(*_: object) -> None:
             return None
 
     class FakeConnectionContext:
@@ -685,7 +690,8 @@ def test_discovery_and_lookup_routes_remain_public(
             return None
 
     class FakeEngine:
-        def connect(self) -> FakeConnectionContext:
+        @staticmethod
+        def connect() -> FakeConnectionContext:
             return FakeConnectionContext()
 
     app = FastAPI()
@@ -723,10 +729,12 @@ async def _body(response: StreamingResponse) -> str:
 async def _file_response_body(response: FileResponse) -> bytes:
     chunks: list[bytes] = []
 
-    async def receive() -> dict[str, Any]:
+    async def receive() -> dict[str, Any]:  # ruff: ignore[unused-async] -- ASGI
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(message: MutableMapping[str, Any]) -> None:
+    async def send(  # ruff: ignore[unused-async] -- ASGI callback
+        message: MutableMapping[str, Any],
+    ) -> None:
         if message["type"] == "http.response.body":
             chunks.append(message.get("body", b""))
 
@@ -1435,7 +1443,7 @@ def test_create_job_returns_503_when_spatial_resolution_fails(
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync())
 
-    def fail_resolution(geojson: GeoJSON) -> GeoJSON:  # noqa: ARG001
+    def fail_resolution(geojson: GeoJSON) -> GeoJSON:  # ruff:ignore[unused-function-argument]
         raise SQLAlchemyError
 
     converter_map = {
@@ -1574,7 +1582,7 @@ def test_job_events_stream_closes_after_terminal_last_event_id(
         )
     )
 
-    assert asyncio.run(_body(response)) == ""
+    assert not asyncio.run(_body(response))
 
 
 def test_job_events_rejects_cursor_older_than_retained_stream(

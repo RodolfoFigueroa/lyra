@@ -1,9 +1,11 @@
+"""Spatial input models and coordinate constraints."""
+
 from __future__ import annotations
 
 from typing import Annotated, ClassVar, Literal
 
 # Pydantic resolves these annotations while constructing the public wire models.
-from lyra.sdk.models import geometry  # noqa: TC002
+from lyra.sdk.models import geometry  # ruff:ignore[typing-only-third-party-import]
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import (
     AfterValidator,
@@ -14,7 +16,14 @@ from pydantic import (
 
 
 def validate_cvegeos(value: list[str]) -> list[str]:
-    """Validate a non-empty, same-level list of INEGI CVEGEO identifiers."""
+    """Validate a non-empty, same-level list of INEGI CVEGEO identifiers.
+
+    Returns:
+        The valid identifier list unchanged.
+
+    Raises:
+        ValueError: If the list is empty or mixes unsupported identifier lengths.
+    """
     if not value:
         msg = "CVEGEO lists must contain at least one identifier."
         raise ValueError(msg)

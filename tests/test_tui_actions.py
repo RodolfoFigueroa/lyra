@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from lyra.api import DownloadError
 from lyra.sdk.models import (
@@ -40,10 +40,13 @@ from lyra.tui.widgets import (
     RestartWorkersDialog,
 )
 from textual.widgets import Button, DataTable, Input, TabbedContent, Tabs
-from textual.widgets._footer import FooterKey
 
 if TYPE_CHECKING:
     from lyra.tui.client import LyraTuiClient
+
+
+class _FooterKeyLike(Protocol):
+    action: str
 
 
 class FakeActionClient:
@@ -58,7 +61,8 @@ class FakeActionClient:
         self.set_routes: list[tuple[str, str]] = []
         self.deleted_routes: list[str] = []
 
-    async def get_readiness(self) -> ReadinessResponse:
+    @staticmethod
+    async def get_readiness() -> ReadinessResponse:
         return ReadinessResponse(
             status="ready",
             api_version="0.1.0",
@@ -66,14 +70,17 @@ class FakeActionClient:
             database=DatabaseHealth(status="ok"),
         )
 
-    async def get_admin_status(self) -> AdminStatusResponse:
+    @staticmethod
+    async def get_admin_status() -> AdminStatusResponse:
         return _admin_status_response()
 
-    async def get_admin_config_summary(self) -> object:
+    @staticmethod
+    async def get_admin_config_summary() -> object:
         message = "config summary not needed"
         raise DownloadError(message)
 
-    async def get_admin_catalog(self) -> CatalogSummaryResponse:
+    @staticmethod
+    async def get_admin_catalog() -> CatalogSummaryResponse:
         return CatalogSummaryResponse(
             metric_count=1,
             metric_names=["metric_a"],
@@ -82,23 +89,28 @@ class FakeActionClient:
             metric_queues={"metric_a": "interactive"},
         )
 
-    async def get_admin_workers(self) -> WorkersResponse:
+    @staticmethod
+    async def get_admin_workers() -> WorkersResponse:
         return WorkersResponse(inspect_available=True, workers=[])
 
-    async def get_admin_queues(self) -> QueuesResponse:
+    @staticmethod
+    async def get_admin_queues() -> QueuesResponse:
         return QueuesResponse(
             allowed_queues=["interactive"],
             default_queue="interactive",
             queues=[],
         )
 
-    async def list_admin_jobs(self) -> JobListResponse:
+    @staticmethod
+    async def list_admin_jobs() -> JobListResponse:
         return JobListResponse(jobs=_jobs())
 
-    async def list_plugin_repos(self) -> PluginRepoListResponse:
+    @staticmethod
+    async def list_plugin_repos() -> PluginRepoListResponse:
         return PluginRepoListResponse(repos=[_repo()])
 
-    async def list_plugin_routing(self) -> PluginRoutingResponse:
+    @staticmethod
+    async def list_plugin_routing() -> PluginRoutingResponse:
         return PluginRoutingResponse(
             metric_queues={"metric_a": "interactive"},
             allowed_queues=["interactive"],
@@ -213,6 +225,7 @@ class FakeActionClient:
 
 class FailingCancelClient(FakeActionClient):
     async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
+        assert isinstance(self, FailingCancelClient)
         del job_id
         message = "Failed to cancel admin job. HTTP 409: terminal"
         raise DownloadError(message)
@@ -653,7 +666,10 @@ def _activate_catalog(app: LyraTuiApp) -> None:
 
 
 def _footer_actions(app: LyraTuiApp) -> set[str]:
-    return {footer_key.action for footer_key in app.query(FooterKey)}
+    return {
+        cast("_FooterKeyLike", footer_key).action
+        for footer_key in app.query("FooterKey")
+    }
 
 
 def _snapshot(*, jobs: list[JobStatusInfo]) -> TuiSnapshot:

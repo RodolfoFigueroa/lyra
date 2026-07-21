@@ -1,3 +1,5 @@
+"""Geometry models used by spatial metric requests."""
+
 from typing import Any, Literal
 
 from lyra.sdk.models.strict import StrictBaseModel

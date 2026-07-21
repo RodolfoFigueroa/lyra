@@ -1,3 +1,5 @@
+"""Generate typed API client modules from an OpenAPI document."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,6 +13,7 @@ import sys
 import tempfile
 import warnings
 from dataclasses import dataclass, field
+from operator import itemgetter
 from pathlib import Path
 
 import requests
@@ -82,14 +85,22 @@ def _import_block(module: str, names: list[str]) -> list[str]:
 
 
 def canonical_catalog_json(catalog: MetricCatalogResponse) -> str:
-    """Serialize a catalog snapshot deterministically."""
+    """Serialize a catalog snapshot deterministically.
+
+    Returns:
+        Canonical newline-terminated JSON with metrics sorted by name.
+    """
     payload = catalog.model_dump(mode="json")
-    payload["metrics"] = sorted(payload["metrics"], key=lambda item: item["name"])
+    payload["metrics"] = sorted(payload["metrics"], key=itemgetter("name"))
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
 def pull_catalog(host: str, *, insecure: bool = False) -> MetricCatalogResponse:
-    """Fetch and validate the public generated-client catalog."""
+    """Fetch and validate the public generated-client catalog.
+
+    Returns:
+        The validated metric catalog returned by the service.
+    """
     normalized = host.rstrip("/")
     if not normalized.startswith(("http://", "https://")):
         scheme = "http" if insecure else "https"
@@ -457,12 +468,16 @@ def _render_metric_class(
         ]
     else:
         submit_call = [
-            "            self._core.raw.submit("
-            "self._metric_name, arguments, options=lyra_options),"
+            (
+                "            self._core.raw.submit("
+                "self._metric_name, arguments, options=lyra_options),"
+            )
         ]
         run_call = [
-            "            self._core.raw.run("
-            "self._metric_name, arguments, options=lyra_options),"
+            (
+                "            self._core.raw.run("
+                "self._metric_name, arguments, options=lyra_options),"
+            )
         ]
     lines = [
         f"class {class_name}:",
@@ -1048,7 +1063,14 @@ def _render_models_source(
 
 
 def render_package(catalog: MetricCatalogResponse) -> tuple[dict[str, str], list[str]]:
-    """Render all generator-owned files without touching a destination."""
+    """Render all generator-owned files without touching a destination.
+
+    Returns:
+        Generated source files keyed by path and any compatibility warnings.
+
+    Raises:
+        ClientGenerationError: If the catalog cannot produce a valid request model.
+    """
     _validate_catalog(catalog)
     catalog = catalog.model_copy(
         update={"metrics": sorted(catalog.metrics, key=lambda metric: metric.name)}
@@ -1176,7 +1198,14 @@ def generate_client(
     output: Path,
     check: bool = False,
 ) -> bool:
-    """Generate a package, returning false only when check mode finds drift."""
+    """Generate a package, returning false only when check mode finds drift.
+
+    Returns:
+        ``False`` when check mode detects stale output; otherwise ``True``.
+
+    Raises:
+        ClientGenerationError: If the package name or rendered package is invalid.
+    """
     if not _PACKAGE_NAME.fullmatch(package):
         msg = f"package must be one Python identifier, got {package!r}"
         raise ClientGenerationError(msg)
@@ -1199,7 +1228,11 @@ def generate_client(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser used by ``lyra-client``."""
+    """Build the command-line parser used by ``lyra-client``.
+
+    Returns:
+        The configured catalog and client-generation argument parser.
+    """
     parser = argparse.ArgumentParser(
         prog="lyra-client",
         description="Pull metric catalogs and generate typed Python clients.",
@@ -1287,6 +1320,11 @@ def _run_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the generated-client command-line interface.
+
+    Returns:
+        Zero on success, one for detected drift, or two for invalid input.
+    """
     args = build_parser().parse_args(argv)
     try:
         return _run_command(args)

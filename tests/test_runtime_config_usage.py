@@ -8,6 +8,8 @@ from lyra.sdk.models import JobEnvelope
 
 from lyra_app import auth, job_store
 from lyra_app.config import LyraConfig, clear_config_cache, get_config, save_config
+from lyra_app.db.connection import database_url
+from lyra_app.db.redis import get_redis_url
 from lyra_app.logging_config import configure_logging
 from tests.config_helpers import load_test_config
 from tests.redis_job_scripts import eval_job_script
@@ -52,7 +54,7 @@ class FakeRedisSync:
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
         for member, score in list(sorted_set.items()):
@@ -88,15 +90,11 @@ def test_redis_url_uses_loaded_config(
     _reload_test_config(config, config_path)
     monkeypatch.setenv("CELERY_BROKER_URL", "redis://env-redis:6379/0")
 
-    from lyra_app.db.redis import get_redis_url  # noqa: PLC0415
-
     assert get_redis_url() == configured_url
 
 
 def test_database_url_uses_env_backed_config(tmp_path: Path) -> None:
     config = load_test_config(tmp_path)
-
-    from lyra_app.db.connection import database_url  # noqa: PLC0415
 
     url = database_url(config=config)
 

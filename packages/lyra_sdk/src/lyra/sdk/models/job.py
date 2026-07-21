@@ -1,3 +1,5 @@
+"""Models for metric job submission, status, and results."""
+
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
@@ -239,6 +241,14 @@ class JobProgress(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_numbers(self) -> Self:
+        """Validate that progress values are finite and internally consistent.
+
+        Returns:
+            The validated progress snapshot.
+
+        Raises:
+            ValueError: If a value is non-finite or current exceeds total.
+        """
         for name, value in (("current", self.current), ("total", self.total)):
             if value is None:
                 continue
@@ -289,7 +299,7 @@ class JobLifecycleEvent(StrictBaseModel):
 
     @property
     def name(self) -> str:
-        """Return the lifecycle status as a concise event name."""
+        """The lifecycle status used as a concise event name."""
         return self.status
 
 
@@ -332,11 +342,16 @@ class JobProgressEvent(StrictBaseModel):
 
     @property
     def name(self) -> str:
-        """Return ``"progress"`` as a concise event name."""
+        """The ``"progress"`` event name."""
         return self.kind
 
     @model_validator(mode="after")
     def validate_numbers(self) -> Self:
+        """Validate the event's quantitative progress fields.
+
+        Returns:
+            The event unchanged after progress validation.
+        """
         JobProgress.model_validate(
             {
                 "timestamp": self.timestamp,
@@ -384,7 +399,7 @@ class JobMessageEvent(StrictBaseModel):
 
     @property
     def name(self) -> str:
-        """Return ``"message"`` as a concise event name."""
+        """The ``"message"`` event name."""
         return self.kind
 
     def snapshot(self) -> JobMessage:
@@ -428,9 +443,6 @@ def parse_job_event(value: object) -> JobEvent:
     Returns:
         The validated lifecycle, progress, or message event.
 
-    Raises:
-        pydantic.ValidationError: If the value does not match a supported event.
-
     """
     return _JOB_EVENT_ADAPTER.validate_python(value)
 
@@ -456,7 +468,11 @@ class TableJobResult(StrictBaseModel):
 
     @classmethod
     def from_dataframe(cls, job_id: str, dataframe: DataFrameLike) -> Self:
-        """Build a table result from a pandas-like DataFrame."""
+        """Build a table result from a pandas-like DataFrame.
+
+        Returns:
+            A table result containing the frame's index, columns, and values.
+        """
         return cls(
             job_id=job_id,
             index=_string_axis_values(dataframe.index, axis="index"),
@@ -472,7 +488,11 @@ class TableJobResult(StrictBaseModel):
         *,
         name: str | None = None,
     ) -> Self:
-        """Build a one-column table result from a pandas-like Series."""
+        """Build a one-column table result from a pandas-like Series.
+
+        Returns:
+            A one-column table result containing the series values.
+        """
         column_name = name or series.name or "value"
         return cls(
             job_id=job_id,
@@ -492,7 +512,14 @@ class TableJobResult(StrictBaseModel):
             Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
         ],
     ) -> Self:
-        """Build a table result from values keyed by the original input index."""
+        """Build a table result from values keyed by the original input index.
+
+        Returns:
+            A table result with values ordered by the supplied index and columns.
+
+        Raises:
+            ValueError: If the supplied value columns do not match ``columns``.
+        """
         raw_index = list(input_index)
         result_index = _string_axis_values(raw_index, axis="index")
         result_columns = _string_axis_values(columns, axis="column")
@@ -526,6 +553,14 @@ class TableJobResult(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> Self:
+        """Validate the table axes and rectangular data shape.
+
+        Returns:
+            The validated table result.
+
+        Raises:
+            ValueError: If row or column dimensions are inconsistent.
+        """
         _string_axis_values(self.index, axis="index")
         _string_axis_values(self.columns, axis="column")
 
@@ -601,7 +636,11 @@ _TERMINAL_JOB_RESULT_ADAPTER: TypeAdapter[TerminalJobResult] = TypeAdapter(
 
 
 def parse_job_result(payload: JsonValue) -> TerminalJobResult:
-    """Parse a terminal job result payload into the discriminated result union."""
+    """Parse a terminal job result payload into the discriminated result union.
+
+    Returns:
+        The validated terminal result matching the payload's result kind.
+    """
     return _TERMINAL_JOB_RESULT_ADAPTER.validate_python(payload)
 
 
@@ -631,6 +670,14 @@ class ResultReference(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_uri(self) -> Self:
+        """Validate that the URI is the stable reference for this job.
+
+        Returns:
+            The validated reference.
+
+        Raises:
+            ValueError: If the URI does not match the job identifier.
+        """
         expected = result_ref_for_job(self.job_id)
         if self.uri != expected:
             msg = f"result reference must be {expected!r}"
@@ -698,6 +745,14 @@ class ResultTableMetadata(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_column_contracts(self) -> Self:
+        """Validate concrete column contracts against the terminal column order.
+
+        Returns:
+            The validated table metadata.
+
+        Raises:
+            ValueError: If contract names differ from the terminal columns.
+        """
         contract_names = [column.name for column in self.column_contracts]
         if contract_names and contract_names != self.columns:
             msg = "column_contracts must match columns in terminal result order"
@@ -823,6 +878,14 @@ class ResultDescriptor(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_reference(self) -> Self:
+        """Validate references and result-kind-specific descriptor metadata.
+
+        Returns:
+            The validated result descriptor.
+
+        Raises:
+            ValueError: If references or result metadata are inconsistent.
+        """
         expected = result_ref_for_job(self.job_id)
         if self.result_ref != expected:
             msg = f"result_ref must be {expected!r}"
@@ -863,7 +926,11 @@ def build_table_preview(
     row_limit: int = DEFAULT_RESULT_PREVIEW_ROWS,
     index_field: str | None = None,
 ) -> ResultTablePreview:
-    """Build a row-oriented table preview that includes the result index."""
+    """Build a row-oriented table preview that includes the result index.
+
+    Returns:
+        A bounded preview with each result index embedded in its row.
+    """
     preview_index_field = index_field or _preview_index_field(result.columns)
     rows: list[dict[str, Any]] = []
     for result_index, values in zip(
@@ -916,7 +983,11 @@ def _numeric_summary(values: Sequence[Any]) -> NumericColumnSummary | None:
 
 
 def build_table_summary(result: TableJobResult) -> ResultSummary:
-    """Build deterministic per-column summaries for a table result."""
+    """Build deterministic per-column summaries for a table result.
+
+    Returns:
+        Row, column, null, and numeric summary metadata for the table.
+    """
     columns: list[ResultColumnSummary] = []
     for position, column in enumerate(result.columns):
         values = _column_values(result, position)
@@ -953,15 +1024,23 @@ def build_result_descriptor(
     result: TerminalJobResult,
     **options: Unpack[ResultDescriptorOptions],
 ) -> ResultDescriptor:
-    """Build an agent-facing descriptor from a terminal result."""
+    """Build an agent-facing descriptor from a terminal result.
+
+    Returns:
+        A stable descriptor with access, preview, and summary metadata.
+
+    Raises:
+        ValueError: If table provenance conflicts with the terminal result.
+    """
     completed_at = options["completed_at"]
     provenance = options.get("provenance")
     lifetime = options.get("lifetime")
-    terminal_json_path = options.get("terminal_json_path")
     jsonl_path = options.get("jsonl_path")
     preview_row_limit = options.get("preview_row_limit", DEFAULT_RESULT_PREVIEW_ROWS)
     result_ref = result_ref_for_job(result.job_id)
-    resolved_terminal_json_path = terminal_json_path or f"/jobs/{result.job_id}/result"
+    resolved_terminal_json_path = options.get("terminal_json_path") or (
+        f"/jobs/{result.job_id}/result"
+    )
     resolved_lifetime = lifetime or ResultLifetime()
 
     if isinstance(result, TableJobResult):

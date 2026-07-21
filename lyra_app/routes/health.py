@@ -1,3 +1,5 @@
+"""Health, readiness, and service-status HTTP endpoints."""
+
 import asyncio
 
 from fastapi import APIRouter, Response, status
@@ -20,6 +22,11 @@ router = APIRouter(tags=["Health"])
 
 
 async def redis_health(timeout_seconds: float) -> RedisHealth:
+    """Probe Redis within a bounded readiness deadline.
+
+    Returns:
+        ``ok`` when Redis responds truthfully, otherwise ``unavailable``.
+    """
     try:
         async with asyncio.timeout(timeout_seconds):
             pong = await redis_client.ping()
@@ -32,6 +39,11 @@ async def database_health(
     database: ApplicationDatabaseRuntime,
     timeout_seconds: float,
 ) -> DatabaseHealth:
+    """Probe PostgreSQL within a bounded readiness deadline.
+
+    Returns:
+        ``ok`` after a successful query, otherwise ``unavailable``.
+    """
     try:
         async with asyncio.timeout(timeout_seconds):
             async with database.require_async_engine().connect() as connection:
@@ -43,6 +55,11 @@ async def database_health(
 
 @router.get("/live")
 async def liveness() -> LivenessResponse:
+    """Report that the API process is alive.
+
+    Returns:
+        A live status and the running API version.
+    """
     return LivenessResponse(status="ok", api_version=APP_VERSION)
 
 
@@ -51,6 +68,14 @@ async def readiness(
     response: Response,
     database: DatabaseRuntimeDependency,
 ) -> ReadinessResponse:
+    """Report combined Redis and PostgreSQL readiness.
+
+    Returns:
+        Dependency statuses and an HTTP status reflecting aggregate readiness.
+
+    Raises:
+        RuntimeError: If application database state is unavailable.
+    """
     if database is None:
         msg = "Application database runtime is unavailable."
         raise RuntimeError(msg)

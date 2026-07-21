@@ -1,3 +1,5 @@
+"""MCP server construction and application integration."""
+
 from __future__ import annotations
 
 import json
@@ -77,6 +79,11 @@ def create_mcp_app(
     backend: LyraMCPBackend | None = None,
     database: ApplicationDatabaseRuntime | None = None,
 ) -> Starlette:
+    """Create the authenticated stateless Streamable HTTP MCP application.
+
+    Returns:
+        A Starlette app exposing the validated Lyra MCP tool server.
+    """
     public_api_base_url = ApiConfig(public_base_url=public_api_base_url).public_base_url
     tool_backend = backend or InProcessLyraBackend(database)
     server = Server(
@@ -86,7 +93,7 @@ def create_mcp_app(
     )
 
     @server.list_tools()
-    async def list_tools() -> list[Tool]:
+    async def list_tools() -> list[Tool]:  # ruff: ignore[unused-async] -- MCP callback
         return [
             Tool(
                 name=contract.name,

@@ -1,7 +1,9 @@
+"""High-level database operations used by the Lyra service."""
+
 from collections.abc import Sequence
 from typing import Literal
 
-import geopandas as gpd
+import geopandas
 from lyra.sdk.db import LyraDB
 from lyra.sdk.db_types import Bounds
 from sqlalchemy import quoted_name
@@ -11,7 +13,10 @@ from lyra_app.loaders.db import load_geometries_from_bounds
 
 
 class LyraDBImplicit(LyraDB):
+    """Implement the plugin database API using an injected synchronous engine."""
+
     def __init__(self, engine: Engine) -> None:
+        """Initialize database operations with the worker-owned engine."""
         self._engine = engine
 
     def load_denue_from_bounds(
@@ -20,7 +25,7 @@ class LyraDBImplicit(LyraDB):
         *,
         year: Literal[2020, 2021, 2022, 2023, 2024, 2025],
         month: Literal[5, 11],
-    ) -> gpd.GeoDataFrame:
+    ) -> geopandas.GeoDataFrame:
         """Load DENUE economic-unit records that intersect a bounding box.
 
         DENUE (Directorio Estadístico Nacional de Unidades Económicas) tables are
@@ -52,7 +57,7 @@ class LyraDBImplicit(LyraDB):
         bounds: Bounds,
         *,
         level: Literal[4, 5, 6, 7, 8, 9] = 9,
-    ) -> gpd.GeoDataFrame:
+    ) -> geopandas.GeoDataFrame:
         """Load mesh-grid cells that intersect a bounding box.
 
         Queries the ``mesh_level_{level}`` table and returns cells with their
@@ -81,7 +86,7 @@ class LyraDBImplicit(LyraDB):
         *,
         level: Literal["ent", "mun", "loc", "ageb", "mza"],
         columns: Sequence[str],
-    ) -> gpd.GeoDataFrame:
+    ) -> geopandas.GeoDataFrame:
         """Load 2020 census records that intersect a bounding box.
 
         Queries the ``census_2020_{level}`` table for the specified geographic

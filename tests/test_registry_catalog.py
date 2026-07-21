@@ -129,7 +129,7 @@ def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
         lambda _config, _state: [_synced_repo(repo)],
     )
 
-    def fail_import(name: str, package: str | None = None) -> object:  # noqa: ARG001
+    def fail_import(name: str, package: str | None = None) -> object:  # ruff:ignore[unused-function-argument]
         msg = "API catalog loading must not import plugin code"
         raise AssertionError(msg)
 
@@ -348,7 +348,7 @@ def test_catalog_refresh_reads_directory_source_without_importing_plugin_code(
         repo_id="directory-plugin",
     )
 
-    def fail_import(name: str, package: str | None = None) -> object:  # noqa: ARG001
+    def fail_import(name: str, package: str | None = None) -> object:  # ruff:ignore[unused-function-argument]
         msg = "API catalog loading must not import plugin code"
         raise AssertionError(msg)
 

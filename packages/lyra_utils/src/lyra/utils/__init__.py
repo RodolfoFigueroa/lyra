@@ -1,3 +1,5 @@
+"""General-purpose utilities shared across Lyra packages."""
+
 from lyra.utils.date import get_date_range, get_season_date_range
 from lyra.utils.ee import (
     chunk_gdf,

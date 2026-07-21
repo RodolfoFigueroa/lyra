@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-import geopandas as gpd
+import geopandas
 import sqlalchemy
 from lyra.sdk.db_types import Bounds
 from sqlalchemy import Connection, quoted_name, text
@@ -24,7 +24,7 @@ def load_geometries_from_bounds(
     conn: Connection,
     columns: Sequence[str],
     table_name: str,
-) -> gpd.GeoDataFrame:
+) -> geopandas.GeoDataFrame:
     """Load geometries from a PostGIS table that intersect a bounding box.
 
     Always includes the ``"geometry"`` column even if it is not listed in
@@ -45,14 +45,14 @@ def load_geometries_from_bounds(
         columns = [*list(columns), "geometry"]
 
     table_name = quoted_name(table_name, quote=True)
-    return gpd.read_postgis(
+    return geopandas.read_postgis(
         f"""
         SELECT {", ".join(columns)} FROM {table_name}
         WHERE ST_Intersects(
             geometry,
             ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372)
         )
-        """,  # noqa: S608
+        """,  # ruff:ignore[hardcoded-sql-expression]
         conn,
         params={
             "xmin": float(bounds.xmin),
@@ -101,7 +101,7 @@ def load_geometries_from_cvegeos(
     cvegeos: list[str],
     *,
     conn: Connection,
-) -> gpd.GeoDataFrame:
+) -> geopandas.GeoDataFrame:
     """Load census geometries for a list of cvegeo codes.
 
     The table is inferred automatically from the cvegeo length via
@@ -117,12 +117,12 @@ def load_geometries_from_cvegeos(
     """
     table_name = get_table_name_for_cvegeos(cvegeos)
 
-    return gpd.read_postgis(
+    return geopandas.read_postgis(
         f"""
         SELECT cvegeo, geometry AS geometry
         FROM {table_name}
         WHERE cvegeo IN %(cvegeos)s
-        """,  # noqa: S608
+        """,  # ruff:ignore[hardcoded-sql-expression]
         conn,
         params={"cvegeos": tuple(cvegeos)},
         geom_col="geometry",
@@ -133,7 +133,7 @@ def load_bounds_from_cvegeos(
     cvegeos: list[str],
     *,
     conn: Connection,
-) -> gpd.GeoDataFrame:
+) -> geopandas.GeoDataFrame:
     """Load the aggregate bounding-box geometry for a list of cvegeo codes.
 
     Computes ``ST_Extent`` over all matching census geometries and returns a
@@ -149,12 +149,12 @@ def load_bounds_from_cvegeos(
     """
     table_name = get_table_name_for_cvegeos(cvegeos)
 
-    return gpd.read_postgis(
+    return geopandas.read_postgis(
         f"""
         SELECT ST_Extent(geometry)::geometry AS geometry
         FROM {table_name}
         WHERE cvegeo IN %(cvegeos)s
-        """,  # noqa: S608
+        """,  # ruff:ignore[hardcoded-sql-expression]
         conn,
         params={"cvegeos": tuple(cvegeos)},
         geom_col="geometry",
@@ -166,7 +166,7 @@ def load_geometries_from_met_zone_code(
     code: str,
     *,
     conn: Connection,
-) -> gpd.GeoDataFrame:
+) -> geopandas.GeoDataFrame:
     """Load AGEB geometries for all census units in a metropolitan zone.
 
     Joins ``census_2020_ageb`` → ``census_2020_mun`` → ``metropoli_2020`` to
@@ -181,7 +181,7 @@ def load_geometries_from_met_zone_code(
         A GeoDataFrame of AGEB geometries indexed by ``cvegeo``.
 
     """
-    return gpd.read_postgis(
+    return geopandas.read_postgis(
         """
         SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
             FROM census_2020_ageb
@@ -197,7 +197,9 @@ def load_geometries_from_met_zone_code(
     ).set_index("cvegeo")
 
 
-def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDataFrame:
+def load_bounds_from_met_zone_code(
+    code: str, *, conn: Connection
+) -> geopandas.GeoDataFrame:
     """Load the aggregate bounding-box geometry for a metropolitan zone.
 
     Computes ``ST_Extent`` over all AGEB geometries belonging to the given
@@ -216,7 +218,7 @@ def load_bounds_from_met_zone_code(code: str, *, conn: Connection) -> gpd.GeoDat
         sqlalchemy.text("SELECT ST_SRID(geometry) FROM census_2020_ageb LIMIT 1")
     ).scalar()
 
-    return gpd.read_postgis(
+    return geopandas.read_postgis(
         """
         SELECT ST_Extent(census_2020_ageb.geometry)::geometry AS geometry
             FROM census_2020_ageb

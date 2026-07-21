@@ -6,7 +6,7 @@ import argparse
 import json
 import re
 import shutil
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] -- invokes Git
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
@@ -48,14 +48,14 @@ class PackageConfig:
 
     @property
     def pyproject_path(self) -> str:
-        """Return the package's project metadata path."""
+        """The package's project metadata path relative to the repository root."""
         if self.path == PRODUCT_PATH:
             return "pyproject.toml"
         return f"{self.path}/pyproject.toml"
 
     @property
     def repository_changelog_path(self) -> str:
-        """Return the changelog path relative to the repository root."""
+        """The changelog path relative to the repository root."""
         if self.path == PRODUCT_PATH:
             return self.changelog_path
         return f"{self.path}/{self.changelog_path}"
@@ -120,7 +120,7 @@ def _repository_text(root: Path, ref: str, path: str) -> str:
     if git is None:
         message = "git is required to plan a release"
         raise ReleasePlanError(message)
-    result = subprocess.run(  # noqa: S603 -- ref is validated as a commit SHA
+    result = subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true] -- ref is validated as a commit SHA
         [git, "show", f"{ref}:{path}"],
         cwd=root,
         check=False,
@@ -138,7 +138,7 @@ def _repository_sha(root: Path, ref: str) -> str:
     if git is None:
         message = "git is required to plan a release"
         raise ReleasePlanError(message)
-    result = subprocess.run(  # noqa: S603 -- ref is validated as a commit SHA
+    result = subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true] -- ref is validated as a commit SHA
         [git, "rev-parse", f"{ref}^{{commit}}"],
         cwd=root,
         check=False,
@@ -152,7 +152,15 @@ def _repository_sha(root: Path, ref: str) -> str:
 
 
 def load_package_configs(config_text: str) -> tuple[PackageConfig, ...]:
-    """Load and validate the package map from Release Please configuration."""
+    """Load and validate the package map from Release Please configuration.
+
+    Returns:
+        Package configurations in their declared aggregate-release order.
+
+    Raises:
+        ReleasePlanError: If the configuration is malformed or violates the
+            aggregate release contract.
+    """
     config = _json_object(config_text, CONFIG_PATH)
     if config.get("skip-github-release") is not True:
         message = "Release Please must run with skip-github-release enabled"
@@ -196,7 +204,14 @@ def load_package_configs(config_text: str) -> tuple[PackageConfig, ...]:
 
 
 def load_versions(manifest_text: str) -> dict[str, str]:
-    """Load strict package versions from a Release Please manifest."""
+    """Load strict package versions from a Release Please manifest.
+
+    Returns:
+        A mapping from each configured package path to its semantic version.
+
+    Raises:
+        ReleasePlanError: If a manifest version is not an ``X.Y.Z`` string.
+    """
     manifest = _json_object(manifest_text, MANIFEST_PATH)
     versions: dict[str, str] = {}
     for path, raw_version in manifest.items():
@@ -306,13 +321,20 @@ def plan_release(
     root: Path = ROOT,
     github_output: Path | None = None,
 ) -> ReleasePlan:
-    """Plan an aggregate release by comparing two repository revisions."""
+    """Plan an aggregate release by comparing two repository revisions.
+
+    Returns:
+        The product release metadata and paths of generated release artifacts.
+
+    Raises:
+        ReleasePlanError: If refs, package state, version changes, or changelogs do
+            not satisfy the aggregate release contract.
+    """
     for name, ref in (("base", base_ref), ("head", head_ref)):
         if COMMIT_PATTERN.fullmatch(ref) is None:
             message = f"{name} ref must be a full lowercase commit SHA"
             raise ReleasePlanError(message)
-    config_text = _repository_text(root, head_ref, CONFIG_PATH)
-    packages = load_package_configs(config_text)
+    packages = load_package_configs(_repository_text(root, head_ref, CONFIG_PATH))
     before = load_versions(_repository_text(root, base_ref, MANIFEST_PATH))
     after = load_versions(_repository_text(root, head_ref, MANIFEST_PATH))
     _validate_package_state(
@@ -423,7 +445,11 @@ def plan_release(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the release tooling command-line parser."""
+    """Build the release tooling command-line parser.
+
+    Returns:
+        The parser for repository validation and release planning commands.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate", help="validate current release metadata")
@@ -436,7 +462,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: list[str] | None = None) -> int:
-    """Run release validation or planning from the command line."""
+    """Run release validation or planning from the command line.
+
+    Returns:
+        Zero on success or two when release metadata is invalid.
+    """
     options = build_parser().parse_args(arguments)
     try:
         if options.command == "validate":

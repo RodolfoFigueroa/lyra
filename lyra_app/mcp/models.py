@@ -1,3 +1,5 @@
+"""Data models exposed through Lyra's MCP tools."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -367,6 +369,8 @@ class DownloadResultOutput(MCPContractModel):
 
 @dataclass(frozen=True)
 class ToolContract:
+    """Describe one MCP tool's schemas and behavioral annotations."""
+
     name: str
     description: str
     input_model: type[MCPContractModel]
@@ -377,10 +381,12 @@ class ToolContract:
 
     @property
     def input_schema(self) -> dict[str, Any]:
+        """The JSON Schema generated from the strict input contract."""
         return self.input_model.model_json_schema()
 
     @property
     def output_schema(self) -> dict[str, Any]:
+        """The JSON Schema generated for the complete output union."""
         return self.output_adapter.json_schema()
 
 

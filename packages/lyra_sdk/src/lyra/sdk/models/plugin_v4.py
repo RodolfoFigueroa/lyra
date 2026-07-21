@@ -1,3 +1,5 @@
+"""Version 4 plugin manifest and runtime configuration models."""
+
 import json
 import math
 import re
@@ -166,6 +168,14 @@ class StringInputV4(PluginOwnedInputMetadataV4):
 
     @model_validator(mode="after")
     def validate_length_bounds(self) -> Self:
+        """Require minimum string length not to exceed maximum length.
+
+        Returns:
+            This input declaration after validating its length interval.
+
+        Raises:
+            ValueError: If the minimum length exceeds the maximum.
+        """
         if (
             self.min_length is not None
             and self.max_length is not None
@@ -185,6 +195,14 @@ class NumberInputV4(PluginOwnedInputMetadataV4):
 
     @model_validator(mode="after")
     def validate_numeric_bounds(self) -> Self:
+        """Require the numeric minimum not to exceed the maximum.
+
+        Returns:
+            This input declaration after validating its numeric interval.
+
+        Raises:
+            ValueError: If the minimum exceeds the maximum.
+        """
         if (
             self.minimum is not None
             and self.maximum is not None
@@ -204,6 +222,14 @@ class IntegerInputV4(PluginOwnedInputMetadataV4):
 
     @model_validator(mode="after")
     def validate_integer_bounds(self) -> Self:
+        """Require the integer minimum not to exceed the maximum.
+
+        Returns:
+            This input declaration after validating its integer interval.
+
+        Raises:
+            ValueError: If the minimum exceeds the maximum.
+        """
         if (
             self.minimum is not None
             and self.maximum is not None
@@ -232,6 +258,14 @@ class EnumInputV4(PluginOwnedInputMetadataV4):
     @field_validator("values")
     @classmethod
     def validate_values(cls, values: list[JsonScalar]) -> list[JsonScalar]:
+        """Require unique, finite, non-null JSON scalar enum members.
+
+        Returns:
+            The validated enum members in declaration order.
+
+        Raises:
+            ValueError: If a member is null, non-finite, non-scalar, or duplicated.
+        """
         identities: set[str] = set()
         duplicates: list[JsonScalar] = []
         for value in values:
@@ -243,7 +277,7 @@ class EnumInputV4(PluginOwnedInputMetadataV4):
                 raise ValueError(msg)
             if not isinstance(value, str | int | float | bool):
                 msg = "enum values must be JSON scalar values"
-                raise ValueError(msg)  # noqa: TRY004
+                raise ValueError(msg)  # ruff:ignore[type-check-without-type-error]
 
             identity = _json_scalar_identity(value)
             if identity in identities:
@@ -268,11 +302,17 @@ class JsonSchemaInputV4(PluginOwnedInputMetadataV4):
 
     @property
     def schema(self) -> JsonObject:
+        """The plugin-owned JSON Schema using its public field name."""
         return self.schema_
 
     @field_validator("schema_")
     @classmethod
     def validate_schema(cls, schema: JsonObject) -> JsonObject:
+        """Validate a plugin-owned JSON Schema document.
+
+        Returns:
+            The schema unchanged after structural validation.
+        """
         _validate_json_schema(schema, "json_schema.schema")
         return schema
 
@@ -346,6 +386,14 @@ class TableOutputColumnV4(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_derivations(self) -> Self:
+        """Require fractional-area derivations to use square-metre numeric sources.
+
+        Returns:
+            This column after validating its optional derivation.
+
+        Raises:
+            ValueError: If the source type is nonnumeric or its unit is not ``m2``.
+        """
         if not self.derivations:
             return self
         if self.type not in {"number", "integer"}:
@@ -382,6 +430,14 @@ class BatchedTableOutputColumnV4(StrictBaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, template: str) -> str:
+        """Require a batched column name template containing only ``key``.
+
+        Returns:
+            The validated name template unchanged.
+
+        Raises:
+            ValueError: If ``key`` is absent or another template field is present.
+        """
         fields = _template_fields(template)
         invalid_fields = sorted(fields - {"key"})
         if invalid_fields:
@@ -396,6 +452,14 @@ class BatchedTableOutputColumnV4(StrictBaseModel):
     @field_validator("description")
     @classmethod
     def validate_description(cls, template: str) -> str:
+        """Restrict batched descriptions to ``key`` and ``label`` fields.
+
+        Returns:
+            The validated description template unchanged.
+
+        Raises:
+            ValueError: If an unsupported template field is present.
+        """
         fields = _template_fields(template)
         invalid_fields = sorted(fields - {"key", "label"})
         if invalid_fields:
@@ -420,6 +484,14 @@ class TableOutputV4(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_columns(self) -> Self:
+        """Require at least one output column and globally unique static names.
+
+        Returns:
+            This table output after validating its column declarations.
+
+        Raises:
+            ValueError: If no columns exist or static and derived names collide.
+        """
         if not self.columns and not self.batched_columns:
             msg = "table outputs must declare columns or batched_columns"
             raise ValueError(msg)
@@ -483,7 +555,15 @@ def expand_runner_table_output_columns(
     output: TableOutputV4,
     job_input: JsonObject,
 ) -> list[TableOutputColumnV4]:
-    """Expand only columns that a runner must return for one job input."""
+    """Expand only columns that a runner must return for one job input.
+
+    Returns:
+        Deep-copied static columns followed by expanded batch-backed columns.
+
+    Raises:
+        TypeError: If a batch source or item has the wrong shape.
+        ValueError: If a template produces an invalid or duplicate column name.
+    """
     columns = [column.model_copy(deep=True) for column in output.columns]
 
     for column_group in output.batched_columns:
@@ -527,7 +607,14 @@ def expand_table_output_columns(
     output: TableOutputV4,
     job_input: JsonObject,
 ) -> list[TableOutputColumnV4]:
-    """Expand the effective table output contract for one validated job input."""
+    """Expand the effective table output contract for one validated job input.
+
+    Returns:
+        Runner columns with server-owned derived columns inserted after sources.
+
+    Raises:
+        ValueError: If expansion produces duplicate output column names.
+    """
     runner_columns = expand_runner_table_output_columns(output, job_input)
     columns: list[TableOutputColumnV4] = []
     for column in runner_columns:
@@ -566,6 +653,14 @@ class FileOutputV4(StrictBaseModel):
     @field_validator("extensions")
     @classmethod
     def validate_extensions(cls, extensions: list[str]) -> list[str]:
+        """Require unique, nonempty file suffixes with leading dots.
+
+        Returns:
+            The validated extension list in declaration order.
+
+        Raises:
+            ValueError: If a suffix is malformed or duplicates another by case.
+        """
         invalid = [
             extension
             for extension in extensions
@@ -609,6 +704,11 @@ class MetricManifestV4(StrictBaseModel):
     @field_validator("name")
     @classmethod
     def validate_public_metric_name(cls, name: str) -> str:
+        """Validate the public metric identifier.
+
+        Returns:
+            The valid metric name unchanged.
+        """
         return _validate_public_name(name, kind="metric name")
 
     @field_validator("inputs")
@@ -617,12 +717,26 @@ class MetricManifestV4(StrictBaseModel):
         cls,
         inputs: dict[str, InputSpecV4],
     ) -> dict[str, InputSpecV4]:
+        """Validate every root request input identifier.
+
+        Returns:
+            The input declaration mapping unchanged.
+        """
         for field_name in inputs:
             _validate_public_name(field_name, kind="root input name")
         return inputs
 
     @model_validator(mode="after")
     def validate_spatial_inputs(self) -> Self:
+        """Require spatial input and table-metric location conventions.
+
+        Returns:
+            This metric after validating its spatial declarations.
+
+        Raises:
+            ValueError: If no spatial input exists or a table metric lacks the
+                canonical ``location`` input.
+        """
         spatial_inputs = [
             input_spec
             for input_spec in self.inputs.values()
@@ -636,11 +750,20 @@ class MetricManifestV4(StrictBaseModel):
             location_input = self.inputs.get("location")
             if not isinstance(location_input, LocationInputV4):
                 msg = "table metrics must declare inputs.location as kind 'location'"
-                raise ValueError(msg)  # noqa: TRY004
+                raise ValueError(msg)  # ruff:ignore[type-check-without-type-error]
         return self
 
     @model_validator(mode="after")
     def validate_batch_sources(self) -> Self:
+        """Require batch inputs and batched columns to reference each other exactly.
+
+        Returns:
+            This metric after validating all batch-source relationships.
+
+        Raises:
+            ValueError: If a batch is unreferenced or a column source is missing or
+                not a batch input.
+        """
         batch_input_names = {
             name
             for name, input_spec in self.inputs.items()
@@ -664,7 +787,7 @@ class MetricManifestV4(StrictBaseModel):
                     "batched column source must reference a batch input: "
                     f"{column.source}"
                 )
-                raise ValueError(msg)  # noqa: TRY004
+                raise ValueError(msg)  # ruff:ignore[type-check-without-type-error]
 
         batched_sources = {column.source for column in self.output.batched_columns}
         unreferenced_batches = sorted(batch_input_names - batched_sources)
@@ -691,6 +814,14 @@ class PluginManifestV4(StrictBaseModel):
     @field_validator("factory")
     @classmethod
     def validate_factory(cls, factory: str) -> str:
+        """Require an importable ``module:attribute`` factory reference.
+
+        Returns:
+            The validated factory reference unchanged.
+
+        Raises:
+            ValueError: If the reference does not match the supported syntax.
+        """
         if not _FACTORY_PATTERN.fullmatch(factory):
             msg = "factory must be a module:attribute reference"
             raise ValueError(msg)
@@ -698,6 +829,14 @@ class PluginManifestV4(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_unique_metric_names(self) -> Self:
+        """Require unique public metric names within a plugin manifest.
+
+        Returns:
+            This manifest after validating metric-name uniqueness.
+
+        Raises:
+            ValueError: If two manifest entries use the same metric name.
+        """
         seen: set[str] = set()
         duplicates: set[str] = set()
         for metric in self.metrics:
@@ -731,11 +870,21 @@ class CompiledMetricManifestV4(StrictBaseModel):
     @field_validator("name")
     @classmethod
     def validate_public_metric_name(cls, name: str) -> str:
+        """Validate the compiled public metric identifier.
+
+        Returns:
+            The valid metric name unchanged.
+        """
         return _validate_public_name(name, kind="metric name")
 
     @field_validator("request_schema")
     @classmethod
     def validate_request_schema(cls, schema: JsonObject) -> JsonObject:
+        """Validate the compiled unresolved-request JSON Schema.
+
+        Returns:
+            The schema unchanged after structural validation.
+        """
         _validate_json_schema(schema, "request_schema")
         return schema
 
@@ -1063,7 +1212,11 @@ def _compile_metric_request_schema(
 
 
 def compile_plugin_manifest(manifest: PluginManifestV4) -> CompiledPluginManifestV4:
-    """Compile a schema v4 authoring manifest into Lyra's runtime contract."""
+    """Compile a schema v4 authoring manifest into Lyra's runtime contract.
+
+    Returns:
+        The runtime manifest with compiled request and spatial-input contracts.
+    """
     compiled_metrics: list[CompiledMetricManifestV4] = []
     for index, metric in enumerate(manifest.metrics):
         request_schema, spatial_inputs, batch_inputs = _compile_metric_request_schema(

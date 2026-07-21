@@ -1,3 +1,5 @@
+"""HTTP endpoints for submitting and inspecting metric jobs."""
+
 from __future__ import annotations
 
 import json
@@ -43,7 +45,7 @@ from lyra_app.spatial_inputs import (
 from lyra_app.worker_control import reconcile_celery_failure
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.job_submission import SubmissionRedisClient
@@ -127,7 +129,7 @@ def _stream_id_parts(value: str) -> tuple[int, int]:
         raise HTTPException(status_code=400, detail="Invalid Last-Event-ID") from exc
 
 
-async def _table_jsonl_stream(result: TableJobResult) -> AsyncIterator[str]:
+def _table_jsonl_stream(result: TableJobResult) -> Iterator[str]:
     index_field = build_table_preview(result, row_limit=0).index_field
     for result_index, values in zip(result.index, result.data, strict=True):
         row = {index_field: result_index}
@@ -180,6 +182,15 @@ async def create_job(
     request: JobCreateRequest,
     database: ApplicationDatabaseRuntime | None = None,
 ) -> JobCreateResponse:
+    """Submit a validated job request and translate domain failures to HTTP errors.
+
+    Returns:
+        Queued or idempotently reused job metadata.
+
+    Raises:
+        HTTPException: If the request, metric, capacity, or backing service prevents
+            submission.
+    """
     try:
         return await submit_job(
             request,
@@ -199,7 +210,8 @@ async def create_job(
         raise HTTPException(status_code=422, detail=exc.errors) from exc
     except (DatabaseUnavailableError, SpatialInputResolutionUnavailableError) as exc:
         runtime_config = database.config if database is not None else get_config()
-        raise database_unavailable_http_exception(runtime_config) from exc
+        error = database_unavailable_http_exception(runtime_config)
+        raise error from exc
     except IdempotencyConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -231,11 +243,24 @@ async def create_job_route(
     request: JobCreateRequest,
     database: DatabaseRuntimeDependency,
 ) -> JobCreateResponse:
+    """Handle authenticated HTTP job submission.
+
+    Returns:
+        Queued or idempotently reused job metadata.
+    """
     return await create_job(request, database)
 
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str) -> JobStatusInfo:
+    """Return the latest reconciled status for a retained job.
+
+    Returns:
+        The current lifecycle, progress, message, and error metadata.
+
+    Raises:
+        HTTPException: If Redis is unavailable or the job is no longer retained.
+    """
     await _ensure_redis_available()
     snapshot = await _get_reconciled_job_status(job_id)
     if snapshot is None:
@@ -252,6 +277,15 @@ async def get_job_events(
         Header(alias="Last-Event-ID"),
     ] = None,
 ) -> StreamingResponse:
+    """Stream retained and live job events using Server-Sent Events.
+
+    Returns:
+        An event stream beginning after the optional cursor.
+
+    Raises:
+        HTTPException: If the job is absent, Redis is unavailable, or the requested
+            cursor predates retained history.
+    """
     await _ensure_redis_available()
     snapshot = await _get_reconciled_job_status(job_id)
     if snapshot is None:
@@ -279,6 +313,14 @@ async def get_job_events(
 
 @router.get("/jobs/{job_id}/result", response_model=None)
 async def get_job_result(job_id: str) -> JSONResponse:
+    """Return the raw terminal result retained for a job.
+
+    Returns:
+        The validated terminal result as a JSON response.
+
+    Raises:
+        HTTPException: If Redis is unavailable or the result is not retained.
+    """
     await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:
@@ -293,6 +335,14 @@ async def get_job_result(job_id: str) -> JSONResponse:
 
 @router.get("/jobs/{job_id}/result/descriptor", response_model=None)
 async def get_job_result_descriptor(job_id: str) -> JSONResponse:
+    """Return result metadata or current non-success status for a job.
+
+    Returns:
+        A terminal descriptor, failure metadata, or an accepted running response.
+
+    Raises:
+        HTTPException: If Redis is unavailable or a successful result has expired.
+    """
     await _ensure_redis_available()
     descriptor = await job_store.get_job_result_descriptor_async(job_id)
     if descriptor is not None:
@@ -323,6 +373,14 @@ async def get_job_result_descriptor(job_id: str) -> JSONResponse:
 
 @router.get("/jobs/{job_id}/result/table.jsonl", response_model=None)
 async def export_job_result_jsonl(job_id: str) -> StreamingResponse:
+    """Stream a retained table result as newline-delimited JSON.
+
+    Returns:
+        A downloadable JSONL response with one object per table row.
+
+    Raises:
+        HTTPException: If the result is absent or is not a table.
+    """
     await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:
@@ -343,6 +401,14 @@ async def export_job_result_jsonl(job_id: str) -> StreamingResponse:
 
 @router.get("/jobs/{job_id}/result/download", response_model=None)
 async def download_job_result(job_id: str) -> FileResponse:
+    """Download the retained artifact for a file-producing job.
+
+    Returns:
+        A file response using the result's media type and filename.
+
+    Raises:
+        HTTPException: If the result or artifact is absent or is not a file result.
+    """
     await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:

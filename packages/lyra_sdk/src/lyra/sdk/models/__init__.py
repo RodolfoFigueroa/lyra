@@ -1,3 +1,5 @@
+"""Validated data models shared by Lyra clients and plugins."""
+
 from lyra.sdk.models.admin import (
     CreatePluginRepoRequest,
     CreatePluginRepoResponse,

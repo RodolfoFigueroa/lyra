@@ -1,3 +1,5 @@
+"""Authentication helpers for agent-facing HTTP requests."""
+
 from __future__ import annotations
 
 import hmac
@@ -17,7 +19,11 @@ _bearer = HTTPBearer(auto_error=False, scheme_name="AgentBearer")
 
 
 def validate_agent_authorization(authorization: str | None, expected_key: str) -> None:
-    """Validate one Agent API Bearer credential without exposing key material."""
+    """Validate one Agent API Bearer credential without exposing key material.
+
+    Raises:
+        HTTPException: If the credential is absent, malformed, or does not match.
+    """
     if authorization is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -45,7 +51,12 @@ def require_agent_key(
         Depends(_bearer),
     ],
 ) -> None:
-    """FastAPI dependency enforcing the shared Agent API credential."""
+    """FastAPI dependency enforcing the shared Agent API credential.
+
+    Raises:
+        HTTPException: If the configured key cannot be loaded or authentication
+            fails.
+    """
     try:
         expected_key = get_config().agent.read_api_key()
     except (ConfigLoadError, ConfigSecretError) as exc:
@@ -65,10 +76,12 @@ class AgentBearerAuthMiddleware:
     """ASGI middleware applying the same Agent API check used by REST jobs."""
 
     def __init__(self, app: ASGIApp, *, agent_api_key: str) -> None:
+        """Initialize middleware around an ASGI app with the expected agent key."""
         self._app = app
         self._agent_api_key = agent_api_key
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Authenticate HTTP requests and pass through other ASGI scope types."""
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return

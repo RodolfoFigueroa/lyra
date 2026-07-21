@@ -1,3 +1,5 @@
+"""Administrative controls for inspecting and restarting workers."""
+
 import asyncio
 import logging
 import time
@@ -30,6 +32,8 @@ WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS = 10.0
 
 @dataclass(frozen=True)
 class WorkerInspectSnapshot:
+    """Capture normalized task, queue, and statistics responses from Celery."""
+
     inspect_available: bool
     active: dict[str, list[JsonObject]] | None
     reserved: dict[str, list[JsonObject]] | None
@@ -39,6 +43,7 @@ class WorkerInspectSnapshot:
 
     @property
     def observed_worker_names(self) -> set[str]:
+        """The union of worker names present in any available inspect section."""
         names: set[str] = set()
         for section in (
             self.active,
@@ -54,6 +59,8 @@ class WorkerInspectSnapshot:
 
 @dataclass(frozen=True)
 class WorkerInspectState:
+    """Pair the latest inspect snapshot with freshness and failure metadata."""
+
     snapshot: WorkerInspectSnapshot
     observed_at: datetime | None
     age_seconds: float | None
@@ -95,7 +102,7 @@ _UNKNOWN_WORKER_INSPECT_SNAPSHOT = WorkerInspectSnapshot(
 def _inspect_call(call: Callable[[], JsonValue], method_name: str) -> JsonValue:
     try:
         return call()
-    except Exception:  # noqa: BLE001  # pragma: no cover - Celery transports vary
+    except Exception:  # pragma: no cover - Celery transports vary
         logger.warning("Celery inspect.%s() failed.", method_name, exc_info=True)
         return None
 
@@ -144,6 +151,11 @@ def _normalise_active_queues(raw: JsonValue) -> dict[str, list[str]] | None:
 
 
 def inspect_workers() -> WorkerInspectSnapshot:
+    """Collect and normalize all supported Celery worker inspection sections.
+
+    Returns:
+        A snapshot whose availability reflects whether any inspection succeeded.
+    """
     inspector = celery_app.control.inspect(
         timeout=DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS
     )
@@ -168,6 +180,7 @@ def inspect_workers() -> WorkerInspectSnapshot:
 
 
 def clear_worker_inspect_snapshot_cache() -> None:
+    """Clear the short-lived synchronous worker inspection cache."""
     _WORKER_INSPECT_CACHE.snapshot = None
     _WORKER_INSPECT_CACHE.observed_at = None
 
@@ -176,6 +189,11 @@ def get_worker_inspect_snapshot(
     *,
     force_refresh: bool = False,
 ) -> WorkerInspectSnapshot:
+    """Return a fresh or briefly cached synchronous worker inspection snapshot.
+
+    Returns:
+        The cached snapshot when still current, otherwise a newly collected one.
+    """
     now = time.monotonic()
     if (
         not force_refresh
@@ -192,6 +210,7 @@ def get_worker_inspect_snapshot(
 
 
 def reset_worker_inspect_collector_state() -> None:
+    """Clear background collector observations and error metadata."""
     with _WORKER_INSPECT_COLLECTOR_LOCK:
         _WORKER_INSPECT_COLLECTOR.snapshot = None
         _WORKER_INSPECT_COLLECTOR.observed_at = None
@@ -201,6 +220,11 @@ def reset_worker_inspect_collector_state() -> None:
 
 
 def get_worker_inspect_state() -> WorkerInspectState:
+    """Read the latest background inspection state and compute its current age.
+
+    Returns:
+        The observed snapshot and freshness metadata, or an unknown stale state.
+    """
     now = time.monotonic()
     with _WORKER_INSPECT_COLLECTOR_LOCK:
         snapshot = _WORKER_INSPECT_COLLECTOR.snapshot
@@ -228,10 +252,15 @@ def get_worker_inspect_state() -> WorkerInspectState:
 
 
 async def refresh_worker_inspect_snapshot() -> WorkerInspectState:
+    """Refresh the background worker snapshot without blocking the event loop.
+
+    Returns:
+        The resulting state, retaining the previous snapshot if inspection fails.
+    """
     attempt_at = datetime.now(UTC)
     try:
         snapshot = await asyncio.to_thread(inspect_workers)
-    except Exception as exc:  # noqa: BLE001  # pragma: no cover - transport setup varies
+    except Exception as exc:  # pragma: no cover - transport setup varies
         logger.warning("Background worker inspect refresh failed.", exc_info=True)
         with _WORKER_INSPECT_COLLECTOR_LOCK:
             _WORKER_INSPECT_COLLECTOR.last_attempt_at = attempt_at
@@ -258,7 +287,8 @@ async def _worker_inspect_collector_loop(stop_event: asyncio.Event) -> None:
             )
 
 
-async def start_worker_inspect_collector() -> None:
+def start_worker_inspect_collector() -> None:
+    """Start the singleton background inspection task if it is not running."""
     with _WORKER_INSPECT_COLLECTOR_LOCK:
         task = _WORKER_INSPECT_COLLECTOR.task
         if task is not None and not task.done():
@@ -272,6 +302,7 @@ async def start_worker_inspect_collector() -> None:
 
 
 async def stop_worker_inspect_collector() -> None:
+    """Signal and await the background inspection task, then clear its handles."""
     with _WORKER_INSPECT_COLLECTOR_LOCK:
         task = _WORKER_INSPECT_COLLECTOR.task
         stop_event = _WORKER_INSPECT_COLLECTOR.stop_event
@@ -291,12 +322,22 @@ async def stop_worker_inspect_collector() -> None:
 
 
 def worker_inspect_collector_running() -> bool:
+    """Report whether the background worker inspection task is active.
+
+    Returns:
+        ``True`` while an unfinished collector task exists.
+    """
     with _WORKER_INSPECT_COLLECTOR_LOCK:
         task = _WORKER_INSPECT_COLLECTOR.task
     return task is not None and not task.done()
 
 
 def safe_task_summary(task: JsonObject, *, worker_name: str) -> JsonObject:
+    """Extract the non-sensitive task fields exposed by the admin API.
+
+    Returns:
+        A fixed-shape summary containing task identity, worker, ETA, and start time.
+    """
     raw_request = task.get("request")
     request = raw_request if isinstance(raw_request, dict) else task
     time_start = request.get("time_start") or task.get("time_start")
@@ -316,6 +357,7 @@ def safe_task_summary(task: JsonObject, *, worker_name: str) -> JsonObject:
 
 
 def notify_interrupted_tasks(task_ids: list[str]) -> None:
+    """Persist terminal worker-interruption results for a collection of tasks."""
     for task_id in task_ids:
         job_store.save_job_result(
             FailedJobResult(
@@ -330,7 +372,11 @@ def notify_interrupted_tasks(task_ids: list[str]) -> None:
 
 
 def persist_unexpected_task_failure(task_id: str) -> bool:
-    """Persist a Celery-level failure without replacing a terminal Lyra job."""
+    """Persist a Celery-level failure without replacing a terminal Lyra job.
+
+    Returns:
+        ``True`` when a new terminal result was stored.
+    """
     return job_store.save_job_result_if_active(
         FailedJobResult(
             job_id=task_id,
@@ -356,7 +402,12 @@ def notify_unexpected_task_failure(task_id: str) -> None:
 async def reconcile_celery_failure(
     snapshot: job_store.JobStatusSnapshot,
 ) -> job_store.JobStatusSnapshot:
-    """Repair a nonterminal Lyra job when Celery has a terminal failure."""
+    """Repair a nonterminal Lyra job when Celery has a terminal failure.
+
+    Returns:
+        The repaired status snapshot, or the original if repair is unnecessary or
+        unavailable.
+    """
     if job_store.is_terminal_status(snapshot.status):
         return snapshot
 
@@ -364,7 +415,7 @@ async def reconcile_celery_failure(
         celery_state = await asyncio.to_thread(
             lambda: celery_app.AsyncResult(snapshot.job_id).state
         )
-    except Exception:  # noqa: BLE001  # Result backends fail independently
+    except Exception:  # Result backends fail independently
         logger.warning(
             "Could not reconcile Celery state for task %s.",
             snapshot.job_id,
@@ -381,7 +432,7 @@ async def reconcile_celery_failure(
             snapshot.job_id,
         )
         repaired = await job_store.get_job_status_async(snapshot.job_id)
-    except Exception:  # noqa: BLE001  # Preserve the last readable Lyra state
+    except Exception:  # Preserve the last readable Lyra state
         logger.warning(
             "Could not persist reconciled failure for task %s.",
             snapshot.job_id,
@@ -395,11 +446,13 @@ async def reconcile_celery_failure(
 
 
 def revoke_job(job_id: str) -> None:
+    """Request non-terminating Celery revocation for a job identifier."""
     celery_app.control.revoke(job_id)
     logger.info("Requested cancellation for task %s.", job_id)
 
 
 def graceful_worker_restart(timeout: float = 30.0) -> None:
+    """Drain workers before shutdown, terminating tasks only after the timeout."""
     inspector = celery_app.control.inspect()
     deadline = time.monotonic() + timeout
 

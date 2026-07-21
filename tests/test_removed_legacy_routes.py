@@ -10,7 +10,7 @@ from tests.config_helpers import load_test_config
 def test_openapi_exposes_only_job_execution_routes(tmp_path: Path) -> None:
     load_test_config(tmp_path)
     try:
-        from lyra_app.routes import met_zone  # noqa: PLC0415
+        from lyra_app.routes import met_zone  # ruff:ignore[import-outside-top-level]
 
         app = FastAPI()
         app.include_router(jobs.router)

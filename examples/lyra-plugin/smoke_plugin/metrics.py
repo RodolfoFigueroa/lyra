@@ -1,3 +1,5 @@
+"""Metric functions used by the example smoke-test plugin."""
+
 from __future__ import annotations
 
 from lyra.sdk import Input, LocationInput, RunContext, metric
@@ -42,6 +44,11 @@ def run_table(
     *,
     context: RunContext,
 ) -> TableJobResult:
+    """Copy the submitted integer into a row for every input feature.
+
+    Returns:
+        A table result indexed by the input feature identifiers.
+    """
     context.report_progress(stage="table", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
@@ -70,6 +77,11 @@ def run_file(
     *,
     context: RunContext,
 ) -> FileJobResult:
+    """Write the input feature identifiers to a small text artifact.
+
+    Returns:
+        A file result referring to the generated text artifact.
+    """
     context.report_progress(stage="file", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
@@ -99,6 +111,11 @@ def run_cancel(
     *,
     context: RunContext,
 ) -> TableJobResult:
+    """Exercise cancellation reporting before producing a table result.
+
+    Returns:
+        A table result when the context has not been cancelled.
+    """
     context.report_progress(stage="cancel-check", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)

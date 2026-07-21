@@ -95,7 +95,7 @@ class FakeRedisSync:
         for member in members:
             sorted_set.pop(member, None)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # noqa: A002
+    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
         for member, score in list(sorted_set.items()):
@@ -294,8 +294,8 @@ class FakeRedisAsync:
     async def zremrangebyscore(
         self,
         key: str,
-        min: str | float,  # noqa: A002
-        max: float,  # noqa: A002
+        min: str | float,  # ruff:ignore[builtin-argument-shadowing]
+        max: float,  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
         lower = float("-inf") if min == "-inf" else float(min)
         sorted_set = self.sorted_sets.setdefault(key, {})
@@ -323,7 +323,7 @@ class FakeRedisAsync:
         self,
         streams: dict[str, str],
         *,
-        block: int,  # noqa: ARG002
+        block: int,  # ruff:ignore[unused-method-argument]
         count: int | None = None,
     ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
         key, after_id = next(iter(streams.items()))
@@ -923,7 +923,7 @@ def test_table_descriptor_expands_fractional_area_column_contract() -> None:
         "covered_area_fraction",
     ]
     assert contracts[1].unit == "ratio"
-    assert descriptor.preview.rows[0]["covered_area_fraction"] == 0.25
+    assert descriptor.preview.rows[0]["covered_area_fraction"] == pytest.approx(0.25)
     assert [column.name for column in descriptor.summary.columns] == [
         "covered_area_m2",
         "covered_area_fraction",

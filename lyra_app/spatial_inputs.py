@@ -1,5 +1,8 @@
+"""Validation and normalization of spatial metric inputs."""
+
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -34,13 +37,16 @@ class SpatialInputResolution:
 
 
 class SpatialInputValidationError(Exception):
+    """Report API-compatible validation failures for spatial input fields."""
+
     def __init__(self, errors: list[dict[str, Any]]) -> None:
+        """Initialize the error with structured field-level validation details."""
         self.errors = errors
         super().__init__("spatial input validation failed")
 
 
 class SpatialInputResolutionUnavailableError(Exception):
-    pass
+    """Indicate that an external spatial lookup could not be completed."""
 
 
 def _adapter_for_kind(kind: SpatialInputKindV4) -> TypeAdapter[Any]:
@@ -66,9 +72,17 @@ def resolve_spatial_inputs(
     spatial_inputs: dict[str, SpatialInputKindV4],
     converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    if converter_map is None:
-        from lyra_app import converters  # noqa: PLC0415
+    """Validate and replace declared spatial wrappers with resolved GeoJSON.
 
+    Returns:
+        A copy of the payload containing serialized GeoJSON for spatial fields.
+
+    Raises:
+        SpatialInputValidationError: If a wrapper or converted geometry is invalid.
+        SpatialInputResolutionUnavailableError: If an external lookup fails.
+    """
+    if converter_map is None:
+        converters = importlib.import_module("lyra_app.converters")
         converter_map = vars(converters)["converter_map"]
     resolved = dict(payload)
     for field_name, kind in spatial_inputs.items():
@@ -107,7 +121,11 @@ def resolve_spatial_inputs_with_metadata(
     spatial_inputs: dict[str, SpatialInputKindV4],
     converter_map: dict[str, dict[str, Any]] | None = None,
 ) -> SpatialInputResolution:
-    """Resolve spatial inputs while retaining no resolved geometry in metadata."""
+    """Resolve spatial inputs while retaining no resolved geometry in metadata.
+
+    Returns:
+        The resolved worker input and non-geometric row identity metadata.
+    """
     resolved = resolve_spatial_inputs(payload, spatial_inputs, converter_map)
     row_identity: RowIdentityMetadata | None = None
     for field_name, kind in spatial_inputs.items():

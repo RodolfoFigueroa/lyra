@@ -1,3 +1,5 @@
+"""Celery task implementations for executing metric jobs."""
+
 import logging
 import math
 import time
@@ -43,6 +45,8 @@ from pydantic import ValidationError as PydanticValidationError
 from lyra_app import job_store
 from lyra_app.celery_app import celery_app
 from lyra_app.config import LyraConfig, get_config
+from lyra_app.db import connection as database_connection
+from lyra_app.db.client import LyraDBImplicit
 from lyra_app.db.connection import is_database_unavailable_error
 from lyra_app.plugin_state import (
     PluginState,
@@ -68,6 +72,8 @@ MetricRunCallable = Callable[[JobEnvelope, "WorkerRunContext"], PluginResult]
 
 @dataclass(frozen=True)
 class RunnerMetricEntry:
+    """Bundle a runner metric's queue, output contract, and callable."""
+
     metric_name: str
     queue: str
     output: OutputSpecV4
@@ -76,6 +82,8 @@ class RunnerMetricEntry:
 
 @dataclass
 class WorkerRunContext:
+    """Provide plugin execution resources and rate-limited job event reporting."""
+
     job_id: str
     metric: str
     logger: logging.Logger
@@ -120,6 +128,12 @@ class WorkerRunContext:
         unit: str | None = None,
         message: str | None = None,
     ) -> None:
+        """Validate, coalesce, and persist progress for the running job.
+
+        Raises:
+            ValueError: If progress decreases or changes its total or unit within a
+                stage.
+        """
         event = JobProgressEvent(
             job_id=self.job_id,
             metric=self.metric,
@@ -139,8 +153,6 @@ class WorkerRunContext:
             if previous.total is not None and event.total != previous.total:
                 msg = f"Progress total for stage {stage!r} must remain stable."
                 raise ValueError(msg)
-            if previous.total is None and event.total is not None:
-                pass
             if previous.unit != event.unit:
                 msg = f"Progress unit for stage {stage!r} must remain stable."
                 raise ValueError(msg)
@@ -170,6 +182,7 @@ class WorkerRunContext:
         level: JobMessageLevel = "info",
         fields: JsonObject | None = None,
     ) -> None:
+        """Persist a structured plugin message when event capacity is available."""
         if self._pending_progress is not None:
             self._emit_progress(self._pending_progress, force=True)
         event = JobMessageEvent(
@@ -186,6 +199,7 @@ class WorkerRunContext:
         job_store.append_job_message(event)
 
     def flush_events(self) -> None:
+        """Persist pending progress and summarize any rate-limited messages."""
         if self._pending_progress is not None:
             self._emit_progress(self._pending_progress, force=True)
         if self._suppressed_messages:
@@ -203,6 +217,7 @@ class WorkerRunContext:
             )
 
     def check_cancelled(self) -> None:
+        """Raise when the job has been marked cancelled in durable state."""
         job_store.raise_if_cancelled(self.job_id)
 
 
@@ -211,7 +226,8 @@ _RUNNER_TEMP_BASE: Path | None = None
 
 
 def set_runner_temp_base(path: Path | None) -> None:
-    global _RUNNER_TEMP_BASE  # noqa: PLW0603
+    """Set or clear the process-wide parent directory for per-job scratch data."""
+    global _RUNNER_TEMP_BASE  # ruff:ignore[global-statement]
 
     _RUNNER_TEMP_BASE = path
 
@@ -288,6 +304,14 @@ def load_runner_metric_entries(
     config: LyraConfig | None = None,
     store: PluginStateStore | None = None,
 ) -> dict[str, RunnerMetricEntry]:
+    """Load executable metric entries assigned to one worker pool.
+
+    Returns:
+        A mapping from metric name to its validated runner contract.
+
+    Raises:
+        RuntimeError: If runner manifests contain duplicate selected metrics.
+    """
     if config is None:
         config = get_config()
 
@@ -330,7 +354,12 @@ def refresh_runner_registry(
     config: LyraConfig | None = None,
     store: PluginStateStore | None = None,
 ) -> dict[str, RunnerMetricEntry]:
-    global _RUNNER_TEMP_BASE  # noqa: PLW0603
+    """Replace the process runner registry for one configured worker pool.
+
+    Returns:
+        A copy of the newly loaded runner registry.
+    """
+    global _RUNNER_TEMP_BASE  # ruff:ignore[global-statement]
 
     if config is None:
         config = get_config()
@@ -363,6 +392,11 @@ def _safe_path_segment(value: str) -> str:
 
 
 def build_run_context(job: JobEnvelope) -> WorkerRunContext:
+    """Build the isolated filesystem, database, logging, and event context for a job.
+
+    Returns:
+        A worker context bound to the job and its per-job scratch directory.
+    """
     temp_dir = _runner_temp_base() / _safe_path_segment(job.job_id)
     temp_dir.mkdir(parents=True, exist_ok=True)
     return WorkerRunContext(
@@ -375,10 +409,7 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
 
 
 def _build_db_context() -> LyraDB:
-    from lyra_app.db.client import LyraDBImplicit  # noqa: PLC0415
-    from lyra_app.db.connection import get_worker_engine  # noqa: PLC0415
-
-    return LyraDBImplicit(get_worker_engine())
+    return LyraDBImplicit(database_connection.get_worker_engine())
 
 
 def _job_id_from_payload(payload: JsonValue, fallback: str) -> str:
@@ -499,7 +530,7 @@ def _fractional_area_value(
     feature_id: str,
     column_name: str,
     job_id: str,
-) -> float | None | FailedJobResult:
+) -> float | FailedJobResult | None:
     if source_value is None:
         return None
     if not math.isfinite(area) or area <= 0:
@@ -786,8 +817,7 @@ def _execute_known_job(job: JobEnvelope, entry: RunnerMetricEntry) -> JsonObject
 
     context: WorkerRunContext | None = None
     try:
-        if job_store.get_job_status(job.job_id) is None:
-            job_store.set_job_status(job.job_id, "queued", metric=job.metric)
+        _ensure_job_is_queued(job)
         job_store.set_job_status(job.job_id, "running", metric=job.metric)
         context = build_run_context(job)
         raw_result = entry.run(job, context)
@@ -819,7 +849,17 @@ def _execute_known_job(job: JobEnvelope, entry: RunnerMetricEntry) -> JsonObject
     return _persist_result(result, metric=job.metric)
 
 
+def _ensure_job_is_queued(job: JobEnvelope) -> None:
+    if job_store.get_job_status(job.job_id) is None:
+        job_store.set_job_status(job.job_id, "queued", metric=job.metric)
+
+
 def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
+    """Validate and execute a serialized job through the captured runner registry.
+
+    Returns:
+        The persisted terminal result payload, including validation failures.
+    """
     fallback_job_id = _job_id_from_payload(envelope_payload, task_id)
     try:
         job = JobEnvelope.model_validate(envelope_payload)
@@ -843,6 +883,11 @@ def execute_job(envelope_payload: JsonValue, *, task_id: str) -> JsonObject:
 
 @celery_app.task(name=GENERIC_TASK_NAME, bind=True)
 def run_metric_task(self: Task, envelope_payload: JsonObject) -> JsonObject:
+    """Execute a generic Celery metric task using its request identifier.
+
+    Returns:
+        The persisted terminal result payload.
+    """
     task_id = str(getattr(self.request, "id", "") or "unknown-job")
     return execute_job(envelope_payload, task_id=task_id)
 
@@ -855,7 +900,7 @@ def _notify_unexpected_task_failure(
     if not task_id:
         logger.error("Celery reported a task failure without a task ID.")
         return
-    from lyra_app.worker_control import (  # noqa: PLC0415
+    from lyra_app.worker_control import (  # ruff:ignore[import-outside-top-level]
         notify_unexpected_task_failure,
     )
 

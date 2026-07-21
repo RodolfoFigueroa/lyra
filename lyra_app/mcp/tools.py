@@ -1,3 +1,5 @@
+"""MCP tool implementations for querying and operating Lyra."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,19 +11,51 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from lyra.sdk.models.metric import normalize_metric_search_tokens
-from lyra.sdk.types import validate_json_value
+from fastapi import HTTPException
+from lyra.sdk.models import (
+    JobCreateRequest,
+    JobCreateResponse,
+    JobStatusInfo,
+    ResultDescriptor,
+)
+from lyra.sdk.models.metric import (
+    MetricCatalogResponse,
+    MetricInfoV4,
+    normalize_metric_search_tokens,
+)
+from lyra.sdk.types import JsonObject, JsonValue, validate_json_value
 from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
+from typing_extensions import override
+
+from lyra_app import job_store
+from lyra_app.db.connection import (
+    ApplicationDatabaseRuntime,
+    DatabaseUnavailableError,
+    is_database_unavailable_error,
+)
+from lyra_app.job_submission import (
+    IdempotencyConflictError,
+    SubmissionRateLimitedError,
+    SubmissionUnavailableError,
+    UnknownMetricError,
+    submit_job,
+)
+from lyra_app.loaders.db import get_met_zone_code_from_name_async
+from lyra_app.registry import (
+    MetricPayloadValidationError,
+    get_metric_catalog,
+    get_metric_info,
+)
+from lyra_app.routes import jobs
+from lyra_app.spatial_inputs import (
+    SpatialInputResolutionUnavailableError,
+    SpatialInputValidationError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from fastapi import HTTPException
-    from lyra.sdk.models import JobCreateResponse, JobStatusInfo, ResultDescriptor
-    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
-    from lyra.sdk.types import JsonObject, JsonValue
-
-    from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.mcp.models import (
         GetJobResultInput,
         GetMetricInput,
@@ -47,11 +81,19 @@ _MAX_COMPACT_DESCRIPTION_LENGTH = 240
 
 
 class LyraMCPBackend(Protocol):
-    async def get_metrics(self) -> MetricCatalogResponse: ...
+    """Define the domain operations used by transport-independent MCP tools."""
 
-    async def lookup_met_zone(self, name: str) -> dict[str, str] | None: ...
+    async def get_metrics(self) -> MetricCatalogResponse:
+        """Return the complete public metric catalog."""
+        ...
 
-    async def get_metric(self, metric: str) -> MetricInfoV4 | None: ...
+    async def lookup_met_zone(self, name: str) -> dict[str, str] | None:
+        """Resolve a metropolitan-zone name to its canonical code and name."""
+        ...
+
+    async def get_metric(self, metric: str) -> MetricInfoV4 | None:
+        """Return public metadata for a metric when it exists."""
+        ...
 
     async def create_job(
         self,
@@ -59,11 +101,17 @@ class LyraMCPBackend(Protocol):
         payload: JsonObject,
         *,
         idempotency_key: str | None = None,
-    ) -> JobCreateResponse: ...
+    ) -> JobCreateResponse:
+        """Validate and submit a metric job through the Lyra domain service."""
+        ...
 
-    async def get_job(self, job_id: str) -> JobStatusInfo | None: ...
+    async def get_job(self, job_id: str) -> JobStatusInfo | None:
+        """Return current job status when the job is retained."""
+        ...
 
-    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None: ...
+    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
+        """Return the terminal result descriptor when it is retained."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -75,31 +123,30 @@ class ToolCallError(Exception):
     details: JsonValue = None
 
     def to_payload(self) -> dict[str, Any]:
+        """Render this failure using the MCP tool error envelope.
+
+        Returns:
+            A structured error object with optional domain-specific details.
+        """
         error: JsonObject = {"code": self.code, "message": self.message}
         if self.details is not None:
             error["details"] = self.details
         return {"error": error}
 
 
-class InProcessLyraBackend:
+class InProcessLyraBackend(LyraMCPBackend):
+    """Implement MCP domain operations directly against this Lyra process."""
+
     def __init__(self, database: ApplicationDatabaseRuntime | None = None) -> None:
+        """Initialize the backend with an optional application database runtime."""
         self.database = database
 
+    @override
     async def get_metrics(self) -> MetricCatalogResponse:
-        from lyra_app.registry import get_metric_catalog  # noqa: PLC0415
-
         return await asyncio.to_thread(get_metric_catalog)
 
+    @override
     async def lookup_met_zone(self, name: str) -> dict[str, str] | None:
-        from sqlalchemy.exc import SQLAlchemyError  # noqa: PLC0415
-
-        from lyra_app.db.connection import (  # noqa: PLC0415
-            is_database_unavailable_error,
-        )
-        from lyra_app.loaders.db import (  # noqa: PLC0415
-            get_met_zone_code_from_name_async,
-        )
-
         if self.database is None:
             msg = "Application database runtime is unavailable."
             raise RuntimeError(msg)
@@ -127,11 +174,11 @@ class InProcessLyraBackend:
         cve_met, nom_met = result
         return {"cve_met": cve_met, "nom_met": nom_met}
 
+    @override
     async def get_metric(self, metric: str) -> MetricInfoV4 | None:
-        from lyra_app.registry import get_metric_info  # noqa: PLC0415
-
         return await asyncio.to_thread(get_metric_info, metric)
 
+    @override
     async def create_job(
         self,
         metric: str,
@@ -139,22 +186,6 @@ class InProcessLyraBackend:
         *,
         idempotency_key: str | None = None,
     ) -> JobCreateResponse:
-        from lyra.sdk.models import JobCreateRequest  # noqa: PLC0415
-
-        from lyra_app.db.connection import DatabaseUnavailableError  # noqa: PLC0415
-        from lyra_app.job_submission import (  # noqa: PLC0415
-            IdempotencyConflictError,
-            SubmissionRateLimitedError,
-            SubmissionUnavailableError,
-            UnknownMetricError,
-            submit_job,
-        )
-        from lyra_app.registry import MetricPayloadValidationError  # noqa: PLC0415
-        from lyra_app.spatial_inputs import (  # noqa: PLC0415
-            SpatialInputResolutionUnavailableError,
-            SpatialInputValidationError,
-        )
-
         try:
             return await submit_job(
                 JobCreateRequest(
@@ -207,26 +238,20 @@ class InProcessLyraBackend:
                 _BACKEND_ERROR, "Failed to create job.", str(exc)
             ) from exc
 
+    @override
     async def get_job(self, job_id: str) -> JobStatusInfo | None:
-        from fastapi import HTTPException as FastAPIHTTPException  # noqa: PLC0415
-
-        from lyra_app.routes import jobs  # noqa: PLC0415
-
         try:
             return await jobs.get_job(job_id)
-        except FastAPIHTTPException as exc:
+        except HTTPException as exc:
             if exc.status_code == 404:
                 return None
             raise _tool_error_from_http(exc, context="fetch job status") from exc
 
+    @override
     async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
-        from fastapi import HTTPException as FastAPIHTTPException  # noqa: PLC0415
-
-        from lyra_app import job_store  # noqa: PLC0415
-
         try:
             return await job_store.get_job_result_descriptor_async(job_id)
-        except FastAPIHTTPException as exc:
+        except HTTPException as exc:
             if exc.status_code == 404:
                 return None
             raise _tool_error_from_http(exc, context="fetch result descriptor") from exc
@@ -239,7 +264,14 @@ async def execute_tool(
     *,
     public_api_base_url: str,
 ) -> dict[str, Any]:
-    """Execute one validated tool call against the Lyra domain service."""
+    """Execute one validated tool call against the Lyra domain service.
+
+    Returns:
+        The tool-specific success payload.
+
+    Raises:
+        ToolCallError: If the requested tool name is unknown.
+    """
     if name == "lyra_lookup_met_zone":
         payload = await _lookup_met_zone(cast("LookupMetZoneInput", arguments), backend)
     elif name == "lyra_list_metrics":

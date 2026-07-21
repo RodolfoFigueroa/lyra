@@ -1,3 +1,5 @@
+"""Models describing the value types accepted and returned by metrics."""
+
 from typing import Any
 
 from lyra.sdk.models.strict import StrictBaseModel

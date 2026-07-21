@@ -136,7 +136,7 @@ def test_runtime_image_contains_only_runtime_workspace_packages_and_license() ->
     assert "COPY packages/lyra_tui " not in runtime_stage
 
 
-def test_publish_workflows_build_supported_platforms() -> None:
+def test_publish_workflows_build_supported_platforms_natively() -> None:
     workflows = [
         ROOT / ".github" / "workflows" / "docker-publish.yml",
         ROOT / ".github" / "workflows" / "release-please.yml",
@@ -145,5 +145,8 @@ def test_publish_workflows_build_supported_platforms() -> None:
     for workflow in workflows:
         contents = _read(workflow)
 
-        assert "uses: docker/setup-qemu-action@v3" in contents
+        assert "uses: docker/github-builder/.github/workflows/build.yml@v1" in contents
         assert "platforms: linux/amd64,linux/arm64" in contents
+        assert "default=ubuntu-24.04" in contents
+        assert "linux/arm64=ubuntu-24.04-arm" in contents
+        assert "uses: docker/setup-qemu-action" not in contents

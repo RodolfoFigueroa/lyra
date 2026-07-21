@@ -7,13 +7,11 @@ on:
     paths-ignore:
       - "docs/**"
 
-# Explicitly grant access to write to GHCR, read repo contents
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  build-and-push:
+  validate:
     runs-on: ubuntu-latest
 
     steps:
@@ -31,36 +29,29 @@ jobs:
       - name: Enforce SDK Sync & Formatting
         run: uv run pre-commit run --all-files
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
+  build-and-push:
+    needs: validate
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      packages: write
+    with:
+      output: image
+      push: true
+      platforms: linux/amd64,linux/arm64
+      distribute: true
+      runner: |
+        default=ubuntu-24.04
+        linux/arm64=ubuntu-24.04-arm
+      cache: true
+      cache-mode: max
+      cache-scope: lyra-app
+      sign: "false"
+      meta-images: ghcr.io/${{ github.repository_owner }}/lyra
+      meta-tags: type=raw,value=dev
+      set-meta-labels: true
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Automatically generates tags and labels
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/lyra
-          tags: |
-            type=raw,value=dev
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Enables GitHub Actions cache to speed up subsequent builds
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

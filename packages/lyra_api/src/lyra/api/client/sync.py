@@ -18,12 +18,7 @@ from typing import (
 )
 
 import requests
-from lyra.api.client.base import (
-    ClientSecurityOptions,
-    _BaseTransport,
-    _load_pandas,
-    service_unavailable_error,
-)
+from lyra.api.client.base import _BaseTransport, _load_pandas, service_unavailable_error
 from lyra.api.exceptions import (
     DownloadError,
     JobEventCursorGapError,
@@ -304,6 +299,7 @@ class JobHandle(Generic[_SuccessResultT]):
 
 class _RequestModelOptions(TypedDict):
     error_context: str
+    authenticated: NotRequired[bool]
     expected_status: NotRequired[int]
     params: NotRequired[dict[str, Any] | None]
     json_body: NotRequired[dict[str, Any] | None]
@@ -320,6 +316,7 @@ class _SyncTransport(_BaseTransport):
         **options: Unpack[_RequestModelOptions],
     ) -> _ModelT:
         error_context = options["error_context"]
+        authenticated = options.get("authenticated", True)
         expected_status = options.get("expected_status", 200)
         params = options.get("params")
         json_body = options.get("json_body")
@@ -330,7 +327,7 @@ class _SyncTransport(_BaseTransport):
                 params=params,
                 json=json_body,
                 timeout=self.timeout,
-                headers=self._headers_for_path(path),
+                headers=self._auth_headers if authenticated else self.headers,
             )
         except requests.RequestException as exc:
             err = f"{error_context} request error: {exc}"
@@ -395,6 +392,7 @@ class _SyncTransport(_BaseTransport):
             "lookups/met-zones",
             MetZoneCodeResponse,
             error_context="fetch met-zone lookup",
+            authenticated=False,
             params={"name": name},
         )
 
@@ -414,7 +412,7 @@ class _SyncTransport(_BaseTransport):
                 self._http_url("jobs"),
                 json=body,
                 timeout=self.timeout,
-                headers=self._agent_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Job creation error: {exc}"
@@ -442,7 +440,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url(f"jobs/{job_id}"),
                 timeout=self.timeout,
-                headers=self._agent_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Job status error: {exc}"
@@ -470,7 +468,7 @@ class _SyncTransport(_BaseTransport):
                 self._http_url("admin/jobs"),
                 params=params,
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin job list error: {exc}"
@@ -489,7 +487,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.post(
                 self._http_url(f"admin/jobs/{job_id}/cancel"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin job cancellation error: {exc}"
@@ -615,7 +613,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url("admin/status"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin status request error: {exc}"
@@ -634,7 +632,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url("admin/config-summary"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin config summary request error: {exc}"
@@ -653,7 +651,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url("admin/catalog"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin catalog request error: {exc}"
@@ -672,7 +670,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url("admin/workers"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin workers request error: {exc}"
@@ -691,7 +689,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url(f"admin/workers/{worker_name}"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin worker request error: {exc}"
@@ -710,7 +708,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url("admin/queues"),
                 timeout=self.timeout,
-                headers=self._admin_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Admin queues request error: {exc}"
@@ -745,7 +743,7 @@ class _SyncTransport(_BaseTransport):
                 cursor=cursor,
                 attempts=attempts,
             )
-            headers = dict(self._agent_headers)
+            headers = dict(self._auth_headers)
             if cursor is not None:
                 headers["Last-Event-ID"] = cursor
             try:
@@ -803,7 +801,7 @@ class _SyncTransport(_BaseTransport):
             response = requests.get(
                 self._http_url(f"jobs/{job_id}/result"),
                 timeout=self.timeout,
-                headers=self._agent_headers,
+                headers=self._auth_headers,
             )
         except requests.RequestException as exc:
             err = f"Job result error: {exc}"
@@ -830,7 +828,7 @@ class _SyncTransport(_BaseTransport):
             with requests.get(
                 self._http_url(f"jobs/{job_id}/result/download"),
                 timeout=self.timeout,
-                headers=self._agent_headers,
+                headers=self._auth_headers,
                 stream=True,
             ) as response:
                 if response.status_code != 200:
@@ -880,7 +878,7 @@ class _SyncTransport(_BaseTransport):
             with requests.get(
                 self._http_url(f"jobs/{job_id}/result/table.jsonl"),
                 timeout=self.timeout,
-                headers=self._agent_headers,
+                headers=self._auth_headers,
                 stream=True,
             ) as response:
                 if response.status_code != 200:
@@ -963,6 +961,10 @@ class _SyncTransport(_BaseTransport):
             raise DownloadError(err)
 
         return MetricInfoV4.model_validate(response.json())
+
+
+class _SyncAdminTransport(_SyncTransport):
+    """Synchronous transport configured exclusively with an administrator key."""
 
 
 class _HealthResource:
@@ -1180,6 +1182,10 @@ class _AdminCatalogResource:
         return self._transport.refresh_plugin_catalog()
 
 
+class _WorkerRestartOptions(TypedDict):
+    timeout: NotRequired[float]
+
+
 class _AdminWorkersResource:
     def __init__(self, transport: _SyncTransport) -> None:
         self._transport = transport
@@ -1190,8 +1196,11 @@ class _AdminWorkersResource:
     def get(self, name: str) -> WorkerDetail:
         return self._transport.get_admin_worker(name)
 
-    def restart(self, *, timeout: float = 30.0) -> WorkerRestartResponse:
-        return self._transport.restart_workers(timeout=timeout)
+    def restart(
+        self,
+        **options: Unpack[_WorkerRestartOptions],
+    ) -> WorkerRestartResponse:
+        return self._transport.restart_workers(timeout=options.get("timeout", 30.0))
 
 
 class _AdminQueuesResource:
@@ -1216,9 +1225,55 @@ class _AdminRoutingResource:
         return self._transport.delete_plugin_routing(metric)
 
 
-class _AdminResource:
-    def __init__(self, transport: _SyncTransport) -> None:
+class LyraClient:
+    """Resource-oriented synchronous client for the Lyra HTTP API."""
+
+    def __init__(
+        self,
+        host: str,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
+        *,
+        agent_api_key: str | None = None,
+        secure: bool = True,
+    ) -> None:
+        transport = _SyncTransport(
+            host,
+            timeout,
+            headers,
+            api_key=agent_api_key,
+            secure=secure,
+        )
         self._transport = transport
+        self.health = _HealthResource(transport)
+        self.lookups = _LookupsResource(transport)
+        self.catalog = _CatalogResource(transport)
+        self.jobs = _JobsResource(transport)
+        self.results = _ResultsResource(transport)
+        self.raw = _RawMetricsResource(transport)
+
+
+class LyraAdminClient:
+    """Resource-oriented synchronous client for Lyra administration."""
+
+    def __init__(
+        self,
+        host: str,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
+        *,
+        admin_api_key: str | None = None,
+        secure: bool = True,
+    ) -> None:
+        transport = _SyncAdminTransport(
+            host,
+            timeout,
+            headers,
+            api_key=admin_api_key,
+            secure=secure,
+        )
+        self._transport = transport
+        self.health = _HealthResource(transport)
         self.jobs = _AdminJobsResource(transport)
         self.plugin_repos = _AdminPluginReposResource(transport)
         self.catalog = _AdminCatalogResource(transport)
@@ -1231,24 +1286,3 @@ class _AdminResource:
 
     def config_summary(self) -> ConfigSummaryResponse:
         return self._transport.get_admin_config_summary()
-
-
-class LyraClient:
-    """Resource-oriented synchronous client for the Lyra HTTP API."""
-
-    def __init__(
-        self,
-        host: str,
-        timeout: float = 30.0,
-        headers: dict[str, str] | None = None,
-        **options: Unpack[ClientSecurityOptions],
-    ) -> None:
-        transport = _SyncTransport(host, timeout, headers, **options)
-        self._transport = transport
-        self.health = _HealthResource(transport)
-        self.lookups = _LookupsResource(transport)
-        self.catalog = _CatalogResource(transport)
-        self.jobs = _JobsResource(transport)
-        self.results = _ResultsResource(transport)
-        self.raw = _RawMetricsResource(transport)
-        self.admin = _AdminResource(transport)

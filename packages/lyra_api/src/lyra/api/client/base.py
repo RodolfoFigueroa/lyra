@@ -1,7 +1,6 @@
 import importlib
 import logging
 from types import ModuleType
-from typing import NotRequired, TypedDict, Unpack
 from urllib.parse import urlparse
 
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
@@ -77,15 +76,6 @@ def _load_pandas() -> ModuleType:
         raise DownloadError(err) from exc
 
 
-class ClientSecurityOptions(TypedDict):
-    """Authentication, transport, and logging options shared by API clients."""
-
-    agent_api_key: NotRequired[str | None]
-    admin_api_key: NotRequired[str | None]
-    secure: NotRequired[bool]
-    log_level: NotRequired[int]
-
-
 class _BaseTransport:
     """Base class for Lyra API clients, containing shared logic and configuration."""
 
@@ -94,7 +84,9 @@ class _BaseTransport:
         host: str,
         timeout: float = 30.0,
         headers: dict[str, str] | None = None,
-        **options: Unpack[ClientSecurityOptions],
+        *,
+        api_key: str | None = None,
+        secure: bool = True,
     ) -> None:
         """Initialize shared client configuration.
 
@@ -103,37 +95,22 @@ class _BaseTransport:
             timeout: Request timeout in seconds. Defaults to 30.0.
             headers: Default HTTP headers to include in HTTP requests. If None,
                 defaults to an empty dict.
-            agent_api_key: Bearer token for job and result requests.
-            admin_api_key: Bearer token for admin requests.
+            api_key: Bearer token used by this transport's protected routes.
             secure: Whether to use HTTPS. Defaults to True.
-            log_level: Logging level for status messages. Defaults to logging.INFO.
         """
-        agent_api_key = options.get("agent_api_key")
-        admin_api_key = options.get("admin_api_key")
         self.host = host.rstrip("/")
         self.timeout = timeout
         self.headers = dict(headers or {})
-        self._agent_headers = dict(self.headers)
-        self._admin_headers = dict(self.headers)
-        if agent_api_key is not None:
-            self._agent_headers["Authorization"] = f"Bearer {agent_api_key}"
-        if admin_api_key is not None:
-            self._admin_headers["Authorization"] = f"Bearer {admin_api_key}"
-        self.secure = options.get("secure", True)
+        self._auth_headers = dict(self.headers)
+        if api_key is not None:
+            self._auth_headers["Authorization"] = f"Bearer {api_key}"
+        self.secure = secure
         self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self._logger.setLevel(options.get("log_level", logging.INFO))
+        self._logger.setLevel(logging.INFO)
 
     def _http_url(self, path: str) -> str:
         protocol = "https" if self.secure else "http"
         return f"{protocol}://{self.host}/{path.lstrip('/')}"
-
-    def _headers_for_path(self, path: str) -> dict[str, str]:
-        normalized_path = path.lstrip("/")
-        if normalized_path == "jobs" or normalized_path.startswith("jobs/"):
-            return self._agent_headers
-        if normalized_path == "admin" or normalized_path.startswith("admin/"):
-            return self._admin_headers
-        return self.headers
 
     def _job_id_from_result_ref(self, result_ref_or_job_id: str) -> str:
         return parse_result_ref(result_ref_or_job_id)

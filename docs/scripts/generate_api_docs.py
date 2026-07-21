@@ -183,6 +183,8 @@ PAGE_SPECS = (
         symbols=(
             sym("lyra.api", "LyraClient"),
             sym("lyra.api", "AsyncLyraClient"),
+            sym("lyra.api", "LyraAdminClient"),
+            sym("lyra.api", "AsyncLyraAdminClient"),
             sym("lyra.api", "JobHandle"),
             sym("lyra.api", "AsyncJobHandle"),
             sym("lyra.api", "SubmitOptions"),

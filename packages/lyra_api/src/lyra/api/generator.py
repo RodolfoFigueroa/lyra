@@ -818,7 +818,6 @@ class _ClientOptions(TypedDict):
     timeout: NotRequired[float]
     headers: NotRequired[dict[str, str] | None]
     agent_api_key: NotRequired[str | None]
-    admin_api_key: NotRequired[str | None]
     secure: NotRequired[bool]
     verify_catalog: NotRequired[Literal["off", "warn", "error"]]
 
@@ -834,7 +833,6 @@ class Client:
             options.get("timeout", 30.0),
             options.get("headers"),
             agent_api_key=options.get("agent_api_key"),
-            admin_api_key=options.get("admin_api_key"),
             secure=options.get("secure", True),
         )
         self._core = core
@@ -844,7 +842,6 @@ class Client:
         self.jobs = core.jobs
         self.results = core.results
         self.raw = core.raw
-        self.admin = core.admin
         verifier = CatalogVerifier(core, options.get("verify_catalog", "warn"))
         self.metrics = Metrics(core, verifier)
 
@@ -860,7 +857,6 @@ class AsyncClient:
             options.get("timeout", 30.0),
             options.get("headers"),
             agent_api_key=options.get("agent_api_key"),
-            admin_api_key=options.get("admin_api_key"),
             secure=options.get("secure", True),
         )
         self._core = core
@@ -870,7 +866,6 @@ class AsyncClient:
         self.jobs = core.jobs
         self.results = core.results
         self.raw = core.raw
-        self.admin = core.admin
         verifier = AsyncCatalogVerifier(
             core,
             options.get("verify_catalog", "warn"),

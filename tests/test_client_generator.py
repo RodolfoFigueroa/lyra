@@ -127,9 +127,9 @@ def test_checked_in_fixture_exposes_typed_models_and_methods(
         "limit": 25,
         "threshold": None,
     }
-    assert hasattr(
-        generated.Client("example.test", verify_catalog="off").metrics, "advanced_score"
-    )
+    client = generated.Client("example.test", verify_catalog="off")
+    assert not hasattr(client, "admin")
+    assert hasattr(client.metrics, "advanced_score")
     assert hasattr(
         generated.Client("example.test", verify_catalog="off").metrics.raster_export,
         "run_to_file",

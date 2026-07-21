@@ -23,12 +23,7 @@ from typing import (
 import aiofiles
 import aiofiles.os
 import aiohttp
-from lyra.api.client.base import (
-    ClientSecurityOptions,
-    _BaseTransport,
-    _load_pandas,
-    service_unavailable_error,
-)
+from lyra.api.client.base import _BaseTransport, _load_pandas, service_unavailable_error
 from lyra.api.exceptions import (
     DownloadError,
     JobEventCursorGapError,
@@ -333,6 +328,7 @@ async def _response_lines(response: aiohttp.ClientResponse) -> AsyncIterator[str
 
 class _RequestModelOptions(TypedDict):
     error_context: str
+    authenticated: NotRequired[bool]
     expected_status: NotRequired[int]
     params: NotRequired[dict[str, Any] | None]
     json_body: NotRequired[dict[str, Any] | None]
@@ -349,6 +345,7 @@ class _AsyncTransport(_BaseTransport):
         **options: Unpack[_RequestModelOptions],
     ) -> _ModelT:
         error_context = options["error_context"]
+        authenticated = options.get("authenticated", True)
         expected_status = options.get("expected_status", 200)
         params = options.get("params")
         json_body = options.get("json_body")
@@ -361,7 +358,7 @@ class _AsyncTransport(_BaseTransport):
                     self._http_url(path),
                     params=params,
                     json=json_body,
-                    headers=self._headers_for_path(path),
+                    headers=self._auth_headers if authenticated else self.headers,
                 ) as response,
             ):
                 if response.status != expected_status:
@@ -424,6 +421,7 @@ class _AsyncTransport(_BaseTransport):
             "lookups/met-zones",
             MetZoneCodeResponse,
             error_context="fetch met-zone lookup",
+            authenticated=False,
             params={"name": name},
         )
 
@@ -445,7 +443,7 @@ class _AsyncTransport(_BaseTransport):
                 session.post(
                     self._http_url("jobs"),
                     json=body,
-                    headers=self._agent_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 202:
@@ -476,7 +474,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}"),
-                    headers=self._agent_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -507,7 +505,7 @@ class _AsyncTransport(_BaseTransport):
                 session.get(
                     self._http_url("admin/jobs"),
                     params=params,
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -526,7 +524,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.post(
                     self._http_url(f"admin/jobs/{job_id}/cancel"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -659,7 +657,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/status"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -680,7 +678,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/config-summary"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -702,7 +700,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/catalog"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -723,7 +721,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/workers"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -744,7 +742,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"admin/workers/{worker_name}"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -765,7 +763,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url("admin/queues"),
-                    headers=self._admin_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -817,7 +815,7 @@ class _AsyncTransport(_BaseTransport):
                 cursor=cursor,
                 attempts=attempts,
             )
-            headers = dict(self._agent_headers)
+            headers = dict(self._auth_headers)
             if cursor is not None:
                 headers["Last-Event-ID"] = cursor
             try:
@@ -883,7 +881,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}/result"),
-                    headers=self._agent_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -910,7 +908,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}/result/download"),
-                    headers=self._agent_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -966,7 +964,7 @@ class _AsyncTransport(_BaseTransport):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(
                     self._http_url(f"jobs/{job_id}/result/table.jsonl"),
-                    headers=self._agent_headers,
+                    headers=self._auth_headers,
                 ) as response,
             ):
                 if response.status != 200:
@@ -1075,6 +1073,10 @@ class _AsyncTransport(_BaseTransport):
             raise DownloadError(err)
 
         return MetricInfoV4.model_validate(metric)
+
+
+class _AsyncAdminTransport(_AsyncTransport):
+    """Asynchronous transport configured exclusively with an administrator key."""
 
 
 class _HealthResource:
@@ -1304,6 +1306,10 @@ class _AdminCatalogResource:
         return await self._transport.refresh_plugin_catalog()
 
 
+class _WorkerRestartOptions(TypedDict):
+    timeout: NotRequired[float]
+
+
 class _AdminWorkersResource:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._transport = transport
@@ -1314,8 +1320,13 @@ class _AdminWorkersResource:
     async def get(self, name: str) -> WorkerDetail:
         return await self._transport.get_admin_worker(name)
 
-    async def restart(self, *, wait_seconds: float = 30.0) -> WorkerRestartResponse:
-        return await self._transport.restart_workers(timeout=wait_seconds)
+    async def restart(
+        self,
+        **options: Unpack[_WorkerRestartOptions],
+    ) -> WorkerRestartResponse:
+        return await self._transport.restart_workers(
+            timeout=options.get("timeout", 30.0)
+        )
 
 
 class _AdminQueuesResource:
@@ -1344,9 +1355,55 @@ class _AdminRoutingResource:
         return await self._transport.delete_plugin_routing(metric)
 
 
-class _AdminResource:
-    def __init__(self, transport: _AsyncTransport) -> None:
+class AsyncLyraClient:
+    """Resource-oriented asynchronous client for the Lyra HTTP API."""
+
+    def __init__(
+        self,
+        host: str,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
+        *,
+        agent_api_key: str | None = None,
+        secure: bool = True,
+    ) -> None:
+        transport = _AsyncTransport(
+            host,
+            timeout,
+            headers,
+            api_key=agent_api_key,
+            secure=secure,
+        )
         self._transport = transport
+        self.health = _HealthResource(transport)
+        self.lookups = _LookupsResource(transport)
+        self.catalog = _CatalogResource(transport)
+        self.jobs = _JobsResource(transport)
+        self.results = _ResultsResource(transport)
+        self.raw = _RawMetricsResource(transport)
+
+
+class AsyncLyraAdminClient:
+    """Resource-oriented asynchronous client for Lyra administration."""
+
+    def __init__(
+        self,
+        host: str,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
+        *,
+        admin_api_key: str | None = None,
+        secure: bool = True,
+    ) -> None:
+        transport = _AsyncAdminTransport(
+            host,
+            timeout,
+            headers,
+            api_key=admin_api_key,
+            secure=secure,
+        )
+        self._transport = transport
+        self.health = _HealthResource(transport)
         self.jobs = _AdminJobsResource(transport)
         self.plugin_repos = _AdminPluginReposResource(transport)
         self.catalog = _AdminCatalogResource(transport)
@@ -1359,24 +1416,3 @@ class _AdminResource:
 
     async def config_summary(self) -> ConfigSummaryResponse:
         return await self._transport.get_admin_config_summary()
-
-
-class AsyncLyraClient:
-    """Resource-oriented asynchronous client for the Lyra HTTP API."""
-
-    def __init__(
-        self,
-        host: str,
-        timeout: float = 30.0,
-        headers: dict[str, str] | None = None,
-        **options: Unpack[ClientSecurityOptions],
-    ) -> None:
-        transport = _AsyncTransport(host, timeout, headers, **options)
-        self._transport = transport
-        self.health = _HealthResource(transport)
-        self.lookups = _LookupsResource(transport)
-        self.catalog = _CatalogResource(transport)
-        self.jobs = _JobsResource(transport)
-        self.results = _ResultsResource(transport)
-        self.raw = _RawMetricsResource(transport)
-        self.admin = _AdminResource(transport)

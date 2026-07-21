@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
@@ -7,8 +8,8 @@ from typing import Any, ClassVar, NotRequired, Self, TypedDict, Unpack, cast
 import pytest
 import requests
 from lyra.api import parse_result_ref
-from lyra.api.client.async_ import AsyncLyraClient
-from lyra.api.client.sync import LyraClient
+from lyra.api.client.async_ import AsyncLyraAdminClient, AsyncLyraClient
+from lyra.api.client.sync import LyraAdminClient, LyraClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
 from lyra.sdk.models import FileJobResult, JobProgressEvent, TableJobResult
 from lyra.sdk.types import JsonValue
@@ -28,6 +29,34 @@ class AsyncLyraAPIClient(AsyncLyraClient):
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
         return cast("Callable[..., Any]", getattr(self._transport, name))
+
+
+def test_public_client_surfaces_and_credentials_are_separated() -> None:
+    sync_consumer = LyraClient("example.test")
+    async_consumer = AsyncLyraClient("example.test")
+    sync_admin = LyraAdminClient("example.test")
+    async_admin = AsyncLyraAdminClient("example.test")
+
+    assert not hasattr(sync_consumer, "admin")
+    assert not hasattr(async_consumer, "admin")
+    assert not hasattr(sync_admin, "raw")
+    assert not hasattr(async_admin, "raw")
+    assert hasattr(sync_admin, "health")
+    assert hasattr(async_admin, "health")
+
+    sync_consumer_parameters = inspect.signature(LyraClient).parameters
+    async_consumer_parameters = inspect.signature(AsyncLyraClient).parameters
+    sync_admin_parameters = inspect.signature(LyraAdminClient).parameters
+    async_admin_parameters = inspect.signature(AsyncLyraAdminClient).parameters
+
+    assert "agent_api_key" in sync_consumer_parameters
+    assert "agent_api_key" in async_consumer_parameters
+    assert "admin_api_key" not in sync_consumer_parameters
+    assert "admin_api_key" not in async_consumer_parameters
+    assert "admin_api_key" in sync_admin_parameters
+    assert "admin_api_key" in async_admin_parameters
+    assert "agent_api_key" not in sync_admin_parameters
+    assert "agent_api_key" not in async_admin_parameters
 
 
 class _FakeSyncResponseOptions(TypedDict):
@@ -734,16 +763,15 @@ def test_sync_client_uses_admin_job_operations(
 
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
     monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
-    client = LyraAPIClient(
+    client = LyraAdminClient(
         "example.test",
         secure=False,
         timeout=12.0,
-        agent_api_key="agent-secret",
         admin_api_key="admin-secret",
     )
 
-    jobs = client.list_admin_jobs(limit=10, status="running", metric="heavy_metric")
-    cancelled = client.cancel_admin_job("job-1")
+    jobs = client.jobs.list(limit=10, status="running", metric="heavy_metric")
+    cancelled = client.jobs.cancel("job-1")
 
     assert requests_seen == [
         {
@@ -781,29 +809,37 @@ def test_sync_client_uses_observability_routes(
         "http://example.test/admin/queues": _queues_response(),
     }
     seen: list[str] = []
+    seen_headers: list[dict[str, str]] = []
 
     def get(
         url: str,
         *,
         timeout: float,  # noqa: ARG001
-        headers: dict[str, str],  # noqa: ARG001
+        headers: dict[str, str],
     ) -> FakeSyncResponse:
         seen.append(url)
+        seen_headers.append(headers)
         return FakeSyncResponse(payload=responses[url])
 
     monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    client = LyraAPIClient("example.test", secure=False)
+    client = LyraAdminClient(
+        "example.test",
+        secure=False,
+        admin_api_key="admin-secret",
+    )
 
-    liveness = client.get_liveness()
-    readiness = client.get_readiness()
-    status = client.get_admin_status()
-    config = client.get_admin_config_summary()
-    catalog = client.get_admin_catalog()
-    workers = client.get_admin_workers()
-    worker = client.get_admin_worker("interactive")
-    queues = client.get_admin_queues()
+    liveness = client.health.liveness()
+    readiness = client.health.readiness()
+    status = client.status()
+    config = client.config_summary()
+    catalog = client.catalog.summary()
+    workers = client.workers.list()
+    worker = client.workers.get("interactive")
+    queues = client.queues.list()
 
     assert seen == list(responses)
+    assert seen_headers[:2] == [{}, {}]
+    assert seen_headers[2:] == [{"Authorization": "Bearer admin-secret"}] * 6
     assert liveness.status == "ok"
     assert readiness.status == "ready"
     assert readiness.database.status == "ok"
@@ -873,28 +909,33 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
         return FakeSyncResponse(payload=responses.pop(0))
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
-    client = LyraAPIClient(
+    client = LyraClient(
+        "example.test/",
+        secure=False,
+        timeout=12.0,
+    )
+    admin = LyraAdminClient(
         "example.test/",
         secure=False,
         timeout=12.0,
         admin_api_key="admin-secret",
     )
 
-    met_zone = client.get_met_zone_code("Valle de Mexico")
-    repos = client.list_plugin_repos()
-    created = client.create_plugin_repo("dir:///plugins/smoke", repo_id="smoke")
-    updated = client.update_plugin_repo(
+    met_zone = client.lookups.met_zone_code("Valle de Mexico")
+    repos = admin.plugin_repos.list()
+    created = admin.plugin_repos.create("dir:///plugins/smoke", repo_id="smoke")
+    updated = admin.plugin_repos.update(
         "smoke",
         source="dir:///plugins/smoke-updated",
         enabled=False,
     )
-    deleted = client.delete_plugin_repo("smoke")
-    synced = client.sync_plugin_repo("smoke")
-    refreshed = client.refresh_plugin_catalog()
-    restarted = client.restart_workers(timeout=12.5)
-    routing = client.list_plugin_routing()
-    assignment = client.set_plugin_routing("smoke_table_metric", "batch")
-    routing_deleted = client.delete_plugin_routing("smoke_table_metric")
+    deleted = admin.plugin_repos.delete("smoke")
+    synced = admin.plugin_repos.sync("smoke")
+    refreshed = admin.catalog.refresh()
+    restarted = admin.workers.restart(timeout=12.5)
+    routing = admin.routing.list()
+    assignment = admin.routing.set("smoke_table_metric", "batch")
+    routing_deleted = admin.routing.delete("smoke_table_metric")
 
     assert requests_seen == [
         {
@@ -1023,7 +1064,7 @@ def test_sync_client_reports_operator_route_errors(
         DownloadError,
         match=r"Failed to sync plugin repo\. HTTP 409: plugin disabled",
     ):
-        LyraAPIClient("example.test", secure=False).sync_plugin_repo("smoke")
+        LyraAdminClient("example.test", secure=False).plugin_repos.sync("smoke")
 
 
 def test_sync_client_returns_grouped_data_type_schemas(
@@ -1489,18 +1530,17 @@ def test_async_client_uses_admin_job_operations(
         "lyra.api.client.async_.aiohttp.ClientSession",
         RecordingSession,
     )
-    client = AsyncLyraAPIClient(
+    client = AsyncLyraAdminClient(
         "example.test",
         secure=False,
         timeout=12.0,
-        agent_api_key="agent-secret",
         admin_api_key="admin-secret",
     )
 
     jobs = asyncio.run(
-        client.list_admin_jobs(limit=10, status="running", metric="heavy_metric")
+        client.jobs.list(limit=10, status="running", metric="heavy_metric")
     )
-    cancelled = asyncio.run(client.cancel_admin_job("job-1"))
+    cancelled = asyncio.run(client.jobs.cancel("job-1"))
 
     assert RecordingSession.requests_seen == [
         {
@@ -1531,9 +1571,13 @@ def test_async_client_uses_observability_routes(
 ) -> None:
     class RecordingSession(FakeSession):
         urls: ClassVar[list[str]] = []
+        headers: ClassVar[list[dict[str, str]]] = []
 
         def get(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
             self.urls.append(str(args[0]))
+            headers = kwargs.get("headers")
+            assert isinstance(headers, dict)
+            self.headers.append(cast("dict[str, str]", headers))
             return super().get(*args, **kwargs)
 
     responses = [
@@ -1553,16 +1597,20 @@ def test_async_client_uses_observability_routes(
         "lyra.api.client.async_.aiohttp.ClientSession",
         RecordingSession,
     )
-    client = AsyncLyraAPIClient("example.test", secure=False)
+    client = AsyncLyraAdminClient(
+        "example.test",
+        secure=False,
+        admin_api_key="admin-secret",
+    )
 
-    liveness = asyncio.run(client.get_liveness())
-    readiness = asyncio.run(client.get_readiness())
-    status = asyncio.run(client.get_admin_status())
-    config = asyncio.run(client.get_admin_config_summary())
-    catalog = asyncio.run(client.get_admin_catalog())
-    workers = asyncio.run(client.get_admin_workers())
-    worker = asyncio.run(client.get_admin_worker("interactive"))
-    queues = asyncio.run(client.get_admin_queues())
+    liveness = asyncio.run(client.health.liveness())
+    readiness = asyncio.run(client.health.readiness())
+    status = asyncio.run(client.status())
+    config = asyncio.run(client.config_summary())
+    catalog = asyncio.run(client.catalog.summary())
+    workers = asyncio.run(client.workers.list())
+    worker = asyncio.run(client.workers.get("interactive"))
+    queues = asyncio.run(client.queues.list())
 
     assert RecordingSession.urls == [
         "http://example.test/live",
@@ -1574,6 +1622,10 @@ def test_async_client_uses_observability_routes(
         "http://example.test/admin/workers/interactive",
         "http://example.test/admin/queues",
     ]
+    assert RecordingSession.headers[:2] == [{}, {}]
+    assert (
+        RecordingSession.headers[2:] == [{"Authorization": "Bearer admin-secret"}] * 6
+    )
     assert liveness.status == "ok"
     assert readiness.status == "ready"
     assert status.metric_count == 1
@@ -1637,7 +1689,11 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
         "lyra.api.client.async_.aiohttp.ClientSession",
         RecordingSession,
     )
-    client = AsyncLyraAPIClient(
+    client = AsyncLyraClient(
+        "example.test/",
+        secure=False,
+    )
+    admin = AsyncLyraAdminClient(
         "example.test/",
         secure=False,
         admin_api_key="admin-secret",
@@ -1645,24 +1701,24 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
 
     async def run_requests() -> tuple[Any, ...]:
         return (
-            await client.get_met_zone_code("Valle de Mexico"),
-            await client.list_plugin_repos(),
-            await client.create_plugin_repo(
+            await client.lookups.met_zone_code("Valle de Mexico"),
+            await admin.plugin_repos.list(),
+            await admin.plugin_repos.create(
                 "dir:///plugins/smoke",
                 repo_id="smoke",
             ),
-            await client.update_plugin_repo(
+            await admin.plugin_repos.update(
                 "smoke",
                 source="dir:///plugins/smoke-updated",
                 enabled=False,
             ),
-            await client.delete_plugin_repo("smoke"),
-            await client.sync_plugin_repo("smoke"),
-            await client.refresh_plugin_catalog(),
-            await client.restart_workers(timeout=12.5),
-            await client.list_plugin_routing(),
-            await client.set_plugin_routing("smoke_table_metric", "batch"),
-            await client.delete_plugin_routing("smoke_table_metric"),
+            await admin.plugin_repos.delete("smoke"),
+            await admin.plugin_repos.sync("smoke"),
+            await admin.catalog.refresh(),
+            await admin.workers.restart(timeout=12.5),
+            await admin.routing.list(),
+            await admin.routing.set("smoke_table_metric", "batch"),
+            await admin.routing.delete("smoke_table_metric"),
         )
 
     (
@@ -1813,7 +1869,9 @@ def test_async_client_reports_operator_route_errors(
         match=r"Failed to sync plugin repo\. HTTP 409: plugin disabled",
     ):
         asyncio.run(
-            AsyncLyraAPIClient("example.test", secure=False).sync_plugin_repo("smoke")
+            AsyncLyraAdminClient("example.test", secure=False).plugin_repos.sync(
+                "smoke"
+            )
         )
 
 

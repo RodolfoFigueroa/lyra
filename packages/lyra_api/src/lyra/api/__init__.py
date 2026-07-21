@@ -1,6 +1,6 @@
-from lyra.api.client.async_ import AsyncJobHandle, AsyncLyraClient
+from lyra.api.client.async_ import AsyncJobHandle, AsyncLyraAdminClient, AsyncLyraClient
 from lyra.api.client.base import parse_result_ref
-from lyra.api.client.sync import JobHandle, LyraClient
+from lyra.api.client.sync import JobHandle, LyraAdminClient, LyraClient
 from lyra.api.exceptions import (
     DownloadError,
     JobEventCursorGapError,
@@ -14,6 +14,7 @@ from lyra.api.options import RunOptions, SubmitOptions
 
 __all__ = [
     "AsyncJobHandle",
+    "AsyncLyraAdminClient",
     "AsyncLyraClient",
     "DownloadError",
     "JobEventCursorGapError",
@@ -21,6 +22,7 @@ __all__ = [
     "JobHandle",
     "JobWaitTimeoutError",
     "LyraAPIError",
+    "LyraAdminClient",
     "LyraClient",
     "MetricRunError",
     "RunOptions",

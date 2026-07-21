@@ -98,9 +98,9 @@ request. Server-side request validation remains authoritative.
 
 ## Core resources and raw escape hatch
 
-Generated clients expose the core namespaces alongside `metrics`: `health`,
-`lookups`, `catalog`, `jobs`, `results`, `raw`, and `admin`. For a metric not in
-the snapshot, use the explicitly untyped escape hatch:
+Generated clients expose the consumer namespaces alongside `metrics`: `health`,
+`lookups`, `catalog`, `jobs`, `results`, and `raw`. For a metric not in the
+snapshot, use the explicitly untyped escape hatch:
 
 ```python
 result = client.raw.run(
@@ -113,7 +113,27 @@ Raw arguments are JSON objects and raw successful results are
 `TableJobResult | FileJobResult`. Prefer regeneration once the new catalog is
 available.
 
-Operator workflows live under `client.admin`, including `admin.jobs`,
-`admin.plugin_repos`, `admin.catalog`, `admin.workers`, `admin.queues`, and
-`admin.routing`. Use a separate client configured with `admin_api_key` for
-operator applications.
+## Administrator client
+
+Operator applications use a separate client type and credential. Administrator
+resources are exposed directly rather than through consumer clients:
+
+```python
+import os
+
+from lyra.api import LyraAdminClient
+
+admin = LyraAdminClient(
+    "lyra.example.com",
+    admin_api_key=os.environ["LYRA_ADMIN_API_KEY"],
+)
+
+status = admin.status()
+jobs = admin.jobs.list(status="running")
+admin.workers.restart(timeout=30)
+```
+
+Use `AsyncLyraAdminClient` for the equivalent asynchronous interface. Both
+administrator clients expose `health`, `jobs`, `plugin_repos`, `catalog`,
+`workers`, `queues`, and `routing`. Consumer and administrator credentials are
+never accepted by the same client type.

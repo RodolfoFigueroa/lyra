@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-utils-v0.4.0...lyra-utils-v0.5.0) (2026-07-21)
+
+
+### Features
+
+* Add fractional area metrics ([fb4277b](https://github.com/RodolfoFigueroa/lyra/commit/fb4277b236ae00d6ff4c4381f4bffbd68d28300c))
+* Add missing docstrings and misc. lint fixes ([2cd9b2b](https://github.com/RodolfoFigueroa/lyra/commit/2cd9b2bf8c91ffaaa146c9e081a741b59215b9b0))
+* Centralize release pipeline ([0eed021](https://github.com/RodolfoFigueroa/lyra/commit/0eed0216427bc4b8a0413ad0783e68e8fb46cd11))
+* Expose more models in the SDK ([413e185](https://github.com/RodolfoFigueroa/lyra/commit/413e185d88c85bc3cdd7709075a4185097732136))
+
 ## [0.4.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-utils-v0.3.0...lyra-utils-v0.4.0) (2026-07-21)
 
 

@@ -64,8 +64,11 @@ class _MatrixLike(Protocol):
 class DataFrameLike(Protocol):
     """Minimal dataframe interface accepted by table-result constructors."""
 
-    index: Iterable[_Stringable]
-    columns: Iterable[_Stringable]
+    @property
+    def index(self) -> Iterable[_Stringable]: ...
+
+    @property
+    def columns(self) -> Iterable[_Stringable]: ...
 
     def to_numpy(self) -> _MatrixLike: ...
 
@@ -73,10 +76,13 @@ class DataFrameLike(Protocol):
 class SeriesLike(Protocol):
     """Minimal series interface accepted by table-result constructors."""
 
-    name: str | None
-    index: Iterable[_Stringable]
+    @property
+    def name(self) -> _Stringable | None: ...
 
-    def tolist(self) -> list[JsonValue]: ...
+    @property
+    def index(self) -> Iterable[_Stringable]: ...
+
+    def tolist(self) -> list[Any]: ...
 
 
 MappingValueT = TypeVar("MappingValueT")

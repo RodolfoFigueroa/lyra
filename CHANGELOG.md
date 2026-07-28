@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.18.0...lyra-v0.18.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* Fix Pandas protocols ([26fbeac](https://github.com/RodolfoFigueroa/lyra/commit/26fbeacd0a7ed426191964eb019f6ddc7d6d6ec6))
+
 ## [0.18.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.17.0...lyra-v0.18.0) (2026-07-21)
 
 

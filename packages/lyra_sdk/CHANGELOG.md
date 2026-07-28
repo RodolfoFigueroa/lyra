@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.13.0...lyra-sdk-v0.13.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* Fix Pandas protocols ([26fbeac](https://github.com/RodolfoFigueroa/lyra/commit/26fbeacd0a7ed426191964eb019f6ddc7d6d6ec6))
+
 ## [0.13.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.12.0...lyra-sdk-v0.13.0) (2026-07-21)
 
 

@@ -36,7 +36,7 @@ state.
 | Component | Responsibility |
 | --- | --- |
 | FastAPI application | Discovery, validation, resolution, submission, result access, and administration. |
-| `lyra-sdk` | Shared plugin, geometry, catalog, job, and runtime contracts. |
+| `lyra-sdk` | Shared plugin, geometry, catalog, job, runtime, and read-only database contracts; optional Postgres adapter and local connector. |
 | `lyra-api` | Sync and async HTTP clients. |
 | Celery workers | Trusted plugin installation, import, execution, and result validation. |
 | Redis | Celery transport plus retained job status, events, provenance, and results. |
@@ -46,3 +46,9 @@ state.
 API and worker processes deliberately have different trust boundaries. A valid
 catalog entry proves a manifest is readable; it does not prove a worker can
 install or execute the plugin.
+
+The application worker and `LocalRunContext` both use the SDK-owned
+`PostgresLyraDB`; the application does not own a second database client and the
+SDK does not generate one from application code. Production workers own their
+engines and persistence behavior. The local connector owns only the engine it
+creates for its context-manager block.

@@ -68,6 +68,7 @@ PAGE_SPECS = (
         ),
         symbols=(
             sym("lyra.sdk.context", "RunContext"),
+            sym("lyra.sdk.context", "RunCancelledError"),
             sym("lyra.sdk.local", "LocalRunContext"),
             sym("lyra.sdk.db", "LyraDB"),
             sym("lyra.sdk.db", "StubLyraDB"),
@@ -76,6 +77,8 @@ PAGE_SPECS = (
             sym("lyra.sdk.db", "DatabaseQueryTimeoutError"),
             sym("lyra.sdk.db", "DatabaseUnavailableError"),
             sym("lyra.sdk.db", "LyraDatabaseError"),
+            sym("lyra.sdk.postgres", "PostgresLyraDB"),
+            sym("lyra.sdk.postgres", "connect_postgres"),
         ),
     ),
     PageSpec(

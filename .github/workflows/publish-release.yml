@@ -88,10 +88,19 @@ jobs:
 
       - name: Smoke test the built distributions
         run: |
-          mkdir -p "${RUNNER_TEMP}/lyra-release-smoke"
-          cd "${RUNNER_TEMP}/lyra-release-smoke"
+          sdk_wheels=("${RUNNER_TEMP}"/lyra-dist/lyra_sdk-*.whl)
+          uv venv "${RUNNER_TEMP}/lyra-core-smoke"
+          uv pip install --python "${RUNNER_TEMP}/lyra-core-smoke/bin/python" "${sdk_wheels[0]}"
+          "${RUNNER_TEMP}/lyra-core-smoke/bin/python" tests/smoke_installed_distribution.py core
+          uv venv "${RUNNER_TEMP}/lyra-postgres-smoke"
+          uv pip install --python "${RUNNER_TEMP}/lyra-postgres-smoke/bin/python" "${sdk_wheels[0]}[postgres]"
+          "${RUNNER_TEMP}/lyra-postgres-smoke/bin/python" tests/smoke_installed_distribution.py postgres
+
+          mkdir -p "${RUNNER_TEMP}/lyra-app-smoke"
+          cd "${RUNNER_TEMP}/lyra-app-smoke"
           uv init --bare
           uv add "${RUNNER_TEMP}"/lyra-dist/*.whl
+          uv run python "${GITHUB_WORKSPACE}/tests/smoke_installed_distribution.py" application
           uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra.tui; import lyra_app"
           uv run lyra-plugin --help
           uv run lyra-client --help

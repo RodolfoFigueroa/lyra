@@ -86,6 +86,9 @@ uv run python -c "from smoke_plugin.plugin import create_plugin; print(create_pl
 uv run pytest
 ```
 
+For direct execution with the strict database stub, a test fake, or managed
+Postgres/PostGIS, continue with [Run plugins locally](../local-execution/).
+
 Push the repository, add it through `/admin/plugin-repos`, refresh the catalog,
 and restart workers when the refresh response recommends it. The
 [publishing guide](../publish-and-debug/) covers source forms, queues, and

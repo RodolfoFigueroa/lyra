@@ -180,7 +180,8 @@ and return `FileJobResult`.
 ## Runtime context
 
 `RunContext` provides the job and metric names, logger, temporary directory,
-database helper, durable progress events, and cooperative cancellation. Every
+read-only database helper, durable progress events, and cooperative
+cancellation. Every
 worker validates database connectivity before accepting jobs, so plugins may use
 `context.db` directly without a `None` check. A later database outage becomes a
 retryable `database_unavailable` job failure. Statement deadlines become
@@ -199,6 +200,11 @@ the PostgreSQL adapter receive the same `DatabaseUnavailableError`,
 `DatabaseQueryTimeoutError`, and `DatabaseQueryError` types directly; their
 public messages omit SQL parameters and backend details, while the original
 exception remains available through exception chaining.
+
+Use `LocalRunContext` for direct author and unit-test execution. The
+[local-execution guide](../local-execution/) documents the strict stub, an
+injected test fake, and managed Postgres/PostGIS, including ownership and the
+differences from worker execution.
 
 Use `context.report_progress(stage=..., current=..., total=..., unit=...)` for
 monotonic quantitative progress within a stage. A new stage may restart at zero;

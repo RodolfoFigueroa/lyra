@@ -91,6 +91,28 @@ def test_deployment_documents_read_only_database_role_contract() -> None:
     assert "startup never creates or\nchanges roles" in deployment
 
 
+def test_local_execution_documents_supported_database_modes_and_boundaries() -> None:
+    guide = (
+        ROOT / "docs" / "src" / "content" / "docs" / "plugins" / "local-execution.md"
+    ).read_text(encoding="utf-8")
+
+    required_phrases = (
+        "Mode 1: no database",
+        "Mode 2: a test fake",
+        "Mode 3: live Postgres/PostGIS",
+        "uv add lyra-sdk",
+        "uv add 'lyra-sdk[postgres]'",
+        "Python 3.11 and newer",
+        "DatabaseNotConfiguredError",
+        "lyra-sdk-local",
+        "do not form a security boundary",
+        "Multiple calls do not",
+        "schema/version compatibility check",
+    )
+
+    assert all(phrase in guide for phrase in required_phrases)
+
+
 def test_release_parser_accepts_product_and_legacy_application_tags() -> None:
     assert parse_release("lyra-v0.8.0") == Release((0, 8, 0), "lyra-v0.8.0")
     assert parse_release("lyra-app-v0.7.0") == Release((0, 7, 0), "lyra-app-v0.7.0")

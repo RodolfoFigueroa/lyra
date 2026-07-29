@@ -8,13 +8,14 @@ from uuid import uuid4
 import geopandas
 import pytest
 from lyra.sdk import (
+    Bounds,
     DatabaseQueryError,
     DatabaseQueryTimeoutError,
     DatabaseUnavailableError,
     LocalRunContext,
+    RunContext,
     postgres,
 )
-from lyra.sdk.db_types import Bounds
 from lyra.sdk.postgres import PostgresLyraDB, classify_postgres_error
 from lyra.sdk.postgres_connection import (
     PostgresWorkload,
@@ -348,6 +349,36 @@ def test_local_context_reads_match_the_application_adapter(
 
     assert len(owned_engines) == 1
     _assert_no_checked_out_connections(owned_engines[0])
+
+
+def test_live_author_workflow_captures_events_and_file_after_spatial_read(
+    postgis_database: tuple[Engine, str],
+    tmp_path: Path,
+) -> None:
+    postgis_engine, schema = postgis_database
+
+    def run_plugin(context: RunContext) -> int:
+        mesh = context.db.load_mesh_from_bounds(_INTERSECTING_BOUNDS, level=9)
+        context.report_progress(stage="spatial-read", current=1, total=1, unit="query")
+        context.report_message("Spatial read complete", fields={"rows": len(mesh)})
+        (context.temp_dir / "row-count.txt").write_text(
+            str(len(mesh)),
+            encoding="utf-8",
+        )
+        return len(mesh)
+
+    with LocalRunContext.connect_postgres(
+        postgis_engine.url,
+        job_id="live-author-smoke",
+        metric="spatial_author_check",
+        temp_dir=tmp_path,
+        schema=schema,
+    ) as context:
+        row_count = run_plugin(context)
+
+    assert row_count == 1
+    assert [event.kind for event in context.events] == ["progress", "message"]
+    assert (tmp_path / "row-count.txt").read_text(encoding="utf-8") == "1"
 
 
 def test_local_context_rejects_writes_and_releases_failed_transaction(

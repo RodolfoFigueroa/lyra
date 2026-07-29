@@ -44,11 +44,12 @@ result payloads do not include SQL parameters or internal database messages.
 
 ## Read-only database role
 
-Use one centrally provisioned runtime role for the API, spatial loaders, workers,
-and trusted local development. The role must not own the database, data schema,
-tables, or views. It needs only database `CONNECT`, target-schema `USAGE`, and
-`SELECT` on the tables or views Lyra reads. It must not receive `CREATE`,
-`INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, trigger, or ownership privileges.
+Use dedicated login roles for the application runtime and vetted local authors;
+never reuse the database owner or migration role. No reader role may own the
+database, data schema, tables, or views. Grant only database `CONNECT`,
+target-schema `USAGE`, `SELECT` on required tables or views, and `EXECUTE` on
+required functions. Do not grant `CREATE`, `INSERT`, `UPDATE`, `DELETE`,
+`TRUNCATE`, trigger, or ownership privileges.
 
 The following is an operator template, not an application migration. Run it as a
 database administrator, replace the identifiers, and supply credentials through
@@ -61,6 +62,8 @@ CREATE ROLE lyra_runtime LOGIN;
 GRANT CONNECT ON DATABASE lyra TO lyra_runtime;
 GRANT USAGE ON SCHEMA lyra_data TO lyra_runtime;
 GRANT SELECT ON ALL TABLES IN SCHEMA lyra_data TO lyra_runtime;
+GRANT EXECUTE ON FUNCTION lyra_data.required_reader_function(integer)
+    TO lyra_runtime;
 
 ALTER DEFAULT PRIVILEGES
     FOR ROLE lyra_data_owner
@@ -81,11 +84,21 @@ The external loader must create future tables and views as
 database-level read-only default may be used when every connection to that
 database is a reader; otherwise keep the role-level default shown above.
 
+Create an equivalent, separately revocable role for each author or approved
+author group and narrow its table, view, and function grants to actual plugin
+needs. Protect password-bearing URLs in a secret manager, rotate them, and
+revoke login or grants when access ends. Credentials must never appear in
+source control, shell history, logs, screenshots, or issue reports. Configure
+the approved schema explicitly rather than relying on a broad search path.
+
 Lyra also sets every data-engine session to read-only and assigns stable
 `application_name` values (`lyra-api`, `lyra-spatial`, `lyra-worker`, and
-`lyra-probe`). These settings are defense in depth and observability aids, not a
-substitute for database privileges. Application startup never creates or
-changes roles, grants, schemas, or data objects.
+`lyra-probe`); the local SDK uses `lyra-sdk-local`. These settings are
+low-cardinality observability aids, not authorization or a substitute for
+database privileges. Trusted authors, read-only session settings, and
+`LocalRunContext` do not form a security boundary. Application startup never creates or
+changes roles, grants, schemas, or data objects, and local access must treat the
+shared database as real data.
 
 ## State and files
 

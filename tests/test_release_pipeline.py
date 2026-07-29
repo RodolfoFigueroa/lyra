@@ -244,3 +244,20 @@ def test_publisher_is_gated_and_orders_irreversible_operations() -> None:
     assert workflow.index("tag-components:") < workflow.index(
         "publish-product-release:"
     )
+
+
+def test_ci_and_publisher_isolate_sdk_distribution_modes() -> None:
+    workflows = (
+        (ROOT / ".github" / "workflows" / "ci.yml").read_text(),
+        (ROOT / ".github" / "workflows" / "publish-release.yml").read_text(),
+    )
+
+    for workflow in workflows:
+        assert "smoke_installed_distribution.py core" in workflow
+        assert "smoke_installed_distribution.py postgres" in workflow
+        assert 'smoke_installed_distribution.py" application' in workflow
+        assert "lyra_sdk-*.whl" in workflow
+
+
+def test_sdk_distribution_declares_inline_type_information() -> None:
+    assert (ROOT / "packages" / "lyra_sdk" / "src" / "lyra" / "py.typed").is_file()

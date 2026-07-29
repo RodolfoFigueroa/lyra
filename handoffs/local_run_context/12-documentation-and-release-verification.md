@@ -1,6 +1,6 @@
 # Step 12: Document and Release-Verify the Local Plugin Workflow
 
-Status: `planned`
+Status: `complete`
 
 Depends on:
 
@@ -206,7 +206,48 @@ Use the repository's more specific documented commands where they differ from th
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added a navigable plugin-author local-execution guide with
+  runnable public-API examples for the strict stub, a caller-owned fake, and
+  managed live Postgres/PostGIS; documented installation constraints, resource
+  ownership, failure behavior, production semantic differences, transaction
+  scope, connectivity-probe limitations, and the direct-connect trust model.
+  Strengthened deployment and architecture guidance for dedicated,
+  least-privilege author roles, credential handling, the `lyra-sdk-local`
+  identity, authoritative database permissions, and the shared SDK-owned
+  adapter. Completed generated runtime references for `RunCancelledError`,
+  `PostgresLyraDB`, and `connect_postgres`; added the PEP 561 `py.typed` marker;
+  added installed-distribution smoke coverage for independent core SDK,
+  Postgres-extra SDK, and packaged-application environments; upgraded CI and
+  release validation to run those isolated modes; and added a disposable
+  PostGIS author smoke covering a real spatial read, events, and a retained
+  file.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, `uv run ty
+  check`, `uv lock --check`, `uv run python -m build_scripts.release validate`,
+  and `git diff --check` passed. Focused documentation, release, local-context,
+  and connector tests passed (53 tests). `npm run generate --prefix docs`,
+  `npm run check --prefix docs`, `npm run build --prefix docs`, and `npm run
+  check:links --prefix docs` passed, including every new API target and local
+  link. `uv build --all-packages` built all five source and wheel
+  distributions; three fresh Python 3.11 environments passed the core-only,
+  SDK-with-Postgres-extra, and application installed-wheel smoke modes; wheel
+  inspection confirmed all public SDK modules and `lyra/py.typed`. The two
+  live local-author/Postgres parity smokes passed against the documented pinned
+  disposable PostGIS service. The full integration selection had 19 passes and
+  the two unrelated failures already recorded by Step 11. The full coverage
+  command passed outside the restricted sandbox (840 tests passed, 21
+  live-PostGIS tests skipped, 86% total coverage) and regenerated
+  `coverage.xml`.
+- Deviations or follow-up notes: No design deviations and no later handoff
+  assumptions changed. Adding `py.typed` was the small packaging correction
+  required to include the SDK's intended inline type information. The first
+  package-build attempt could not resolve cached build requirements because
+  the restricted environment blocked DNS; the approved network-enabled rerun
+  passed. The restricted full-suite attempt was stopped at the repository's
+  known cross-thread event-loop hang and the same command then passed outside
+  that restriction. The live integration selection still has two pre-existing
+  failures: Psycopg reports the authentication failure without SQLSTATE and the
+  classifier treats that operational error as unavailable, while `SELECT
+  invalid syntax` produces undefined-column SQLSTATE `42703` outside the test's
+  accepted `42P01`/`42601` set. Both are broader Step 08/11 taxonomy-test
+  follow-ups, not documentation or packaging defects.

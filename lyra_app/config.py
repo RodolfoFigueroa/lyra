@@ -13,6 +13,10 @@ from tomllib import TOMLDecodeError
 from typing import Literal, Self
 from urllib.parse import urlparse, urlsplit
 
+from lyra.sdk.postgres_sql import (
+    DEFAULT_POSTGRES_SCHEMA,
+    validate_postgres_identifier,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -415,6 +419,10 @@ class DatabaseConfig(StrictConfigModel):
         repr=False,
         description="PostgreSQL password supplied by LYRA_POSTGRES_PASSWORD.",
     )
+    data_schema: str = Field(
+        default=DEFAULT_POSTGRES_SCHEMA,
+        description="Schema containing Lyra's spatial data tables.",
+    )
     readiness_timeout_seconds: float = Field(
         default=1.0,
         gt=0,
@@ -447,6 +455,19 @@ class DatabaseConfig(StrictConfigModel):
             The normalized, nonblank connection value.
         """
         return _strip_required_string(value)
+
+    @field_validator("data_schema")
+    @classmethod
+    def validate_data_schema(cls, value: str) -> str:
+        """Require a supported PostgreSQL identifier for the data schema.
+
+        Returns:
+            The validated schema identifier.
+        """
+        return validate_postgres_identifier(
+            value,
+            field_name="database.data_schema",
+        )
 
     def read_password(self) -> str:
         """Return the resolved PostgreSQL password.
@@ -1166,6 +1187,7 @@ def _append_database_pool_section(
 
 def _append_database_section(lines: list[str], database: DatabaseConfig) -> None:
     lines.append("[database]")
+    _append_key(lines, "data_schema", database.data_schema)
     _append_key(
         lines,
         "readiness_timeout_seconds",

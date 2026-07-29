@@ -211,7 +211,10 @@ async def _resolve_spatial_input(
         )
 
     converters = importlib.import_module("lyra_app.converters")
-    converter_map = converters.build_converter_map(database.require_spatial_engine())
+    converter_map = converters.build_converter_map(
+        database.require_spatial_engine(),
+        schema=database.config.database.data_schema,
+    )
     return await database.run_spatial(
         resolve_spatial_inputs_with_metadata,
         validated_input,

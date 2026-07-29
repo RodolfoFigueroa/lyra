@@ -11,6 +11,15 @@ from lyra.sdk.postgres import PostgresLyraDB
 from pandas.errors import DatabaseError
 from shapely.geometry import Point, Polygon
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.schema import CreateSchema, DropSchema
+
+from lyra_app.loaders.db import (
+    get_met_zone_code_from_name,
+    load_bounds_from_cvegeos,
+    load_bounds_from_met_zone_code,
+    load_geometries_from_cvegeos,
+    load_geometries_from_met_zone_code,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -25,7 +34,7 @@ class _CheckedOutPool(Protocol):
 
 
 @pytest.fixture(scope="module")
-def postgis_engine() -> Iterator[Engine]:
+def postgis_database() -> Iterator[tuple[Engine, str]]:
     database_url = os.environ.get(_DATABASE_URL_VARIABLE)
     if database_url is None:
         pytest.skip(f"{_DATABASE_URL_VARIABLE} is not configured")
@@ -37,8 +46,12 @@ def postgis_engine() -> Iterator[Engine]:
     try:
         with admin_engine.begin() as connection:
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
-            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-            connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+            connection.execute(CreateSchema(schema))
+            connection.execute(text("SET LOCAL search_path TO public"))
+            connection.execute(
+                text(f'SET LOCAL search_path TO "{schema}", public')
+            )  # test fixture identifier is generated, not caller-controlled
             for statement in _FIXTURE_SQL.read_text().split(";"):
                 if statement.strip():
                     connection.exec_driver_sql(statement)
@@ -48,15 +61,14 @@ def postgis_engine() -> Iterator[Engine]:
             pool_size=1,
             max_overflow=0,
             pool_timeout=1,
-            connect_args={"options": f"-csearch_path={schema},public"},
         )
-        yield query_engine
+        yield query_engine, schema
     finally:
         if query_engine is not None:
             query_engine.dispose()
         try:
             with admin_engine.begin() as connection:
-                connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+                connection.execute(DropSchema(schema, cascade=True, if_exists=True))
         finally:
             admin_engine.dispose()
 
@@ -72,9 +84,10 @@ def _assert_no_checked_out_connections(engine: Engine) -> None:
 
 
 def test_load_denue_from_bounds_characterizes_spatial_results(
-    postgis_engine: Engine,
+    postgis_database: tuple[Engine, str],
 ) -> None:
-    database = PostgresLyraDB(postgis_engine)
+    postgis_engine, schema = postgis_database
+    database = PostgresLyraDB(postgis_engine, schema=schema)
 
     result = database.load_denue_from_bounds(
         _INTERSECTING_BOUNDS,
@@ -96,9 +109,10 @@ def test_load_denue_from_bounds_characterizes_spatial_results(
 
 
 def test_load_mesh_from_bounds_characterizes_spatial_results(
-    postgis_engine: Engine,
+    postgis_database: tuple[Engine, str],
 ) -> None:
-    database = PostgresLyraDB(postgis_engine)
+    postgis_engine, schema = postgis_database
+    database = PostgresLyraDB(postgis_engine, schema=schema)
 
     result = database.load_mesh_from_bounds(_INTERSECTING_BOUNDS, level=9)
 
@@ -114,9 +128,10 @@ def test_load_mesh_from_bounds_characterizes_spatial_results(
 
 
 def test_load_census_from_bounds_characterizes_spatial_results(
-    postgis_engine: Engine,
+    postgis_database: tuple[Engine, str],
 ) -> None:
-    database = PostgresLyraDB(postgis_engine)
+    postgis_engine, schema = postgis_database
+    database = PostgresLyraDB(postgis_engine, schema=schema)
 
     result = database.load_census_from_bounds(
         _INTERSECTING_BOUNDS,
@@ -137,8 +152,11 @@ def test_load_census_from_bounds_characterizes_spatial_results(
     _assert_no_checked_out_connections(postgis_engine)
 
 
-def test_repeated_calls_reuse_the_pooled_engine(postgis_engine: Engine) -> None:
-    database = PostgresLyraDB(postgis_engine)
+def test_repeated_calls_reuse_the_pooled_engine(
+    postgis_database: tuple[Engine, str],
+) -> None:
+    postgis_engine, schema = postgis_database
+    database = PostgresLyraDB(postgis_engine, schema=schema)
 
     first = database.load_mesh_from_bounds(_INTERSECTING_BOUNDS)
     second = database.load_mesh_from_bounds(_INTERSECTING_BOUNDS)
@@ -148,8 +166,11 @@ def test_repeated_calls_reuse_the_pooled_engine(postgis_engine: Engine) -> None:
     _assert_no_checked_out_connections(postgis_engine)
 
 
-def test_database_exception_returns_connection_to_pool(postgis_engine: Engine) -> None:
-    database = PostgresLyraDB(postgis_engine)
+def test_database_exception_returns_connection_to_pool(
+    postgis_database: tuple[Engine, str],
+) -> None:
+    postgis_engine, schema = postgis_database
+    database = PostgresLyraDB(postgis_engine, schema=schema)
 
     with pytest.raises(DatabaseError):
         database.load_census_from_bounds(
@@ -160,4 +181,53 @@ def test_database_exception_returns_connection_to_pool(postgis_engine: Engine) -
 
     _assert_no_checked_out_connections(postgis_engine)
     assert not database.load_mesh_from_bounds(_INTERSECTING_BOUNDS).empty
+    _assert_no_checked_out_connections(postgis_engine)
+
+
+def test_application_spatial_loaders_are_schema_qualified_and_deterministic(
+    postgis_database: tuple[Engine, str],
+) -> None:
+    postgis_engine, schema = postgis_database
+    requested = ["01002", "01001", "01002"]
+
+    with postgis_engine.connect() as connection:
+        geometries = load_geometries_from_cvegeos(
+            requested,
+            conn=connection,
+            schema=schema,
+        )
+        bounds = load_bounds_from_cvegeos(
+            requested,
+            conn=connection,
+            schema=schema,
+        )
+        metropolitan_geometries = load_geometries_from_met_zone_code(
+            "01",
+            conn=connection,
+            schema=schema,
+        )
+        metropolitan_bounds = load_bounds_from_met_zone_code(
+            "01",
+            conn=connection,
+            schema=schema,
+        )
+        match = get_met_zone_code_from_name(
+            "Aguascaliente",
+            conn=connection,
+            schema=schema,
+        )
+
+    assert geometries.index.tolist() == requested
+    assert geometries.columns.tolist() == ["geometry"]
+    _assert_crs_6372(geometries)
+    assert bounds.columns.tolist() == ["geometry"]
+    _assert_crs_6372(bounds)
+    assert metropolitan_geometries.index.tolist() == [
+        "0100100010001",
+        "0100100010002",
+    ]
+    _assert_crs_6372(metropolitan_geometries)
+    assert metropolitan_bounds.columns.tolist() == ["geometry"]
+    _assert_crs_6372(metropolitan_bounds)
+    assert match == ("01", "Aguascalientes")
     _assert_no_checked_out_connections(postgis_engine)

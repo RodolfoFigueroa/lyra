@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.abc
 import inspect
+import math
 import multiprocessing
 import sys
 from typing import TYPE_CHECKING
@@ -12,6 +13,7 @@ import pytest
 from lyra.sdk import DatabaseNotConfiguredError, LyraDB, StubLyraDB, postgres
 from lyra.sdk.db_types import Bounds
 from lyra.sdk.postgres import PostgresLyraDB
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine
 
 if TYPE_CHECKING:
@@ -119,6 +121,7 @@ def test_postgres_database_uses_but_does_not_dispose_injected_engine(
 ) -> None:
     engine = MagicMock(spec=Engine)
     connection = engine.connect.return_value.__enter__.return_value
+    connection.dialect = postgresql.dialect()
     expected = object()
     loader = MagicMock(return_value=expected)
     monkeypatch.setattr(postgres, "_load_geometries_from_bounds", loader)
@@ -130,13 +133,159 @@ def test_postgres_database_uses_but_does_not_dispose_injected_engine(
 
     assert result is expected
     loader.assert_called_once_with(
-        Bounds(0, 0, 1, 1),
+        bounds_parameters={"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0},
         conn=connection,
         columns=["codigo", "geometry"],
         table_name="mesh_level_8",
+        schema="public",
     )
     engine.connect.assert_called_once_with()
     engine.dispose.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            lambda database: database.load_denue_from_bounds(
+                Bounds(0, 0, 1, 1),
+                year=2019,
+                month=11,
+            ),
+            "DENUE year",
+        ),
+        (
+            lambda database: database.load_denue_from_bounds(
+                Bounds(0, 0, 1, 1),
+                year=2025,
+                month=12,
+            ),
+            "DENUE month",
+        ),
+        (
+            lambda database: database.load_mesh_from_bounds(
+                Bounds(0, 0, 1, 1),
+                level=3,
+            ),
+            "mesh level",
+        ),
+        (
+            lambda database: database.load_census_from_bounds(
+                Bounds(0, 0, 1, 1),
+                level="state",
+                columns=["pobtot"],
+            ),
+            "census level",
+        ),
+        (
+            lambda database: database.load_census_from_bounds(
+                Bounds(0, 0, 1, 1),
+                level="mun",
+                columns=[""],
+            ),
+            "non-empty",
+        ),
+        (
+            lambda database: database.load_census_from_bounds(
+                Bounds(0, 0, 1, 1),
+                level="mun",
+                columns=["pobtot", "pobtot"],
+            ),
+            "unique",
+        ),
+        (
+            lambda database: database.load_census_from_bounds(
+                Bounds(0, 0, 1, 1),
+                level="mun",
+                columns=["pobtot; DROP TABLE census_2020_mun"],
+            ),
+            "ASCII",
+        ),
+        (
+            lambda database: database.load_census_from_bounds(
+                Bounds(0, 0, 1, 1),
+                level="mun",
+                columns=["x" * 64],
+            ),
+            "63",
+        ),
+    ],
+)
+def test_postgres_database_rejects_invalid_runtime_arguments_before_connecting(
+    call: Callable[[PostgresLyraDB], object],
+    match: str,
+) -> None:
+    engine = MagicMock(spec=Engine)
+    database = PostgresLyraDB(engine)
+
+    with pytest.raises(ValueError, match=match):
+        call(database)
+
+    engine.connect.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("bounds", "match"),
+    [
+        (Bounds(math.nan, 0, 1, 1), "finite"),
+        (Bounds(0, 0, math.inf, 1), "finite"),
+        (Bounds(1, 0, 1, 1), "xmin"),
+        (Bounds(0, 2, 1, 1), "ymin"),
+    ],
+)
+def test_postgres_database_rejects_invalid_bounds_before_connecting(
+    bounds: Bounds,
+    match: str,
+) -> None:
+    engine = MagicMock(spec=Engine)
+
+    with pytest.raises(ValueError, match=match):
+        PostgresLyraDB(engine).load_mesh_from_bounds(bounds)
+
+    engine.connect.assert_not_called()
+
+
+@pytest.mark.parametrize("schema", ["", "bad-schema", "x" * 64])
+def test_postgres_database_rejects_invalid_schema_before_connecting(
+    schema: str,
+) -> None:
+    engine = MagicMock(spec=Engine)
+
+    with pytest.raises(ValueError, match=r"identifier|63|ASCII"):
+        PostgresLyraDB(engine, schema=schema)
+
+    engine.connect.assert_not_called()
+
+
+def test_postgres_database_preserves_columns_and_quotes_reserved_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = MagicMock(spec=Engine)
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.dialect = postgresql.dialect()
+    expected = object()
+    read_postgis = MagicMock(return_value=expected)
+    compile_query = MagicMock(return_value="compiled query")
+    monkeypatch.setattr(postgres.geopandas, "read_postgis", read_postgis)
+    monkeypatch.setattr(postgres, "compile_postgres_query", compile_query)
+
+    result = PostgresLyraDB(engine, schema="select").load_census_from_bounds(
+        Bounds(0, 0, 1, 1),
+        level="mun",
+        columns=["from", "geometry"],
+    )
+
+    assert result is expected
+    statement = compile_query.call_args.args[0]
+    assert list(statement.selected_columns.keys()) == ["from", "geometry"]
+    assert {table.schema for table in statement.get_final_froms()} == {"select"}
+    assert read_postgis.call_args.args[0] == "compiled query"
+    assert read_postgis.call_args.kwargs["params"] == {
+        "xmin": 0.0,
+        "ymin": 0.0,
+        "xmax": 1.0,
+        "ymax": 1.0,
+    }
 
 
 @pytest.mark.parametrize(

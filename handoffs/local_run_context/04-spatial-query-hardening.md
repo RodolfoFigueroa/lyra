@@ -1,6 +1,6 @@
 # Step 04: Harden spatial query construction
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 03: Extract the PostgreSQL adapter into the SDK](03-postgres-adapter-extraction.md)
 
@@ -146,7 +146,30 @@ Run the required Python checks, plus:
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added the validated `database.data_schema` setting with the
+  backward-compatible `public` default, deterministic TOML rendering, example
+  configuration, and generated-reference coverage; introduced shared optional
+  SDK PostgreSQL identifier validation, fully quoted table construction, and
+  dialect-aware GeoPandas compilation; made `PostgresLyraDB` schema-aware and
+  validate DENUE editions, mesh/census levels, census columns, and finite
+  ordered bounds before connection checkout; schema-qualified every SDK and
+  application spatial query; passed the configured schema through workers,
+  spatial converters, REST, and MCP lookups; added stable query ordering and
+  caller-order-preserving bound CVEGEO resolution, including duplicates; fixed
+  empty, mixed-level, and unsupported-length CVEGEO rejection; and expanded
+  unit and live PostGIS fixtures/tests for validation, identifier safety,
+  schema selection, binding, CRS, output columns, and ordering.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed; focused SDK database, application loader, configuration,
+  worker/runtime, spatial-input route, MCP, and documentation contract tests
+  passed (294 tests); `npm run generate --prefix docs` completed and generated
+  the `database.data_schema` configuration reference/schema; the integration
+  selection without `LYRA_TEST_POSTGIS_URL` safely skipped 6 tests; the same
+  suite against the documented disposable PostGIS 17 / PostGIS 3.5 service
+  passed (6 tests); and the full coverage command passed against PostGIS (753
+  tests, 86% total coverage) and regenerated `coverage.xml`.
+- Deviations or follow-up notes: None. Generated documentation artifacts remain
+  ignored build outputs as established by the repository; their generation and
+  contract checks passed. No implementation decision changed a later handoff
+  assumption.

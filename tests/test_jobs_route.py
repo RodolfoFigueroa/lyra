@@ -666,9 +666,10 @@ def test_discovery_and_lookup_routes_remain_public(
     )
 
     async def lookup_met_zone(  # ruff: ignore[unused-async] -- awaited double
-        _name: str, *, conn: object
+        _name: str, *, conn: object, schema: str
     ) -> tuple[str, str]:
         assert conn is not None
+        assert schema == "public"
         return "09.01", "Valle de México"
 
     monkeypatch.setattr(

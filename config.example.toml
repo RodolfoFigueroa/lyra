@@ -23,6 +23,8 @@ forwarded_allow_ips = ["127.0.0.1"]
 url = "redis://lyra-redis-dev:6379/0"
 
 [database]
+# Schema containing the Lyra-managed spatial data tables.
+data_schema = "public"
 readiness_timeout_seconds = 1.0
 retry_after_seconds = 5
 

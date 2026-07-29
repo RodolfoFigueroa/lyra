@@ -125,6 +125,7 @@ def test_load_config_reads_toml_and_validates_secret_references(
 
     assert config.api.port == 5219
     assert config.database.read_password() == "postgres-secret"
+    assert config.database.data_schema == "public"
     assert config.admin.read_api_key() == "admin-secret"
     assert config.agent.read_api_key() == "agent-secret"
     assert config.agent_submission_limit.limit == 10
@@ -154,6 +155,7 @@ def test_load_and_render_config_preserves_initial_plugin_repos(
         "owner/other-plugin",
     ]
     assert reparsed.plugins.initial_repos == config.plugins.initial_repos
+    assert 'data_schema = "public"' in rendered
 
 
 def test_config_rejects_duplicate_initial_plugin_repos(tmp_path: Path) -> None:

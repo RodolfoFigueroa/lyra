@@ -131,6 +131,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.database.port == 5432
     assert config.database.name == "lyra"
     assert config.database.user == "lyra"
+    assert config.database.data_schema == "public"
     assert config.database.read_password() == "postgres-secret"
     assert config.earth_engine.service_account_file == (
         tmp_path / "secrets" / "service-account.json"
@@ -169,6 +170,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     assert config.database.port == 5432
     assert config.database.name == "lyra"
     assert config.database.user == "lyra"
+    assert config.database.data_schema == "public"
     assert config.database.read_password() == "postgres-secret"
     assert config.earth_engine.service_account_file == (
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
@@ -201,6 +203,20 @@ def test_config_contract_rejects_unknown_fields(tmp_path: Path) -> None:
     raw["unexpected"] = True
 
     _assert_invalid(raw, "Extra inputs are not permitted")
+
+
+@pytest.mark.parametrize(
+    "schema",
+    ["", "bad-schema", "schema.name", "x" * 64],
+)
+def test_config_contract_rejects_invalid_database_data_schema(
+    tmp_path: Path,
+    schema: str,
+) -> None:
+    raw = _valid_config(tmp_path)
+    raw["database"] = {"data_schema": schema}
+
+    _assert_invalid(raw, "database.data_schema")
 
 
 def test_config_contract_rejects_unknown_nested_fields(tmp_path: Path) -> None:

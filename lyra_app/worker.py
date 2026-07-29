@@ -409,7 +409,11 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
 
 
 def _build_db_context() -> LyraDB:
-    return PostgresLyraDB(database_connection.get_worker_engine())
+    config = get_config()
+    return PostgresLyraDB(
+        database_connection.get_worker_engine(),
+        schema=config.database.data_schema,
+    )
 
 
 def _job_id_from_payload(payload: JsonValue, fallback: str) -> str:

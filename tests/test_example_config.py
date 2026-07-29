@@ -40,6 +40,7 @@ def test_example_config_matches_config_contract(
     assert "password" not in raw_config["database"]
     assert "host" not in raw_config["database"]
     assert config.database.api.pool_size == 5
+    assert config.database.data_schema == "public"
     assert "admin" not in raw_config
     assert "agent" not in raw_config
     assert config.database.read_password() == "postgres-secret"
@@ -57,6 +58,7 @@ def test_example_config_matches_config_contract(
     rendered = render_config_toml(config)
 
     assert "[database]" in rendered
+    assert 'data_schema = "public"' in rendered
     assert "[database.api]" in rendered
     assert "[database.spatial]" in rendered
     assert "[database.worker]" in rendered

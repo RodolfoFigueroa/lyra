@@ -35,7 +35,11 @@ async def get_met_zone_code(
         raise RuntimeError(msg)
     try:
         async with database.require_async_engine().connect() as connection:
-            result = await get_met_zone_code_from_name_async(name, conn=connection)
+            result = await get_met_zone_code_from_name_async(
+                name,
+                conn=connection,
+                schema=database.config.database.data_schema,
+            )
     except SQLAlchemyError as exc:
         if not is_database_unavailable_error(exc):
             raise

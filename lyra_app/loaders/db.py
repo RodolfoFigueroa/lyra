@@ -1,147 +1,205 @@
 """Utilities for loading spatial data from a PostGIS database."""
 
-import geopandas
-import sqlalchemy
-from sqlalchemy import Connection, quoted_name, text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from __future__ import annotations
 
-_MET_ZONE_LOOKUP_QUERY = text(
-    """
-    SELECT cve_met, nom_met FROM metropoli_2020
-    WHERE similarity(nom_met, :name) > 0.3
-    ORDER BY similarity(nom_met, :name) DESC
-    LIMIT 1
-    """
+from typing import TYPE_CHECKING
+
+import geopandas
+from lyra.sdk.postgres_sql import (
+    DEFAULT_POSTGRES_SCHEMA,
+    compile_postgres_query,
+    postgres_table,
+    validate_postgres_identifier,
 )
+from sqlalchemy import (
+    Connection,
+    String,
+    bindparam,
+    func,
+    literal_column,
+    select,
+    union_all,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncConnection
+    from sqlalchemy.sql.schema import Table
+    from sqlalchemy.sql.selectable import Join, Select, Subquery
+
+_CVEGEO_LEVEL_BY_LENGTH = {
+    2: "ent",
+    5: "mun",
+    9: "loc",
+    13: "ageb",
+    16: "mza",
+}
+
+
+def _validated_schema(schema: str) -> str:
+    return validate_postgres_identifier(schema, field_name="database schema")
 
 
 def get_table_name_for_cvegeos(cvegeos: list[str]) -> str:
-    """Return the quoted PostGIS table name for a list of cvegeo codes.
-
-    Infers the geographic level from the uniform length of the provided codes:
-
-    - 2 chars → ``census_2020_ent``
-    - 5 chars → ``census_2020_mun``
-    - 9 chars → ``census_2020_loc``
-    - 13 chars → ``census_2020_ageb``
-    - 16 chars → ``census_2020_mza``
-
-    Args:
-        cvegeos: List of cvegeo strings that must all have the same length.
+    """Return the census table name for a non-empty, same-level CVEGEO list.
 
     Returns:
-        A SQL-quoted table name string for the corresponding census level.
+        The census table name corresponding to the identifiers' shared length.
 
     Raises:
-        ValueError: If the cvegeo codes do not all have the same length.
-
+        ValueError: If no identifiers are supplied, their lengths differ, or the
+            shared length does not identify a supported census level.
     """
+    if not cvegeos:
+        msg = "cvegeos must contain at least one identifier"
+        raise ValueError(msg)
+    if any(not isinstance(cvegeo, str) or not cvegeo for cvegeo in cvegeos):
+        msg = "cvegeos must contain only non-empty strings"
+        raise ValueError(msg)
     cvegeo_lengths = {len(cvegeo) for cvegeo in cvegeos}
-
     if len(cvegeo_lengths) != 1:
-        err = "All cvegeos must have the same length to determine the geographic level."
-        raise ValueError(err)
+        msg = "all cvegeos must belong to the same geographic level"
+        raise ValueError(msg)
+    length = next(iter(cvegeo_lengths))
+    try:
+        level = _CVEGEO_LEVEL_BY_LENGTH[length]
+    except KeyError as exc:
+        msg = f"unsupported cvegeo length: {length}"
+        raise ValueError(msg) from exc
+    return f"census_2020_{level}"
 
-    length_to_level_map = {2: "ent", 5: "mun", 9: "loc", 13: "ageb", 16: "mza"}
-    level = length_to_level_map.get(cvegeo_lengths.pop())
 
-    return quoted_name(f"census_2020_{level}", quote=True)
+def _requested_cvegeos(cvegeos: list[str]) -> tuple[Subquery, dict[str, str]]:
+    rows = []
+    parameters = {}
+    for position, cvegeo in enumerate(cvegeos):
+        parameter_name = f"cvegeo_{position}"
+        parameters[parameter_name] = cvegeo
+        rows.append(
+            select(
+                bindparam(parameter_name, type_=String).label("cvegeo"),
+                literal_column(str(position)).label("position"),
+            )
+        )
+    return union_all(*rows).subquery("requested"), parameters
 
 
 def load_geometries_from_cvegeos(
     cvegeos: list[str],
     *,
     conn: Connection,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
 ) -> geopandas.GeoDataFrame:
-    """Load census geometries for a list of cvegeo codes.
-
-    The table is inferred automatically from the cvegeo length via
-    :func:`get_table_name_for_cvegeos`. The result is indexed by ``cvegeo``.
-
-    Args:
-        cvegeos: List of cvegeo strings identifying the census units to load.
-        conn: Active SQLAlchemy database connection.
+    """Load census geometries in the same order as the requested CVEGEO codes.
 
     Returns:
         A GeoDataFrame indexed by ``cvegeo`` with a ``geometry`` column.
-
     """
     table_name = get_table_name_for_cvegeos(cvegeos)
-
+    table = postgres_table(
+        table_name,
+        schema=_validated_schema(schema),
+        columns=["cvegeo", "geometry"],
+    )
+    requested, parameters = _requested_cvegeos(cvegeos)
+    statement = (
+        select(
+            requested.c.cvegeo,
+            table.c.geometry.label("geometry"),
+        )
+        .select_from(requested.join(table, table.c.cvegeo == requested.c.cvegeo))
+        .order_by(
+            requested.c.position,
+            table.c.cvegeo,
+            func.ST_AsEWKB(table.c.geometry),
+        )
+    )
     return geopandas.read_postgis(
-        f"""
-        SELECT cvegeo, geometry AS geometry
-        FROM {table_name}
-        WHERE cvegeo IN %(cvegeos)s
-        """,  # ruff:ignore[hardcoded-sql-expression]
+        compile_postgres_query(statement, conn),
         conn,
-        params={"cvegeos": tuple(cvegeos)},
+        params=parameters,
         geom_col="geometry",
-    ).set_index("cvegeo")  # ty: ignore[no-matching-overload]
+    ).set_index("cvegeo")
 
 
 def load_bounds_from_cvegeos(
     cvegeos: list[str],
     *,
     conn: Connection,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
 ) -> geopandas.GeoDataFrame:
-    """Load the aggregate bounding-box geometry for a list of cvegeo codes.
-
-    Computes ``ST_Extent`` over all matching census geometries and returns a
-    single-row GeoDataFrame containing the envelope.
-
-    Args:
-        cvegeos: List of cvegeo strings identifying the census units.
-        conn: Active SQLAlchemy database connection.
+    """Load one aggregate bounding-box geometry for the requested CVEGEO codes.
 
     Returns:
         A single-row GeoDataFrame with the combined bounding-box geometry.
-
     """
     table_name = get_table_name_for_cvegeos(cvegeos)
-
+    table = postgres_table(
+        table_name,
+        schema=_validated_schema(schema),
+        columns=["cvegeo", "geometry"],
+    )
+    requested, parameters = _requested_cvegeos(cvegeos)
+    statement = select(
+        func.ST_Envelope(func.ST_Collect(table.c.geometry)).label("geometry")
+    ).select_from(requested.join(table, table.c.cvegeo == requested.c.cvegeo))
     return geopandas.read_postgis(
-        f"""
-        SELECT ST_Extent(geometry)::geometry AS geometry
-        FROM {table_name}
-        WHERE cvegeo IN %(cvegeos)s
-        """,  # ruff:ignore[hardcoded-sql-expression]
+        compile_postgres_query(statement, conn),
         conn,
-        params={"cvegeos": tuple(cvegeos)},
+        params=parameters,
         geom_col="geometry",
-    )  # ty: ignore[no-matching-overload]
+    )
 
 
-# Metropolitan-zone imports currently use AGEB geometries only.
+def _metropolitan_tables(schema: str) -> tuple[Table, Table, Join]:
+    validated_schema = _validated_schema(schema)
+    ageb = postgres_table(
+        "census_2020_ageb",
+        schema=validated_schema,
+        columns=["cvegeo", "cve_mun", "geometry"],
+    )
+    municipality = postgres_table(
+        "census_2020_mun",
+        schema=validated_schema,
+        columns=["cvegeo", "cve_met"],
+    )
+    metropolitan = postgres_table(
+        "metropoli_2020",
+        schema=validated_schema,
+        columns=["cve_met", "nom_met"],
+    )
+    joined = ageb.join(
+        municipality,
+        ageb.c.cve_mun == municipality.c.cvegeo,
+    ).join(
+        metropolitan,
+        municipality.c.cve_met == metropolitan.c.cve_met,
+    )
+    return ageb, metropolitan, joined
+
+
 def load_geometries_from_met_zone_code(
     code: str,
     *,
     conn: Connection,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
 ) -> geopandas.GeoDataFrame:
     """Load AGEB geometries for all census units in a metropolitan zone.
 
-    Joins ``census_2020_ageb`` → ``census_2020_mun`` → ``metropoli_2020`` to
-    retrieve every AGEB belonging to the given metropolitan zone code. The
-    result is indexed by ``cvegeo``.
-
-    Args:
-        code: Metropolitan zone code (``cve_met``).
-        conn: Active SQLAlchemy database connection.
-
     Returns:
         A GeoDataFrame of AGEB geometries indexed by ``cvegeo``.
-
     """
+    ageb, metropolitan, joined = _metropolitan_tables(schema)
+    statement = (
+        select(ageb.c.cvegeo, ageb.c.geometry.label("geometry"))
+        .select_from(joined)
+        .where(metropolitan.c.cve_met == bindparam("code"))
+        .order_by(
+            ageb.c.cvegeo,
+            func.ST_AsEWKB(ageb.c.geometry),
+        )
+    )
     return geopandas.read_postgis(
-        """
-        SELECT census_2020_ageb.cvegeo, census_2020_ageb.geometry
-            FROM census_2020_ageb
-        INNER JOIN census_2020_mun
-            ON census_2020_ageb.cve_mun = census_2020_mun.cvegeo
-        INNER JOIN metropoli_2020
-            ON census_2020_mun.cve_met = metropoli_2020.cve_met
-        WHERE metropoli_2020.cve_met = %(code)s
-        """,
+        compile_postgres_query(statement, conn),
         conn,
         params={"code": code},
         geom_col="geometry",
@@ -149,40 +207,46 @@ def load_geometries_from_met_zone_code(
 
 
 def load_bounds_from_met_zone_code(
-    code: str, *, conn: Connection
+    code: str,
+    *,
+    conn: Connection,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
 ) -> geopandas.GeoDataFrame:
-    """Load the aggregate bounding-box geometry for a metropolitan zone.
-
-    Computes ``ST_Extent`` over all AGEB geometries belonging to the given
-    metropolitan zone code.
-
-    Args:
-        code: Metropolitan zone code (``cve_met``).
-        conn: Active SQLAlchemy database connection.
+    """Load one aggregate bounding-box geometry for a metropolitan zone.
 
     Returns:
-        A single-row GeoDataFrame indexed by ``cve_met`` containing the
-        combined bounding-box geometry.
-
+        A single-row GeoDataFrame containing the combined bounding-box geometry.
     """
-    crs = conn.execute(
-        sqlalchemy.text("SELECT ST_SRID(geometry) FROM census_2020_ageb LIMIT 1")
-    ).scalar()
-
+    ageb, metropolitan, joined = _metropolitan_tables(schema)
+    statement = (
+        select(func.ST_Envelope(func.ST_Collect(ageb.c.geometry)).label("geometry"))
+        .select_from(joined)
+        .where(metropolitan.c.cve_met == bindparam("code"))
+    )
     return geopandas.read_postgis(
-        """
-        SELECT ST_Extent(census_2020_ageb.geometry)::geometry AS geometry
-            FROM census_2020_ageb
-        INNER JOIN census_2020_mun
-            ON census_2020_ageb.cve_mun = census_2020_mun.cvegeo
-        INNER JOIN metropoli_2020
-            ON census_2020_mun.cve_met = metropoli_2020.cve_met
-        WHERE metropoli_2020.cve_met = %(code)s
-        """,
+        compile_postgres_query(statement, conn),
         conn,
         params={"code": code},
         geom_col="geometry",
-        crs=crs,
+    )
+
+
+def _met_zone_lookup_statement(schema: str) -> Select[tuple[str, str]]:
+    metropolitan = postgres_table(
+        "metropoli_2020",
+        schema=_validated_schema(schema),
+        columns=["cve_met", "nom_met"],
+    )
+    score = func.similarity(metropolitan.c.nom_met, bindparam("name"))
+    return (
+        select(metropolitan.c.cve_met, metropolitan.c.nom_met)
+        .where(score > bindparam("similarity_threshold"))
+        .order_by(
+            score.desc(),
+            metropolitan.c.nom_met,
+            metropolitan.c.cve_met,
+        )
+        .limit(literal_column("1"))
     )
 
 
@@ -190,21 +254,13 @@ def get_met_zone_code_from_name(
     name: str,
     *,
     conn: Connection,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
 ) -> tuple[str, str] | None:
-    """Return (cve_met, nom_met) for the closest matching metropolitan zone name.
-
-    Uses PostgreSQL trigram similarity (pg_trgm extension required).
-    Returns None if no zone exceeds the similarity threshold.
-
-    Args:
-        name: The (possibly misspelled) metropolitan zone name to search for.
-        conn: Active SQLAlchemy database connection.
-
-    Returns:
-        A tuple of (cve_met, nom_met) for the best match, or None.
-
-    """
-    result = conn.execute(_MET_ZONE_LOOKUP_QUERY, {"name": name})
+    """Return the closest metropolitan-zone code and name, if one matches."""
+    result = conn.execute(
+        _met_zone_lookup_statement(schema),
+        {"name": name, "similarity_threshold": 0.3},
+    )
     row = result.fetchone()
     if row is None:
         return None
@@ -215,9 +271,13 @@ async def get_met_zone_code_from_name_async(
     name: str,
     *,
     conn: AsyncConnection,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
 ) -> tuple[str, str] | None:
     """Return the closest metropolitan-zone match using an async connection."""
-    result = await conn.execute(_MET_ZONE_LOOKUP_QUERY, {"name": name})
+    result = await conn.execute(
+        _met_zone_lookup_statement(schema),
+        {"name": name, "similarity_threshold": 0.3},
+    )
     row = result.fetchone()
     if row is None:
         return None

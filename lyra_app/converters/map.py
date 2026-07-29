@@ -3,6 +3,7 @@
 from functools import partial
 from typing import Any
 
+from lyra.sdk.postgres_sql import DEFAULT_POSTGRES_SCHEMA
 from sqlalchemy.engine import Engine
 
 from lyra_app.converters.bounds import (
@@ -25,7 +26,11 @@ from lyra_app.converters.location import (
 )
 
 
-def build_converter_map(engine: Engine) -> dict[str, dict[str, Any]]:
+def build_converter_map(
+    engine: Engine,
+    *,
+    schema: str = DEFAULT_POSTGRES_SCHEMA,
+) -> dict[str, dict[str, Any]]:
     """Bind spatial input converters to a database engine.
 
     Returns:
@@ -33,13 +38,29 @@ def build_converter_map(engine: Engine) -> dict[str, dict[str, Any]]:
     """
     return {
         "location": {
-            "cvegeo_list": partial(load_location_from_cvegeos, engine=engine),
-            "met_zone_code": partial(load_location_from_met_zone_code, engine=engine),
+            "cvegeo_list": partial(
+                load_location_from_cvegeos,
+                engine=engine,
+                schema=schema,
+            ),
+            "met_zone_code": partial(
+                load_location_from_met_zone_code,
+                engine=engine,
+                schema=schema,
+            ),
             "geojson": load_location_from_geojson,
         },
         "bounds": {
-            "cvegeo_list": partial(load_bounds_from_cvegeos, engine=engine),
-            "met_zone_code": partial(load_bounds_from_met_zone_code, engine=engine),
+            "cvegeo_list": partial(
+                load_bounds_from_cvegeos,
+                engine=engine,
+                schema=schema,
+            ),
+            "met_zone_code": partial(
+                load_bounds_from_met_zone_code,
+                engine=engine,
+                schema=schema,
+            ),
             "geojson": load_bounds_from_geojson,
         },
     }

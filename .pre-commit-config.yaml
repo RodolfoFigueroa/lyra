@@ -4,15 +4,6 @@ repos:
     hooks:
       - id: uv-lock
 
-  - repo: local
-    hooks:
-      - id: generate-sdk-interface
-        name: Generate SDK Interface
-        entry: bash build_scripts/generate_sdk.sh
-        language: system
-        files: ^lyra_app/db/client\.py$
-        pass_filenames: false
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.22
     hooks:

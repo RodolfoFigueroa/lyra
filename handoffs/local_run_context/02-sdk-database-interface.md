@@ -1,6 +1,6 @@
 # Step 02: Make the SDK database interface authoritative
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 01: PostGIS integration harness](01-postgis-integration-harness.md)
 
@@ -125,7 +125,32 @@ Run the required formatting, linting, and type checks, plus:
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Replaced the generated SDK database class with a
+  hand-maintained, dependency-light `LyraDB` abstract interface without an
+  engine constructor; added and exported `DatabaseNotConfiguredError` and the
+  strict `StubLyraDB`; migrated the SDK plugin test context from an unsafe cast
+  to the stub; added SDK coverage for abstractness, application adapter
+  compatibility, preserved method parameter contracts, method-specific stub
+  failures, and imports with database packages blocked; removed the SDK
+  database generator, wrapper, tests, and pre-commit hook; and added the new
+  SDK symbols and constructor guidance to API-reference inputs and plugin
+  documentation.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and
+  `uv run ty check` passed; `uv run pytest tests/test_sdk_database.py
+  tests/test_sdk_plugin.py -q` passed (22 tests); the Step 01 PostGIS suite
+  passed against a disposable pinned PostGIS container (5 tests), while the
+  same selection without `LYRA_TEST_POSTGIS_URL` safely skipped all 5 tests;
+  `uv run pre-commit run --all-files` passed; `uv build --package lyra-sdk`
+  built the wheel and source distribution; an isolated Python 3.13 environment
+  installed the core wheel and imported the public database symbols without
+  loading GeoPandas, Psycopg, or SQLAlchemy;
+  `npm run generate --prefix docs` generated reference entries for all three
+  database symbols; and the full coverage command passed against the
+  disposable PostGIS service (715 tests, 86% total coverage) and regenerated
+  `coverage.xml`.
+- Deviations or follow-up notes: None. The full suite was run outside the
+  restricted command sandbox because that environment does not deliver
+  asyncio cross-thread event-loop wakeups; the same suite completes normally
+  without that sandbox restriction. No implementation decision changed a later
+  handoff assumption.

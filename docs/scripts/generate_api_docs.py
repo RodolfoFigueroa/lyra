@@ -69,6 +69,8 @@ PAGE_SPECS = (
         symbols=(
             sym("lyra.sdk.context", "RunContext"),
             sym("lyra.sdk.db", "LyraDB"),
+            sym("lyra.sdk.db", "StubLyraDB"),
+            sym("lyra.sdk.db", "DatabaseNotConfiguredError"),
         ),
     ),
     PageSpec(

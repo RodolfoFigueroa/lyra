@@ -1,7 +1,7 @@
 """Public interfaces for developing and running Lyra plugins."""
 
 from lyra.sdk.context import RunContext
-from lyra.sdk.db import LyraDB
+from lyra.sdk.db import DatabaseNotConfiguredError, LyraDB, StubLyraDB
 from lyra.sdk.db_types import Bounds
 from lyra.sdk.models import (
     AdminStatusResponse,
@@ -96,6 +96,7 @@ __all__ = [
     "ConfigSummaryResponse",
     "CreatePluginRepoRequest",
     "CreatePluginRepoResponse",
+    "DatabaseNotConfiguredError",
     "DeleteMetricQueueResponse",
     "DeletePluginRepoResponse",
     "FailedJobResult",
@@ -144,6 +145,7 @@ __all__ = [
     "RowIdentityMetadata",
     "RunContext",
     "SetMetricQueueRequest",
+    "StubLyraDB",
     "SyncPluginRepoResponse",
     "TableJobResult",
     "TerminalJobResult",

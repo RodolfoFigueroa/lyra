@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import pytest
 from jsonschema.validators import validator_for
@@ -16,6 +16,7 @@ from lyra.sdk import (
     PluginDefinition,
     PluginDefinitionError,
     RunContext,
+    StubLyraDB,
     metric,
 )
 from lyra.sdk.models import JobEnvelope, JobMessageLevel, TableJobResult
@@ -79,7 +80,7 @@ def _table_output() -> TableOutputV4:
     )
 
 
-_FAKE_DB = cast("LyraDB", object())
+_FAKE_DB = StubLyraDB()
 
 
 @dataclass

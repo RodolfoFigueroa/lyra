@@ -187,9 +187,11 @@ retryable `database_unavailable` job failure.
 
 Call `context.check_cancelled()` around expensive stages. Expected domain
 failures may return `FailedJobResult`; unexpected exceptions and invalid results
-are normalized by the worker. Unit-test contexts must provide a fake or mocked
-`LyraDB`; a strict fake that rejects unexpected calls is preferred for metrics
-that do not use the database.
+are normalized by the worker. Unit-test contexts can use `StubLyraDB`, which
+raises `DatabaseNotConfiguredError` for every operation, when a metric should not
+access the database. Database implementations own their initialization; the
+`LyraDB` interface no longer exposes the backend-specific engine constructor
+that earlier releases generated from the application adapter.
 
 Use `context.report_progress(stage=..., current=..., total=..., unit=...)` for
 monotonic quantitative progress within a stage. A new stage may restart at zero;

@@ -21,6 +21,7 @@ from typing import (
     runtime_checkable,
 )
 
+from lyra.sdk.context import RunCancelledError
 from lyra.sdk.models import (
     JobEnvelope,
     JobEvent,
@@ -462,7 +463,7 @@ class AgentSubmissionLimitDecision(StrictBaseModel):
     retry_after_seconds: int = Field(ge=1)
 
 
-class JobCancelledError(RuntimeError):
+class JobCancelledError(RunCancelledError):
     """Indicate that an operation cannot continue because its job was cancelled."""
 
     def __init__(self, job_id: str) -> None:

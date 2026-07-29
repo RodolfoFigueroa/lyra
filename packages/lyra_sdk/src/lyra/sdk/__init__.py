@@ -1,6 +1,6 @@
 """Public interfaces for developing and running Lyra plugins."""
 
-from lyra.sdk.context import RunContext
+from lyra.sdk.context import RunCancelledError, RunContext
 from lyra.sdk.db import (
     DatabaseNotConfiguredError,
     DatabaseQueryError,
@@ -155,6 +155,7 @@ __all__ = [
     "ResultLifetime",
     "ResultReference",
     "RowIdentityMetadata",
+    "RunCancelledError",
     "RunContext",
     "SetMetricQueueRequest",
     "StubLyraDB",

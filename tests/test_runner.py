@@ -1532,3 +1532,63 @@ def test_run_context_coalesces_progress_and_flushes_latest(
         if isinstance(event.event, JobProgressEvent)
     ]
     assert progress == [0, 2]
+
+
+def test_run_context_preserves_progress_sequence_across_stages(
+    worker_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_redis = FakeRedisSync()
+    config = get_config()
+    coalescing_config = config.model_copy(
+        update={
+            "job_events": config.job_events.model_copy(
+                update={"progress_min_interval_ms": 1_000}
+            )
+        }
+    )
+    monkeypatch.setattr(worker_module, "get_config", lambda: coalescing_config)
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 100.0)
+    context = worker_module.WorkerRunContext(
+        job_id="job-1",
+        metric="metric",
+        logger=worker_module.logger,
+        temp_dir=tmp_path,
+        db=None,
+    )
+    worker_module.job_store.set_job_status(
+        "job-1", "queued", metric="metric", client=fake_redis
+    )
+    worker_module.job_store.set_job_status(
+        "job-1", "running", metric="metric", client=fake_redis
+    )
+
+    context.report_progress(stage="compute", current=0, total=3, unit="tiles")
+    context.report_progress(stage="compute", current=1, total=3, unit="tiles")
+    context.report_progress(stage="compute", current=2, total=3, unit="tiles")
+    context.report_progress(stage="save", current=0, total=1, unit="file")
+    context.report_progress(stage="save", current=1, total=1, unit="file")
+    context.report_message("Saved output")
+    context.flush_events()
+
+    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
+    progress = [
+        (event.event.stage, event.event.current)
+        for event in events
+        if isinstance(event.event, JobProgressEvent)
+    ]
+    assert progress == [
+        ("compute", 0),
+        ("compute", 2),
+        ("save", 0),
+        ("save", 1),
+    ]
+    assert [event.event.name for event in events[-5:]] == [
+        "progress",
+        "progress",
+        "progress",
+        "progress",
+        "message",
+    ]

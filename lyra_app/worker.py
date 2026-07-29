@@ -40,6 +40,7 @@ from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.plugin import PluginDefinition, PluginResult
 from lyra.sdk.plugin_loader import load_plugin_definition
 from lyra.sdk.postgres import PostgresLyraDB
+from lyra.sdk.run_context_state import RunProgressState
 from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
 
@@ -92,8 +93,8 @@ class WorkerRunContext:
     _pending_progress: JobProgressEvent | None = field(
         default=None, init=False, repr=False
     )
-    _last_reported_progress: JobProgressEvent | None = field(
-        default=None, init=False, repr=False
+    _progress_state: RunProgressState = field(
+        default_factory=RunProgressState, init=False, repr=False
     )
     _last_progress_emit: float | None = field(default=None, init=False, repr=False)
     _suppressed_messages: int = field(default=0, init=False, repr=False)
@@ -127,12 +128,7 @@ class WorkerRunContext:
         unit: str | None = None,
         message: str | None = None,
     ) -> None:
-        """Validate, coalesce, and persist progress for the running job.
-
-        Raises:
-            ValueError: If progress decreases or changes its total or unit within a
-                stage.
-        """
+        """Validate, coalesce, and persist progress for the running job."""
         event = JobProgressEvent(
             job_id=self.job_id,
             metric=self.metric,
@@ -143,21 +139,11 @@ class WorkerRunContext:
             unit=unit,
             message=message,
         )
-        previous = self._last_reported_progress
+        previous = self._progress_state.last_event
         stage_changed = previous is None or previous.stage != stage
-        if previous is not None and not stage_changed:
-            if event.current < previous.current:
-                msg = f"Progress for stage {stage!r} must not decrease."
-                raise ValueError(msg)
-            if previous.total is not None and event.total != previous.total:
-                msg = f"Progress total for stage {stage!r} must remain stable."
-                raise ValueError(msg)
-            if previous.unit != event.unit:
-                msg = f"Progress unit for stage {stage!r} must remain stable."
-                raise ValueError(msg)
+        self._progress_state.accept(event)
         if stage_changed and self._pending_progress is not None:
             self._emit_progress(self._pending_progress, force=True)
-        self._last_reported_progress = event
         completed = event.total is not None and event.current == event.total
         elapsed_ms = (
             None

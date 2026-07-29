@@ -1,6 +1,6 @@
 # Step 09: Share Run-Context Event Semantics
 
-Status: `planned`
+Status: `complete`
 
 Depends on:
 
@@ -145,7 +145,26 @@ When running the full suite, generate `coverage.xml`.
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added the public SDK `RunCancelledError` contract and
+  documented it on `RunContext.check_cancelled()`, while preserving application
+  compatibility by making `job_store.JobCancelledError` its subclass. Added the
+  SDK-owned, top-level-unexported `RunProgressState` implementation utility for
+  monotonic current, stable concrete total, stable unit, stage reset, and
+  rejection-safe state updates. Replaced `WorkerRunContext`'s private transition
+  implementation with the shared helper without moving throttling, coalescing,
+  persistence, message validation, logging, or cancellation polling out of the
+  application. Added focused SDK transition and cancellation tests plus worker
+  characterization coverage for coalescing, stage boundaries, completion, and
+  message ordering.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed. Focused SDK context, worker, and job-store coverage passed with
+  `uv run pytest tests/test_sdk_context.py tests/test_runner.py
+  tests/test_job_store.py -q` (91 passed). The full coverage command `uv run
+  pytest --cov=lyra_app --cov=lyra --cov-report=term-missing
+  --cov-report=xml` passed (804 tests passed, 18 live-PostGIS tests skipped
+  because `LYRA_TEST_POSTGIS_URL` was not configured, 86% total coverage) and
+  regenerated `coverage.xml`.
+- Deviations or follow-up notes: No design deviations and no later handoff
+  assumptions changed. The live PostGIS tests are unrelated to this step and
+  remained skipped because their external database URL was not configured.

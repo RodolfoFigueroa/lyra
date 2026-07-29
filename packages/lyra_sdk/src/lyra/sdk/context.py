@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from lyra.sdk.models import JobMessageLevel
 
 
+class RunCancelledError(RuntimeError):
+    """Indicate that a metric run was cooperatively cancelled."""
+
+
 class RunContext(Protocol):
     """Runtime services and durable reporting hooks provided to a metric run."""
 
@@ -99,10 +103,10 @@ class RunContext(Protocol):
         cancellation remains cooperative and responsive.
 
         Raises:
-            RuntimeError: If the current job has been cancelled.
+            RunCancelledError: If the current job has been cancelled.
 
         """
         ...
 
 
-__all__ = ["RunContext"]
+__all__ = ["RunCancelledError", "RunContext"]

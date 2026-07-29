@@ -1,6 +1,6 @@
 # Step 05: Read-only connection profiles
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 04: Harden spatial query construction](04-spatial-query-hardening.md)
 
@@ -125,7 +125,27 @@ Run the required Python checks, plus:
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added a shared optional-SDK PostgreSQL profile helper with
+  fixed low-cardinality API, spatial, worker, probe, integration, and future
+  local workload names; made workload selection mandatory at application engine
+  factories; applied read-only transaction defaults and preserved URL-supplied
+  libpq/TLS options while retaining all existing connection, pool, recycle,
+  pre-ping, and statement deadlines; enabled SQLAlchemy parameter hiding;
+  assigned distinct API, spatial, worker, and startup-probe profiles; extended
+  the disposable PostGIS fixture with isolated owner and login-capable runtime
+  roles, least-privilege grants, role defaults, and deterministic cleanup; added
+  live assertions for every supported read, read-only/session identity,
+  privilege denial, rejected DML/DDL, pool return, and password redaction; and
+  documented an operator-owned least-privilege SQL template plus ongoing role
+  auditing guidance.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed; focused engine, configuration, worker/probe, SDK database, and
+  documentation contract tests passed (49 tests); the live PostGIS 17 / PostGIS
+  3.5 integration suite passed (13 tests); `npm run generate --prefix docs`,
+  `npm run check --prefix docs`, `npm run build --prefix docs`, and `npm run
+  check:links --prefix docs` passed; and the full live-database coverage command
+  passed (762 tests, 86% total coverage) and regenerated `coverage.xml`.
+- Deviations or follow-up notes: None. The shared profile helper includes the
+  reserved `lyra-sdk-local` identity for Step 11 but does not create a local
+  engine or connection manager. No later handoff assumption changed.

@@ -8,6 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
+from lyra.sdk.postgres_connection import (
+    PostgresWorkload,
+    apply_read_only_postgres_profile,
+)
 from sqlalchemy import text
 from sqlalchemy.engine import URL, Engine, create_engine
 from sqlalchemy.exc import DBAPIError, OperationalError
@@ -49,22 +53,24 @@ def database_url(
 
 def _engine_options(
     pool: DatabasePoolConfig,
-) -> dict[str, bool | int | float | dict[str, int | str]]:
+) -> dict[str, bool | int | float | dict[str, int]]:
     return {
         "pool_size": pool.pool_size,
         "max_overflow": pool.max_overflow,
         "pool_timeout": pool.pool_timeout_seconds,
         "pool_recycle": pool.pool_recycle_seconds,
         "pool_pre_ping": True,
+        "hide_parameters": True,
         "connect_args": {
             "connect_timeout": pool.connect_timeout_seconds,
-            "options": f"-c statement_timeout={pool.statement_timeout_ms}",
         },
     }
 
 
 def create_sync_database_engine(
     pool: DatabasePoolConfig,
+    *,
+    workload: PostgresWorkload,
     config: LyraConfig | None = None,
 ) -> Engine:
     """Create a synchronous SQLAlchemy engine for one configured workload pool.
@@ -72,11 +78,18 @@ def create_sync_database_engine(
     Returns:
         A lazily connecting synchronous database engine.
     """
-    return create_engine(database_url(config=config), **_engine_options(pool))
+    url = apply_read_only_postgres_profile(
+        database_url(config=config),
+        workload=workload,
+        statement_timeout_ms=pool.statement_timeout_ms,
+    )
+    return create_engine(url, **_engine_options(pool))
 
 
 def create_async_database_engine(
     pool: DatabasePoolConfig,
+    *,
+    workload: PostgresWorkload,
     config: LyraConfig | None = None,
 ) -> AsyncEngine:
     """Create an asynchronous SQLAlchemy engine for one configured workload pool.
@@ -84,7 +97,12 @@ def create_async_database_engine(
     Returns:
         A lazily connecting asynchronous database engine.
     """
-    return create_async_engine(database_url(config=config), **_engine_options(pool))
+    url = apply_read_only_postgres_profile(
+        database_url(config=config),
+        workload=workload,
+        statement_timeout_ms=pool.statement_timeout_ms,
+    )
+    return create_async_engine(url, **_engine_options(pool))
 
 
 class ApplicationDatabaseRuntime:
@@ -104,11 +122,13 @@ class ApplicationDatabaseRuntime:
             return
         self.async_engine = create_async_database_engine(
             self.config.database.api,
-            self.config,
+            workload=PostgresWorkload.API,
+            config=self.config,
         )
         self.spatial_engine = create_sync_database_engine(
             self.config.database.spatial,
-            self.config,
+            workload=PostgresWorkload.SPATIAL,
+            config=self.config,
         )
         worker_count = self.config.database.spatial.pool_size
         self._spatial_executor = ThreadPoolExecutor(
@@ -223,7 +243,8 @@ def get_worker_engine(config: LyraConfig | None = None) -> Engine:
         runtime_config = get_config() if config is None else config
         _worker_engine = create_sync_database_engine(
             runtime_config.database.worker,
-            runtime_config,
+            workload=PostgresWorkload.WORKER,
+            config=runtime_config,
         )
         _worker_engine_pid = process_id
     return _worker_engine
@@ -231,7 +252,11 @@ def get_worker_engine(config: LyraConfig | None = None) -> Engine:
 
 def probe_worker_database(config: LyraConfig) -> None:
     """Verify worker database connectivity without retaining a pre-fork engine."""
-    engine = create_sync_database_engine(config.database.worker, config)
+    engine = create_sync_database_engine(
+        config.database.worker,
+        workload=PostgresWorkload.PROBE,
+        config=config,
+    )
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -271,6 +296,7 @@ def is_database_unavailable_error(exc: BaseException) -> bool:
 __all__ = [
     "ApplicationDatabaseRuntime",
     "DatabaseUnavailableError",
+    "PostgresWorkload",
     "create_async_database_engine",
     "create_sync_database_engine",
     "database_url",

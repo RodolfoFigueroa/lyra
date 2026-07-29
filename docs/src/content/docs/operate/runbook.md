@@ -50,6 +50,20 @@ repair nonterminal Lyra state when Celery's result backend already reports a
 failure. A complete worker or host loss that leaves Celery without a terminal
 state is not inferred automatically.
 
+## Database access audit
+
+Confirm active Lyra connections in `pg_stat_activity` by their fixed
+`application_name`: `lyra-api`, `lyra-spatial`, `lyra-worker`, and
+`lyra-probe`. Unexpected high-cardinality names indicate a connection that was
+not created through the supported profile.
+
+Periodically verify that the configured runtime role is not an owner, has
+`CONNECT` and target-schema `USAGE`, and has only `SELECT` on required data
+tables or views. Check that its `default_transaction_read_only` setting is on
+and that the external data owner grants `SELECT` on future objects. Role and
+grant changes belong to central database provisioning; do not add them to Lyra
+startup or readiness handling.
+
 ## Common response
 
 1. Check `/live` and `/ready`.

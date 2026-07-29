@@ -36,6 +36,51 @@ probe terminates startup so the process supervisor can retry it. Engines used by
 metric execution are still created inside worker processes; a database outage
 after startup is recorded as a retryable `database_unavailable` job failure.
 
+## Read-only database role
+
+Use one centrally provisioned runtime role for the API, spatial loaders, workers,
+and trusted local development. The role must not own the database, data schema,
+tables, or views. It needs only database `CONNECT`, target-schema `USAGE`, and
+`SELECT` on the tables or views Lyra reads. It must not receive `CREATE`,
+`INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, trigger, or ownership privileges.
+
+The following is an operator template, not an application migration. Run it as a
+database administrator, replace the identifiers, and supply credentials through
+your secret manager rather than placing a password in this file or startup
+automation:
+
+```sql
+CREATE ROLE lyra_runtime LOGIN;
+
+GRANT CONNECT ON DATABASE lyra TO lyra_runtime;
+GRANT USAGE ON SCHEMA lyra_data TO lyra_runtime;
+GRANT SELECT ON ALL TABLES IN SCHEMA lyra_data TO lyra_runtime;
+
+ALTER DEFAULT PRIVILEGES
+    FOR ROLE lyra_data_owner
+    IN SCHEMA lyra_data
+    GRANT SELECT ON TABLES TO lyra_runtime;
+
+REVOKE CREATE ON DATABASE lyra FROM lyra_runtime;
+REVOKE CREATE ON SCHEMA lyra_data FROM lyra_runtime;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+ALTER ROLE lyra_runtime SET default_transaction_read_only = on;
+```
+
+The external loader must create future tables and views as
+`lyra_data_owner` (or the actual data-owning role named in
+`ALTER DEFAULT PRIVILEGES`). Audit direct and inherited grants so
+`lyra_runtime` has no write, truncate, trigger, or ownership capability. A
+database-level read-only default may be used when every connection to that
+database is a reader; otherwise keep the role-level default shown above.
+
+Lyra also sets every data-engine session to read-only and assigns stable
+`application_name` values (`lyra-api`, `lyra-spatial`, `lyra-worker`, and
+`lyra-probe`). These settings are defense in depth and observability aids, not a
+substitute for database privileges. Application startup never creates or
+changes roles, grants, schemas, or data objects.
+
 ## State and files
 
 ```text

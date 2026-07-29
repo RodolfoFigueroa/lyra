@@ -15,6 +15,112 @@ from lyra_app.routes import met_zone
 from tests.config_helpers import load_test_config
 
 
+class FakeAsyncEngine:
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        dispose_error: BaseException | None = None,
+    ) -> None:
+        self.events = events
+        self.dispose_error = dispose_error
+
+    async def dispose(self) -> None:
+        self.events.append("async-dispose")
+        if self.dispose_error is not None:
+            raise self.dispose_error
+
+
+class FakeSpatialEngine:
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        dispose_error: BaseException | None = None,
+    ) -> None:
+        self.events = events
+        self.dispose_error = dispose_error
+
+    def dispose(self) -> None:
+        self.events.append("spatial-dispose")
+        if self.dispose_error is not None:
+            raise self.dispose_error
+
+
+class FakeExecutor:
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        shutdown_error: BaseException | None = None,
+    ) -> None:
+        self.events = events
+        self.shutdown_error = shutdown_error
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        assert wait is True
+        assert cancel_futures is True
+        self.events.append("executor-shutdown")
+        if self.shutdown_error is not None:
+            raise self.shutdown_error
+
+
+class OneShotConstructionFailure:
+    def __init__(self, stage: str | None) -> None:
+        self.stage = stage
+
+    def raise_for(self, stage: str) -> None:
+        if self.stage == stage:
+            self.stage = None
+            msg = f"{stage} construction failed"
+            raise RuntimeError(msg)
+
+
+def install_runtime_resource_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_stage: str | None = None,
+    cleanup_fails: bool = False,
+) -> tuple[list[str], list[object]]:
+    events: list[str] = []
+    created: list[object] = []
+    failure = OneShotConstructionFailure(fail_stage)
+    semaphore_type = asyncio.Semaphore
+
+    def create_async(*_: object, **__: object) -> AsyncEngine:
+        failure.raise_for("async")
+        error = RuntimeError("async cleanup failed") if cleanup_fails else None
+        engine = FakeAsyncEngine(events, dispose_error=error)
+        created.append(engine)
+        return cast("AsyncEngine", engine)
+
+    def create_spatial(*_: object, **__: object) -> Engine:
+        failure.raise_for("spatial")
+        error = RuntimeError("spatial cleanup failed") if cleanup_fails else None
+        engine = FakeSpatialEngine(events, dispose_error=error)
+        created.append(engine)
+        return cast("Engine", engine)
+
+    def create_executor(**_: object) -> FakeExecutor:
+        failure.raise_for("executor")
+        error = RuntimeError("executor cleanup failed") if cleanup_fails else None
+        executor = FakeExecutor(events, shutdown_error=error)
+        created.append(executor)
+        return executor
+
+    def create_semaphore(_: int) -> asyncio.Semaphore:
+        failure.raise_for("semaphore")
+        semaphore = semaphore_type(1)
+        created.append(semaphore)
+        return semaphore
+
+    monkeypatch.setattr(connection, "create_async_database_engine", create_async)
+    monkeypatch.setattr(connection, "create_sync_database_engine", create_spatial)
+    monkeypatch.setattr(connection, "ThreadPoolExecutor", create_executor)
+    monkeypatch.setattr(connection.asyncio, "Semaphore", create_semaphore)
+    return events, created
+
+
 def test_application_database_runtime_owns_async_and_spatial_engines(
     tmp_path: Path,
 ) -> None:
@@ -32,6 +138,138 @@ def test_application_database_runtime_owns_async_and_spatial_engines(
     assert asyncio.run(exercise()) == 3
     with pytest.raises(RuntimeError, match="has not been started"):
         runtime.require_async_engine()
+
+
+@pytest.mark.parametrize(
+    ("fail_stage", "cleanup_events"),
+    [
+        ("async", []),
+        ("spatial", ["async-dispose"]),
+        ("executor", ["spatial-dispose", "async-dispose"]),
+        (
+            "semaphore",
+            ["executor-shutdown", "spatial-dispose", "async-dispose"],
+        ),
+    ],
+)
+def test_runtime_start_failure_is_atomic_and_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_stage: str,
+    cleanup_events: list[str],
+) -> None:
+    config = load_test_config(tmp_path)
+    events, created = install_runtime_resource_fakes(
+        monkeypatch,
+        fail_stage=fail_stage,
+    )
+    runtime = connection.ApplicationDatabaseRuntime(config)
+
+    async def exercise() -> None:
+        with pytest.raises(RuntimeError, match=f"{fail_stage} construction failed"):
+            await runtime.start()
+
+        assert runtime.async_engine is None
+        assert runtime.spatial_engine is None
+        assert vars(runtime)["_spatial_executor"] is None
+        assert vars(runtime)["_spatial_capacity"] is None
+        assert events == cleanup_events
+
+        await runtime.start()
+        started_resources = list(created)
+        await runtime.start()
+        assert created == started_resources
+
+        await runtime.close()
+        await runtime.close()
+
+    asyncio.run(exercise())
+
+    assert events == [
+        *cleanup_events,
+        "executor-shutdown",
+        "spatial-dispose",
+        "async-dispose",
+    ]
+
+
+def test_runtime_concurrent_starts_create_one_resource_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    events, created = install_runtime_resource_fakes(monkeypatch)
+    runtime = connection.ApplicationDatabaseRuntime(config)
+
+    async def exercise() -> None:
+        await asyncio.gather(runtime.start(), runtime.start())
+        assert len(created) == 4
+        await runtime.close()
+
+    asyncio.run(exercise())
+    assert events == [
+        "executor-shutdown",
+        "spatial-dispose",
+        "async-dispose",
+    ]
+
+
+def test_runtime_close_attempts_every_cleanup_and_clears_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    events, _ = install_runtime_resource_fakes(monkeypatch, cleanup_fails=True)
+    runtime = connection.ApplicationDatabaseRuntime(config)
+
+    async def exercise() -> None:
+        await runtime.start()
+        with pytest.raises(
+            BaseExceptionGroup,
+            match="Multiple failures occurred",
+        ) as exc_info:
+            await runtime.close()
+
+        assert len(exc_info.value.exceptions) == 3
+        assert runtime.async_engine is None
+        assert runtime.spatial_engine is None
+        assert vars(runtime)["_spatial_executor"] is None
+        assert vars(runtime)["_spatial_capacity"] is None
+        await runtime.close()
+
+    asyncio.run(exercise())
+    assert events == [
+        "executor-shutdown",
+        "spatial-dispose",
+        "async-dispose",
+    ]
+
+
+def test_runtime_start_preserves_construction_error_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    events, _ = install_runtime_resource_fakes(
+        monkeypatch,
+        fail_stage="semaphore",
+        cleanup_fails=True,
+    )
+    runtime = connection.ApplicationDatabaseRuntime(config)
+
+    with pytest.raises(RuntimeError, match="semaphore construction failed") as exc_info:
+        asyncio.run(runtime.start())
+
+    assert len(exc_info.value.__notes__) == 3
+    cleanup_notes = "\n".join(exc_info.value.__notes__)
+    assert "executor cleanup failed" in cleanup_notes
+    assert "spatial cleanup failed" in cleanup_notes
+    assert "async cleanup failed" in cleanup_notes
+    assert events == [
+        "executor-shutdown",
+        "spatial-dispose",
+        "async-dispose",
+    ]
 
 
 def test_sync_engine_factory_applies_read_only_spatial_profile(

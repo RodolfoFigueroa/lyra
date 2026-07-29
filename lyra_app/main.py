@@ -32,9 +32,9 @@ async def lifespan(app: FastAPI) -> AsyncGeneratorType:
         Control to FastAPI while all configured application resources are active.
     """
     database = getattr(app.state, "database", None)
-    if database is not None:
-        await database.start()
     try:
+        if database is not None:
+            await database.start()
         start_worker_inspect_collector()
         try:
             async with AsyncExitStack() as stack:

@@ -1,6 +1,6 @@
 # Step 06: Atomic application database runtime startup
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 05: Read-only connection profiles](05-read-only-connection-profiles.md)
 
@@ -111,7 +111,24 @@ global boundary.
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added a lifecycle lock shared by application database
+  startup and shutdown; constructed the async engine, spatial engine, executor,
+  and capacity semaphore as unpublished locals; used ordered startup cleanup
+  callbacks to dispose every resource created before a construction failure
+  while preserving the original exception; published only complete resource
+  sets; made close clear state once and attempt executor, spatial-engine, and
+  async-engine cleanup in order while retaining multiple failures; moved
+  database startup inside the FastAPI lifespan cleanup boundary; and added
+  controlled tests for every construction stage, cleanup failures, retry,
+  repeated and concurrent start, repeated close, shutdown ordering, and the
+  actual lifespan startup-failure path.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed; focused database-runtime and lifespan tests passed (19 tests);
+  and `uv run pytest --cov=lyra_app --cov=lyra --cov-report=term-missing
+  --cov-report=xml` passed (757 tests, 13 live-PostGIS tests skipped because
+  `LYRA_TEST_POSTGIS_URL` was not configured, 86% total coverage) and
+  regenerated `coverage.xml`.
+- Deviations or follow-up notes: None. Executor cancellation and semaphore
+  release behavior remain unchanged for Step 07, and no later handoff
+  assumption changed.

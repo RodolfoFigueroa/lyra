@@ -127,6 +127,44 @@ def test_lifespan_owns_database_runtime(monkeypatch: pytest.MonkeyPatch) -> None
     ]
 
 
+def test_lifespan_closes_database_when_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeDatabaseRuntime:
+        resource_open = False
+
+        async def start(self) -> None:
+            calls.append("database-start")
+            self.resource_open = True
+            msg = "database startup failed"
+            raise RuntimeError(msg)
+
+        async def close(self) -> None:
+            calls.append("database-close")
+            self.resource_open = False
+
+    database = FakeDatabaseRuntime()
+    app = FastAPI()
+    app.state.database = database
+    monkeypatch.setattr(
+        main,
+        "start_worker_inspect_collector",
+        lambda: calls.append("worker-start"),
+    )
+
+    async def run_lifespan() -> None:
+        async with main.lifespan(app):
+            pytest.fail("Lifespan yielded after database startup failed.")
+
+    with pytest.raises(RuntimeError, match="database startup failed"):
+        asyncio.run(run_lifespan())
+
+    assert calls == ["database-start", "database-close"]
+    assert database.resource_open is False
+
+
 def test_run_server_configures_trusted_proxy_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

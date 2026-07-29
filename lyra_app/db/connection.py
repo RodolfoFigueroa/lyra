@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AsyncExitStack
 from functools import partial
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
@@ -21,7 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from lyra_app.config import DatabasePoolConfig, LyraConfig, get_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
 ResultT = TypeVar("ResultT")
 Parameters = ParamSpec("Parameters")
@@ -111,6 +113,7 @@ class ApplicationDatabaseRuntime:
     def __init__(self, config: LyraConfig) -> None:
         """Initialize stopped API database resources for a validated config."""
         self.config = config
+        self._lifecycle_lock = asyncio.Lock()
         self.async_engine: AsyncEngine | None = None
         self.spatial_engine: Engine | None = None
         self._spatial_executor: ThreadPoolExecutor | None = None
@@ -118,40 +121,75 @@ class ApplicationDatabaseRuntime:
 
     async def start(self) -> None:
         """Create API engines and the bounded spatial-query executor once."""
-        if self.async_engine is not None:
-            return
-        self.async_engine = create_async_database_engine(
-            self.config.database.api,
-            workload=PostgresWorkload.API,
-            config=self.config,
-        )
-        self.spatial_engine = create_sync_database_engine(
-            self.config.database.spatial,
-            workload=PostgresWorkload.SPATIAL,
-            config=self.config,
-        )
-        worker_count = self.config.database.spatial.pool_size
-        self._spatial_executor = ThreadPoolExecutor(
-            max_workers=worker_count,
-            thread_name_prefix="lyra-spatial",
-        )
-        self._spatial_capacity = asyncio.Semaphore(worker_count)
+        async with self._lifecycle_lock:
+            if self.async_engine is not None:
+                return
+
+            async_engine: AsyncEngine | None = None
+            spatial_engine: Engine | None = None
+            executor: ThreadPoolExecutor | None = None
+            async with AsyncExitStack() as startup_cleanup:
+                async_engine = create_async_database_engine(
+                    self.config.database.api,
+                    workload=PostgresWorkload.API,
+                    config=self.config,
+                )
+                startup_cleanup.push_async_exit(
+                    partial(
+                        _cleanup_failed_start,
+                        operation=async_engine.dispose,
+                    )
+                )
+                spatial_engine = create_sync_database_engine(
+                    self.config.database.spatial,
+                    workload=PostgresWorkload.SPATIAL,
+                    config=self.config,
+                )
+                startup_cleanup.push_async_exit(
+                    partial(
+                        _cleanup_failed_start,
+                        operation=partial(asyncio.to_thread, spatial_engine.dispose),
+                    )
+                )
+                worker_count = self.config.database.spatial.pool_size
+                executor = ThreadPoolExecutor(
+                    max_workers=worker_count,
+                    thread_name_prefix="lyra-spatial",
+                )
+                startup_cleanup.push_async_exit(
+                    partial(
+                        _cleanup_failed_start,
+                        operation=partial(
+                            asyncio.to_thread,
+                            executor.shutdown,
+                            wait=True,
+                            cancel_futures=True,
+                        ),
+                    )
+                )
+                capacity = asyncio.Semaphore(worker_count)
+                startup_cleanup.pop_all()
+
+            self.async_engine = async_engine
+            self.spatial_engine = spatial_engine
+            self._spatial_executor = executor
+            self._spatial_capacity = capacity
 
     async def close(self) -> None:
         """Stop the spatial executor and dispose all application engines."""
-        async_engine = self.async_engine
-        spatial_engine = self.spatial_engine
-        executor = self._spatial_executor
-        self.async_engine = None
-        self.spatial_engine = None
-        self._spatial_executor = None
-        self._spatial_capacity = None
-        if executor is not None:
-            await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
-        if spatial_engine is not None:
-            await asyncio.to_thread(spatial_engine.dispose)
-        if async_engine is not None:
-            await async_engine.dispose()
+        async with self._lifecycle_lock:
+            async_engine = self.async_engine
+            spatial_engine = self.spatial_engine
+            executor = self._spatial_executor
+            self.async_engine = None
+            self.spatial_engine = None
+            self._spatial_executor = None
+            self._spatial_capacity = None
+            await _close_database_resources(
+                async_engine=async_engine,
+                spatial_engine=spatial_engine,
+                executor=executor,
+            )
 
     def require_async_engine(self) -> AsyncEngine:
         """Return the started asynchronous API engine.
@@ -221,6 +259,74 @@ class ApplicationDatabaseRuntime:
             )
         finally:
             capacity.release()
+
+
+async def _close_database_resources(
+    *,
+    async_engine: AsyncEngine | None,
+    spatial_engine: Engine | None,
+    executor: ThreadPoolExecutor | None,
+) -> None:
+    """Close owned database resources in shutdown order, attempting every one.
+
+    Raises:
+        BaseExceptionGroup: When multiple resource cleanup operations fail.
+    """
+    errors: list[BaseException] = []
+    if executor is not None:
+        error = await _capture_cleanup(
+            asyncio.to_thread(
+                executor.shutdown,
+                wait=True,
+                cancel_futures=True,
+            )
+        )
+        if error is not None:
+            errors.append(error)
+    if spatial_engine is not None:
+        error = await _capture_cleanup(asyncio.to_thread(spatial_engine.dispose))
+        if error is not None:
+            errors.append(error)
+    if async_engine is not None:
+        error = await _capture_cleanup(async_engine.dispose())
+        if error is not None:
+            errors.append(error)
+
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        msg = "Multiple failures occurred while closing application database resources."
+        raise BaseExceptionGroup(msg, errors)
+
+
+async def _capture_cleanup(operation: Awaitable[None]) -> BaseException | None:
+    """Run one cleanup operation and capture its outcome.
+
+    Returns:
+        The cleanup failure, or ``None`` when cleanup succeeded.
+    """
+    (result,) = await asyncio.gather(operation, return_exceptions=True)
+    return result if isinstance(result, BaseException) else None
+
+
+async def _cleanup_failed_start(
+    _exc_type: type[BaseException] | None,
+    exception: BaseException | None,
+    _traceback: TracebackType | None,
+    *,
+    operation: Callable[[], Awaitable[None]],
+) -> bool:
+    """Clean one unpublished resource while preserving the startup exception.
+
+    Returns:
+        ``False`` so the exit stack continues propagating the startup exception.
+    """
+    cleanup_error = await _capture_cleanup(operation())
+    if cleanup_error is not None and exception is not None:
+        exception.add_note(
+            f"Additional database startup cleanup failure: {cleanup_error!r}"
+        )
+    return False
 
 
 _worker_engine: Engine | None = None

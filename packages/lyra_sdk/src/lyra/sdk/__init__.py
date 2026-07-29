@@ -11,6 +11,7 @@ from lyra.sdk.db import (
     StubLyraDB,
 )
 from lyra.sdk.db_types import Bounds
+from lyra.sdk.local import LocalRunContext
 from lyra.sdk.models import (
     AdminStatusResponse,
     BoundsReference,
@@ -133,6 +134,7 @@ __all__ = [
     "JobRunProvenance",
     "JobStatusInfo",
     "LivenessResponse",
+    "LocalRunContext",
     "LocationInput",
     "LocationReference",
     "LyraDB",

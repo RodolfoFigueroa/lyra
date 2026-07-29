@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 def _assert_dependency_light_import() -> None:
-    blocked = {"geopandas", "psycopg", "sqlalchemy"}
+    blocked = {"geopandas", "lyra_app", "psycopg", "sqlalchemy"}
 
     class BlockDatabaseImports(importlib.abc.MetaPathFinder):
         def __init__(self, blocked_modules: set[str]) -> None:
@@ -50,6 +50,7 @@ def _assert_dependency_light_import() -> None:
 
     assert issubclass(sdk.DatabaseNotConfiguredError, RuntimeError)
     assert issubclass(sdk.StubLyraDB, sdk.LyraDB)
+    assert sdk.LocalRunContext.__module__ == "lyra.sdk.local"
     assert blocked.isdisjoint(sys.modules)
 
 

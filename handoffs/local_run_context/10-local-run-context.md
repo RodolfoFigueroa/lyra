@@ -1,6 +1,6 @@
 # Step 10: Add `LocalRunContext`
 
-Status: `planned`
+Status: `complete`
 
 Depends on:
 
@@ -158,7 +158,28 @@ Also build or install the core SDK without its optional Postgres dependencies an
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added and top-level-exported the dependency-light
+  `LocalRunContext` with validated metadata, caller-owned directory creation,
+  a fresh strict `StubLyraDB` default, optional database and logger injection,
+  immediate typed progress/message capture through shared event models and
+  `RunProgressState`, immutable tuple snapshots, and cooperative cancellation.
+  Added generated API-reference input and focused SDK coverage for construction,
+  protocol compatibility, directory ownership, logging, every stub operation,
+  fake database use, event validation/order/snapshots, rejected-transition
+  recovery, cancellation, and direct `PluginDefinition` execution.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed. Focused local/context/plugin/database coverage passed with `uv
+  run pytest tests/test_sdk_local_context.py tests/test_sdk_context.py
+  tests/test_sdk_plugin.py tests/test_sdk_database.py -q` (71 tests). `npm run
+  generate --prefix docs` regenerated the API reference. `uv build --package
+  lyra-sdk` built the source and wheel distributions, and an isolated core-wheel
+  environment imported `LocalRunContext` while actively blocking SQLAlchemy,
+  Psycopg, GeoPandas, and application imports. The full coverage command `uv run
+  pytest --cov=lyra_app --cov=lyra --cov-report=term-missing
+  --cov-report=xml` passed (823 tests, 18 live-PostGIS tests skipped because
+  `LYRA_TEST_POSTGIS_URL` was not configured, 86% total coverage) and regenerated
+  `coverage.xml`.
+- Deviations or follow-up notes: No design deviations. The isolated wheel check
+  required network access to populate a missing cached core dependency. No
+  implementation decision changed a later handoff assumption.

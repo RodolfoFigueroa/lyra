@@ -251,14 +251,27 @@ class ApplicationDatabaseRuntime:
             msg = "Spatial database capacity is temporarily unavailable."
             raise DatabaseUnavailableError(msg) from exc
 
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
+            future = loop.run_in_executor(
                 executor,
                 partial(function, *args, **kwargs),
             )
-        finally:
+        except BaseException:
             capacity.release()
+            raise
+
+        future.add_done_callback(partial(_release_spatial_capacity, capacity=capacity))
+        return await asyncio.shield(future)
+
+
+def _release_spatial_capacity(
+    _future: object,
+    *,
+    capacity: asyncio.Semaphore,
+) -> None:
+    """Release capacity after the submitted executor operation terminates."""
+    capacity.release()
 
 
 async def _close_database_resources(

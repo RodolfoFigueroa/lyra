@@ -1,6 +1,6 @@
 # Step 07: Correct spatial executor cancellation
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 06: Atomic application database runtime startup](06-atomic-database-runtime-startup.md)
 
@@ -102,7 +102,25 @@ job-submission spatial-resolution tests, and the full suite with coverage.
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Transferred each admitted spatial permit to the submitted
+  executor future, protected that future from caller cancellation with
+  `asyncio.shield()`, and released capacity from an event-loop completion
+  callback exactly once after underlying work terminates. Preserved immediate
+  release when executor submission itself fails and retained the existing
+  admission-only timeout. Added deterministic thread-synchronization tests for
+  cancelled callers retaining capacity, cancellation immediately before and
+  after worker completion, normal results, worker exceptions, submission
+  failures, admission timeout, exact release counts, and runtime shutdown
+  waiting for live work whose caller was cancelled.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed; `uv run pytest tests/test_database_runtime.py -q` passed (21
+  tests); job-submission spatial-resolution coverage passed with `uv run pytest
+  tests/test_jobs_route.py -k 'spatial or cvegeo or met_zone' -q` (5 tests, 79
+  deselected); and `uv run pytest --cov=lyra_app --cov=lyra
+  --cov-report=term-missing --cov-report=xml` passed (764 tests, 13 live-PostGIS
+  tests skipped because `LYRA_TEST_POSTGIS_URL` was not configured, 86% total
+  coverage) and regenerated `coverage.xml`.
+- Deviations or follow-up notes: None. Shutdown continues to use executor
+  shutdown with `wait=True` and `cancel_futures=True`; no later handoff
+  assumption changed.

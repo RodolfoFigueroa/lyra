@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Annotated, cast
 from uuid import uuid4
 
 from anyio import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from lyra.sdk.db import LyraDatabaseError
 from lyra.sdk.models import (
     FileJobResult,
     JobCreateRequest,
@@ -26,7 +28,6 @@ from lyra_app import job_store
 from lyra_app.agent_auth import require_agent_key
 from lyra_app.celery_app import celery_app
 from lyra_app.config import get_config
-from lyra_app.db.connection import DatabaseUnavailableError
 from lyra_app.db.dependencies import get_database_runtime
 from lyra_app.db.redis import redis_client
 from lyra_app.job_submission import (
@@ -37,11 +38,8 @@ from lyra_app.job_submission import (
     submit_job,
 )
 from lyra_app.registry import MetricPayloadValidationError
-from lyra_app.routes.errors import database_unavailable_http_exception
-from lyra_app.spatial_inputs import (
-    SpatialInputResolutionUnavailableError,
-    SpatialInputValidationError,
-)
+from lyra_app.routes.errors import database_error_http_exception
+from lyra_app.spatial_inputs import SpatialInputValidationError
 from lyra_app.worker_control import reconcile_celery_failure
 
 if TYPE_CHECKING:
@@ -55,6 +53,7 @@ DatabaseRuntimeDependency = Annotated[
 ]
 
 router = APIRouter(tags=["Jobs"], dependencies=[Depends(require_agent_key)])
+logger = logging.getLogger(__name__)
 
 TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
 SSE_KEEPALIVE = ": keepalive\n\n"
@@ -208,9 +207,11 @@ async def create_job(
         raise HTTPException(status_code=422, detail=exc.errors) from exc
     except SpatialInputValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
-    except (DatabaseUnavailableError, SpatialInputResolutionUnavailableError) as exc:
+    except LyraDatabaseError as exc:
+        if not exc.retryable:
+            logger.exception("Database query failed while resolving job inputs.")
         runtime_config = database.config if database is not None else get_config()
-        error = database_unavailable_http_exception(runtime_config)
+        error = database_error_http_exception(exc, runtime_config)
         raise error from exc
     except IdempotencyConflictError as exc:
         raise HTTPException(

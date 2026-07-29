@@ -183,7 +183,10 @@ and return `FileJobResult`.
 database helper, durable progress events, and cooperative cancellation. Every
 worker validates database connectivity before accepting jobs, so plugins may use
 `context.db` directly without a `None` check. A later database outage becomes a
-retryable `database_unavailable` job failure.
+retryable `database_unavailable` job failure. Statement deadlines become
+retryable `database_query_timeout` failures, while authentication, privilege,
+schema, column, and SQL defects become non-retryable `database_query_error`
+failures. Lyra does not retry database operations automatically.
 
 Call `context.check_cancelled()` around expensive stages. Expected domain
 failures may return `FailedJobResult`; unexpected exceptions and invalid results
@@ -191,7 +194,11 @@ are normalized by the worker. Unit-test contexts can use `StubLyraDB`, which
 raises `DatabaseNotConfiguredError` for every operation, when a metric should not
 access the database. Database implementations own their initialization; the
 `LyraDB` interface no longer exposes the backend-specific engine constructor
-that earlier releases generated from the application adapter.
+that earlier releases generated from the application adapter. Local callers of
+the PostgreSQL adapter receive the same `DatabaseUnavailableError`,
+`DatabaseQueryTimeoutError`, and `DatabaseQueryError` types directly; their
+public messages omit SQL parameters and backend details, while the original
+exception remains available through exception chaining.
 
 Use `context.report_progress(stage=..., current=..., total=..., unit=...)` for
 monotonic quantitative progress within a stage. A new stage may restart at zero;

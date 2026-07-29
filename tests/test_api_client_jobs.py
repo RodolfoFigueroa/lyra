@@ -166,7 +166,7 @@ def _database_unavailable_response() -> dict[str, Any]:
     return {
         "detail": {
             "code": "database_unavailable",
-            "message": "The spatial database is temporarily unavailable.",
+            "message": "The database is temporarily unavailable.",
             "retryable": True,
         }
     }

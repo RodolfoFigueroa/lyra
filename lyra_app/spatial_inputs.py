@@ -6,7 +6,10 @@ import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from lyra.sdk.db import LyraDatabaseError
 from lyra.sdk.models import RowIdentityMetadata
+from lyra.sdk.postgres import classify_postgres_error
+from pandas.errors import DatabaseError as PandasDatabaseError
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
@@ -45,10 +48,6 @@ class SpatialInputValidationError(Exception):
         super().__init__("spatial input validation failed")
 
 
-class SpatialInputResolutionUnavailableError(Exception):
-    """Indicate that an external spatial lookup could not be completed."""
-
-
 def _adapter_for_kind(kind: SpatialInputKindV4) -> TypeAdapter[Any]:
     return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
 
@@ -79,7 +78,7 @@ def resolve_spatial_inputs(
 
     Raises:
         SpatialInputValidationError: If a wrapper or converted geometry is invalid.
-        SpatialInputResolutionUnavailableError: If an external lookup fails.
+        LyraDatabaseError: If an external database lookup fails.
     """
     if converter_map is None:
         converters = importlib.import_module("lyra_app.converters")
@@ -107,9 +106,11 @@ def resolve_spatial_inputs(
             raise SpatialInputValidationError(
                 [{"loc": [field_name], "msg": str(exc), "type": "value_error"}]
             ) from exc
-        except (KeyError, SQLAlchemyError) as exc:
-            msg = f"Failed to resolve spatial input {field_name!r}."
-            raise SpatialInputResolutionUnavailableError(msg) from exc
+        except LyraDatabaseError:
+            raise
+        except (PandasDatabaseError, SQLAlchemyError) as exc:
+            classified = classify_postgres_error(exc)
+            raise classified from exc
 
         resolved[field_name] = geojson.model_dump(mode="json")
 

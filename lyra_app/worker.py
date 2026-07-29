@@ -11,7 +11,7 @@ from pathlib import Path
 
 from celery import Task
 from celery.signals import task_failure
-from lyra.sdk.db import LyraDB
+from lyra.sdk.db import LyraDatabaseError, LyraDB
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -47,7 +47,6 @@ from lyra_app import job_store
 from lyra_app.celery_app import celery_app
 from lyra_app.config import LyraConfig, get_config
 from lyra_app.db import connection as database_connection
-from lyra_app.db.connection import is_database_unavailable_error
 from lyra_app.plugin_state import (
     PluginState,
     PluginStateStore,
@@ -431,13 +430,16 @@ def _failed_result(job_id: str, error_type: str, message: str) -> FailedJobResul
     )
 
 
-def _database_unavailable_result(job_id: str) -> FailedJobResult:
+def _database_error_result(
+    job_id: str,
+    error: LyraDatabaseError,
+) -> FailedJobResult:
     return FailedJobResult(
         job_id=job_id,
         error={
-            "type": "database_unavailable",
-            "message": "The database is temporarily unavailable.",
-            "retryable": True,
+            "type": error.code,
+            "message": error.public_message,
+            "retryable": error.retryable,
         },
     )
 
@@ -831,14 +833,15 @@ def _execute_known_job(job: JobEnvelope, entry: RunnerMetricEntry) -> JsonObject
     except Exception as exc:
         if _flush_failed_job_events(context, job):
             return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
-        if is_database_unavailable_error(exc):
-            logger.warning(
-                "Database unavailable while executing metric %s for job %s.",
+        if isinstance(exc, LyraDatabaseError):
+            log = logger.warning if exc.retryable else logger.exception
+            log(
+                "Database failure while executing metric %s for job %s.",
                 job.metric,
                 job.job_id,
                 exc_info=True,
             )
-            failure = _database_unavailable_result(job.job_id)
+            failure = _database_error_result(job.job_id, exc)
         else:
             logger.exception(
                 "Generic task %s failed while executing metric %s for job %s.",

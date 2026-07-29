@@ -1,17 +1,19 @@
 """HTTP endpoint for resolving meteorological zones."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
+from lyra.sdk.db import LyraDatabaseError
 from lyra.sdk.models import MetZoneCodeResponse
+from lyra.sdk.postgres import classify_postgres_error
 from sqlalchemy.exc import SQLAlchemyError
 
-from lyra_app.db.connection import (
-    is_database_unavailable_error,
-)
 from lyra_app.db.dependencies import DatabaseRuntimeDependency
 from lyra_app.loaders.db import get_met_zone_code_from_name_async
-from lyra_app.routes.errors import database_unavailable_http_exception
+from lyra_app.routes.errors import database_error_http_exception
 
 router = APIRouter(tags=["Lookups"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/lookups/met-zones")
@@ -26,9 +28,7 @@ async def get_met_zone_code(
 
     Raises:
         RuntimeError: If the application database runtime is unavailable.
-        SQLAlchemyError: If a non-availability database error occurs.
-        HTTPException: If the database is temporarily unavailable or no zone
-            matches the name.
+        HTTPException: If the database operation fails or no zone matches the name.
     """
     if database is None:
         msg = "Application database runtime is unavailable."
@@ -41,9 +41,15 @@ async def get_met_zone_code(
                 schema=database.config.database.data_schema,
             )
     except SQLAlchemyError as exc:
-        if not is_database_unavailable_error(exc):
-            raise
-        error = database_unavailable_http_exception(database.config)
+        classified = classify_postgres_error(exc)
+        if not classified.retryable:
+            logger.exception("Database query failed while resolving a met zone.")
+        error = database_error_http_exception(classified, database.config)
+        raise error from exc
+    except LyraDatabaseError as exc:
+        if not exc.retryable:
+            logger.exception("Database query failed while resolving a met zone.")
+        error = database_error_http_exception(exc, database.config)
         raise error from exc
 
     if result is None:

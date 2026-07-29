@@ -12,6 +12,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from lyra.sdk import DatabaseQueryTimeoutError, DatabaseUnavailableError
 from lyra.sdk.models import (
     CancelledJobResult,
     FailedJobResult,
@@ -27,7 +28,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, job_submission, registry
 from lyra_app.config import clear_config_cache, get_config
-from lyra_app.mcp.tools import InProcessLyraBackend
+from lyra_app.mcp.tools import InProcessLyraBackend, ToolCallError
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.config_helpers import load_test_config, plugin_state_store
@@ -1437,7 +1438,7 @@ def test_create_job_rejects_invalid_cvegeo_list(
     assert exc_info.value.status_code == 422
 
 
-def test_create_job_returns_503_when_spatial_resolution_fails(
+def test_create_job_returns_non_retryable_500_when_spatial_query_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1472,7 +1473,112 @@ def test_create_job_returns_503_when_spatial_resolution_fails(
             )
         )
 
-    assert exc_info.value.status_code == 503
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == {
+        "code": "database_query_error",
+        "message": "The database query failed.",
+        "retryable": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("database_error", "expected"),
+    [
+        (
+            DatabaseUnavailableError(),
+            (
+                503,
+                "database_unavailable",
+                "The database is temporarily unavailable.",
+            ),
+        ),
+        (
+            DatabaseQueryTimeoutError(),
+            (504, "database_query_timeout", "The database query timed out."),
+        ),
+    ],
+)
+def test_create_job_maps_retryable_database_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    database_error: Exception,
+    expected: tuple[int, str, str],
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    _patch_redis(monkeypatch, FakeRedisAsync())
+
+    def fail_resolution(_geojson: GeoJSON) -> GeoJSON:
+        raise database_error
+
+    monkeypatch.setitem(
+        sys.modules,
+        "lyra_app.converters",
+        SimpleNamespace(
+            converter_map={
+                kind: dict.fromkeys(
+                    ("geojson", "cvegeo_list", "met_zone_code"),
+                    fail_resolution,
+                )
+                for kind in ("location", "bounds")
+            }
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+            )
+        )
+
+    status_code, code, message = expected
+    assert exc_info.value.status_code == status_code
+    assert exc_info.value.detail == {
+        "code": code,
+        "message": message,
+        "retryable": True,
+    }
+    assert exc_info.value.headers == {"Retry-After": "5"}
+
+
+def test_mcp_submission_maps_database_timeout_without_internal_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    _patch_redis(monkeypatch, redis)
+    monkeypatch.setattr(job_submission, "redis_client", redis)
+
+    def fail_resolution(_geojson: GeoJSON) -> GeoJSON:
+        raise DatabaseQueryTimeoutError
+
+    monkeypatch.setitem(
+        sys.modules,
+        "lyra_app.converters",
+        SimpleNamespace(
+            converter_map={
+                kind: dict.fromkeys(
+                    ("geojson", "cvegeo_list", "met_zone_code"),
+                    fail_resolution,
+                )
+                for kind in ("location", "bounds")
+            }
+        ),
+    )
+
+    with pytest.raises(ToolCallError) as exc_info:
+        asyncio.run(
+            InProcessLyraBackend().create_job("heavy_metric", _spatial_payload())
+        )
+
+    assert exc_info.value.to_payload() == {
+        "error": {
+            "code": "database_query_timeout",
+            "message": "The database query timed out.",
+            "details": {"retryable": True, "retry_after_seconds": 5},
+        }
+    }
 
 
 def test_create_job_returns_503_when_redis_unavailable(

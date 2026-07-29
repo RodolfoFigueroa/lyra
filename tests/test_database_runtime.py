@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self, cast
 
+import psycopg
 import pytest
 from fastapi import HTTPException
 from lyra.sdk.postgres_connection import PostgresWorkload
@@ -342,7 +343,7 @@ def test_spatial_capacity_acquisition_preserves_admission_timeout(
 
         with pytest.raises(
             connection.DatabaseUnavailableError,
-            match="capacity is temporarily unavailable",
+            match="temporarily unavailable",
         ):
             await runtime.run_spatial(lambda: None)
 
@@ -696,8 +697,9 @@ def test_worker_database_probe_disposes_engine_when_connection_fails(
         @staticmethod
         def connect() -> None:
             statement = "connect"
-            message = "unavailable"
-            raise OperationalError(statement, {}, Exception(message))
+            raise OperationalError(
+                statement, {}, psycopg.OperationalError("unavailable")
+            )
 
         @staticmethod
         def dispose() -> None:
@@ -723,8 +725,11 @@ def test_met_zone_lookup_returns_retryable_503_for_database_failure(
     class FailedConnectionContext:
         async def __aenter__(self) -> None:
             statement = "connect"
-            message = "unavailable"
-            raise OperationalError(statement, {}, Exception(message))
+            raise OperationalError(
+                statement,
+                {},
+                psycopg.OperationalError("unavailable"),
+            )
 
         async def __aexit__(self, *_: object) -> None:
             return None
@@ -745,7 +750,7 @@ def test_met_zone_lookup_returns_retryable_503_for_database_failure(
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == {
         "code": "database_unavailable",
-        "message": "The spatial database is temporarily unavailable.",
+        "message": "The database is temporarily unavailable.",
         "retryable": True,
     }
     assert exc_info.value.headers == {"Retry-After": "5"}

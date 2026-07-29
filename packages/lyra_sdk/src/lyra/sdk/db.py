@@ -13,8 +13,23 @@ if TYPE_CHECKING:
     from lyra.sdk.db_types import Bounds
 
 
-class DatabaseNotConfiguredError(RuntimeError):
+class LyraDatabaseError(RuntimeError):
+    """Base class for stable, public database-service failures."""
+
+    code = "database_error"
+    retryable = False
+    public_message = "The database operation failed."
+
+    def __init__(self) -> None:
+        """Initialize the failure with its safe public message."""
+        super().__init__(self.public_message)
+
+
+class DatabaseNotConfiguredError(LyraDatabaseError):
     """Raised when database access is attempted without an implementation."""
+
+    code = "database_not_configured"
+    public_message = "Database access is not configured."
 
     def __init__(self, operation: str) -> None:
         """Describe the unavailable database operation.
@@ -24,10 +39,34 @@ class DatabaseNotConfiguredError(RuntimeError):
 
         """
         self.operation = operation
-        super().__init__(
+        RuntimeError.__init__(
+            self,
             f"Database operation {operation!r} requires a configured LyraDB. "
-            "Supply a real or fake LyraDB implementation."
+            "Supply a real or fake LyraDB implementation.",
         )
+
+
+class DatabaseUnavailableError(LyraDatabaseError):
+    """Indicate a transient connection, capacity, or server availability failure."""
+
+    code = "database_unavailable"
+    retryable = True
+    public_message = "The database is temporarily unavailable."
+
+
+class DatabaseQueryTimeoutError(LyraDatabaseError):
+    """Indicate that a database statement exceeded its execution deadline."""
+
+    code = "database_query_timeout"
+    retryable = True
+    public_message = "The database query timed out."
+
+
+class DatabaseQueryError(LyraDatabaseError):
+    """Indicate a non-transient database execution or schema failure."""
+
+    code = "database_query_error"
+    public_message = "The database query failed."
 
 
 class LyraDB(ABC):
@@ -167,4 +206,12 @@ class StubLyraDB(LyraDB):
         raise DatabaseNotConfiguredError(operation)
 
 
-__all__ = ["DatabaseNotConfiguredError", "LyraDB", "StubLyraDB"]
+__all__ = [
+    "DatabaseNotConfiguredError",
+    "DatabaseQueryError",
+    "DatabaseQueryTimeoutError",
+    "DatabaseUnavailableError",
+    "LyraDB",
+    "LyraDatabaseError",
+    "StubLyraDB",
+]

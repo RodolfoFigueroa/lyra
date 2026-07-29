@@ -1,30 +1,16 @@
 """Optional PostgreSQL implementation of the Lyra plugin database interface."""
 
 import math
-from collections.abc import Sequence
-from importlib import import_module
-from typing import Literal
+from collections.abc import Callable, Sequence
+from typing import Literal, NoReturn, TypeVar
 
-try:
-    import geopandas
-    from sqlalchemy import Connection, bindparam, func, literal_column, select
-    from sqlalchemy.engine import Engine
-
-    import_module("psycopg")
-except ModuleNotFoundError as error:
-    if error.name is None or error.name.split(".", maxsplit=1)[0] not in {
-        "geopandas",
-        "psycopg",
-        "sqlalchemy",
-    }:
-        raise
-    message = (
-        "PostgreSQL support requires the 'postgres' extra. "
-        "Install it with `uv add 'lyra-sdk[postgres]'`."
-    )
-    raise ModuleNotFoundError(message, name=error.name) from None
-
-from lyra.sdk.db import LyraDB
+from lyra.sdk.db import (
+    DatabaseQueryError,
+    DatabaseQueryTimeoutError,
+    DatabaseUnavailableError,
+    LyraDatabaseError,
+    LyraDB,
+)
 from lyra.sdk.db_types import Bounds
 from lyra.sdk.postgres_sql import (
     DEFAULT_POSTGRES_SCHEMA,
@@ -33,10 +19,128 @@ from lyra.sdk.postgres_sql import (
     validate_postgres_identifier,
 )
 
+
+def _raise_missing_postgres_extra(error: ModuleNotFoundError) -> NoReturn:
+    if error.name is None or error.name.split(".", maxsplit=1)[0] not in {
+        "geopandas",
+        "psycopg",
+        "sqlalchemy",
+    }:
+        raise error
+    message = (
+        "PostgreSQL support requires the 'postgres' extra. "
+        "Install it with `uv add 'lyra-sdk[postgres]'`."
+    )
+    raise ModuleNotFoundError(message, name=error.name) from None
+
+
+try:
+    import geopandas
+    import psycopg
+except ModuleNotFoundError as error:
+    _raise_missing_postgres_extra(error)
+
+try:
+    from sqlalchemy import Connection, bindparam, func, literal_column, select
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+except ModuleNotFoundError as error:
+    _raise_missing_postgres_extra(error)
+
 _DENUE_YEARS = frozenset({2020, 2021, 2022, 2023, 2024, 2025})
 _DENUE_MONTHS = frozenset({5, 11})
 _MESH_LEVELS = frozenset({4, 5, 6, 7, 8, 9})
 _CENSUS_LEVELS = frozenset({"ent", "mun", "loc", "ageb", "mza"})
+_POSTGRES_SERVER_UNAVAILABLE_STATES = frozenset(
+    {
+        "57P01",  # admin_shutdown
+        "57P02",  # crash_shutdown
+        "57P03",  # cannot_connect_now
+        "57P04",  # database_dropped
+    }
+)
+ResultT = TypeVar("ResultT")
+
+
+def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
+    """Return a finite cause/context chain for backend wrapper exceptions."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and all(current is not seen for seen in chain):
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return tuple(chain)
+
+
+def classify_postgres_error(exc: BaseException) -> LyraDatabaseError:
+    """Classify a PostgreSQL/SQLAlchemy failure into the public SDK taxonomy.
+
+    SQLSTATE is authoritative when available. Driver exceptions without a
+    SQLSTATE are considered unavailable only for Psycopg connection/interface
+    failures; all unknown and deterministic failures are query errors.
+
+    Returns:
+        The existing SDK error or a safe SDK-owned classification.
+    """
+    chain = _exception_chain(exc)
+    wrapped = next(
+        (item for item in chain if isinstance(item, LyraDatabaseError)),
+        None,
+    )
+    if isinstance(wrapped, LyraDatabaseError):
+        return wrapped
+    error_type: type[LyraDatabaseError]
+    if any(isinstance(item, SQLAlchemyTimeoutError) for item in chain) or any(
+        isinstance(item, DBAPIError) and item.connection_invalidated for item in chain
+    ):
+        error_type = DatabaseUnavailableError
+    else:
+        originals = tuple(
+            item.orig if isinstance(item, DBAPIError) else item for item in chain
+        )
+        sqlstate = next(
+            (
+                state
+                for item in originals
+                if isinstance(state := getattr(item, "sqlstate", None), str)
+            ),
+            None,
+        )
+        if sqlstate == "57014":
+            error_type = DatabaseQueryTimeoutError
+        elif (
+            isinstance(sqlstate, str)
+            and (
+                sqlstate.startswith(("08", "53"))
+                or sqlstate in _POSTGRES_SERVER_UNAVAILABLE_STATES
+            )
+        ) or (
+            sqlstate is None
+            and any(
+                isinstance(item, psycopg.OperationalError | psycopg.InterfaceError)
+                for item in originals
+            )
+        ):
+            error_type = DatabaseUnavailableError
+        else:
+            error_type = DatabaseQueryError
+    return error_type()
+
+
+def _run_database_operation(operation: Callable[[], ResultT]) -> ResultT:
+    """Run one backend callable and translate failures at the SDK boundary.
+
+    Returns:
+        The backend operation result.
+    """
+    try:
+        return operation()
+    except Exception as exc:
+        classified = classify_postgres_error(exc)
+        if classified is exc:
+            raise
+        raise classified from exc
 
 
 def _validate_bounds(bounds: Bounds) -> dict[str, float]:
@@ -186,14 +290,17 @@ class PostgresLyraDB(LyraDB):
             raise ValueError(msg)
         parameters = _validate_bounds(bounds)
 
-        with self._engine.connect() as conn:
-            return _load_geometries_from_bounds(
-                conn=conn,
-                columns=["per_ocu", "codigo_act", "geometry"],
-                table_name=f"denue_{year}_{month:02d}",
-                schema=self._schema,
-                bounds_parameters=parameters,
-            )
+        def load() -> geopandas.GeoDataFrame:
+            with self._engine.connect() as conn:
+                return _load_geometries_from_bounds(
+                    conn=conn,
+                    columns=["per_ocu", "codigo_act", "geometry"],
+                    table_name=f"denue_{year}_{month:02d}",
+                    schema=self._schema,
+                    bounds_parameters=parameters,
+                )
+
+        return _run_database_operation(load)
 
     def load_mesh_from_bounds(
         self,
@@ -227,14 +334,17 @@ class PostgresLyraDB(LyraDB):
             raise ValueError(msg)
         parameters = _validate_bounds(bounds)
 
-        with self._engine.connect() as conn:
-            return _load_geometries_from_bounds(
-                conn=conn,
-                columns=["codigo", "geometry"],
-                table_name=f"mesh_level_{level}",
-                schema=self._schema,
-                bounds_parameters=parameters,
-            )
+        def load() -> geopandas.GeoDataFrame:
+            with self._engine.connect() as conn:
+                return _load_geometries_from_bounds(
+                    conn=conn,
+                    columns=["codigo", "geometry"],
+                    table_name=f"mesh_level_{level}",
+                    schema=self._schema,
+                    bounds_parameters=parameters,
+                )
+
+        return _run_database_operation(load)
 
     def load_census_from_bounds(
         self,
@@ -268,14 +378,21 @@ class PostgresLyraDB(LyraDB):
         validated_columns = _validate_columns(columns)
         parameters = _validate_bounds(bounds)
 
-        with self._engine.connect() as conn:
-            return _load_geometries_from_bounds(
-                conn=conn,
-                columns=validated_columns,
-                table_name=f"census_2020_{level}",
-                schema=self._schema,
-                bounds_parameters=parameters,
-            )
+        def load() -> geopandas.GeoDataFrame:
+            with self._engine.connect() as conn:
+                return _load_geometries_from_bounds(
+                    conn=conn,
+                    columns=validated_columns,
+                    table_name=f"census_2020_{level}",
+                    schema=self._schema,
+                    bounds_parameters=parameters,
+                )
+
+        return _run_database_operation(load)
 
 
-__all__ = ["DEFAULT_POSTGRES_SCHEMA", "PostgresLyraDB"]
+__all__ = [
+    "DEFAULT_POSTGRES_SCHEMA",
+    "PostgresLyraDB",
+    "classify_postgres_error",
+]

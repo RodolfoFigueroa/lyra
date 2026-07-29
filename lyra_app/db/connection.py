@@ -9,14 +9,13 @@ from contextlib import AsyncExitStack
 from functools import partial
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
+from lyra.sdk.db import DatabaseUnavailableError
 from lyra.sdk.postgres_connection import (
     PostgresWorkload,
     apply_read_only_postgres_profile,
 )
 from sqlalchemy import text
 from sqlalchemy.engine import URL, Engine, create_engine
-from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from lyra_app.config import DatabasePoolConfig, LyraConfig, get_config
@@ -27,10 +26,6 @@ if TYPE_CHECKING:
 
 ResultT = TypeVar("ResultT")
 Parameters = ParamSpec("Parameters")
-
-
-class DatabaseUnavailableError(RuntimeError):
-    """Raised when database work cannot start within its service deadline."""
 
 
 def database_url(
@@ -248,8 +243,7 @@ class ApplicationDatabaseRuntime:
             ):
                 await capacity.acquire()
         except TimeoutError as exc:
-            msg = "Spatial database capacity is temporarily unavailable."
-            raise DatabaseUnavailableError(msg) from exc
+            raise DatabaseUnavailableError from exc
 
         loop = asyncio.get_running_loop()
         try:
@@ -393,25 +387,6 @@ def dispose_worker_engine() -> None:
     _worker_engine_pid = None
 
 
-def is_database_unavailable_error(exc: BaseException) -> bool:
-    """Classify transient connection, capacity, and statement-timeout failures.
-
-    Returns:
-        ``True`` when callers should present a temporary-unavailability response.
-    """
-    if isinstance(
-        exc,
-        DatabaseUnavailableError | OperationalError | SQLAlchemyTimeoutError,
-    ):
-        return True
-    if isinstance(exc, DBAPIError):
-        if exc.connection_invalidated:
-            return True
-        sqlstate = getattr(exc.orig, "sqlstate", None)
-        return sqlstate == "57014"
-    return False
-
-
 __all__ = [
     "ApplicationDatabaseRuntime",
     "DatabaseUnavailableError",
@@ -421,6 +396,5 @@ __all__ = [
     "database_url",
     "dispose_worker_engine",
     "get_worker_engine",
-    "is_database_unavailable_error",
     "probe_worker_database",
 ]

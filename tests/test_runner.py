@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from lyra.sdk import (
+    DatabaseQueryError,
+    DatabaseQueryTimeoutError,
+    DatabaseUnavailableError,
+)
 from lyra.sdk.models import (
     FileJobResult,
     JobEnvelope,
@@ -16,7 +21,6 @@ from lyra.sdk.models import (
 )
 from lyra.sdk.models.plugin_v4 import FileOutputV4, TableOutputV4
 from lyra.sdk.postgres import PostgresLyraDB
-from sqlalchemy.exc import OperationalError
 
 from lyra_app import worker_control
 from lyra_app.config import clear_config_cache, get_config
@@ -886,14 +890,43 @@ def test_plugin_exception_persists_failed_result(
     assert _decode_stored_result(worker_module, fake_redis, "job-bad") == result
 
 
-def test_database_exception_persists_retryable_failed_result(
+@pytest.mark.parametrize(
+    ("database_error", "expected_error"),
+    [
+        (
+            DatabaseUnavailableError(),
+            {
+                "type": "database_unavailable",
+                "message": "The database is temporarily unavailable.",
+                "retryable": True,
+            },
+        ),
+        (
+            DatabaseQueryTimeoutError(),
+            {
+                "type": "database_query_timeout",
+                "message": "The database query timed out.",
+                "retryable": True,
+            },
+        ),
+        (
+            DatabaseQueryError(),
+            {
+                "type": "database_query_error",
+                "message": "The database query failed.",
+                "retryable": False,
+            },
+        ),
+    ],
+)
+def test_database_exception_persists_typed_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
+    database_error: Exception,
+    expected_error: dict[str, object],
 ) -> None:
     def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
-        statement = "SELECT 1"
-        message = "unavailable"
-        raise OperationalError(statement, {}, Exception(message))
+        raise database_error
 
     worker_module.RUNNER_REGISTRY["database_metric"] = worker_module.RunnerMetricEntry(
         metric_name="database_metric",
@@ -910,11 +943,7 @@ def test_database_exception_persists_retryable_failed_result(
     )
 
     assert result["status"] == "failed"
-    assert result["error"] == {
-        "type": "database_unavailable",
-        "message": "The database is temporarily unavailable.",
-        "retryable": True,
-    }
+    assert result["error"] == expected_error
     assert _decode_stored_result(worker_module, fake_redis, "job-database") == result
 
 

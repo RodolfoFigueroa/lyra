@@ -35,6 +35,12 @@ connection and executes `SELECT 1` with its worker pool configuration. A failed
 probe terminates startup so the process supervisor can retry it. Engines used by
 metric execution are still created inside worker processes; a database outage
 after startup is recorded as a retryable `database_unavailable` job failure.
+Query cancellation or statement timeout is reported separately as retryable
+`database_query_timeout`. Authentication, privilege, missing schema objects,
+invalid SQL, and other deterministic defects are non-retryable
+`database_query_error` failures and retain their backend exception chain in
+server logs. Lyra never retries these operations automatically, and public
+result payloads do not include SQL parameters or internal database messages.
 
 ## Read-only database role
 

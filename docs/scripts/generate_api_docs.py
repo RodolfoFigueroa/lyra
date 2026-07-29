@@ -71,6 +71,10 @@ PAGE_SPECS = (
             sym("lyra.sdk.db", "LyraDB"),
             sym("lyra.sdk.db", "StubLyraDB"),
             sym("lyra.sdk.db", "DatabaseNotConfiguredError"),
+            sym("lyra.sdk.db", "DatabaseQueryError"),
+            sym("lyra.sdk.db", "DatabaseQueryTimeoutError"),
+            sym("lyra.sdk.db", "DatabaseUnavailableError"),
+            sym("lyra.sdk.db", "LyraDatabaseError"),
         ),
     ),
     PageSpec(

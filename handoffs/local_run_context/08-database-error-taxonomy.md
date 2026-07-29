@@ -1,6 +1,6 @@
 # Step 08: Introduce a precise database error taxonomy
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 07: Correct spatial executor cancellation](07-spatial-executor-cancellation.md)
 
@@ -143,7 +143,36 @@ Run the required Python checks, plus:
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added a dependency-light public SDK database hierarchy with
+  stable codes, retryability, and safe messages; made
+  `DatabaseNotConfiguredError` inherit from it; and added one optional
+  PostgreSQL classifier that prioritizes SDK errors, pool exhaustion,
+  invalidation, SQLSTATE, and narrow no-SQLSTATE Psycopg connection failures.
+  Wrapped every `PostgresLyraDB` operation at its public boundary while
+  preserving argument validation and exception causes. Reused the classifier
+  for application spatial and async lookup failures, removed the application
+  duplicate availability classifier, and normalized HTTP, MCP, and worker
+  responses for unavailable, timeout, and non-transient query failures without
+  exposing SQL text, bound values, credentials, or backend messages. Added
+  operator/plugin documentation and generated-reference entries for the public
+  errors.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed. Classifier, SDK, spatial-loader, runtime, route,
+  job-submission, MCP, worker, and PostGIS coverage passed with `uv run pytest
+  tests/test_database_errors.py tests/test_sdk_database.py
+  tests/test_spatial_loaders.py tests/test_database_runtime.py
+  tests/test_jobs_route.py tests/test_mcp_server.py tests/test_runner.py
+  tests/test_postgis_integration.py -q` (258 passed, 18 live-PostGIS tests
+  skipped). Generated documentation passed with `npm run generate --prefix
+  docs`, and documentation/release checks passed with `uv run pytest
+  tests/test_docs_contract.py tests/test_release_pipeline.py -q` (18 passed).
+  The full coverage command `uv run pytest --cov=lyra_app --cov=lyra
+  --cov-report=term-missing --cov-report=xml` passed (791 tests, 18
+  live-PostGIS tests skipped because `LYRA_TEST_POSTGIS_URL` was not
+  configured, 86% total coverage) and regenerated `coverage.xml`.
+- Deviations or follow-up notes: No design deviations. Real PostGIS failure
+  cases for statement timeout, privilege, undefined table/column, invalid
+  syntax, pool exhaustion, authentication, and terminated connections were
+  added but could not execute locally without `LYRA_TEST_POSTGIS_URL`. No later
+  handoff assumptions changed.

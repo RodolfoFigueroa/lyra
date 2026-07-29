@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from fastapi import HTTPException
+from lyra.sdk.db import LyraDatabaseError
 from lyra.sdk.models import (
     JobCreateRequest,
     JobCreateResponse,
@@ -23,17 +25,13 @@ from lyra.sdk.models.metric import (
     MetricInfoV4,
     normalize_metric_search_tokens,
 )
+from lyra.sdk.postgres import classify_postgres_error
 from lyra.sdk.types import JsonObject, JsonValue, validate_json_value
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from typing_extensions import override
 
 from lyra_app import job_store
-from lyra_app.db.connection import (
-    ApplicationDatabaseRuntime,
-    DatabaseUnavailableError,
-    is_database_unavailable_error,
-)
 from lyra_app.job_submission import (
     IdempotencyConflictError,
     SubmissionRateLimitedError,
@@ -48,14 +46,12 @@ from lyra_app.registry import (
     get_metric_info,
 )
 from lyra_app.routes import jobs
-from lyra_app.spatial_inputs import (
-    SpatialInputResolutionUnavailableError,
-    SpatialInputValidationError,
-)
+from lyra_app.spatial_inputs import SpatialInputValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.mcp.models import (
         GetJobResultInput,
         GetMetricInput,
@@ -75,9 +71,9 @@ _INVALID_PARAMETERS_ERROR = "invalid_parameters"
 _IDEMPOTENCY_CONFLICT_ERROR = "idempotency_conflict"
 _RATE_LIMITED_ERROR = "rate_limited"
 _BACKEND_ERROR = "backend_error"
-_DATABASE_UNAVAILABLE_ERROR = "database_unavailable"
 _METRIC_CURSOR_VERSION = 1
 _MAX_COMPACT_DESCRIPTION_LENGTH = 240
+logger = logging.getLogger(__name__)
 
 
 class LyraMCPBackend(Protocol):
@@ -134,6 +130,22 @@ class ToolCallError(Exception):
         return {"error": error}
 
 
+def _database_tool_error(
+    error: LyraDatabaseError,
+    *,
+    retry_after_seconds: int,
+) -> ToolCallError:
+    """Build a safe MCP failure from an SDK database error.
+
+    Returns:
+        A transport-independent database tool error.
+    """
+    details: JsonObject = {"retryable": error.retryable}
+    if error.retryable:
+        details["retry_after_seconds"] = retry_after_seconds
+    return ToolCallError(error.code, error.public_message, details)
+
+
 class InProcessLyraBackend(LyraMCPBackend):
     """Implement MCP domain operations directly against this Lyra process."""
 
@@ -158,17 +170,19 @@ class InProcessLyraBackend(LyraMCPBackend):
                     schema=self.database.config.database.data_schema,
                 )
         except SQLAlchemyError as exc:
-            if not is_database_unavailable_error(exc):
-                raise
-            raise ToolCallError(
-                _DATABASE_UNAVAILABLE_ERROR,
-                "The spatial database is temporarily unavailable.",
-                {
-                    "retryable": True,
-                    "retry_after_seconds": (
-                        self.database.config.database.retry_after_seconds
-                    ),
-                },
+            classified = classify_postgres_error(exc)
+            if not classified.retryable:
+                logger.exception("Database query failed during MCP met-zone lookup.")
+            raise _database_tool_error(
+                classified,
+                retry_after_seconds=(self.database.config.database.retry_after_seconds),
+            ) from exc
+        except LyraDatabaseError as exc:
+            if not exc.retryable:
+                logger.exception("Database query failed during MCP met-zone lookup.")
+            raise _database_tool_error(
+                exc,
+                retry_after_seconds=(self.database.config.database.retry_after_seconds),
             ) from exc
         if result is None:
             return None
@@ -216,25 +230,19 @@ class InProcessLyraBackend(LyraMCPBackend):
                 str(exc),
                 validate_json_value(exc.details),
             ) from exc
-        except (
-            DatabaseUnavailableError,
-            SpatialInputResolutionUnavailableError,
-            SubmissionUnavailableError,
-        ) as exc:
-            if isinstance(
+        except LyraDatabaseError as exc:
+            if not exc.retryable:
+                logger.exception("Database query failed during MCP job submission.")
+            retry_after = (
+                self.database.config.database.retry_after_seconds
+                if self.database is not None
+                else 5
+            )
+            raise _database_tool_error(
                 exc,
-                DatabaseUnavailableError | SpatialInputResolutionUnavailableError,
-            ):
-                retry_after = (
-                    self.database.config.database.retry_after_seconds
-                    if self.database is not None
-                    else 5
-                )
-                raise ToolCallError(
-                    _DATABASE_UNAVAILABLE_ERROR,
-                    "The spatial database is temporarily unavailable.",
-                    {"retryable": True, "retry_after_seconds": retry_after},
-                ) from exc
+                retry_after_seconds=retry_after,
+            ) from exc
+        except SubmissionUnavailableError as exc:
             raise ToolCallError(
                 _BACKEND_ERROR, "Failed to create job.", str(exc)
             ) from exc

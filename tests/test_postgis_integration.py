@@ -7,17 +7,22 @@ from uuid import uuid4
 
 import geopandas
 import pytest
+from lyra.sdk import (
+    DatabaseQueryError,
+    DatabaseQueryTimeoutError,
+    DatabaseUnavailableError,
+)
 from lyra.sdk.db_types import Bounds
-from lyra.sdk.postgres import PostgresLyraDB
+from lyra.sdk.postgres import PostgresLyraDB, classify_postgres_error
 from lyra.sdk.postgres_connection import (
     PostgresWorkload,
     apply_read_only_postgres_profile,
 )
-from pandas.errors import DatabaseError
 from shapely.geometry import Point, Polygon
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from lyra_app.loaders.db import (
@@ -280,13 +285,14 @@ def test_database_exception_returns_connection_to_pool(
     postgis_engine, schema = postgis_database
     database = PostgresLyraDB(postgis_engine, schema=schema)
 
-    with pytest.raises(DatabaseError):
+    with pytest.raises(DatabaseQueryError) as exc_info:
         database.load_census_from_bounds(
             _INTERSECTING_BOUNDS,
             level="mun",
             columns=["missing_column"],
         )
 
+    assert exc_info.value.__cause__ is not None
     _assert_no_checked_out_connections(postgis_engine)
     assert not database.load_mesh_from_bounds(_INTERSECTING_BOUNDS).empty
     _assert_no_checked_out_connections(postgis_engine)
@@ -406,10 +412,11 @@ def test_runtime_role_rejects_writes_and_schema_changes(
         connection.exec_driver_sql(statement.format(schema=quoted_schema))
 
     assert getattr(exc_info.value.orig, "sqlstate", None) in {"25006", "42501"}
+    assert isinstance(classify_postgres_error(exc_info.value), DatabaseQueryError)
     _assert_no_checked_out_connections(postgis_engine)
 
 
-def test_connection_failure_does_not_expose_password(
+def test_authentication_failure_is_non_retryable_and_does_not_expose_password(
     postgis_database: tuple[Engine, str],
 ) -> None:
     postgis_engine, _schema = postgis_database
@@ -424,9 +431,96 @@ def test_connection_failure_does_not_expose_password(
     try:
         with pytest.raises(OperationalError) as exc_info:
             failed_engine.connect()
+        assert isinstance(classify_postgres_error(exc_info.value), DatabaseQueryError)
         assert password not in str(exc_info.value)
         assert password not in repr(exc_info.value)
         assert password not in str(failed_engine.url)
         assert password not in repr(failed_engine.url)
     finally:
         failed_engine.dispose()
+
+
+def test_real_statement_timeout_is_classified_separately(
+    postgis_database: tuple[Engine, str],
+) -> None:
+    postgis_engine, _schema = postgis_database
+
+    with postgis_engine.begin() as connection:
+        connection.execute(text("SET LOCAL statement_timeout = 10"))
+        with pytest.raises(DBAPIError) as exc_info:
+            connection.execute(text("SELECT pg_sleep(1)"))
+
+    assert getattr(exc_info.value.orig, "sqlstate", None) == "57014"
+    assert isinstance(
+        classify_postgres_error(exc_info.value),
+        DatabaseQueryTimeoutError,
+    )
+    _assert_no_checked_out_connections(postgis_engine)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT * FROM table_that_does_not_exist",
+        "SELECT invalid syntax",
+    ],
+)
+def test_real_schema_and_syntax_failures_are_non_retryable(
+    postgis_database: tuple[Engine, str],
+    statement: str,
+) -> None:
+    postgis_engine, _schema = postgis_database
+
+    with (
+        pytest.raises(DBAPIError) as exc_info,
+        postgis_engine.begin() as connection,
+    ):
+        connection.execute(text(statement))
+
+    assert getattr(exc_info.value.orig, "sqlstate", None) in {"42P01", "42601"}
+    assert isinstance(classify_postgres_error(exc_info.value), DatabaseQueryError)
+    _assert_no_checked_out_connections(postgis_engine)
+
+
+def test_real_pool_exhaustion_is_classified_as_unavailable(
+    postgis_database: tuple[Engine, str],
+) -> None:
+    postgis_engine, _schema = postgis_database
+    exhausted_engine = create_engine(
+        postgis_engine.url,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.01,
+        hide_parameters=True,
+    )
+    try:
+        with (
+            exhausted_engine.connect(),
+            pytest.raises(SQLAlchemyTimeoutError) as exc_info,
+        ):
+            exhausted_engine.connect()
+        assert isinstance(
+            classify_postgres_error(exc_info.value),
+            DatabaseUnavailableError,
+        )
+    finally:
+        exhausted_engine.dispose()
+
+
+def test_real_terminated_connection_is_classified_as_unavailable(
+    postgis_database: tuple[Engine, str],
+) -> None:
+    postgis_engine, _schema = postgis_database
+    terminated_engine = create_engine(postgis_engine.url, hide_parameters=True)
+    try:
+        with (
+            pytest.raises(DBAPIError) as exc_info,
+            terminated_engine.connect() as connection,
+        ):
+            connection.execute(text("SELECT pg_terminate_backend(pg_backend_pid())"))
+        assert isinstance(
+            classify_postgres_error(exc_info.value),
+            DatabaseUnavailableError,
+        )
+    finally:
+        terminated_engine.dispose()

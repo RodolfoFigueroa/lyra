@@ -288,7 +288,8 @@ def _validate_package_state(
             )
             raise ReleasePlanError(message)
         for dependency in INTERNAL_DEPENDENCIES.get(package.path, ()):
-            if not any(item.startswith(f"{dependency}>=") for item in dependencies):
+            minimum_pattern = re.compile(rf"^{re.escape(dependency)}(?:\[[^\]]+\])?>=")
+            if not any(minimum_pattern.match(item) for item in dependencies):
                 message = (
                     f"{package.package_name} must declare a minimum version for "
                     f"{dependency}"

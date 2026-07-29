@@ -8,6 +8,13 @@ dependencies = [
     "ruamel-yaml>=0.19.1",
 ]
 
+[project.optional-dependencies]
+postgres = [
+    "geopandas>=1.1.3",
+    "psycopg[binary]>=3.3.2",
+    "sqlalchemy>=2.0.51",
+]
+
 [project.scripts]
 lyra-plugin = "lyra.sdk.plugin_cli:main"
 

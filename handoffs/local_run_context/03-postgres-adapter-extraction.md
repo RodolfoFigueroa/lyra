@@ -1,6 +1,6 @@
 # Step 03: Extract the PostgreSQL adapter into the SDK
 
-Status: `planned`
+Status: `complete`
 
 Depends on: [Step 02: Make the SDK database interface authoritative](02-sdk-database-interface.md)
 
@@ -123,7 +123,30 @@ Run the required Python checks, plus:
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added the optional `lyra-sdk[postgres]` extra with direct
+  GeoPandas, Psycopg, and SQLAlchemy dependencies; moved the sole concrete
+  database implementation and its private bounds loader into
+  `lyra.sdk.postgres.PostgresLyraDB` with an installation-oriented missing-extra
+  error; migrated workers and the PostGIS characterization suite to the shared
+  engine-injected adapter; removed `lyra_app/db/client.py` and the extracted
+  application helper; declared the SDK PostgreSQL extra as an application
+  dependency; updated the lockfile; added SDK coverage for optional-import
+  behavior, interface compatibility, and engine ownership; strengthened the
+  worker context assertion; and taught release metadata validation to recognize
+  minimum-version requirements that include extras.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, `uv run ty
+  check`, `uv lock --check`, and `uv run python -m build_scripts.release
+  validate` passed; focused SDK database and worker tests passed (46 tests);
+  release pipeline tests passed (10 tests); the integration selection without
+  `LYRA_TEST_POSTGIS_URL` safely skipped all 5 tests; the Step 01 suite passed
+  against the documented pinned disposable PostGIS service (5 tests); both
+  `lyra-sdk` and `lyra-app` built as wheels and source distributions; isolated
+  wheel smoke tests passed for core `lyra-sdk`, `lyra-sdk[postgres]`, and
+  `lyra-app` with its local workspace wheels; and the full coverage command
+  passed against PostGIS (717 tests, 86% total coverage) and regenerated
+  `coverage.xml`.
+- Deviations or follow-up notes: None. The live PostGIS and full-suite commands
+  ran outside the restricted command sandbox because it blocks localhost
+  database access and has a known cross-thread event-loop limitation. No
+  implementation decision changed a later handoff assumption.

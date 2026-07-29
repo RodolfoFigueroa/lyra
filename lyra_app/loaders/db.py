@@ -1,10 +1,7 @@
 """Utilities for loading spatial data from a PostGIS database."""
 
-from collections.abc import Sequence
-
 import geopandas
 import sqlalchemy
-from lyra.sdk.db_types import Bounds
 from sqlalchemy import Connection, quoted_name, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -16,52 +13,6 @@ _MET_ZONE_LOOKUP_QUERY = text(
     LIMIT 1
     """
 )
-
-
-def load_geometries_from_bounds(
-    bounds: Bounds,
-    *,
-    conn: Connection,
-    columns: Sequence[str],
-    table_name: str,
-) -> geopandas.GeoDataFrame:
-    """Load geometries from a PostGIS table that intersect a bounding box.
-
-    Always includes the ``"geometry"`` column even if it is not listed in
-    ``columns``. Uses SRID 6372 (Mexico ITRF2008) for the envelope.
-
-    Args:
-        bounds: Minimum and maximum x/y coordinates to query.
-        conn: Active SQLAlchemy database connection.
-        columns: Column names to select. ``"geometry"`` is appended
-            automatically if not present.
-        table_name: Name of the PostGIS table to query.
-
-    Returns:
-        A GeoDataFrame of rows whose geometries intersect the given envelope.
-
-    """
-    if "geometry" not in columns:
-        columns = [*list(columns), "geometry"]
-
-    table_name = quoted_name(table_name, quote=True)
-    return geopandas.read_postgis(
-        f"""
-        SELECT {", ".join(columns)} FROM {table_name}
-        WHERE ST_Intersects(
-            geometry,
-            ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372)
-        )
-        """,  # ruff:ignore[hardcoded-sql-expression]
-        conn,
-        params={
-            "xmin": float(bounds.xmin),
-            "ymin": float(bounds.ymin),
-            "xmax": float(bounds.xmax),
-            "ymax": float(bounds.ymax),
-        },
-        geom_col="geometry",
-    )
 
 
 def get_table_name_for_cvegeos(cvegeos: list[str]) -> str:

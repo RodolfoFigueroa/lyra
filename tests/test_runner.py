@@ -15,6 +15,7 @@ from lyra.sdk.models import (
     TerminalJobResult,
 )
 from lyra.sdk.models.plugin_v4 import FileOutputV4, TableOutputV4
+from lyra.sdk.postgres import PostgresLyraDB
 from sqlalchemy.exc import OperationalError
 
 from lyra_app import worker_control
@@ -587,7 +588,7 @@ def test_runner_uses_configured_worker_temp_dir(
 
     assert context.temp_dir == tmp_path / "worker-temp" / "job-temp"
     assert context.temp_dir.is_dir()
-    assert context.db is not None
+    assert isinstance(context.db, PostgresLyraDB)
 
 
 def test_runner_propagates_database_context_construction_failure(

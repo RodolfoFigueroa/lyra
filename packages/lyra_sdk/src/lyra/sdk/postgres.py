@@ -1,22 +1,73 @@
-"""High-level database operations used by the Lyra service."""
+"""Optional PostgreSQL implementation of the Lyra plugin database interface."""
 
 from collections.abc import Sequence
+from importlib import import_module
 from typing import Literal
 
-import geopandas
+try:
+    import geopandas
+    from sqlalchemy import Connection, quoted_name
+    from sqlalchemy.engine import Engine
+
+    import_module("psycopg")
+except ModuleNotFoundError as error:
+    if error.name is None or error.name.split(".", maxsplit=1)[0] not in {
+        "geopandas",
+        "psycopg",
+        "sqlalchemy",
+    }:
+        raise
+    message = (
+        "PostgreSQL support requires the 'postgres' extra. "
+        "Install it with `uv add 'lyra-sdk[postgres]'`."
+    )
+    raise ModuleNotFoundError(message, name=error.name) from None
+
 from lyra.sdk.db import LyraDB
 from lyra.sdk.db_types import Bounds
-from sqlalchemy import quoted_name
-from sqlalchemy.engine import Engine
-
-from lyra_app.loaders.db import load_geometries_from_bounds
 
 
-class LyraDBImplicit(LyraDB):
+def _load_geometries_from_bounds(
+    bounds: Bounds,
+    *,
+    conn: Connection,
+    columns: Sequence[str],
+    table_name: str,
+) -> geopandas.GeoDataFrame:
+    """Load geometries from a PostGIS table that intersect a bounding box.
+
+    Returns:
+        A GeoDataFrame of rows whose geometries intersect the given envelope.
+
+    """
+    if "geometry" not in columns:
+        columns = [*list(columns), "geometry"]
+
+    table_name = quoted_name(table_name, quote=True)
+    return geopandas.read_postgis(
+        f"""
+        SELECT {", ".join(columns)} FROM {table_name}
+        WHERE ST_Intersects(
+            geometry,
+            ST_MakeEnvelope(%(xmin)s, %(ymin)s, %(xmax)s, %(ymax)s, 6372)
+        )
+        """,  # ruff:ignore[hardcoded-sql-expression]
+        conn,
+        params={
+            "xmin": float(bounds.xmin),
+            "ymin": float(bounds.ymin),
+            "xmax": float(bounds.xmax),
+            "ymax": float(bounds.ymax),
+        },
+        geom_col="geometry",
+    )
+
+
+class PostgresLyraDB(LyraDB):
     """Implement the plugin database API using an injected synchronous engine."""
 
     def __init__(self, engine: Engine) -> None:
-        """Initialize database operations with the worker-owned engine."""
+        """Initialize database operations with a runtime-owned engine."""
         self._engine = engine
 
     def load_denue_from_bounds(
@@ -45,7 +96,7 @@ class LyraDBImplicit(LyraDB):
         table_name = quoted_name(f"denue_{year}_{month:02d}", quote=True)
 
         with self._engine.connect() as conn:
-            return load_geometries_from_bounds(
+            return _load_geometries_from_bounds(
                 bounds,
                 conn=conn,
                 columns=["per_ocu", "codigo_act", "geometry"],
@@ -73,7 +124,7 @@ class LyraDBImplicit(LyraDB):
 
         """
         with self._engine.connect() as conn:
-            return load_geometries_from_bounds(
+            return _load_geometries_from_bounds(
                 bounds,
                 conn=conn,
                 columns=["codigo", "geometry"],
@@ -104,9 +155,12 @@ class LyraDBImplicit(LyraDB):
 
         """
         with self._engine.connect() as conn:
-            return load_geometries_from_bounds(
+            return _load_geometries_from_bounds(
                 bounds,
                 conn=conn,
                 columns=columns,
                 table_name=f"census_2020_{level}",
             )
+
+
+__all__ = ["PostgresLyraDB"]

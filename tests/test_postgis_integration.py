@@ -7,11 +7,10 @@ from uuid import uuid4
 import geopandas
 import pytest
 from lyra.sdk.db_types import Bounds
+from lyra.sdk.postgres import PostgresLyraDB
 from pandas.errors import DatabaseError
 from shapely.geometry import Point, Polygon
 from sqlalchemy import Engine, create_engine, text
-
-from lyra_app.db.client import LyraDBImplicit
 
 pytestmark = pytest.mark.integration
 
@@ -75,7 +74,7 @@ def _assert_no_checked_out_connections(engine: Engine) -> None:
 def test_load_denue_from_bounds_characterizes_spatial_results(
     postgis_engine: Engine,
 ) -> None:
-    database = LyraDBImplicit(postgis_engine)
+    database = PostgresLyraDB(postgis_engine)
 
     result = database.load_denue_from_bounds(
         _INTERSECTING_BOUNDS,
@@ -99,7 +98,7 @@ def test_load_denue_from_bounds_characterizes_spatial_results(
 def test_load_mesh_from_bounds_characterizes_spatial_results(
     postgis_engine: Engine,
 ) -> None:
-    database = LyraDBImplicit(postgis_engine)
+    database = PostgresLyraDB(postgis_engine)
 
     result = database.load_mesh_from_bounds(_INTERSECTING_BOUNDS, level=9)
 
@@ -117,7 +116,7 @@ def test_load_mesh_from_bounds_characterizes_spatial_results(
 def test_load_census_from_bounds_characterizes_spatial_results(
     postgis_engine: Engine,
 ) -> None:
-    database = LyraDBImplicit(postgis_engine)
+    database = PostgresLyraDB(postgis_engine)
 
     result = database.load_census_from_bounds(
         _INTERSECTING_BOUNDS,
@@ -139,7 +138,7 @@ def test_load_census_from_bounds_characterizes_spatial_results(
 
 
 def test_repeated_calls_reuse_the_pooled_engine(postgis_engine: Engine) -> None:
-    database = LyraDBImplicit(postgis_engine)
+    database = PostgresLyraDB(postgis_engine)
 
     first = database.load_mesh_from_bounds(_INTERSECTING_BOUNDS)
     second = database.load_mesh_from_bounds(_INTERSECTING_BOUNDS)
@@ -150,7 +149,7 @@ def test_repeated_calls_reuse_the_pooled_engine(postgis_engine: Engine) -> None:
 
 
 def test_database_exception_returns_connection_to_pool(postgis_engine: Engine) -> None:
-    database = LyraDBImplicit(postgis_engine)
+    database = PostgresLyraDB(postgis_engine)
 
     with pytest.raises(DatabaseError):
         database.load_census_from_bounds(

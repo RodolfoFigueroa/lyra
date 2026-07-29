@@ -39,6 +39,7 @@ from lyra.sdk.models.plugin_v4 import (
 from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.plugin import PluginDefinition, PluginResult
 from lyra.sdk.plugin_loader import load_plugin_definition
+from lyra.sdk.postgres import PostgresLyraDB
 from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
 
@@ -46,7 +47,6 @@ from lyra_app import job_store
 from lyra_app.celery_app import celery_app
 from lyra_app.config import LyraConfig, get_config
 from lyra_app.db import connection as database_connection
-from lyra_app.db.client import LyraDBImplicit
 from lyra_app.db.connection import is_database_unavailable_error
 from lyra_app.plugin_state import (
     PluginState,
@@ -409,7 +409,7 @@ def build_run_context(job: JobEnvelope) -> WorkerRunContext:
 
 
 def _build_db_context() -> LyraDB:
-    return LyraDBImplicit(database_connection.get_worker_engine())
+    return PostgresLyraDB(database_connection.get_worker_engine())
 
 
 def _job_id_from_payload(payload: JsonValue, fallback: str) -> str:

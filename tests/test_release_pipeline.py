@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 PACKAGE_DATA = {
-    ".": ("lyra", "lyra-app", ("lyra-sdk>=0.11.0", "lyra-utils>=0.2.0")),
+    ".": (
+        "lyra",
+        "lyra-app",
+        ("lyra-sdk[postgres]>=0.11.0", "lyra-utils>=0.2.0"),
+    ),
     "packages/lyra_sdk": ("lyra-sdk", "lyra-sdk", ()),
     "packages/lyra_api": ("lyra-api", "lyra-api", ("lyra-sdk>=0.11.0",)),
     "packages/lyra_utils": (

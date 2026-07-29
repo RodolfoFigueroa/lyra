@@ -58,6 +58,11 @@ per-file-ignores = { "tests/**/*.py" = [
 ] }
 pydocstyle = { "convention" = "google" }
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires the dedicated LYRA_TEST_POSTGIS_URL database",
+]
+
 
 [dependency-groups]
 dev = [

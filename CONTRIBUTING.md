@@ -44,6 +44,36 @@ The development Compose stack is the preferred integration environment:
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
 
+### PostGIS integration tests
+
+The PostGIS characterization tests use only `LYRA_TEST_POSTGIS_URL`; they never
+read Lyra's production database configuration. To start a disposable local
+database matching CI, run:
+
+```bash
+docker run --rm --name lyra-test-postgis \
+  -e POSTGRES_DB=lyra_test \
+  -e POSTGRES_USER=lyra_test \
+  -e POSTGRES_PASSWORD=lyra_test \
+  -p 55432:5432 \
+  postgis/postgis:17-3.5@sha256:77e89c11c4779c394ebeeaac1099dafb77b728abc8cd45dcaf6c4695503a0c37
+```
+
+In another terminal, point the integration suite at that database:
+
+```bash
+LYRA_TEST_POSTGIS_URL='postgresql+psycopg://lyra_test:lyra_test@localhost:55432/lyra_test' \
+  uv run pytest -m integration
+```
+
+The tests create and remove an isolated schema. Without
+`LYRA_TEST_POSTGIS_URL`, integration tests skip without attempting a database
+connection. Run the fast unit selection explicitly with:
+
+```bash
+uv run pytest -m "not integration"
+```
+
 ## Required verification
 
 After changing Python, run all of these and fix failures caused by the change:

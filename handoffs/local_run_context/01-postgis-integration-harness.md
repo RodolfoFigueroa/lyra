@@ -1,6 +1,6 @@
 # Step 01: PostGIS integration harness
 
-Status: `planned`
+Status: `complete`
 
 Depends on: none
 
@@ -121,7 +121,20 @@ Run the repository Python checks and:
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Registered the `integration` pytest marker; added an
+  environment-gated PostGIS characterization suite and deterministic SQL
+  fixture in an isolated schema; covered all current `LyraDBImplicit` spatial
+  methods, intersecting and empty results, result columns/geometries/CRS,
+  repeated pooled calls, and connection return after success and database
+  errors; added a digest-pinned PostGIS 17 / PostGIS 3.5 service to Python CI;
+  and documented disposable local execution in `CONTRIBUTING.md`.
+- Verification: `uv run ruff format .` passed; `uv run ruff check .` passed;
+  `uv run ty check` passed; integration selection without
+  `LYRA_TEST_POSTGIS_URL` reported 5 skipped and made no database connection;
+  `uv run pytest tests/test_database_runtime.py -vv -s` passed (6 tests);
+  `uv run pytest -m integration -q` against the disposable PostGIS service
+  passed (5 tests); and the full coverage command passed (710 tests, 86% total
+  coverage) and generated `coverage.xml`.
+- Deviations or follow-up notes: None. Production database behavior and later
+  handoff assumptions were unchanged.

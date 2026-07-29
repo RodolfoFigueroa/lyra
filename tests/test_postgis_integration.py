@@ -11,6 +11,8 @@ from lyra.sdk import (
     DatabaseQueryError,
     DatabaseQueryTimeoutError,
     DatabaseUnavailableError,
+    LocalRunContext,
+    postgres,
 )
 from lyra.sdk.db_types import Bounds
 from lyra.sdk.postgres import PostgresLyraDB, classify_postgres_error
@@ -18,6 +20,7 @@ from lyra.sdk.postgres_connection import (
     PostgresWorkload,
     apply_read_only_postgres_profile,
 )
+from lyra.sdk.postgres_sql import postgres_table
 from shapely.geometry import Point, Polygon
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL, make_url
@@ -277,6 +280,111 @@ def test_repeated_calls_reuse_the_pooled_engine(
     assert first.equals(second)
     assert postgis_engine.pool.status().startswith("Pool size: 1")
     _assert_no_checked_out_connections(postgis_engine)
+
+
+def test_local_context_reads_match_the_application_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    postgis_database: tuple[Engine, str],
+    tmp_path: Path,
+) -> None:
+    postgis_engine, schema = postgis_database
+    owned_engines: list[Engine] = []
+
+    def capture_engine(url: URL, **options: object) -> Engine:
+        engine = create_engine(url, **options)
+        owned_engines.append(engine)
+        return engine
+
+    monkeypatch.setattr(postgres, "create_engine", capture_engine)
+    production_database = PostgresLyraDB(postgis_engine, schema=schema)
+    expected_denue = production_database.load_denue_from_bounds(
+        _INTERSECTING_BOUNDS,
+        year=2025,
+        month=11,
+    )
+    expected_mesh = production_database.load_mesh_from_bounds(
+        _INTERSECTING_BOUNDS,
+        level=9,
+    )
+    expected_census = production_database.load_census_from_bounds(
+        _INTERSECTING_BOUNDS,
+        level="mun",
+        columns=["cvegeo", "pobtot"],
+    )
+
+    with LocalRunContext.connect_postgres(
+        postgis_engine.url,
+        job_id="local-postgis",
+        metric="integration",
+        temp_dir=tmp_path,
+        schema=schema,
+    ) as context:
+        assert context.db.load_denue_from_bounds(
+            _INTERSECTING_BOUNDS,
+            year=2025,
+            month=11,
+        ).equals(expected_denue)
+        assert context.db.load_mesh_from_bounds(
+            _INTERSECTING_BOUNDS,
+            level=9,
+        ).equals(expected_mesh)
+        assert context.db.load_census_from_bounds(
+            _INTERSECTING_BOUNDS,
+            level="mun",
+            columns=["cvegeo", "pobtot"],
+        ).equals(expected_census)
+        owned_engine = owned_engines[0]
+        with owned_engine.connect() as connection:
+            policy = connection.execute(
+                text(
+                    "SELECT "
+                    "current_setting('transaction_read_only') AS read_only, "
+                    "current_setting('application_name') AS application_name"
+                )
+            ).one()
+        assert policy.read_only == "on"
+        assert policy.application_name == "lyra-sdk-local"
+        _assert_no_checked_out_connections(owned_engine)
+
+    assert len(owned_engines) == 1
+    _assert_no_checked_out_connections(owned_engines[0])
+
+
+def test_local_context_rejects_writes_and_releases_failed_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+    postgis_database: tuple[Engine, str],
+    tmp_path: Path,
+) -> None:
+    postgis_engine, schema = postgis_database
+    owned_engines: list[Engine] = []
+
+    def capture_engine(url: URL, **options: object) -> Engine:
+        engine = create_engine(url, **options)
+        owned_engines.append(engine)
+        return engine
+
+    monkeypatch.setattr(postgres, "create_engine", capture_engine)
+
+    with LocalRunContext.connect_postgres(
+        postgis_engine.url,
+        job_id="local-postgis",
+        metric="integration",
+        temp_dir=tmp_path,
+        schema=schema,
+    ):
+        owned_engine = owned_engines[0]
+        census_table = postgres_table(
+            "census_2020_mun",
+            schema=schema,
+            columns=["pobtot"],
+        )
+        with pytest.raises(DBAPIError) as error, owned_engine.begin() as connection:
+            connection.execute(census_table.update().values(pobtot=0))
+
+        assert getattr(error.value.orig, "sqlstate", None) in {"25006", "42501"}
+        _assert_no_checked_out_connections(owned_engine)
+
+    _assert_no_checked_out_connections(owned_engines[0])
 
 
 def test_database_exception_returns_connection_to_pool(

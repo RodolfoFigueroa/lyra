@@ -1,6 +1,6 @@
 # Step 11: Connect `LocalRunContext` to Postgres/PostGIS
 
-Status: `planned`
+Status: `complete`
 
 Depends on:
 
@@ -184,7 +184,32 @@ The full test suite must generate `coverage.xml`.
 
 Complete this section when the step is implemented.
 
-- Date:
-- Material changes:
-- Verification:
-- Deviations or follow-up notes:
+- Date: 2026-07-28
+- Material changes: Added the engine-owning
+  `lyra.sdk.postgres.connect_postgres` context manager with safe PostgreSQL URL
+  parsing, positive local-profile override validation, preserved URL query
+  options, fixed read-only `lyra-sdk-local` identity, one-connection pooling,
+  eager `SELECT 1` probing through the SDK database error taxonomy, and
+  deterministic engine disposal. Added the lazy class-level
+  `LocalRunContext.connect_postgres` manager while preserving caller ownership
+  for databases injected into ordinary local contexts. Added focused unit,
+  optional-dependency isolation, and live PostGIS coverage for profile defaults,
+  redaction, every cleanup path, missing-extra guidance, all `LyraDB` reads,
+  schema selection, read-only enforcement, application-path result parity, and
+  checked-out connection release.
+- Verification: `uv run ruff format .`, `uv run ruff check .`, and `uv run ty
+  check` passed. Focused SDK connector, database, and local-context tests passed
+  (57 tests). The two new live PostGIS local-context tests passed against the
+  documented disposable PostGIS 17 / PostGIS 3.5 service. The complete live
+  integration module had 18 passes and two unrelated pre-existing failures: its
+  authentication fixture is classified unavailable when the current Psycopg
+  error has no SQLSTATE, and `SELECT invalid syntax` produces undefined-column
+  SQLSTATE `42703` rather than the test's accepted `42P01`/`42601`. The full
+  coverage command passed without a configured integration URL (837 tests, 20
+  skipped, 86% total coverage) and regenerated `coverage.xml`. `lyra-sdk` built
+  as a wheel and source distribution; isolated built-wheel smoke tests passed
+  for both core SDK imports without SQLAlchemy and the PostgreSQL extra.
+- Deviations or follow-up notes: No implementation deviations. The live
+  PostGIS commands required localhost access outside the restricted sandbox,
+  and the isolated core-wheel install required network access for one uncached
+  dependency. No Step 12 assumption changed.

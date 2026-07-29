@@ -24,7 +24,7 @@ def apply_read_only_postgres_profile(
     url: URL,
     *,
     workload: PostgresWorkload,
-    statement_timeout_ms: int,
+    statement_timeout_ms: float,
 ) -> URL:
     """Return a URL with Lyra's read-only session policy applied.
 

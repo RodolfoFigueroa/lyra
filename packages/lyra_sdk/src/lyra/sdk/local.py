@@ -2,17 +2,36 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, Self, TypedDict, cast
 
 from lyra.sdk.context import RunCancelledError
 from lyra.sdk.db import LyraDB, StubLyraDB
 from lyra.sdk.models import JobMessageEvent, JobMessageLevel, JobProgressEvent
 from lyra.sdk.run_context_state import RunProgressState
+from typing_extensions import Unpack
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+    from contextlib import AbstractContextManager
     from pathlib import Path
+
+    from sqlalchemy.engine import URL
+
+
+class _LocalPostgresContextOptions(TypedDict):
+    job_id: str
+    metric: str
+    temp_dir: Path
+    schema: NotRequired[str]
+    logger: NotRequired[logging.Logger | None]
+    connect_timeout_seconds: NotRequired[float]
+    pool_timeout_seconds: NotRequired[float]
+    statement_timeout_ms: NotRequired[float]
+    pool_recycle_seconds: NotRequired[float]
 
 
 class LocalRunContext:
@@ -64,6 +83,59 @@ class LocalRunContext:
         self._events: list[JobProgressEvent | JobMessageEvent] = []
         self._progress_state = RunProgressState()
         self._cancelled = False
+
+    @classmethod
+    @contextmanager
+    def connect_postgres(
+        cls,
+        database_url: str | URL,
+        **options: Unpack[_LocalPostgresContextOptions],
+    ) -> Iterator[Self]:
+        """Own a live local PostgreSQL context for the duration of one block.
+
+        The context and its database must not be used after this manager exits.
+        Ordinary :class:`LocalRunContext` instances with an injected database
+        remain caller-owned and never dispose that database's resources.
+
+        Yields:
+            A local context backed by the shared PostgreSQL adapter.
+
+        Raises:
+            ImportError: If the ``lyra-sdk[postgres]`` extra is not installed.
+            TypeError: If an unsupported local-context option is supplied.
+        """
+        unexpected = (
+            options.keys() - _LocalPostgresContextOptions.__annotations__.keys()
+        )
+        if unexpected:
+            names = ", ".join(sorted(unexpected))
+            msg = f"unexpected local PostgreSQL context option(s): {names}"
+            raise TypeError(msg)
+        try:
+            postgres = importlib.import_module("lyra.sdk.postgres")
+        except ModuleNotFoundError as error:
+            if "lyra-sdk[postgres]" in str(error):
+                raise ImportError(str(error)) from None
+            raise ImportError(str(error)) from error
+        connector = cast(
+            "Callable[..., AbstractContextManager[LyraDB]]",
+            postgres.connect_postgres,
+        )
+        with connector(
+            database_url,
+            schema=options.get("schema", "public"),
+            connect_timeout_seconds=options.get("connect_timeout_seconds", 5),
+            pool_timeout_seconds=options.get("pool_timeout_seconds", 5),
+            statement_timeout_ms=options.get("statement_timeout_ms", 300_000),
+            pool_recycle_seconds=options.get("pool_recycle_seconds", 900),
+        ) as database:
+            yield cls(
+                job_id=options["job_id"],
+                metric=options["metric"],
+                temp_dir=options["temp_dir"],
+                db=database,
+                logger=options.get("logger"),
+            )
 
     @property
     def job_id(self) -> str:

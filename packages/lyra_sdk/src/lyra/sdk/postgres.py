@@ -1,8 +1,11 @@
 """Optional PostgreSQL implementation of the Lyra plugin database interface."""
 
+from __future__ import annotations
+
 import math
-from collections.abc import Callable, Sequence
-from typing import Literal, NoReturn, TypeVar
+from contextlib import contextmanager
+from numbers import Real
+from typing import TYPE_CHECKING, Literal, NoReturn, TypedDict, TypeVar
 
 from lyra.sdk.db import (
     DatabaseQueryError,
@@ -11,13 +14,22 @@ from lyra.sdk.db import (
     LyraDatabaseError,
     LyraDB,
 )
-from lyra.sdk.db_types import Bounds
+from lyra.sdk.postgres_connection import (
+    PostgresWorkload,
+    apply_read_only_postgres_profile,
+)
 from lyra.sdk.postgres_sql import (
     DEFAULT_POSTGRES_SCHEMA,
     compile_postgres_query,
     postgres_table,
     validate_postgres_identifier,
 )
+from typing_extensions import Unpack
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Sequence
+
+    from lyra.sdk.db_types import Bounds
 
 
 def _raise_missing_postgres_extra(error: ModuleNotFoundError) -> NoReturn:
@@ -41,9 +53,9 @@ except ModuleNotFoundError as error:
     _raise_missing_postgres_extra(error)
 
 try:
-    from sqlalchemy import Connection, bindparam, func, literal_column, select
-    from sqlalchemy.engine import Engine
-    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy import Connection, bindparam, func, literal_column, select, text
+    from sqlalchemy.engine import URL, Engine, create_engine, make_url
+    from sqlalchemy.exc import ArgumentError, DBAPIError
     from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 except ModuleNotFoundError as error:
     _raise_missing_postgres_extra(error)
@@ -61,6 +73,18 @@ _POSTGRES_SERVER_UNAVAILABLE_STATES = frozenset(
     }
 )
 ResultT = TypeVar("ResultT")
+_LOCAL_CONNECT_TIMEOUT_SECONDS = 5
+_LOCAL_POOL_TIMEOUT_SECONDS = 5
+_LOCAL_STATEMENT_TIMEOUT_MS = 300_000
+_LOCAL_POOL_RECYCLE_SECONDS = 900
+
+
+class _LocalPostgresOptions(TypedDict, total=False):
+    schema: str
+    connect_timeout_seconds: float
+    pool_timeout_seconds: float
+    statement_timeout_ms: float
+    pool_recycle_seconds: float
 
 
 def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
@@ -141,6 +165,115 @@ def _run_database_operation(operation: Callable[[], ResultT]) -> ResultT:
         if classified is exc:
             raise
         raise classified from exc
+
+
+def _positive_number(value: float, *, field_name: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        msg = f"{field_name} must be a positive number"
+        raise ValueError(msg)
+    return value
+
+
+def _local_postgres_url(database_url: str | URL) -> URL:
+    try:
+        url = make_url(database_url)
+    except (ArgumentError, TypeError):
+        msg = "database_url must be a valid PostgreSQL URL"
+        raise ValueError(msg) from None
+    if url.drivername not in {"postgresql", "postgresql+psycopg"}:
+        msg = "database_url must use PostgreSQL with the Psycopg driver"
+        raise ValueError(msg)
+    if url.drivername == "postgresql":
+        url = url.set(drivername="postgresql+psycopg")
+    return url
+
+
+@contextmanager
+def connect_postgres(
+    database_url: str | URL,
+    **options: Unpack[_LocalPostgresOptions],
+) -> Iterator[PostgresLyraDB]:
+    """Own a local read-only PostgreSQL adapter and its single-connection pool.
+
+    The yielded adapter is valid only inside this context manager. A lightweight
+    ``SELECT 1`` probe verifies connectivity before it is yielded; no schema or
+    compatibility metadata is inspected.
+
+    Args:
+        database_url: Password-bearing PostgreSQL URL or SQLAlchemy URL object.
+        schema: Schema containing Lyra's shared data tables.
+        connect_timeout_seconds: Deadline for establishing a connection.
+        pool_timeout_seconds: Deadline for acquiring the pooled connection.
+        statement_timeout_ms: Per-transaction PostgreSQL statement deadline.
+        pool_recycle_seconds: Maximum age of a pooled connection.
+
+    Yields:
+        A live :class:`PostgresLyraDB` backed by an owned engine.
+
+    Raises:
+        TypeError: If an unsupported connection-profile option is supplied.
+        ValueError: If the URL or local connection profile is invalid.
+    """
+    unexpected = options.keys() - _LocalPostgresOptions.__annotations__.keys()
+    if unexpected:
+        names = ", ".join(sorted(unexpected))
+        msg = f"unexpected local PostgreSQL option(s): {names}"
+        raise TypeError(msg)
+    connect_timeout = _positive_number(
+        options.get("connect_timeout_seconds", _LOCAL_CONNECT_TIMEOUT_SECONDS),
+        field_name="connect_timeout_seconds",
+    )
+    pool_timeout = _positive_number(
+        options.get("pool_timeout_seconds", _LOCAL_POOL_TIMEOUT_SECONDS),
+        field_name="pool_timeout_seconds",
+    )
+    statement_timeout = _positive_number(
+        options.get("statement_timeout_ms", _LOCAL_STATEMENT_TIMEOUT_MS),
+        field_name="statement_timeout_ms",
+    )
+    pool_recycle = _positive_number(
+        options.get("pool_recycle_seconds", _LOCAL_POOL_RECYCLE_SECONDS),
+        field_name="pool_recycle_seconds",
+    )
+    url = apply_read_only_postgres_profile(
+        _local_postgres_url(database_url),
+        workload=PostgresWorkload.LOCAL,
+        statement_timeout_ms=statement_timeout,
+    )
+    try:
+        engine = create_engine(
+            url,
+            pool_size=1,
+            max_overflow=0,
+            pool_timeout=pool_timeout,
+            pool_recycle=pool_recycle,
+            pool_pre_ping=True,
+            hide_parameters=True,
+            connect_args={"connect_timeout": connect_timeout},
+        )
+    except ArgumentError:
+        msg = "database_url or local PostgreSQL profile is invalid"
+        raise ValueError(msg) from None
+
+    try:
+        database = PostgresLyraDB(
+            engine,
+            schema=options.get("schema", DEFAULT_POSTGRES_SCHEMA),
+        )
+
+        def probe() -> None:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+
+        _run_database_operation(probe)
+        yield database
+    finally:
+        engine.dispose()
 
 
 def _validate_bounds(bounds: Bounds) -> dict[str, float]:
@@ -395,4 +528,5 @@ __all__ = [
     "DEFAULT_POSTGRES_SCHEMA",
     "PostgresLyraDB",
     "classify_postgres_error",
+    "connect_postgres",
 ]

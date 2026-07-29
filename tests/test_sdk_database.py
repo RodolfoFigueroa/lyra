@@ -6,6 +6,7 @@ import inspect
 import math
 import multiprocessing
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -15,6 +16,7 @@ from lyra.sdk.db_types import Bounds
 from lyra.sdk.postgres import PostgresLyraDB
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -86,6 +88,45 @@ def _assert_postgres_import_explains_missing_extra() -> None:
 
     assert "lyra-sdk[postgres]" in str(error.value)
     assert "uv add" in str(error.value)
+
+
+def _assert_local_connector_explains_missing_extra() -> None:
+    blocked = {"geopandas"}
+
+    class BlockDatabaseImports(importlib.abc.MetaPathFinder):
+        @override
+        def find_spec(
+            self,
+            fullname: str,
+            path: object = None,
+            target: object = None,
+        ) -> None:
+            del path, target
+            if fullname.split(".", maxsplit=1)[0] in blocked:
+                message = f"blocked optional dependency: {fullname}"
+                raise ModuleNotFoundError(message, name=fullname)
+
+    for module_name in tuple(sys.modules):
+        if (
+            module_name.startswith("lyra.sdk")
+            or module_name.split(".", maxsplit=1)[0] in blocked
+        ):
+            del sys.modules[module_name]
+    sys.meta_path.insert(0, BlockDatabaseImports())
+
+    sdk = importlib.import_module("lyra.sdk")
+    with (
+        pytest.raises(ImportError) as error,
+        sdk.LocalRunContext.connect_postgres(
+            "postgresql+psycopg://localhost/lyra",
+            job_id="local-job",
+            metric="example",
+            temp_dir=Path(),
+        ),
+    ):
+        pytest.fail("connector without optional dependencies was yielded")
+
+    assert "lyra-sdk[postgres]" in str(error.value)
 
 
 def test_lyra_db_is_abstract_and_has_no_backend_constructor() -> None:
@@ -341,6 +382,16 @@ def test_core_sdk_import_does_not_load_optional_database_dependencies() -> None:
 def test_postgres_module_explains_how_to_install_missing_extra() -> None:
     process = multiprocessing.get_context("spawn").Process(
         target=_assert_postgres_import_explains_missing_extra
+    )
+    process.start()
+    process.join()
+
+    assert process.exitcode == 0
+
+
+def test_local_connector_explains_how_to_install_missing_extra() -> None:
+    process = multiprocessing.get_context("spawn").Process(
+        target=_assert_local_connector_explains_missing_extra
     )
     process.start()
     process.join()

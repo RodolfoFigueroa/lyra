@@ -2,13 +2,13 @@
 
 import math
 
-import geopandas
+import geopandas as gpd
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
 
 AREA_CRS = "EPSG:6372"
 
 
-def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> geopandas.GeoDataFrame:
+def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> gpd.GeoDataFrame:
     """Convert a GeoJSON or SingleGeoJSON object to a GeoDataFrame.
 
     The resulting GeoDataFrame uses the CRS declared in the GeoJSON object and
@@ -23,7 +23,7 @@ def convert_geojson_to_gdf(geojson: GeoJSON | SingleGeoJSON) -> geopandas.GeoDat
         the CRS set from the GeoJSON's CRS property.
 
     """
-    out = geopandas.GeoDataFrame.from_features(
+    out = gpd.GeoDataFrame.from_features(
         [feature.model_dump(mode="json") for feature in geojson.features],
         crs=geojson.crs.properties.name,
     )

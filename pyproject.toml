@@ -43,6 +43,7 @@ ignore = [
     "magic-value-comparison",
     "missing-trailing-comma",
     "missing-copyright-notice",
+    "banned-import-alias",
 ]
 per-file-ignores = { "tests/**/*.py" = [
     "assert",

@@ -115,6 +115,15 @@ points at a different commit, the run stops for manual investigation instead of
 moving the tag. Do not manually merge a second release PR or create release tags
 while a publication run is active.
 
+If Release Please reports `There are untagged, merged release PRs outstanding`,
+check merged PRs carrying `autorelease: pending` and their publication runs.
+Retry a failed publisher before starting another release. If a maintainer chooses
+to supersede an unpublished release instead, remove its pending label and rerun
+Release Please; do not mark it `autorelease: tagged` or invent release tags.
+The configured `bootstrap-sha` is the last published release before the skipped
+v0.19.0 release. It bounds history scanning when a manifest version has no tag;
+normal tag-based discovery resumes once the replacement release is published.
+
 The repository secret `RELEASE_PLEASE_TOKEN` must be able to update release PRs,
 push tags, create releases, and edit PR labels. GitHub's package token publishes
 the container image. Component distributions are currently build artifacts and

@@ -3,6 +3,8 @@
   "release-type": "python",
   "include-component-in-tag": true,
   "separate-pull-requests": false,
+  "draft-pull-request": true,
+  "bootstrap-sha": "b7b8a8a3ac41e5cdb3c7a9b15ef2c1099fcba73d",
   "group-pull-request-title-pattern": "chore: release v${version}",
   "skip-github-release": true,
   "bump-minor-pre-major": true,

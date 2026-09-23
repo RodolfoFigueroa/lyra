@@ -66,6 +66,3 @@ def configure_logging(config: LyraConfig | None = None) -> logging.Logger:
     logger.addHandler(handler)
     logger.propagate = False
     return logger
-
-
-__all__ = ["JsonLineFormatter", "configure_logging"]

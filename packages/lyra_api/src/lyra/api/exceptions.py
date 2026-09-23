@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lyra.sdk.models import CancelledJobResult, FailedJobResult
+    from lyra.sdk.models.job import CancelledJobResult, FailedJobResult
 
 
 class LyraAPIError(Exception):

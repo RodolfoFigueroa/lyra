@@ -20,6 +20,3 @@ def database_unavailable_http_exception(config: LyraConfig) -> HTTPException:
         },
         headers={"Retry-After": str(config.database.retry_after_seconds)},
     )
-
-
-__all__ = ["database_unavailable_http_exception"]

@@ -180,26 +180,3 @@ class AdminStatusResponse(StrictBaseModel):
     catalog_fingerprint: str
     catalog_available: bool
     catalog_error: str | None = None
-
-
-__all__ = [
-    "AdminStatusResponse",
-    "CatalogSummaryResponse",
-    "ConfigSummaryResponse",
-    "DatabaseHealth",
-    "LivenessResponse",
-    "PluginSourceSummary",
-    "QueueSummary",
-    "QueuesResponse",
-    "ReadinessResponse",
-    "ReadinessStatus",
-    "RedisHealth",
-    "ServiceReadinessStatus",
-    "WorkerConfigSummary",
-    "WorkerDetail",
-    "WorkerInspectMetadata",
-    "WorkerObservedStatus",
-    "WorkerSummary",
-    "WorkerTaskSummary",
-    "WorkersResponse",
-]

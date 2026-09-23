@@ -7,7 +7,7 @@ from typing import Any, Self, cast
 
 import pytest
 from fastapi import Response
-from lyra.sdk.models import DatabaseHealth
+from lyra.sdk.models.observability import DatabaseHealth
 from redis.exceptions import RedisError
 
 from lyra_app import worker_control

@@ -28,12 +28,10 @@ from lyra.api.exceptions import (
     JobWaitTimeoutError,
     MetricRunError,
 )
-from lyra.sdk.models import (
-    AdminStatusResponse,
+from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
+from lyra.sdk.models.data_types import DataTypesResponse
+from lyra.sdk.models.job import (
     CancelledJobResult,
-    CatalogSummaryResponse,
-    ConfigSummaryResponse,
-    DataTypesResponse,
     FailedJobResult,
     FileJobResult,
     JobCancelResponse,
@@ -45,20 +43,23 @@ from lyra.sdk.models import (
     JobMessageEvent,
     JobProgressEvent,
     JobStatusInfo,
-    LivenessResponse,
-    MetZoneCodeResponse,
-    PluginRepoListResponse,
-    PluginRoutingResponse,
-    QueuesResponse,
-    ReadinessResponse,
     ResultDescriptor,
     TableJobResult,
     TerminalJobResult,
-    WorkerDetail,
-    WorkersResponse,
     parse_job_result,
 )
+from lyra.sdk.models.lookups import MetZoneCodeResponse
 from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+from lyra.sdk.models.observability import (
+    AdminStatusResponse,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
+    LivenessResponse,
+    QueuesResponse,
+    ReadinessResponse,
+    WorkerDetail,
+    WorkersResponse,
+)
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -1142,8 +1143,8 @@ class LyraClient:
     """Access Lyra's consumer API with synchronous requests.
 
     The client groups endpoints into resource namespaces. Use :attr:`catalog` to
-    discover metrics, :attr:`raw` to submit or run metrics without a generated
-    typed client, and :attr:`jobs` and :attr:`results` to observe existing jobs.
+    discover metrics, :attr:`raw` to submit or run metrics with dictionary
+    arguments, and :attr:`jobs` and :attr:`results` to observe existing jobs.
 
     Args:
         host: API hostname, optionally including a base path, but without a URL

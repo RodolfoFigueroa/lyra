@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from lyra.sdk.models import FailedJobResult
+from lyra.sdk.models.job import FailedJobResult
 
 from lyra_app import job_store, worker_control
 from lyra_app.config import clear_config_cache

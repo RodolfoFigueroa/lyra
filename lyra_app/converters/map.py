@@ -43,6 +43,3 @@ def build_converter_map(engine: Engine) -> dict[str, dict[str, Any]]:
             "geojson": load_bounds_from_geojson,
         },
     }
-
-
-__all__ = ["build_converter_map"]

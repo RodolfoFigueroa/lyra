@@ -99,10 +99,3 @@ class AgentBearerAuthMiddleware:
             return
 
         await self._app(scope, receive, send)
-
-
-__all__ = [
-    "AgentBearerAuthMiddleware",
-    "require_agent_key",
-    "validate_agent_authorization",
-]

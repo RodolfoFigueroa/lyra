@@ -529,16 +529,3 @@ def _run_command(args: argparse.Namespace) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-__all__ = [
-    "PluginBuildError",
-    "add_pre_commit_hook",
-    "build_manifest",
-    "build_parser",
-    "check_manifest",
-    "describe_plugin",
-    "main",
-    "render_description",
-    "render_manifest",
-]

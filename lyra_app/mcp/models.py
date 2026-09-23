@@ -25,6 +25,8 @@ class MCPContractModel(BaseModel):
 
 
 class SearchMetricsInput(MCPContractModel):
+    """Search the metric catalog with a bounded lexical query."""
+
     query: str = Field(
         min_length=1,
         description=(
@@ -44,6 +46,8 @@ class SearchMetricsInput(MCPContractModel):
 
 
 class ListMetricsInput(MCPContractModel):
+    """Select a page of the public metric catalog."""
+
     cursor: str | None = Field(
         default=None,
         min_length=1,
@@ -58,6 +62,8 @@ class ListMetricsInput(MCPContractModel):
 
 
 class LookupMetZoneInput(MCPContractModel):
+    """Resolve a metropolitan zone from a human-readable name."""
+
     name: str = Field(
         min_length=1,
         description=(
@@ -68,10 +74,14 @@ class LookupMetZoneInput(MCPContractModel):
 
 
 class GetMetricInput(MCPContractModel):
+    """Select one metric by its public name."""
+
     metric: str = Field(min_length=1, description="Public metric name.")
 
 
 class RunMetricInput(MCPContractModel):
+    """Submit a metric with spatial inputs and an optional wait."""
+
     metric: str = Field(min_length=1, description="Public metric name.")
     met_zone_code: str = Field(
         min_length=1,
@@ -99,6 +109,8 @@ class RunMetricInput(MCPContractModel):
 
 
 class ResultRefInput(MCPContractModel):
+    """Identify a retained result by its stable Lyra reference."""
+
     result_ref: str = Field(
         pattern=RESULT_REF_PATTERN,
         description="Stable reference shaped lyra://results/{job_id}.",
@@ -106,6 +118,8 @@ class ResultRefInput(MCPContractModel):
 
 
 class GetJobResultInput(ResultRefInput):
+    """Retrieve a result with a bounded wait for completion."""
+
     wait_seconds: float = Field(
         default=MAX_RESULT_WAIT_SECONDS,
         ge=0,
@@ -119,6 +133,8 @@ class GetJobResultInput(ResultRefInput):
 
 
 class OutputColumn(MCPContractModel):
+    """Describe a declared metric output column."""
+
     name: str = Field(min_length=1)
     type: Literal["number", "integer", "string", "boolean"]
     unit: str = Field(min_length=1)
@@ -128,11 +144,15 @@ class OutputColumn(MCPContractModel):
 
 
 class SpatialField(MCPContractModel):
+    """Identify a spatial request field and its input kind."""
+
     field: str = Field(min_length=1)
     kind: Literal["location", "bounds"]
 
 
 class SearchCandidate(MCPContractModel):
+    """Describe a metric matched by a catalog search."""
+
     metric: str = Field(min_length=1)
     description: str
     reason: str = Field(min_length=1)
@@ -142,17 +162,23 @@ class SearchCandidate(MCPContractModel):
 
 
 class SearchMetricsOutput(MCPContractModel):
+    """Return ranked metric candidates and catalog identity."""
+
     query: str
     catalog_fingerprint: str | None
     candidates: list[SearchCandidate]
 
 
 class MetricListItem(MCPContractModel):
+    """Summarize one metric in a catalog page."""
+
     name: str = Field(min_length=1)
     description: str
 
 
 class ListMetricsOutput(MCPContractModel):
+    """Return a catalog page and its continuation cursor."""
+
     catalog_fingerprint: str = Field(min_length=1)
     total_count: int = Field(ge=0)
     metrics: list[MetricListItem]
@@ -160,6 +186,8 @@ class ListMetricsOutput(MCPContractModel):
 
 
 class LookupMetZoneOutput(MCPContractModel):
+    """Return the canonical metropolitan-zone code and name."""
+
     cve_met: str = Field(
         min_length=1,
         description="Canonical metropolitan-zone code accepted by Lyra metrics.",
@@ -171,12 +199,16 @@ class LookupMetZoneOutput(MCPContractModel):
 
 
 class TableMetricOutput(MCPContractModel):
+    """Describe fixed and batched columns in a table output."""
+
     kind: Literal["table"]
     columns: list[OutputColumn]
     batched_columns: list[OutputColumn]
 
 
 class FileMetricOutput(MCPContractModel):
+    """Describe a file output and its supported extensions."""
+
     kind: Literal["file"]
     media_type: str = Field(min_length=1)
     extensions: list[str]
@@ -189,6 +221,8 @@ MetricOutput = Annotated[
 
 
 class GetMetricOutput(MCPContractModel):
+    """Return a metric request schema and output contract."""
+
     name: str = Field(min_length=1)
     description: str
     request_schema: dict[str, Any]
@@ -197,6 +231,8 @@ class GetMetricOutput(MCPContractModel):
 
 
 class RunningOutput(MCPContractModel):
+    """Direct a caller to poll an unfinished job."""
+
     status: Literal["running"]
     job_id: str = Field(min_length=1)
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
@@ -205,15 +241,21 @@ class RunningOutput(MCPContractModel):
 
 
 class RunMetricRunningOutput(RunningOutput):
+    """Report an unfinished submission and whether it was reused."""
+
     reused: bool
 
 
 class ResultLifetimeOutput(MCPContractModel):
+    """Describe when a retained result expires."""
+
     expires_in_seconds: int | None = Field(default=None, ge=0)
     expires_at: str | None = None
 
 
 class ResultRawAccessOutput(MCPContractModel):
+    """Describe formats and API paths for retrieving a result."""
+
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
     formats: list[Literal["terminal_json", "jsonl"]]
     terminal_json_path: str = Field(min_length=1)
@@ -221,17 +263,23 @@ class ResultRawAccessOutput(MCPContractModel):
 
 
 class PluginInfoOutput(MCPContractModel):
+    """Identify the plugin that produced a result."""
+
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
 
 
 class RowIdentityOutput(MCPContractModel):
+    """Describe the authoritative identity of result rows."""
+
     field: str = Field(min_length=1)
     namespace: str | None = Field(default=None, min_length=1)
     version: str | None = Field(default=None, min_length=1)
 
 
 class JobRunProvenanceOutput(MCPContractModel):
+    """Capture the inputs and contracts used to execute a job."""
+
     metric: str = Field(min_length=1)
     catalog_fingerprint: str = Field(min_length=1)
     plugin: PluginInfoOutput
@@ -242,6 +290,8 @@ class JobRunProvenanceOutput(MCPContractModel):
 
 
 class ResultTableMetadataOutput(MCPContractModel):
+    """Describe table dimensions, columns, and row identity."""
+
     row_count: int = Field(ge=0)
     column_count: int = Field(ge=0)
     columns: list[str]
@@ -251,6 +301,8 @@ class ResultTableMetadataOutput(MCPContractModel):
 
 
 class ResultTablePreviewOutput(MCPContractModel):
+    """Return a bounded sample of table rows."""
+
     index_field: str = Field(min_length=1)
     rows: list[dict[str, Any]]
     row_limit: int = Field(ge=0)
@@ -258,6 +310,8 @@ class ResultTablePreviewOutput(MCPContractModel):
 
 
 class NumericColumnSummaryOutput(MCPContractModel):
+    """Summarize observed numeric values and null counts."""
+
     count: int = Field(ge=0)
     null_count: int = Field(ge=0)
     min: int | float | None = None
@@ -266,6 +320,8 @@ class NumericColumnSummaryOutput(MCPContractModel):
 
 
 class ResultColumnSummaryOutput(MCPContractModel):
+    """Summarize values in one result column."""
+
     name: str = Field(min_length=1)
     count: int = Field(ge=0)
     null_count: int = Field(ge=0)
@@ -273,6 +329,8 @@ class ResultColumnSummaryOutput(MCPContractModel):
 
 
 class ResultSummaryOutput(MCPContractModel):
+    """Summarize a terminal result and any execution error."""
+
     kind: Literal["table", "file", "failed", "cancelled"]
     row_count: int | None = Field(default=None, ge=0)
     column_count: int | None = Field(default=None, ge=0)
@@ -281,11 +339,15 @@ class ResultSummaryOutput(MCPContractModel):
 
 
 class ResultFileMetadataOutput(MCPContractModel):
+    """Describe the path and media type of a file result."""
+
     file_path: str = Field(min_length=1)
     media_type: str = Field(min_length=1)
 
 
 class ResultDescriptorOutput(MCPContractModel):
+    """Describe a retained terminal result and its retrieval options."""
+
     schema_version: Literal[1]
     job_id: str = Field(min_length=1)
     status: Literal["succeeded", "failed", "cancelled"]
@@ -303,6 +365,8 @@ class ResultDescriptorOutput(MCPContractModel):
 
 
 class RunMetricResultDescriptorOutput(ResultDescriptorOutput):
+    """Return a completed submission and its reuse status."""
+
     reused: bool
 
 
@@ -311,6 +375,8 @@ GetJobResultOutput = RunningOutput | ResultDescriptorOutput
 
 
 class ResultMetadataOutput(MCPContractModel):
+    """Return result metadata without its table preview."""
+
     schema_version: Literal[1]
     job_id: str = Field(min_length=1)
     status: Literal["succeeded", "failed", "cancelled"]
@@ -326,6 +392,8 @@ class ResultMetadataOutput(MCPContractModel):
 
 
 class ResultPreviewOutput(MCPContractModel):
+    """Return a bounded result preview with provenance and summary."""
+
     schema_version: Literal[1]
     job_id: str = Field(min_length=1)
     status: Literal["succeeded", "failed", "cancelled"]
@@ -340,22 +408,30 @@ class ResultPreviewOutput(MCPContractModel):
 
 
 class BearerAuthenticationOutput(MCPContractModel):
+    """Describe the bearer credential needed for an API handoff."""
+
     scheme: Literal["Bearer"]
     credential_env_var: Literal["LYRA_AGENT_API_KEY"]
 
 
 class LyraAPIHandoffOutput(MCPContractModel):
+    """Describe an authenticated HTTP result download."""
+
     method: Literal["GET"]
     url: str = Field(pattern=r"^https?://[^/?#]+(?:/[^?#]*)?$")
     authentication: BearerAuthenticationOutput
 
 
 class ClientHelpersOutput(MCPContractModel):
+    """Provide synchronous and asynchronous Python download examples."""
+
     python_sync: str = Field(min_length=1)
     python_async: str = Field(min_length=1)
 
 
 class DownloadResultOutput(MCPContractModel):
+    """Return download instructions and result expiration metadata."""
+
     job_id: str = Field(min_length=1)
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
     status: Literal["succeeded"]
@@ -532,14 +608,3 @@ TOOL_CONTRACTS = (
 )
 
 TOOL_CONTRACTS_BY_NAME = {contract.name: contract for contract in TOOL_CONTRACTS}
-
-
-__all__ = [
-    "MAX_METRIC_PAGE_SIZE",
-    "MAX_RESULT_WAIT_SECONDS",
-    "MAX_RUN_WAIT_SECONDS",
-    "TOOL_CONTRACTS",
-    "TOOL_CONTRACTS_BY_NAME",
-    "MCPContractModel",
-    "ToolContract",
-]

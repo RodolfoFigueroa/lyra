@@ -12,14 +12,14 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from lyra.sdk.models import (
+from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
     FileJobResult,
     JobCreateRequest,
     TableJobResult,
 )
-from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.metric import MetricCatalogResponse
 from lyra.sdk.types import JsonValue
 from redis.exceptions import RedisError

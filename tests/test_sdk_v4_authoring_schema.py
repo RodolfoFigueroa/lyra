@@ -3,13 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-import lyra.sdk.models as sdk_models
+import lyra.sdk.models.plugin_v4 as plugin_models
 import pytest
-from lyra.sdk.models import PluginManifestV4
 from lyra.sdk.models.plugin_v4 import (
     BatchInputV4,
     FileOutputV4,
     JsonSchemaInputV4,
+    PluginManifestV4,
     TableOutputV4,
 )
 from pydantic import ValidationError
@@ -99,11 +99,11 @@ def _assert_invalid(raw: dict[str, Any], match: str) -> None:
         PluginManifestV4.model_validate(raw)
 
 
-def test_sdk_public_surface_exposes_v4_manifest_models() -> None:
-    assert sdk_models.PluginManifestV4 is PluginManifestV4
-    assert hasattr(sdk_models, "compile_plugin_manifest")
-    assert not hasattr(sdk_models, "PluginManifestV3")
-    assert not hasattr(sdk_models, "MetricInfoV3")
+def test_plugin_module_exposes_v4_manifest_models() -> None:
+    assert plugin_models.PluginManifestV4 is PluginManifestV4
+    assert hasattr(plugin_models, "compile_plugin_manifest")
+    assert not hasattr(plugin_models, "PluginManifestV3")
+    assert not hasattr(plugin_models, "MetricInfoV3")
 
 
 def test_manifest_v4_accepts_minimal_static_table_metric() -> None:

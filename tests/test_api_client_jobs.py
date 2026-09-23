@@ -11,7 +11,7 @@ from lyra.api import parse_result_ref
 from lyra.api.client.async_ import AsyncLyraAdminClient, AsyncLyraClient
 from lyra.api.client.sync import LyraAdminClient, LyraClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
-from lyra.sdk.models import FileJobResult, JobProgressEvent, TableJobResult
+from lyra.sdk.models.job import FileJobResult, JobProgressEvent, TableJobResult
 from lyra.sdk.types import JsonValue
 
 from lyra_app.config import DEFAULT_API_HOST

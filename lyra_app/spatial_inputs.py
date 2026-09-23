@@ -6,18 +6,17 @@ import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from lyra.sdk.models import RowIdentityMetadata
+from lyra.sdk.models.job import RowIdentityMetadata
+from lyra.sdk.models.spatial import BoundsReference, LocationReference
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-from lyra_app.models import ExplicitBoundsUnion, ExplicitLocationUnion
-
 if TYPE_CHECKING:
     from lyra.sdk.models.plugin_v4 import SpatialInputKindV4
 
-_LOCATION_WRAPPER_ADAPTER = TypeAdapter(ExplicitLocationUnion)
-_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(ExplicitBoundsUnion)
+_LOCATION_WRAPPER_ADAPTER = TypeAdapter(LocationReference)
+_BOUNDS_WRAPPER_ADAPTER = TypeAdapter(BoundsReference)
 
 _CVEGEO_NAMESPACES_BY_LENGTH = {
     2: "inegi:cvegeo:state",

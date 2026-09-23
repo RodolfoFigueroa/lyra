@@ -122,7 +122,7 @@ def test_cli_reference_includes_nested_admin_help(
     assert "## lyra-admin config validate\n" in reference
     assert "## lyra-admin workers restart\n" not in reference
     assert "--restart-timeout" not in reference
-    assert "## lyra-client\n" in reference
+    assert "## lyra-plugin\n" in reference
     assert "lyra-tui" not in reference
 
 

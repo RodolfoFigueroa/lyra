@@ -1,122 +1,141 @@
 ---
 title: Python Client
-description: Generate a typed Lyra client and use sync, async, or raw resources.
+description: Inspect the catalog and submit metric jobs with synchronous or asynchronous clients.
 ---
 
-Generated clients are the primary Python interface to Lyra metrics. Commit the
-catalog snapshot and generated source with your application so code review and
-type checking cover every metric call.
-
-## Pull and generate
-
-The `lyra-client` executable is installed with `lyra-api`. The commands below
-pull the public generation contract and render it as an importable package. See
-the [client generator CLI guide](../client-generator-cli/) for every option,
-exit status, and CI behavior.
+Install `lyra-api` and use `LyraClient` or `AsyncLyraClient` to inspect the
+catalog, submit dictionary arguments, and retrieve typed job results:
 
 ```bash
-uv run lyra-client catalog pull \
-  --host lyra.example.com \
-  --output lyra-catalog.json
-
-uv run lyra-client generate \
-  --catalog lyra-catalog.json \
-  --package acme_lyra \
-  --output src/acme_lyra
+uv add lyra-api
 ```
 
-Catalog snapshots contain no timestamps or machine-specific metadata. The
-generator writes deterministic source, a contract module, `py.typed`, and a
-manifest of files it owns. It preserves unrelated files in the destination.
+Client classes, job handles, options, exceptions, and `parse_result_ref` are
+conveniently available from `lyra.api`. The [Python reference](../../api/lyra/)
+documents each definition in its owning module. Import SDK models from their
+owning modules, such as `lyra.sdk.models.job` and `lyra.sdk.models.spatial`.
 
-Use check mode in CI. It performs no writes and prints a concise diff when the
-committed package is stale:
-
-```bash
-uv run lyra-client generate \
-  --catalog lyra-catalog.json \
-  --package acme_lyra \
-  --output src/acme_lyra \
-  --check
-```
-
-## Synchronous use
+## Inspect the catalog
 
 ```python
 import os
 
-from acme_lyra import Client, MetZoneCode
-from lyra.api import RunOptions
+from lyra.api import LyraClient
 
-client = Client(
+client = LyraClient(
     "lyra.example.com",
     agent_api_key=os.environ["LYRA_AGENT_API_KEY"],
 )
 
-result = client.metrics.job_accessibility.run(
-    location=MetZoneCode(value="09.01"),
-    limit=50,
-    lyra_options=RunOptions(
-        idempotency_key="accessibility-2026-07",
-        timeout=300,
-    ),
+catalog = client.catalog.metrics()
+for metric in catalog.metrics:
+    print(metric.name, metric.description)
+
+# Use a metric name advertised by your deployment.
+metric = client.catalog.metric("population")
+print(metric.request_schema)
+print(metric.output)
+```
+
+The catalog exposes each metric's request schema, spatial inputs, and output
+contract, together with a schema dialect, contract version, and catalog
+fingerprint. Choose argument names and values from the deployed metric's schema.
+
+## Submit, wait, and retrieve results
+
+The following examples assume the deployment provides a `population` metric
+with a `location` field accepting metropolitan-zone codes.
+
+```python
+from lyra.api import SubmitOptions
+from lyra.sdk.models.job import FileJobResult, TableJobResult
+from lyra.sdk.types import JsonObject
+
+arguments: JsonObject = {
+    "location": {"data_type": "met_zone_code", "value": "09.01"},
+}
+handle = client.raw.submit(
+    "population",
+    arguments,
+    options=SubmitOptions(idempotency_key="population-2026-07"),
+)
+print(handle.job_id, handle.status().status)
+result = handle.wait(timeout=300)
+
+if isinstance(result, TableJobResult):
+    frame = client.results.dataframe(handle.job_id)
+elif isinstance(result, FileJobResult):
+    client.results.download_file(handle.job_id, "result.bin")
+```
+
+`submit()` returns a `JobHandle`. Its `events()` method streams durable job
+events; `wait()` consumes events until completion and returns the successful
+table or file result. Once the job is complete, `handle.result()` fetches its
+result again. Failed or cancelled jobs raise `MetricRunError` through these
+handle methods, with the job ID, status, structured error, and terminal result.
+A wait deadline raises `JobWaitTimeoutError`; the job can still be running.
+
+For a saved job ID, use `client.jobs.get(job_id)` to inspect status,
+`client.results.get(job_id)` to fetch any terminal result, and
+`client.results.descriptor(job_id)` for result metadata. Descriptor and dataframe
+operations also accept stable `lyra://results/{job_id}` references.
+
+To submit and wait in one call:
+
+```python
+from lyra.api import RunOptions
+
+result = client.raw.run(
+    "population",
+    arguments,
+    options=RunOptions(timeout=300),
 )
 ```
 
-Metric fields are keyword-only parameters with the catalog's required,
-nullable, and default semantics. Generated request models are exported as
-`<MetricPascalCase>Request`. Pydantic validation and the complete Draft 2020-12
-request schema run locally before any network request.
-
-Every metric has `submit()` and `run()`. Submission returns a typed `JobHandle`
-with `status()`, `events()`, `result()`, and `wait()`. File metrics additionally
-have `run_to_file(path=...)`. Failed and cancelled terminal states raise
-`MetricRunError` with the job ID, status, structured error, and terminal result.
+For a metric whose output is a file, `client.raw.run_to_file(metric_name,
+arguments, path="result.bin", options=RunOptions(timeout=300))` also downloads
+the successful result.
 
 ## Asynchronous use
 
 ```python
-from acme_lyra import AsyncClient, CVEGEOList
+import os
 
-client = AsyncClient("lyra.example.com", agent_api_key="...")
-result = await client.metrics.population.run(
-    location=CVEGEOList(value=["09"]),
+from lyra.api import AsyncLyraClient
+
+client = AsyncLyraClient(
+    "lyra.example.com",
+    agent_api_key=os.environ["LYRA_AGENT_API_KEY"],
 )
-```
-
-Await generated `submit()`, `run()`, `run_to_file()`, handle `wait()` and
-`result()`, and ordinary async core-resource operations. Consume handle events
-with `async for`.
-
-## Catalog compatibility
-
-Generated clients verify the live catalog lazily before the first metric
-submission. `verify_catalog="warn"` is the default: a mismatch or failed
-verification emits `CatalogCompatibilityWarning` and continues. Use `"error"`
-to raise `CatalogCompatibilityError`, or `"off"` to make no verification
-request. Server-side request validation remains authoritative.
-
-## Core resources and raw escape hatch
-
-Generated clients expose the consumer namespaces alongside `metrics`: `health`,
-`lookups`, `catalog`, `jobs`, `results`, and `raw`. For a metric not in the
-snapshot, use the explicitly untyped escape hatch:
-
-```python
-result = client.raw.run(
-    "new_metric",
+catalog = await client.catalog.metrics()
+handle = await client.raw.submit(
+    "population",
     {"location": {"data_type": "met_zone_code", "value": "09.01"}},
 )
+result = await handle.wait(timeout=300)
 ```
 
-Raw arguments are JSON objects and raw successful results are
-`TableJobResult | FileJobResult`. Prefer regeneration once the new catalog is
-available.
+Await asynchronous catalog, submission, result, and download operations. An
+`AsyncJobHandle` provides `status()`, `result()`, and `wait()` as awaitable
+operations. Consume `handle.events()` with `async for`.
 
-## Administrator client
+## Validation and migration
 
-Operator applications use a separate client type and credential. Administrator
-resources are exposed directly rather than through consumer clients:
+Metric-specific client generation has been removed. Metric-specific
+autocomplete, generated request models, local generated-client validation, and
+automatic catalog compatibility checks are no longer available. Pass JSON
+objects to the regular client's `raw` methods. Server-side validation remains
+authoritative and validates submissions against each metric's request schema.
+The catalog endpoints, schemas, and fingerprints remain available for inspection.
+
+## Authentication and administrator clients
+
+Pass a hostname without a URL scheme. HTTPS is enabled by default; for a local
+HTTP deployment use `LyraClient("localhost:8000", secure=False, ...)`.
+Consumer job operations use `agent_api_key`; public catalog and lookup endpoints
+do not require that credential. Keep credentials in environment variables.
+
+Operator applications use a separate client type and administrator credential:
 
 ```python
 import os
@@ -127,7 +146,6 @@ admin = LyraAdminClient(
     "lyra.example.com",
     admin_api_key=os.environ["LYRA_ADMIN_API_KEY"],
 )
-
 status = admin.status()
 jobs = admin.jobs.list(status="running")
 workers = admin.workers.list()
@@ -136,4 +154,4 @@ workers = admin.workers.list()
 Use `AsyncLyraAdminClient` for the equivalent asynchronous interface. Both
 administrator clients expose `health`, `jobs`, `plugin_repos`, `catalog`,
 `workers`, `queues`, and `routing`. Consumer and administrator credentials are
-never accepted by the same client type.
+accepted by their respective client types.

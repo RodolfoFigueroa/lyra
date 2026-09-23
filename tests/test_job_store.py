@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lyra.sdk.models import (
+from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
     FileJobResult,

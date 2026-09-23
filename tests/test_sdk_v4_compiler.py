@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 from jsonschema.validators import validator_for
-from lyra.sdk.models import (
+from lyra.sdk.models.plugin_v4 import (
     PluginManifestV4,
     TableOutputV4,
     compile_plugin_manifest,

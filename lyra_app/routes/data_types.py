@@ -3,7 +3,7 @@
 from typing import Literal, get_args, get_origin
 
 from fastapi import APIRouter
-from lyra.sdk.models import DataTypeSchemaInfo, DataTypesResponse
+from lyra.sdk.models.data_types import DataTypeSchemaInfo, DataTypesResponse
 from lyra.sdk.models.spatial import (
     CVEGEOList,
     GeoJSONBounds,

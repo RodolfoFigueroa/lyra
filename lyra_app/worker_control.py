@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from threading import Lock
 
 from celery import states
-from lyra.sdk.models import FailedJobResult
+from lyra.sdk.models.job import FailedJobResult
 from lyra.sdk.types import JsonObject, JsonValue
 
 from lyra_app import job_store

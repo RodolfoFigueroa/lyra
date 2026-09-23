@@ -8,10 +8,10 @@ input and a declared terminal output. Use public contracts from `lyra-sdk`; do
 not import application internals.
 
 Public metric names and root input names must match
-`^[a-z][a-z0-9_]*$`. The `lyra_` prefix is reserved for generated runtime
-keywords. Decorator and manifest construction reject invalid names immediately;
-generator diagnostics also fail on naming collisions, broken references, or
-contracts that cannot be emitted without ambiguity.
+`^[a-z][a-z0-9_]*$`. The `lyra_` prefix is reserved for Lyra-owned
+names. Decorator and manifest construction reject invalid names immediately.
+Manifest compilation also rejects duplicate metric names and invalid input or
+output contracts.
 
 Declare metrics with the standalone `@metric` decorator, then assemble them in
 one explicit, synchronous factory:
@@ -28,6 +28,14 @@ def create_plugin() -> PluginDefinition:
 
 Configure that parameterless factory under `[tool.lyra].factory`. Lyra imports
 only the configured module and never scans the package for metric modules.
+
+The `lyra.sdk` package provides convenient imports for `RunContext`, `LyraDB`,
+`Bounds`, `metric`, `PluginDefinition`, `PluginDefinitionError`,
+`MetricDescription`, `Input`, `LocationInput`, `BoundsInput`, `BatchInput`, and
+`BatchItem`. Import models from their owning modules, for example
+`from lyra.sdk.models.job import TableJobResult`. Utility helpers likewise live
+in `lyra.utils.date`, `lyra.utils.ee`, and `lyra.utils.geometry`. The
+[Python reference](../../api/lyra/) documents definitions at those owning modules.
 
 ## Inputs
 
@@ -211,6 +219,6 @@ definition returned by the factory.
 The compiler rejects extra fields, invalid or reserved public names, invalid
 defaults/examples, duplicate metric names, missing spatial inputs, invalid table
 contracts, and stale artifacts. Every compiled request schema declares Draft
-2020-12 so client generators can validate it without guessing a dialect.
+2020-12 so consumers can interpret it without guessing a dialect.
 Use the generated [Python reference](../../api/lyra/) for
 exact SDK model fields.

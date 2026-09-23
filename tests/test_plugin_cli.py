@@ -42,7 +42,7 @@ factory = "example_plugin:create_plugin"
     (project / "example_plugin.py").write_text(
         """
 from lyra.sdk import Input, LocationInput, PluginDefinition, metric
-from lyra.sdk.models import TableJobResult
+from lyra.sdk.models.job import TableJobResult
 from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4
 
 @metric(

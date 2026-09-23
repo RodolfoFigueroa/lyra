@@ -63,6 +63,3 @@ def load_plugin_definition(factory_ref: str) -> PluginDefinition:
         msg = f"Plugin factory {factory_ref!r} must return PluginDefinition"
         raise PluginLoadError(msg)
     return definition
-
-
-__all__ = ["PluginLoadError", "load_plugin_definition"]

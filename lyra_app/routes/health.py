@@ -3,7 +3,7 @@
 import asyncio
 
 from fastapi import APIRouter, Response, status
-from lyra.sdk.models import (
+from lyra.sdk.models.observability import (
     DatabaseHealth,
     LivenessResponse,
     ReadinessResponse,
@@ -98,6 +98,3 @@ async def readiness(
         catalog_available=is_catalog_loaded(),
         catalog_error=catalog_error(),
     )
-
-
-__all__ = ["database_health", "liveness", "readiness", "redis_health", "router"]

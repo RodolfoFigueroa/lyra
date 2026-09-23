@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from lyra.sdk.config import PluginRepoConfig
-from lyra.sdk.models import (
+from lyra.sdk.models.job import (
     FileJobResult,
     JobEnvelope,
     JobProgressEvent,
@@ -573,7 +573,7 @@ def test_generic_task_executes_factory_and_persists_result(
         "from lyra.sdk import (\n"
         "    Input, LocationInput, PluginDefinition, RunContext, metric,\n"
         ")\n"
-        "from lyra.sdk.models import TableJobResult\n"
+        "from lyra.sdk.models.job import TableJobResult\n"
         "from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4\n"
         "@metric(\n"
         "    name='heavy_metric',\n"

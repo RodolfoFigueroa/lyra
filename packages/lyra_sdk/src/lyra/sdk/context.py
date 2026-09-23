@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from lyra.sdk.db import LyraDB
-    from lyra.sdk.models import JobMessageLevel
+    from lyra.sdk.models.job import JobMessageLevel
 
 
 class RunContext(Protocol):
@@ -103,6 +103,3 @@ class RunContext(Protocol):
 
         """
         ...
-
-
-__all__ = ["RunContext"]

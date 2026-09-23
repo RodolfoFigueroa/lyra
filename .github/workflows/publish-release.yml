@@ -94,9 +94,8 @@ jobs:
           uv add "${RUNNER_TEMP}"/lyra-dist/*.whl
           uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra_app"
           uv run lyra-plugin --help
-          uv run lyra-client --help
           uv run lyra-admin --help
-          uv run lyra-admin repos update --help
+          uv run lyra-admin repos list --help
 
   tag-components:
     needs:

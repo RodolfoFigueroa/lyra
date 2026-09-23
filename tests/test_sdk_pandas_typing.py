@@ -1,5 +1,5 @@
 import pandas as pd
-from lyra.sdk.models import TableJobResult
+from lyra.sdk.models.job import TableJobResult
 
 
 def test_table_result_constructor_accepts_pandas_dataframe() -> None:

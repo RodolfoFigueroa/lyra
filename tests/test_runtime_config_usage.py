@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import pytest
-from lyra.sdk.models import JobEnvelope
+from lyra.sdk.models.job import JobEnvelope
 
 from lyra_app import auth, job_store
 from lyra_app.config import LyraConfig, clear_config_cache, get_config

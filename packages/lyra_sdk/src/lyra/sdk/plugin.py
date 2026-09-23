@@ -64,7 +64,7 @@ ConstraintValue: TypeAlias = int | float
 _PUBLIC_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-class CommonInputMetadata(TypedDict):
+class _CommonInputMetadata(TypedDict):
     description: NotRequired[str]
     examples: NotRequired[list[JsonValue]]
     required: NotRequired[bool]
@@ -431,11 +431,11 @@ def _split_nullable(annotation: PythonAnnotation) -> tuple[PythonAnnotation, boo
 def _schema_metadata(
     annotation: PythonAnnotation,
     schema: JsonObject,
-) -> CommonInputMetadata:
+) -> _CommonInputMetadata:
     _base, annotation_metadata = _unwrap_annotated(annotation)
     if not any(isinstance(value, FieldInfo) for value in annotation_metadata):
         return {}
-    metadata: CommonInputMetadata = {}
+    metadata: _CommonInputMetadata = {}
     description = schema.get("description")
     if isinstance(description, str):
         metadata["description"] = description
@@ -871,16 +871,3 @@ def _format_annotation(annotation: PythonAnnotation) -> str:
         .replace("typing.", "")
         .replace("lyra.sdk.plugin.", "")
     )
-
-
-__all__ = [
-    "BatchInput",
-    "BatchItem",
-    "BoundsInput",
-    "Input",
-    "LocationInput",
-    "MetricDescription",
-    "PluginDefinition",
-    "PluginDefinitionError",
-    "metric",
-]

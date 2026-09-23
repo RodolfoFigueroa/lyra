@@ -9,7 +9,7 @@ from uuid import uuid4
 from anyio import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from lyra.sdk.models import (
+from lyra.sdk.models.job import (
     FileJobResult,
     JobCreateRequest,
     JobCreateResponse,

@@ -21,7 +21,7 @@ from typing import (
     runtime_checkable,
 )
 
-from lyra.sdk.models import (
+from lyra.sdk.models.job import (
     JobEnvelope,
     JobEvent,
     JobLifecycleEvent,
@@ -218,35 +218,61 @@ RedisStreamRecord: TypeAlias = tuple[RedisPayload, RedisStreamFields]
 
 @runtime_checkable
 class SyncKeyReader(Protocol):
-    def get(self, key: str) -> RedisPayload | None: ...
+    """Read a Redis key synchronously."""
+
+    def get(self, key: str) -> RedisPayload | None:
+        """Return the value stored at the key, if present."""
+        ...
 
 
 @runtime_checkable
 class AsyncKeyReader(Protocol):
-    def get(self, key: str) -> Awaitable[RedisPayload | None]: ...
+    """Read a Redis key asynchronously."""
+
+    def get(self, key: str) -> Awaitable[RedisPayload | None]:
+        """Return the value stored at the key, if present."""
+        ...
 
 
 @runtime_checkable
 class SyncMillisecondLifetimeReader(Protocol):
-    def pttl(self, key: str) -> int: ...
+    """Read a key lifetime in milliseconds synchronously."""
+
+    def pttl(self, key: str) -> int:
+        """Return the key lifetime in milliseconds using Redis sentinel values."""
+        ...
 
 
 @runtime_checkable
 class SyncSecondLifetimeReader(Protocol):
-    def ttl(self, key: str) -> int: ...
+    """Read a key lifetime in seconds synchronously."""
+
+    def ttl(self, key: str) -> int:
+        """Return the key lifetime in seconds using Redis sentinel values."""
+        ...
 
 
 @runtime_checkable
 class AsyncMillisecondLifetimeReader(Protocol):
-    def pttl(self, key: str) -> Awaitable[int]: ...
+    """Read a key lifetime in milliseconds asynchronously."""
+
+    def pttl(self, key: str) -> Awaitable[int]:
+        """Return the key lifetime in milliseconds using Redis sentinel values."""
+        ...
 
 
 @runtime_checkable
 class AsyncSecondLifetimeReader(Protocol):
-    def ttl(self, key: str) -> Awaitable[int]: ...
+    """Read a key lifetime in seconds asynchronously."""
+
+    def ttl(self, key: str) -> Awaitable[int]:
+        """Return the key lifetime in seconds using Redis sentinel values."""
+        ...
 
 
 class SyncJobWriter(Protocol):
+    """Persist job state, events, and indexes synchronously."""
+
     def set(
         self,
         key: str,
@@ -254,13 +280,21 @@ class SyncJobWriter(Protocol):
         *,
         ex: int,
         nx: bool = False,
-    ) -> bool | None: ...
+    ) -> bool | None:
+        """Store a value with expiration and optional create-only semantics."""
+        ...
 
-    def expire(self, key: str, ttl: int) -> bool | None: ...
+    def expire(self, key: str, ttl: int) -> bool | None:
+        """Update the key lifetime in seconds."""
+        ...
 
-    def xadd(self, key: str, fields: dict[str, str]) -> RedisPayload: ...
+    def xadd(self, key: str, fields: dict[str, str]) -> RedisPayload:
+        """Append fields to a stream and return the event identifier."""
+        ...
 
-    def zadd(self, key: str, mapping: dict[str, float]) -> int | None: ...
+    def zadd(self, key: str, mapping: dict[str, float]) -> int | None:
+        """Add scored members to a sorted set."""
+        ...
 
     def zremrangebyscore(
         self,
@@ -268,10 +302,14 @@ class SyncJobWriter(Protocol):
         minimum: str | float,
         maximum: float,
         /,
-    ) -> int | None: ...
+    ) -> int | None:
+        """Remove sorted-set members in the given score range."""
+        ...
 
 
 class AsyncJobWriter(Protocol):
+    """Persist job state, events, and indexes asynchronously."""
+
     def set(
         self,
         key: str,
@@ -279,21 +317,29 @@ class AsyncJobWriter(Protocol):
         *,
         ex: int,
         nx: bool = False,
-    ) -> Awaitable[bool | None]: ...
+    ) -> Awaitable[bool | None]:
+        """Store a value with expiration and optional create-only semantics."""
+        ...
 
-    def expire(self, key: str, ttl: int) -> Awaitable[bool | None]: ...
+    def expire(self, key: str, ttl: int) -> Awaitable[bool | None]:
+        """Update the key lifetime in seconds."""
+        ...
 
     def xadd(
         self,
         key: str,
         fields: dict[str, str],
-    ) -> Awaitable[RedisPayload]: ...
+    ) -> Awaitable[RedisPayload]:
+        """Append fields to a stream and return the event identifier."""
+        ...
 
     def zadd(
         self,
         key: str,
         mapping: dict[str, float],
-    ) -> Awaitable[int | None]: ...
+    ) -> Awaitable[int | None]:
+        """Add scored members to a sorted set."""
+        ...
 
     def zremrangebyscore(
         self,
@@ -301,10 +347,14 @@ class AsyncJobWriter(Protocol):
         minimum: str | float,
         maximum: float,
         /,
-    ) -> Awaitable[int | None]: ...
+    ) -> Awaitable[int | None]:
+        """Remove sorted-set members in the given score range."""
+        ...
 
 
 class SyncAtomicJobWriter(SyncJobWriter, SyncKeyReader, Protocol):
+    """Read and write job state atomically using Redis scripts."""
+
     def eval(
         self,
         script: str,
@@ -312,10 +362,14 @@ class SyncAtomicJobWriter(SyncJobWriter, SyncKeyReader, Protocol):
         key: str,
         /,
         *keys_and_args: str | float,
-    ) -> RedisScriptResult: ...
+    ) -> RedisScriptResult:
+        """Execute a Redis script with keys and arguments."""
+        ...
 
 
 class AsyncAtomicJobWriter(AsyncJobWriter, AsyncKeyReader, Protocol):
+    """Read and write job state atomically with awaitable scripts."""
+
     def eval(
         self,
         script: str,
@@ -323,14 +377,18 @@ class AsyncAtomicJobWriter(AsyncJobWriter, AsyncKeyReader, Protocol):
         key: str,
         /,
         *keys_and_args: str | float,
-    ) -> Awaitable[RedisScriptResult]: ...
+    ) -> Awaitable[RedisScriptResult]:
+        """Execute a Redis script with keys and arguments."""
+        ...
 
 
 class SyncJobClient(SyncJobWriter, SyncKeyReader, Protocol):
-    pass
+    """Read and persist job state synchronously."""
 
 
 class SyncConditionalJobWriter(SyncJobClient, Protocol):
+    """Apply conditional job transitions using Redis scripts."""
+
     def eval(
         self,
         script: str,
@@ -338,13 +396,21 @@ class SyncConditionalJobWriter(SyncJobClient, Protocol):
         key: str,
         /,
         *keys_and_args: str | float,
-    ) -> RedisScriptResult: ...
+    ) -> RedisScriptResult:
+        """Execute a Redis script with keys and arguments."""
+        ...
 
 
 class SyncJobListClient(SyncKeyReader, Protocol):
-    def zrevrange(self, key: str, start: int, stop: int) -> Sequence[RedisPayload]: ...
+    """Read and prune the sorted job index."""
 
-    def zrem(self, key: str, *members: str) -> int | None: ...
+    def zrevrange(self, key: str, start: int, stop: int) -> Sequence[RedisPayload]:
+        """Return sorted-set members in descending score order."""
+        ...
+
+    def zrem(self, key: str, *members: str) -> int | None:
+        """Remove the named members from a sorted set."""
+        ...
 
     def zremrangebyscore(
         self,
@@ -352,10 +418,14 @@ class SyncJobListClient(SyncKeyReader, Protocol):
         minimum: str | float,
         maximum: float,
         /,
-    ) -> int | None: ...
+    ) -> int | None:
+        """Remove sorted-set members in the given score range."""
+        ...
 
 
 class SyncEventReader(Protocol):
+    """Read persisted job event ranges synchronously."""
+
     def xrange(
         self,
         key: str,
@@ -363,10 +433,14 @@ class SyncEventReader(Protocol):
         /,
         *,
         count: int | None = None,
-    ) -> Sequence[RedisStreamRecord]: ...
+    ) -> Sequence[RedisStreamRecord]:
+        """Return persisted stream entries starting at the given identifier."""
+        ...
 
 
 class AsyncEventReader(Protocol):
+    """Read persisted job event ranges asynchronously."""
+
     def xrange(
         self,
         key: str,
@@ -374,24 +448,36 @@ class AsyncEventReader(Protocol):
         /,
         *,
         count: int | None = None,
-    ) -> Awaitable[Sequence[RedisStreamRecord]]: ...
+    ) -> Awaitable[Sequence[RedisStreamRecord]]:
+        """Return persisted stream entries starting at the given identifier."""
+        ...
 
 
 class AsyncNewEventReader(Protocol):
+    """Wait for new job events from Redis streams."""
+
     def xread(
         self,
         streams: dict[str, str],
         *,
         block: int,
         count: int | None = None,
-    ) -> Awaitable[Sequence[tuple[RedisPayload, Sequence[RedisStreamRecord]]]]: ...
+    ) -> Awaitable[Sequence[tuple[RedisPayload, Sequence[RedisStreamRecord]]]]:
+        """Read new stream entries, optionally waiting for them."""
+        ...
 
 
 class AsyncDeleteClient(Protocol):
-    def delete(self, key: str) -> Awaitable[int | None]: ...
+    """Delete Redis keys asynchronously."""
+
+    def delete(self, key: str) -> Awaitable[int | None]:
+        """Remove a key and return the number of keys deleted."""
+        ...
 
 
 class AsyncScriptClient(Protocol):
+    """Execute Redis scripts asynchronously."""
+
     def eval(
         self,
         script: str,
@@ -399,12 +485,16 @@ class AsyncScriptClient(Protocol):
         key: str,
         /,
         *args: str | float,
-    ) -> Awaitable[RedisScriptResult]: ...
+    ) -> Awaitable[RedisScriptResult]:
+        """Execute a Redis script with keys and arguments."""
+        ...
 
 
 class AsyncIdempotencyClient(
     AsyncKeyReader, AsyncDeleteClient, AsyncScriptClient, Protocol
 ):
+    """Store and release idempotency records atomically."""
+
     def set(
         self,
         key: str,
@@ -412,7 +502,9 @@ class AsyncIdempotencyClient(
         *,
         ex: int,
         nx: bool = False,
-    ) -> Awaitable[bool | None]: ...
+    ) -> Awaitable[bool | None]:
+        """Store a value with expiration and optional create-only semantics."""
+        ...
 
 
 RedisClientT = TypeVar("RedisClientT")
@@ -457,6 +549,8 @@ class IdempotencyRecord(StrictBaseModel):
 
 
 class AgentSubmissionLimitDecision(StrictBaseModel):
+    """Report whether a submission fits the agent rate limit."""
+
     accepted: bool
     count: int = Field(ge=0)
     retry_after_seconds: int = Field(ge=1)
@@ -1592,55 +1686,3 @@ def _stored_event_from_record(record: RedisStreamRecord) -> StoredJobEvent:
         stream_id=str(stream_id),
         event=parse_job_event(_loads_json(payload)),
     )
-
-
-__all__ = [
-    "DEFAULT_AGENT_SCOPE",
-    "JOB_INDEX_KEY",
-    "JOB_STORE_TTL_SECONDS",
-    "STREAM_LATEST",
-    "STREAM_START",
-    "TERMINAL_STATUSES",
-    "IdempotencyRecord",
-    "JobCancelledError",
-    "JobStatus",
-    "JobStatusSnapshot",
-    "StoredJobEvent",
-    "TerminalJobStatus",
-    "append_job_message",
-    "append_job_progress",
-    "cancel_job",
-    "claim_idempotency_key_async",
-    "create_job",
-    "create_job_async",
-    "delete_job_result_async",
-    "events_key",
-    "get_job_provenance",
-    "get_job_provenance_async",
-    "get_job_result",
-    "get_job_result_async",
-    "get_job_result_descriptor",
-    "get_job_result_descriptor_async",
-    "get_job_status",
-    "get_job_status_async",
-    "get_result_lifetime",
-    "get_result_lifetime_async",
-    "idempotency_key",
-    "is_job_cancelled",
-    "is_terminal_status",
-    "job_idempotency_key",
-    "job_index_key",
-    "list_job_statuses",
-    "provenance_key",
-    "raise_if_cancelled",
-    "read_job_events",
-    "read_job_events_async",
-    "read_new_job_events_async",
-    "release_idempotency_key_async",
-    "result_key",
-    "save_job_result",
-    "save_job_result_if_active",
-    "set_job_status",
-    "set_job_status_async",
-    "status_key",
-]

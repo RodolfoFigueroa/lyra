@@ -106,14 +106,3 @@ BoundsReference = Annotated[
     CVEGEOList | GeoJSONBounds | MetZoneCode,
     Field(discriminator="data_type"),
 ]
-
-
-__all__ = [
-    "BoundsReference",
-    "CVEGEOList",
-    "GeoJSONBounds",
-    "GeoJSONLocation",
-    "LocationReference",
-    "MetZoneCode",
-    "validate_cvegeos",
-]

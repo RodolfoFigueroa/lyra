@@ -5,8 +5,8 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from lyra.sdk.models import JobEnvelope, TableJobResult, expand_table_output_columns
-from lyra.sdk.models.plugin_v4 import TableOutputV4
+from lyra.sdk.models.job import JobEnvelope, TableJobResult
+from lyra.sdk.models.plugin_v4 import TableOutputV4, expand_table_output_columns
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache

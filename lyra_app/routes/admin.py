@@ -7,17 +7,21 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lyra.sdk.config import PluginRepoConfig
-from lyra.sdk.models import (
-    AdminStatusResponse,
-    CatalogSummaryResponse,
-    ConfigSummaryResponse,
+from lyra.sdk.models.admin import (
+    PluginRepoListResponse,
+    PluginRepoResponse,
+    PluginRoutingResponse,
+)
+from lyra.sdk.models.job import (
     JobCancelResponse,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
-    PluginRepoListResponse,
-    PluginRepoResponse,
-    PluginRoutingResponse,
+)
+from lyra.sdk.models.observability import (
+    AdminStatusResponse,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
     PluginSourceSummary,
     QueuesResponse,
     QueueSummary,

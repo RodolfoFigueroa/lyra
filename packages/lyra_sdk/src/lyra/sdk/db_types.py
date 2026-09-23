@@ -10,6 +10,3 @@ class Bounds(NamedTuple):
     ymin: float
     xmax: float
     ymax: float
-
-
-__all__ = ["Bounds"]

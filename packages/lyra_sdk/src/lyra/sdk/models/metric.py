@@ -3,7 +3,6 @@
 import unicodedata
 from typing import Literal
 
-from lyra.sdk.client_contract import CLIENT_SCHEMA_VERSION, JSON_SCHEMA_DIALECT
 from lyra.sdk.models.plugin_v4 import (
     FileOutputV4,
     OutputSpecV4,
@@ -137,7 +136,7 @@ class MetricCatalogResponse(StrictBaseModel):
     """Public metric catalog with a contract-only fingerprint."""
 
     client_schema_version: Literal[1] = Field(
-        description="Version of the generated-client catalog contract.",
+        description="Version of the public metric catalog contract.",
     )
     json_schema_dialect: Literal["https://json-schema.org/draft/2020-12/schema"] = (
         Field(
@@ -152,13 +151,3 @@ class MetricCatalogResponse(StrictBaseModel):
     metrics: list[MetricInfoV4] = Field(
         description="Client-facing metric metadata sorted by metric name.",
     )
-
-
-__all__ = [
-    "CLIENT_SCHEMA_VERSION",
-    "JSON_SCHEMA_DIALECT",
-    "MetricCatalogResponse",
-    "MetricInfoV4",
-    "build_metric_search_text",
-    "normalize_metric_search_tokens",
-]

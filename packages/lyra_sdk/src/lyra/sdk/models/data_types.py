@@ -28,6 +28,3 @@ class DataTypesResponse(StrictBaseModel):
     bounds: list[DataTypeSchemaInfo] = Field(
         description="Wrappers for one enclosing area or bounds geometry.",
     )
-
-
-__all__ = ["DataTypeSchemaInfo", "DataTypesResponse"]

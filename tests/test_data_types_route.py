@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 from jsonschema import validate
 from jsonschema.exceptions import ValidationError
-from lyra.sdk.models import DataTypeSchemaInfo
+from lyra.sdk.models.data_types import DataTypeSchemaInfo
 
 from lyra_app.routes.data_types import list_data_types
 

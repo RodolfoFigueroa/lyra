@@ -229,12 +229,3 @@ def _invalid_argument_result(
         structuredContent=payload,
         isError=True,
     )
-
-
-__all__ = [
-    "SERVER_INSTRUCTIONS",
-    "InProcessLyraBackend",
-    "LyraMCPBackend",
-    "ToolCallError",
-    "create_mcp_app",
-]

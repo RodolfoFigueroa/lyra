@@ -18,8 +18,8 @@ from lyra.sdk import (
     RunContext,
     metric,
 )
-from lyra.sdk.models import JobEnvelope, JobMessageLevel, TableJobResult
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
+from lyra.sdk.models.job import JobEnvelope, JobMessageLevel, TableJobResult
 from lyra.sdk.models.plugin_v4 import (
     BatchedTableOutputColumnV4,
     PluginInfoV4,

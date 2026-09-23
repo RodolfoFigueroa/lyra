@@ -10,7 +10,7 @@ the same change contract as code.
 | --- | --- |
 | `lyra_app/` | HTTP routes, configuration, plugin catalog, job store, workers, MCP, and deployment runtime. |
 | `packages/lyra_sdk/` | Public plugin, catalog, geometry, job, and runtime contracts. |
-| `packages/lyra_api/` | HTTP clients, the administrative CLI, and client generation. |
+| `packages/lyra_api/` | HTTP clients and the administrative CLI. |
 | `packages/lyra_utils/` | Optional geospatial, date, and Earth Engine helpers. |
 | `examples/lyra-plugin/` | Executable plugin used by the docs and integration tests. |
 | `tests/` | Unit, contract, route, client, worker, and documentation tests. |

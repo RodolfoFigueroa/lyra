@@ -65,24 +65,36 @@ class DataFrameLike(Protocol):
     """Minimal dataframe interface accepted by table-result constructors."""
 
     @property
-    def index(self) -> Iterable[_Stringable]: ...
+    def index(self) -> Iterable[_Stringable]:
+        """Row labels in value order."""
+        ...
 
     @property
-    def columns(self) -> Iterable[_Stringable]: ...
+    def columns(self) -> Iterable[_Stringable]:
+        """Column labels in value order."""
+        ...
 
-    def to_numpy(self) -> _MatrixLike: ...
+    def to_numpy(self) -> _MatrixLike:
+        """Return a matrix view of the dataframe values."""
+        ...
 
 
 class SeriesLike(Protocol):
     """Minimal series interface accepted by table-result constructors."""
 
     @property
-    def name(self) -> _Stringable | None: ...
+    def name(self) -> _Stringable | None:
+        """The series label, if present."""
+        ...
 
     @property
-    def index(self) -> Iterable[_Stringable]: ...
+    def index(self) -> Iterable[_Stringable]:
+        """Row labels in value order."""
+        ...
 
-    def tolist(self) -> list[Any]: ...
+    def tolist(self) -> list[Any]:
+        """Return series values as a list."""
+        ...
 
 
 MappingValueT = TypeVar("MappingValueT")
@@ -1213,51 +1225,3 @@ class JobCancelResponse(StrictBaseModel):
     revoke_requested: bool = Field(
         description="Whether Lyra attempted to revoke the Celery task.",
     )
-
-
-__all__ = [
-    "DEFAULT_RESULT_INDEX_FIELD",
-    "DEFAULT_RESULT_PREVIEW_ROWS",
-    "CancelledJobResult",
-    "FailedJobResult",
-    "FileJobResult",
-    "JobCancelResponse",
-    "JobCreateRequest",
-    "JobCreateResponse",
-    "JobEnvelope",
-    "JobEvent",
-    "JobEventRecord",
-    "JobLifecycleEvent",
-    "JobLifecycleStatus",
-    "JobLinks",
-    "JobListResponse",
-    "JobMessage",
-    "JobMessageEvent",
-    "JobMessageLevel",
-    "JobProgress",
-    "JobProgressEvent",
-    "JobRunProvenance",
-    "JobStatusInfo",
-    "NumericColumnSummary",
-    "RawResultFormat",
-    "ResultColumnSummary",
-    "ResultDescriptor",
-    "ResultFileMetadata",
-    "ResultKind",
-    "ResultLifetime",
-    "ResultRawAccess",
-    "ResultReference",
-    "ResultSummary",
-    "ResultTableMetadata",
-    "ResultTablePreview",
-    "RowIdentityMetadata",
-    "TableJobResult",
-    "TerminalJobResult",
-    "TerminalJobStatus",
-    "build_result_descriptor",
-    "build_table_preview",
-    "build_table_summary",
-    "parse_job_event",
-    "parse_job_result",
-    "result_ref_for_job",
-]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lyra.sdk import Input, LocationInput, RunContext, metric
-from lyra.sdk.models import FileJobResult, TableJobResult
+from lyra.sdk.models.job import FileJobResult, TableJobResult
 from lyra.sdk.models.plugin_v4 import (
     FileOutputV4,
     TableOutputColumnV4,

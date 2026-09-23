@@ -22,6 +22,3 @@ def configure_celery(config: LyraConfig | None = None) -> None:
         broker_url=redis_url,
         result_backend=redis_url,
     )
-
-
-__all__ = ["celery_app", "configure_celery"]

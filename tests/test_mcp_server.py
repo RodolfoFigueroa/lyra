@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, Unpack
 
 import httpx
 import pytest
-from lyra.sdk.models import (
+from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
     FileJobResult,

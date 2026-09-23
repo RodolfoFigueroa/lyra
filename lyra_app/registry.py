@@ -16,9 +16,8 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
+from lyra.sdk.client_contract import CLIENT_SCHEMA_VERSION, JSON_SCHEMA_DIALECT
 from lyra.sdk.models.metric import (
-    CLIENT_SCHEMA_VERSION,
-    JSON_SCHEMA_DIALECT,
     MetricCatalogResponse,
     MetricInfoV4,
     build_metric_search_text,

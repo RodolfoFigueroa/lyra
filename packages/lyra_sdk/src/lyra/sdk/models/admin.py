@@ -28,10 +28,3 @@ class PluginRoutingResponse(StrictBaseModel):
     disabled_repos: list[str] = Field(default_factory=list)
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
-
-
-__all__ = [
-    "PluginRepoListResponse",
-    "PluginRepoResponse",
-    "PluginRoutingResponse",
-]

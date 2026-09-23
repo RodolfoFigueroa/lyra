@@ -10,16 +10,15 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, Unpack, cast
 from uuid import uuid4
 
-from lyra.sdk.models import (
+from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk.models.job import (
     JobCreateRequest,
     JobCreateResponse,
     JobEnvelope,
     JobLinks,
     JobRunProvenance,
-    PluginInfoV4,
 )
-from lyra.sdk.models.geometry import GeoJSON
-from lyra.sdk.models.plugin_v4 import OutputSpecV4, TableOutputV4
+from lyra.sdk.models.plugin_v4 import OutputSpecV4, PluginInfoV4, TableOutputV4
 from lyra.utils.geometry import calculate_feature_areas_m2
 from redis.exceptions import RedisError
 
@@ -66,7 +65,11 @@ class SubmissionRedisClient(
     job_store.AsyncJobWriter,
     Protocol,
 ):
-    def ping(self) -> Awaitable[bool]: ...
+    """Provide Redis operations required for job submission."""
+
+    def ping(self) -> Awaitable[bool]:
+        """Check whether Redis responds to a connectivity probe."""
+        ...
 
 
 class SubmissionOptions(TypedDict):
@@ -406,16 +409,3 @@ async def submit_job(
         reused=False,
         links=job_links(job_id),
     )
-
-
-__all__ = [
-    "GENERIC_TASK_NAME",
-    "IdempotencyConflictError",
-    "SubmissionRateLimitedError",
-    "SubmissionUnavailableError",
-    "TaskDispatcher",
-    "UnknownMetricError",
-    "canonical_request_fingerprint",
-    "job_links",
-    "submit_job",
-]

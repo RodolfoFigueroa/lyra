@@ -1,7 +1,7 @@
 """HTTP endpoint for resolving meteorological zones."""
 
 from fastapi import APIRouter, HTTPException
-from lyra.sdk.models import MetZoneCodeResponse
+from lyra.sdk.models.lookups import MetZoneCodeResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app.db.connection import (

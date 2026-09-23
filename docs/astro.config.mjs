@@ -92,6 +92,7 @@ export default defineConfig({
             '../packages/lyra_utils/src',
           ],
           docstringStyle: 'google',
+          filters: { imported: false },
           extensions: ['griffe_pydantic'],
           sourceLink: {
             host: 'github',

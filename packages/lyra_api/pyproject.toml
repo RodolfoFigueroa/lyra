@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 lyra-client = "lyra.api.generator:main"
+lyra-admin = "lyra.api.admin_cli:main"
 
 [build-system]
 requires = ["hatchling"]

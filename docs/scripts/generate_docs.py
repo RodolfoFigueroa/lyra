@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from lyra.api.admin_cli import build_parsers as build_admin_parsers
 from lyra.api.generator import build_parser as build_client_parser
 from lyra.sdk.plugin_cli import build_parser as build_plugin_parser
-from lyra.tui.__main__ import build_parser as build_tui_parser
 
 from docs.scripts.generate_api_docs import generate_api_docs
 from lyra_app.config import LyraConfig
@@ -375,7 +375,7 @@ def generate_cli_reference() -> None:
     parsers = (
         ("lyra-client", build_client_parser()),
         ("lyra-plugin", build_plugin_parser()),
-        ("lyra-tui", build_tui_parser()),
+        *((parser.prog, parser) for parser in build_admin_parsers()),
         ("worker launcher", build_worker_parser()),
     )
     lines = [

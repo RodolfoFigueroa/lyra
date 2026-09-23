@@ -69,10 +69,11 @@ jobs:
           cd "${RUNNER_TEMP}/lyra-ci-smoke"
           uv init --bare
           uv add "${RUNNER_TEMP}"/lyra-dist/*.whl
-          uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra.tui; import lyra_app"
+          uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra_app"
           uv run lyra-plugin --help
           uv run lyra-client --help
-          uv run lyra-tui --help
+          uv run lyra-admin --help
+          uv run lyra-admin repos update --help
 
       - name: Test
         run: >-

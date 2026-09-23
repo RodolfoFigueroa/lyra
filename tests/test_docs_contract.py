@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from docs.scripts import generate_docs
 from docs.scripts.generate_docs import (
     CONTENT_DIR,
     ENV_FIELDS,
@@ -18,6 +20,9 @@ from docs.scripts.versioned_site import (
 )
 from lyra_app.config import LyraConfig
 
+if TYPE_CHECKING:
+    import pytest
+
 ROOT = Path(__file__).parents[1]
 
 
@@ -32,6 +37,22 @@ def test_navigation_is_complete_unique_and_resolvable() -> None:
 
     assert len(authored_slugs) == len(set(authored_slugs))
     assert all(path.is_relative_to(CONTENT_DIR) for path in navigation_pages())
+
+
+def test_cli_reference_includes_nested_admin_help(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(generate_docs, "GENERATED_DIR", tmp_path)
+    generate_docs.generate_cli_reference()
+    reference = (tmp_path / "cli.md").read_text()
+
+    assert "## lyra-admin\n" in reference
+    assert "## lyra-admin repos update\n" in reference
+    assert "--source SOURCE" in reference
+    assert "## lyra-admin workers restart\n" in reference
+    assert "--restart-timeout" in reference
+    assert "## lyra-client\n" in reference
+    assert "lyra-tui" not in reference
 
 
 def test_generated_openapi_has_explicit_authentication_boundaries() -> None:

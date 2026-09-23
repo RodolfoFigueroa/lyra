@@ -28,7 +28,6 @@ COMPONENT_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 INTERNAL_DEPENDENCIES = {
     ".": ("lyra-sdk", "lyra-utils"),
     "packages/lyra_api": ("lyra-sdk",),
-    "packages/lyra_tui": ("lyra-api",),
     "packages/lyra_utils": ("lyra-sdk",),
 }
 

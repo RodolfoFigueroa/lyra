@@ -25,10 +25,6 @@
     "packages/lyra_utils": {
       "component": "lyra-utils",
       "package-name": "lyra-utils"
-    },
-    "packages/lyra_tui": {
-      "component": "lyra-tui",
-      "package-name": "lyra-tui"
     }
   }
 }

@@ -25,6 +25,7 @@ for prerequisites, configuration, authentication, and a complete smoke test.
 - [Use the REST API](https://rodolfofigueroa.github.io/lyra/use/rest-api/)
 - [Use the Python client](https://rodolfofigueroa.github.io/lyra/use/python-client/)
 - [Build a plugin](https://rodolfofigueroa.github.io/lyra/plugins/quickstart/)
+- [Administrative CLI](https://rodolfofigueroa.github.io/lyra/operate/admin-cli/)
 - [Deploy and operate Lyra](https://rodolfofigueroa.github.io/lyra/operate/deployment/)
 - [Generated reference](https://rodolfofigueroa.github.io/lyra/reference/)
 - [Contribute to Lyra](CONTRIBUTING.md)

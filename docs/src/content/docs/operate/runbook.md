@@ -3,6 +3,10 @@ title: Operator Runbook
 description: Monitor health, retained jobs, queues, workers, plugins, and cancellation.
 ---
 
+Use the [administrative CLI](../admin-cli/) for one-shot inspection and management.
+For example, run `uv run lyra-admin health`, then authenticated
+`uv run lyra-admin workers list` and `uv run lyra-admin queues list`.
+
 ## Health
 
 `GET /live` is dependency-free process liveness. `GET /ready` checks Redis and

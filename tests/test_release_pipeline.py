@@ -23,14 +23,12 @@ PACKAGE_DATA = {
         "lyra-utils",
         ("lyra-sdk>=0.11.0",),
     ),
-    "packages/lyra_tui": ("lyra-tui", "lyra-tui", ("lyra-api>=0.6.0",)),
 }
 CURRENT_VERSIONS = {
     ".": "0.14.1",
     "packages/lyra_sdk": "0.11.0",
     "packages/lyra_api": "0.6.1",
     "packages/lyra_utils": "0.2.0",
-    "packages/lyra_tui": "0.5.0",
 }
 ROOT = release.ROOT
 
@@ -147,7 +145,6 @@ def test_plan_release_emits_aggregate_manifest_and_outputs(
     assert "| `lyra-sdk` | `0.11.0` |" in notes
     assert "| `lyra-api` | `0.6.1 -> 0.6.2` |" in notes
     assert "| `lyra-utils` | `0.2.0` |" in notes
-    assert "| `lyra-tui` | `0.5.0` |" in notes
     assert "Status" not in notes
     assert "Unchanged" not in notes
     assert "product_tag=lyra-v0.14.2" in github_output.read_text()
@@ -169,7 +166,7 @@ def test_plan_release_is_deterministic(
 def test_plan_release_requires_product_bump(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    after = {**CURRENT_VERSIONS, "packages/lyra_tui": "0.5.1"}
+    after = {**CURRENT_VERSIONS, "packages/lyra_api": "0.6.2"}
     _patch_repository(monkeypatch, _repository_files(after))
 
     with pytest.raises(

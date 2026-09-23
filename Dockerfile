@@ -19,7 +19,6 @@ RUN apt-get update \
 COPY pyproject.toml uv.lock .python-version ./
 COPY packages/lyra_api/pyproject.toml ./packages/lyra_api/pyproject.toml
 COPY packages/lyra_sdk/pyproject.toml ./packages/lyra_sdk/pyproject.toml
-COPY packages/lyra_tui/pyproject.toml ./packages/lyra_tui/pyproject.toml
 COPY packages/lyra_utils/pyproject.toml ./packages/lyra_utils/pyproject.toml
 
 # Keep third-party dependencies cached when application or workspace source changes.

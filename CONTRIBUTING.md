@@ -1,6 +1,6 @@
 # Contributing to Lyra
 
-This repository is a uv workspace containing the FastAPI application and four
+This repository is a uv workspace containing the FastAPI application and three
 public Python packages. Product documentation lives in `docs/` and is part of
 the same change contract as code.
 
@@ -10,9 +10,8 @@ the same change contract as code.
 | --- | --- |
 | `lyra_app/` | HTTP routes, configuration, plugin catalog, job store, workers, MCP, and deployment runtime. |
 | `packages/lyra_sdk/` | Public plugin, catalog, geometry, job, and runtime contracts. |
-| `packages/lyra_api/` | Synchronous and asynchronous HTTP clients. |
+| `packages/lyra_api/` | HTTP clients, the administrative CLI, and client generation. |
 | `packages/lyra_utils/` | Optional geospatial, date, and Earth Engine helpers. |
-| `packages/lyra_tui/` | Terminal operator console. |
 | `examples/lyra-plugin/` | Executable plugin used by the docs and integration tests. |
 | `tests/` | Unit, contract, route, client, worker, and documentation tests. |
 | `docs/` | Astro Starlight site and generated-reference tooling. |
@@ -84,7 +83,7 @@ editing generated Markdown or JSON.
   contract changes.
 - Keep one authoritative example or explanation and link to it elsewhere.
 - Use Conventional Commit titles. Release Please versions the application,
-  SDK, API client, utilities, and TUI independently.
+  SDK, API client (including the CLI), and utilities independently.
 - Product release tags (`lyra-vX.Y.Z`) define stable documentation versions.
   Historical `lyra-app-vX.Y.Z` tags remain valid documentation sources.
   Package-only tags do not publish a new documentation site.

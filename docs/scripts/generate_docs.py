@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,10 @@ from typing import Any
 from fastapi import FastAPI
 from lyra.api.admin_cli import build_parsers as build_admin_parsers
 from lyra.api.generator import build_parser as build_client_parser
+from lyra.sdk.config import LyraConfig
 from lyra.sdk.plugin_cli import build_parser as build_plugin_parser
 
-from docs.scripts.generate_api_docs import generate_api_docs
-from lyra_app.config import LyraConfig
+from lyra_app.config import LyraConfig as RuntimeConfig
 from lyra_app.mcp.models import TOOL_CONTRACTS
 from lyra_app.mcp.server import SERVER_INSTRUCTIONS
 from lyra_app.routes import admin, data_types, health, jobs, met_zone, metrics
@@ -30,6 +31,7 @@ PUBLIC_DIR = DOCS_DIR / "public"
 NAVIGATION_PATH = DOCS_DIR / "navigation.json"
 SITE = "https://rodolfofigueroa.github.io"
 DEFAULT_BASE = "/lyra/dev"
+PYTHON_API_SLUG = "api/lyra"
 
 DEFAULT_OVERRIDES: dict[str, object] = {
     "api.forwarded_allow_ips": ["127.0.0.1"],
@@ -51,14 +53,10 @@ DEFAULT_OVERRIDES: dict[str, object] = {
     "database.worker.connect_timeout_seconds": 5,
     "database.worker.statement_timeout_ms": 300_000,
     "database.worker.pool_recycle_seconds": 900,
-    "plugins.initial_repos": [],
+    "plugins.repos": [],
 }
 
 ENV_FIELDS = {
-    "database.host": ("LYRA_POSTGRES_HOST", False),
-    "database.port": ("LYRA_POSTGRES_PORT", False),
-    "database.name": ("LYRA_POSTGRES_DB", False),
-    "database.user": ("LYRA_POSTGRES_USER", False),
     "database.password": ("LYRA_POSTGRES_PASSWORD", True),
     "admin.api_key": ("LYRA_ADMIN_API_KEY", True),
     "agent.api_key": ("LYRA_AGENT_API_KEY", True),
@@ -85,7 +83,7 @@ def main() -> None:
     """Generate all source-derived documentation pages and public contracts."""
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
-    generate_api_docs()
+    remove_legacy_python_reference()
     openapi = generate_http_reference()
     config_schema = generate_config_reference()
     generate_cli_reference()
@@ -111,6 +109,13 @@ def main() -> None:
         },
     )
     generate_llm_files()
+
+
+def remove_legacy_python_reference() -> None:
+    """Remove output left by the retired Python API renderer."""
+    legacy = GENERATED_DIR / "python"
+    if legacy.is_dir():
+        shutil.rmtree(legacy)
 
 
 def write_text(path: Path, content: str) -> None:
@@ -324,7 +329,9 @@ def generate_config_reference() -> dict[str, Any]:
     """
     schema = LyraConfig.model_json_schema()
     rows = config_rows(schema, root=schema)
-    known_paths = {row.path for row in rows}
+    runtime_schema = RuntimeConfig.model_json_schema()
+    runtime_rows = config_rows(runtime_schema, root=runtime_schema)
+    known_paths = {row.path for row in runtime_rows}
     missing_env = sorted(set(ENV_FIELDS) - known_paths)
     if missing_env:
         message = f"Unknown environment config fields: {missing_env}"
@@ -336,8 +343,8 @@ def generate_config_reference() -> dict[str, Any]:
             "Configuration Reference",
             "Generated TOML fields, environment variables, defaults, and constraints.",
         ),
-        "Lyra reads TOML from `/lyra_data/config/lyra.toml`. Database connection ",
-        "values and API credentials come only from environment variables.",
+        "Lyra reads settings from `/lyra_data/config/lyra.toml` once at startup.",
+        "Database passwords and API credentials come from environment variables.",
         "",
         "## TOML fields",
         "",
@@ -360,7 +367,7 @@ def generate_config_reference() -> dict[str, Any]:
             "| --- | --- | --- | --- |",
         ]
     )
-    by_path = {row.path: row for row in rows}
+    by_path = {row.path: row for row in runtime_rows}
     for path, (variable, secret) in ENV_FIELDS.items():
         lines.append(
             f"| `{variable}` | `{path}` | {'yes' if secret else 'no'} | "
@@ -487,6 +494,8 @@ def navigation_pages() -> list[Path]:
     pages: list[Path] = []
     for group in navigation:
         for slug in group["items"]:
+            if slug == PYTHON_API_SLUG:
+                continue
             if slug == "reference/generated":
                 pages.extend(sorted(GENERATED_DIR.rglob("*.md")))
                 continue
@@ -555,6 +564,17 @@ def generate_llm_files() -> None:
         url = f"{SITE}{base}/{slug}/" if slug else f"{SITE}{base}/"
         index_lines.append(f"- [{title}]({url}): {description}")
         full_lines.extend([f"# {title}", "", description, "", normalize_mdx(body), ""])
+    api_url = f"{SITE}{base}/{PYTHON_API_SLUG}/llms.txt"
+    api_link = f"[Python API reference]({api_url})"
+    index_lines.append(f"- {api_link}: Complete Python API Markdown export.")
+    full_lines.extend(
+        [
+            "# Python API reference",
+            "",
+            f"Python API content is published separately: {api_link}.",
+            "",
+        ]
+    )
     write_text(PUBLIC_DIR / "llms.txt", "\n".join(index_lines))
     write_text(PUBLIC_DIR / "llms-full.txt", "\n".join(full_lines))
 

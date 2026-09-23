@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from tomllib import loads as loads_normalized_toml
 from typing import TYPE_CHECKING
 
 import pytest
@@ -8,22 +9,15 @@ import pytest
 from lyra_app.config import (
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_AGENT_API_KEY_ENV,
-    LYRA_POSTGRES_DB_ENV,
-    LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
-    LYRA_POSTGRES_PORT_ENV,
-    LYRA_POSTGRES_USER_ENV,
     ConfigLoadError,
     clear_config_cache,
     ensure_runtime_directories,
     get_config,
     load_config,
     parse_config_toml,
-    reload_config,
-    render_config_toml,
-    save_config,
 )
-from lyra_app.toml import loads_normalized_toml
+from tests.config_serialization import render_config_toml, save_config
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -55,7 +49,7 @@ def _valid_toml(
     secrets = _write_secret_files(base)
     return (
         f"""
-schema_version = 1
+schema_version = 2
 
 [api]
 host = "0.0.0.0"
@@ -64,6 +58,11 @@ public_base_url = "http://127.0.0.1:{api_port}"
 
 [redis]
 url = "redis://redis:6379/0"
+
+[database]
+host = "postgres"
+name = "lyra"
+user = "lyra"
 
 [earth_engine]
 project = "earth-engine-project"
@@ -103,10 +102,6 @@ def _write_config(path: Path, contents: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setenv(LYRA_POSTGRES_HOST_ENV, "postgres")
-    monkeypatch.setenv(LYRA_POSTGRES_PORT_ENV, "5432")
-    monkeypatch.setenv(LYRA_POSTGRES_DB_ENV, "lyra")
-    monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, "lyra")
     monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "postgres-secret")
     monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "admin-secret")
     monkeypatch.setenv(LYRA_AGENT_API_KEY_ENV, "agent-secret")
@@ -131,42 +126,7 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.agent_submission_limit.window_seconds == 60
     assert config.earth_engine.service_account_file.exists()
     assert config.plugins.allowed_queues == ["interactive", "batch"]
-    assert config.plugins.initial_repos == []
-
-
-def test_load_and_render_config_preserves_initial_plugin_repos(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "config" / "lyra.toml"
-    contents = _valid_toml(tmp_path).replace(
-        'allowed_queues = ["interactive", "batch"]',
-        'allowed_queues = ["interactive", "batch"]\n'
-        'initial_repos = ["owner/plugin@main", "owner/other-plugin"]',
-    )
-    _write_config(config_path, contents)
-
-    config = load_config(config_path)
-    rendered = render_config_toml(config)
-    reparsed = parse_config_toml(loads_normalized_toml(rendered))
-
-    assert config.plugins.initial_repos == [
-        "owner/plugin@main",
-        "owner/other-plugin",
-    ]
-    assert reparsed.plugins.initial_repos == config.plugins.initial_repos
-
-
-def test_config_rejects_duplicate_initial_plugin_repos(tmp_path: Path) -> None:
-    config_path = tmp_path / "config" / "lyra.toml"
-    contents = _valid_toml(tmp_path).replace(
-        'allowed_queues = ["interactive", "batch"]',
-        'allowed_queues = ["interactive", "batch"]\n'
-        'initial_repos = ["owner/plugin", "owner/plugin@main"]',
-    )
-    _write_config(config_path, contents)
-
-    with pytest.raises(ConfigLoadError, match="duplicate plugin repo IDs"):
-        load_config(config_path)
+    assert config.plugins.repos == []
 
 
 def test_load_config_reads_read_only_config_file_mount_shape(
@@ -184,7 +144,7 @@ def test_load_config_reads_read_only_config_file_mount_shape(
 
 
 def test_load_config_fails_for_missing_file(tmp_path: Path) -> None:
-    with pytest.raises(ConfigLoadError, match="does not exist"):
+    with pytest.raises(ConfigLoadError, match="No such file"):
         load_config(tmp_path / "config" / "missing.toml")
 
 
@@ -192,7 +152,7 @@ def test_load_config_fails_for_invalid_toml(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
     _write_config(config_path, "[api\nport = 5219\n")
 
-    with pytest.raises(ConfigLoadError, match="not valid TOML"):
+    with pytest.raises(ConfigLoadError, match="Cannot load configuration"):
         load_config(config_path)
 
 
@@ -200,7 +160,7 @@ def test_load_config_fails_for_schema_validation_error(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
     _write_config(config_path, _valid_toml(tmp_path) + "\nunexpected = true\n")
 
-    with pytest.raises(ConfigLoadError, match="failed validation"):
+    with pytest.raises(ConfigLoadError, match="validation error"):
         load_config(config_path)
 
 
@@ -208,11 +168,11 @@ def test_load_config_rejects_env_backed_toml_sections(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
     contents = _valid_toml(tmp_path).replace(
         "[earth_engine]",
-        '[database]\nhost = "postgres"\n\n[earth_engine]',
+        '[admin]\napi_key = "secret"\n\n[earth_engine]',
     )
     _write_config(config_path, contents)
 
-    with pytest.raises(ConfigLoadError, match=r"database\.host"):
+    with pytest.raises(ConfigLoadError, match="Extra inputs are not permitted"):
         load_config(config_path)
 
 
@@ -262,29 +222,20 @@ def test_load_config_fails_for_empty_service_account_file(tmp_path: Path) -> Non
         load_config(config_path)
 
 
-def test_get_config_caches_until_explicit_reload(tmp_path: Path) -> None:
+def test_get_config_caches_loaded_document(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "lyra.toml"
     _write_config(config_path, _valid_toml(tmp_path, api_port=5219))
 
     first = get_config(config_path)
     _write_config(config_path, _valid_toml(tmp_path, api_port=6000))
     second = get_config(config_path)
-    reloaded = reload_config(config_path)
+    clear_config_cache()
+    reloaded = get_config(config_path)
 
     assert first is second
     assert second.api.port == 5219
     assert reloaded.api.port == 6000
     assert reloaded is get_config(config_path)
-
-
-def test_reload_config_without_path_reuses_cached_path(tmp_path: Path) -> None:
-    config_path = tmp_path / "config" / "lyra.toml"
-    _write_config(config_path, _valid_toml(tmp_path, api_port=5219))
-    get_config(config_path)
-
-    _write_config(config_path, _valid_toml(tmp_path, api_port=6000))
-
-    assert reload_config().api.port == 6000
 
 
 def test_render_config_toml_preserves_dynamic_quoted_worker_keys(

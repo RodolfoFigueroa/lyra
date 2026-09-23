@@ -7,11 +7,12 @@ import pytest
 from lyra.sdk.models import JobEnvelope
 
 from lyra_app import auth, job_store
-from lyra_app.config import LyraConfig, clear_config_cache, get_config, save_config
+from lyra_app.config import LyraConfig, clear_config_cache, get_config
 from lyra_app.db.connection import database_url
 from lyra_app.db.redis import get_redis_url
 from lyra_app.logging_config import configure_logging
 from tests.config_helpers import load_test_config
+from tests.config_serialization import save_config
 from tests.redis_job_scripts import eval_job_script
 
 

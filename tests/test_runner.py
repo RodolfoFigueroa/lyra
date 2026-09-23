@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from lyra.sdk.config import PluginRepoConfig
 from lyra.sdk.models import (
     FileJobResult,
     JobEnvelope,
@@ -17,12 +19,13 @@ from lyra.sdk.models import (
 from lyra.sdk.models.plugin_v4 import FileOutputV4, TableOutputV4
 from sqlalchemy.exc import OperationalError
 
-from lyra_app import worker_control
+from lyra_app import registry, worker_control
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.db import connection as database_connection
-from lyra_app.plugin_state import PluginState, make_repo_record
+from lyra_app.plugin_runtime import read_snapshot
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
-from tests.config_helpers import load_test_config, plugin_state_store
+from tests.catalog_helpers import configure_catalog_sources
+from tests.config_helpers import load_test_config
 from tests.redis_job_scripts import eval_job_script
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
@@ -231,9 +234,7 @@ class FakeRedisSync:
 
 
 @pytest.fixture
-def worker_module(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[ModuleType]:
+def worker_module(tmp_path: Path) -> Iterator[ModuleType]:
     load_test_config(
         tmp_path,
         metric_queues={
@@ -242,11 +243,6 @@ def worker_module(
         },
     )
     worker = importlib.import_module("lyra_app.worker")
-    monkeypatch.setattr(
-        worker,
-        "PluginStateStore",
-        lambda *_args, **_kwargs: plugin_state_store(tmp_path, get_config()),
-    )
     worker.RUNNER_REGISTRY.clear()
     worker.set_runner_temp_base(tmp_path / "runner-temp")
     yield worker
@@ -306,11 +302,7 @@ def _configure_runner_repos(
     monkeypatch: pytest.MonkeyPatch,
     repo: Path,
 ) -> None:
-    monkeypatch.setattr(
-        worker,
-        "sync_plugin_repos",
-        lambda *_args, **_kwargs: [_synced_repo(repo)],
-    )
+    configure_catalog_sources([_synced_repo(repo)])
     monkeypatch.setattr(worker, "install_runner_plugins", list)
 
 
@@ -324,6 +316,7 @@ def _load_smoke_runner_registry(
         metric_queues=SMOKE_METRIC_QUEUES,
         repos=[smoke_plugin_uri()],
     )
+    registry.initialize_catalog()
     installed: list[SyncedPluginRepo] = []
 
     def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
@@ -397,96 +390,6 @@ def test_runner_loads_only_configured_queue(
     assert entries["heavy_metric"].queue == "heavy"
 
 
-def test_runner_syncs_enabled_state_repos_only(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    worker_module: ModuleType,
-) -> None:
-    config = get_config()
-    directory_source = tmp_path / "directory-plugin"
-    state = PluginState(
-        repos=[
-            make_repo_record("owner/enabled-plugin@main"),
-            make_repo_record(f"dir://{directory_source}", repo_id="directory-plugin"),
-            make_repo_record(
-                "owner/disabled-plugin@v1.0.0",
-                repo_id="disabled-plugin",
-                enabled=False,
-            ),
-        ],
-    )
-    calls: list[tuple[Path, list[str], bool]] = []
-
-    def sync_repos(
-        target_dir: Path,
-        raw_entries: list[str],
-        *,
-        raise_on_error: bool,
-    ) -> list[SyncedPluginRepo]:
-        calls.append((target_dir, raw_entries, raise_on_error))
-        return []
-
-    monkeypatch.setattr(worker_module, "sync_plugin_repos", sync_repos)
-
-    synced = worker_module._runner_sync_repos("heavy", config, state)  # ruff:ignore[private-member-access]
-
-    assert synced == []
-    assert calls == [
-        (
-            tmp_path / "plugins" / "runners" / "heavy",
-            [
-                "owner/enabled-plugin@main",
-                f"dir://{directory_source.resolve().as_posix()}",
-            ],
-            True,
-        )
-    ]
-
-
-def test_runner_loads_repo_and_routing_from_plugin_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    worker_module: ModuleType,
-) -> None:
-    store = plugin_state_store(tmp_path, get_config())
-    store.delete_repo("owner__repo")
-    store.add_repo(
-        "owner/runner-plugin@main",
-        repo_id="runner-plugin",
-    )
-    store.set_metric_queue("heavy_metric", "heavy", repo_id="runner-plugin")
-    repo = tmp_path / "repo"
-    metrics = [_metric(name="heavy_metric", factory="heavy_plugin:create_plugin")]
-    _write_manifest(repo, _manifest(metrics))
-    _write_plugin_definition(tmp_path, "heavy_plugin", metrics)
-    monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(worker_module, "install_runner_plugins", list)
-    calls: list[tuple[Path, list[str], bool]] = []
-
-    def sync_repos(
-        target_dir: Path,
-        raw_entries: list[str],
-        *,
-        raise_on_error: bool,
-    ) -> list[SyncedPluginRepo]:
-        calls.append((target_dir, raw_entries, raise_on_error))
-        return [_synced_repo(repo)]
-
-    monkeypatch.setattr(worker_module, "sync_plugin_repos", sync_repos)
-
-    entries = worker_module.refresh_runner_registry("heavy")
-
-    assert calls == [
-        (
-            tmp_path / "plugins" / "runners" / "heavy",
-            ["owner/runner-plugin@main"],
-            True,
-        )
-    ]
-    assert list(entries) == ["heavy_metric"]
-    assert entries["heavy_metric"].queue == "heavy"
-
-
 def test_runner_loads_directory_source_from_copied_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -496,13 +399,14 @@ def test_runner_loads_directory_source_from_copied_snapshot(
     metrics = [_metric(name="heavy_metric", factory="heavy_plugin:create_plugin")]
     _write_manifest(source, _manifest(metrics))
     _write_plugin_definition(source, "heavy_plugin", metrics)
-    store = plugin_state_store(tmp_path, get_config())
-    store.delete_repo("owner__repo")
-    store.add_repo(
-        f"dir://{source}",
-        repo_id="directory-plugin",
-    )
-    store.set_metric_queue("heavy_metric", "heavy", repo_id="directory-plugin")
+    get_config().plugins.repos = [
+        PluginRepoConfig(
+            id="directory-plugin",
+            source=f"dir://{source}",
+            routing={"heavy_metric": "heavy"},
+        )
+    ]
+    registry.initialize_catalog()
     installed: list[SyncedPluginRepo] = []
 
     def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
@@ -566,9 +470,7 @@ def test_runner_uses_configured_worker_temp_dir(
     heavy_worker = config.get_worker("heavy").model_copy(
         update={"temp_dir": tmp_path / "worker-temp"},
     )
-    config = config.model_copy(
-        update={"workers": {**config.workers, "heavy": heavy_worker}},
-    )
+    config.workers["heavy"] = heavy_worker
     repo = tmp_path / "repo"
     metrics = [_metric(name="heavy_metric", factory="heavy_plugin:create_plugin")]
     _write_manifest(repo, _manifest(metrics))
@@ -608,37 +510,6 @@ def test_runner_propagates_database_context_construction_failure(
                 input={"location": _feature_collection()},
             ),
         )
-
-
-def test_runner_fails_when_metric_queue_assignment_is_missing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    worker_module: ModuleType,
-) -> None:
-    load_test_config(tmp_path, metric_queues={})
-    repo = tmp_path / "repo"
-    _write_manifest(
-        repo,
-        _manifest(
-            [
-                _metric(
-                    name="heavy_metric",
-                    factory="heavy_plugin:run",
-                )
-            ]
-        ),
-    )
-    _write_module(
-        tmp_path,
-        "heavy_plugin",
-        "def run(job, context):\n"
-        "    raise AssertionError('factory should only be imported')\n",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    _configure_runner_repos(worker_module, monkeypatch, repo)
-
-    with pytest.raises(RuntimeError, match="no queue assignment"):
-        worker_module.refresh_runner_registry("heavy")
 
 
 def test_runner_rejects_raw_function_factory(
@@ -1502,3 +1373,44 @@ def test_run_context_coalesces_progress_and_flushes_latest(
         if isinstance(event.event, JobProgressEvent)
     ]
     assert progress == [0, 2]
+
+
+def test_runner_uses_startup_copy_after_original_directory_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_module: ModuleType
+) -> None:
+    source = tmp_path / "source"
+    shutil.copytree(SMOKE_PLUGIN_DIR, source)
+    config = load_test_config(tmp_path, repos=[f"dir://{source}"])
+    registry.initialize_catalog()
+    before = (source / MANIFEST_FILENAME).read_bytes()
+    (source / MANIFEST_FILENAME).write_text("broken after API startup")
+    installed: list[SyncedPluginRepo] = []
+
+    def install(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+        installed.extend(repos)
+        for name in ("smoke_plugin.metrics", "smoke_plugin.plugin", "smoke_plugin"):
+            sys.modules.pop(name, None)
+        for repo in repos:
+            monkeypatch.syspath_prepend(str(repo.path))
+        return repos
+
+    monkeypatch.setattr(worker_module, "install_runner_plugins", install)
+    entries = worker_module.load_runner_metric_entries("interactive", config=config)
+    assert len(entries) == 3
+    assert (installed[0].path / MANIFEST_FILENAME).read_bytes() == before
+
+
+def test_runner_rejects_modified_captured_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_module: ModuleType
+) -> None:
+    config = load_test_config(tmp_path, repos=[smoke_plugin_uri()])
+    registry.initialize_catalog()
+    snapshot = read_snapshot(config)
+    (snapshot.sources[0].path / MANIFEST_FILENAME).write_text("tampered")
+
+    def unexpected_install(_: object) -> None:
+        pytest.fail("Modified snapshots must not reach the installer")
+
+    monkeypatch.setattr(worker_module, "install_runner_plugins", unexpected_install)
+    with pytest.raises(RuntimeError, match="no longer matches"):
+        worker_module.load_runner_metric_entries("interactive", config=config)

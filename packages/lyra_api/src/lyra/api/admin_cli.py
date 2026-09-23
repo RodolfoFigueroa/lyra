@@ -8,10 +8,12 @@ import math
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 from urllib.parse import urlsplit
 
 from lyra.api import LyraAdminClient, LyraAPIError
+from lyra.sdk.config import load_config as load_config_document
 from pydantic import ValidationError
 from typing_extensions import override
 
@@ -76,12 +78,6 @@ _COMMANDS = (
         lambda c, a: c.workers.get(a.name),
     ),
     _Command(
-        "workers restart",
-        "Request restart of all workers.",
-        lambda c, a: c.workers.restart(timeout=a.restart_timeout),
-        mutates=True,
-    ),
-    _Command(
         "queues list",
         "Inspect queues and worker coverage.",
         lambda c, _: c.queues.list(),
@@ -90,70 +86,14 @@ _COMMANDS = (
         "repos list", "List plugin repositories.", lambda c, _: c.plugin_repos.list()
     ),
     _Command(
-        "repos add",
-        "Register a repository and refresh the catalog.",
-        lambda c, a: c.plugin_repos.create(
-            a.source, repo_id=a.id, enabled=not a.disabled
-        ),
-        mutates=True,
-    ),
-    _Command(
-        "repos update",
-        "Update a repository source and refresh the catalog.",
-        lambda c, a: c.plugin_repos.update(a.id, source=a.source),
-        mutates=True,
-    ),
-    _Command(
-        "repos enable",
-        "Enable a repository and refresh the catalog.",
-        lambda c, a: c.plugin_repos.update(a.id, enabled=True),
-        mutates=True,
-    ),
-    _Command(
-        "repos disable",
-        "Disable a repository and refresh the catalog.",
-        lambda c, a: c.plugin_repos.update(a.id, enabled=False),
-        mutates=True,
-    ),
-    _Command(
-        "repos delete",
-        "Delete a repository and refresh the catalog.",
-        lambda c, a: c.plugin_repos.delete(a.id),
-        mutates=True,
-    ),
-    _Command(
-        "repos sync",
-        "Synchronize a repository and refresh the catalog.",
-        lambda c, a: c.plugin_repos.sync(a.id),
-        mutates=True,
-    ),
-    _Command(
         "catalog show",
         "Show catalog contents, sources, and routing.",
         lambda c, _: c.catalog.summary(),
     ),
     _Command(
-        "catalog refresh",
-        "Synchronize enabled sources and refresh the catalog.",
-        lambda c, _: c.catalog.refresh(),
-        mutates=True,
-    ),
-    _Command(
         "routing list",
         "List routing assignments and allowed queues.",
         lambda c, _: c.routing.list(),
-    ),
-    _Command(
-        "routing set",
-        "Assign a metric to a queue.",
-        lambda c, a: c.routing.set(a.metric, a.queue),
-        mutates=True,
-    ),
-    _Command(
-        "routing delete",
-        "Remove a metric's explicit routing assignment.",
-        lambda c, a: c.routing.delete(a.metric),
-        mutates=True,
     ),
 )
 
@@ -226,56 +166,23 @@ def _command_arguments(parser: argparse.ArgumentParser, command: _Command) -> No
             action="store_true",
             help="Confirm this mutation without prompting.",
         )
-    if command.name.startswith("repos "):
-        _repo_arguments(parser, command.name)
-        return
-    match command.name:
-        case "health":
-            parser.add_argument(
-                "--live",
-                action="store_true",
-                help="Check process liveness instead of readiness.",
-            )
-        case "jobs list":
-            parser.add_argument(
-                "--limit",
-                type=_limit,
-                default=50,
-                help="Maximum retained jobs (1-100; default: 50).",
-            )
-            parser.add_argument(
-                "--status",
-                choices=("queued", "running", "succeeded", "failed", "cancelled"),
-            )
-            parser.add_argument("--metric", type=_nonempty)
-        case "workers get":
-            parser.add_argument("name", type=_nonempty)
-        case "workers restart":
-            parser.add_argument(
-                "--restart-timeout",
-                type=_nonnegative,
-                default=30.0,
-                help="Worker drain timeout in seconds (default: 30).",
-            )
-        case "jobs cancel":
-            parser.add_argument("id", type=_nonempty)
-        case "routing set" | "routing delete":
-            parser.add_argument("metric", type=_nonempty)
-            if command.name == "routing set":
-                parser.add_argument("queue", type=_nonempty)
-
-
-def _repo_arguments(parser: argparse.ArgumentParser, name: str) -> None:
-    match name:
-        case "repos add":
-            parser.add_argument("source", type=_nonempty)
-            parser.add_argument("--id", type=_nonempty)
-            parser.add_argument("--disabled", action="store_true")
-        case "repos update":
-            parser.add_argument("id", type=_nonempty)
-            parser.add_argument("--source", required=True, type=_nonempty)
-        case "repos enable" | "repos disable" | "repos delete" | "repos sync":
-            parser.add_argument("id", type=_nonempty)
+    if command.name == "health":
+        parser.add_argument(
+            "--live",
+            action="store_true",
+            help="Check process liveness instead of readiness.",
+        )
+    elif command.name == "jobs list":
+        parser.add_argument("--limit", type=_limit, default=50)
+        parser.add_argument(
+            "--status",
+            choices=("queued", "running", "succeeded", "failed", "cancelled"),
+        )
+        parser.add_argument("--metric", type=_nonempty)
+    elif command.name == "jobs cancel":
+        parser.add_argument("id", type=_nonempty)
+    elif command.name == "workers get":
+        parser.add_argument("name", type=_nonempty)
 
 
 def build_parsers() -> list[argparse.ArgumentParser]:
@@ -321,7 +228,7 @@ def build_parsers() -> list[argparse.ArgumentParser]:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print the API response as JSON; mutations require --yes.",
+        help="Print results as JSON; job cancellation requires --yes.",
     )
     roots = parser.add_subparsers(required=True)
     parsers: list[argparse.ArgumentParser] = [parser]
@@ -338,7 +245,7 @@ def build_parsers() -> list[argparse.ArgumentParser]:
         else:
             if group not in groups:
                 group_parser = roots.add_parser(
-                    group, help=f"Manage {group}.", allow_abbrev=False
+                    group, help=f"Inspect {group}.", allow_abbrev=False
                 )
                 parsers.append(group_parser)
                 groups[group] = group_parser
@@ -361,6 +268,16 @@ def build_parsers() -> list[argparse.ArgumentParser]:
                 leaf.set_defaults(command=command)
                 _command_arguments(leaf, command)
                 parsers.append(leaf)
+    config_group = roots.add_parser(
+        "config", help="Validate local server configuration."
+    )
+    config_commands = config_group.add_subparsers(dest="config_command", required=True)
+    validate = config_commands.add_parser(
+        "validate",
+        help="Check a TOML file offline without credentials or network access.",
+    )
+    validate.add_argument("validate_config_path", metavar="PATH")
+    parsers.extend([config_group, validate])
     return parsers
 
 
@@ -431,7 +348,7 @@ def _confirmed(args: argparse.Namespace) -> bool:
         return False
     target = " ".join(
         f"{field}={value}"
-        for field in ("id", "metric", "queue", "source", "restart_timeout")
+        for field in ("id", "metric")
         if (value := getattr(args, field, None)) is not None
     )
     sys.stderr.write(
@@ -442,23 +359,41 @@ def _confirmed(args: argparse.Namespace) -> bool:
 
 
 def _operation_error(command: _Command, data: dict[str, JsonValue]) -> str | None:
-    if command.name == "health" and data.get("status") == "not_ready":
-        return "Service dependencies are not ready."
-    refresh = data.get("catalog_refresh")
-    if isinstance(refresh, dict) and refresh.get("refreshed") is False:
-        return (
-            "Repository state may have changed, but catalog refresh failed: "
-            f"{refresh.get('error') or 'unknown error'}."
-        )
-    if command.name == "workers restart" and data.get("requested") is False:
-        return "Worker restart was not requested."
+    if command.name == "health" and data.get("status") not in {"ok", "ready"}:
+        return "Service is not ready."
     if command.name == "jobs cancel" and data.get("cancellation_requested") is False:
         return "Job cancellation was not requested."
     return None
 
 
+def _validate_configuration(path: str, *, json_output: bool) -> int:
+    try:
+        config = load_config_document(Path(path))
+    except OSError as exc:
+        _diagnostic("operation", str(exc), json_output=json_output)
+        return 1
+    except ValueError as exc:
+        _diagnostic("usage", str(exc), json_output=json_output)
+        return 2
+    data = {"valid": True, "schema_version": config.schema_version}
+    message = (
+        json.dumps(data)
+        if json_output
+        else (
+            "Configuration is valid (offline checks only; manifests "
+            "and services were not checked)."
+        )
+    )
+    sys.stdout.write(message + "\n")
+    return 0
+
+
 def _execute(arguments: Sequence[str], *, json_output: bool) -> int:
     args = build_parser().parse_args(arguments)
+    if getattr(args, "validate_config_path", None) is not None:
+        return _validate_configuration(
+            args.validate_config_path, json_output=json_output
+        )
     key = args.admin_api_key or os.getenv("LYRA_ADMIN_API_KEY")
     if args.command.name != "health" and (key is None or not key.strip()):
         message = "Set LYRA_ADMIN_API_KEY or supply --admin-api-key."

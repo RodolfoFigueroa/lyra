@@ -72,8 +72,7 @@ def run(
     location: LocationInput,
     patterns: list[BatchItem[str]],
     limit: int = 100,
-) -> TableJobResult:
-    ...
+) -> TableJobResult: ...
 ```
 
 Function annotations remain authoritative for Python types and nullability;
@@ -91,12 +90,12 @@ makes an ordinary input omittable and is recorded as its manifest default. Put
 the default after the annotation; `Input` deliberately has no default field:
 
 ```python
-inputs={
+inputs = {
     "limit": Input(description="Maximum number of results.", ge=1),
 }
 
-def run(location: LocationInput, limit: int = 100) -> TableJobResult:
-    ...
+
+def run(location: LocationInput, limit: int = 100) -> TableJobResult: ...
 ```
 
 Omission and nullability are independent. A union with `None` (written as
@@ -105,14 +104,14 @@ itself make the input omittable. To permit both omission and `null`, annotate
 the value as nullable and give it a default:
 
 ```python
-inputs={
+inputs = {
     "threshold": Input(
         description="Threshold, or null to disable filtering.",
     ),
 }
 
-def run(location: LocationInput, threshold: float | None = None) -> TableJobResult:
-    ...
+
+def run(location: LocationInput, threshold: float | None = None) -> TableJobResult: ...
 ```
 
 The resulting contracts are:
@@ -213,5 +212,5 @@ The compiler rejects extra fields, invalid or reserved public names, invalid
 defaults/examples, duplicate metric names, missing spatial inputs, invalid table
 contracts, and stale artifacts. Every compiled request schema declares Draft
 2020-12 so client generators can validate it without guessing a dialect.
-Use the generated [Python reference](../../reference/generated/python/) for
+Use the generated [Python reference](../../api/lyra/) for
 exact SDK model fields.

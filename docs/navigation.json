@@ -4,5 +4,5 @@
   {"label": "Build Plugins", "items": ["plugins/quickstart", "plugins/authoring", "plugins/publish-and-debug"]},
   {"label": "Operate", "items": ["operate/deployment", "operate/runbook", "operate/admin-cli"]},
   {"label": "Concepts", "items": ["concepts/architecture"]},
-  {"label": "Reference", "items": ["reference/index", "reference/generated"]}
+  {"label": "Reference", "items": ["reference/index", "reference/generated", "api/lyra"]}
 ]

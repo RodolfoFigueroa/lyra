@@ -6,12 +6,18 @@ from importlib import import_module
 from types import AsyncGeneratorType
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from lyra_app import registry
 from lyra_app.auth import initialize_earth_engine
 from lyra_app.celery_app import configure_celery
-from lyra_app.config import LyraConfig, ensure_runtime_directories, get_config
+from lyra_app.config import (
+    LyraConfig,
+    ensure_runtime_directories,
+    get_config,
+    initialize_runtime_config,
+)
 from lyra_app.db.connection import ApplicationDatabaseRuntime
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
@@ -59,6 +65,7 @@ def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:
         The validated configuration used to initialize the process.
     """
     config = get_config() if config is None else config
+    initialize_runtime_config(config)
     ensure_runtime_directories(config)
     configure_logging(config)
     configure_redis(config)
@@ -74,7 +81,7 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
         A fully routed FastAPI application with managed database state.
     """
     config = bootstrap_runtime(config)
-    registry.ensure_catalog_loaded()
+    registry.initialize_catalog(config)
 
     # Defer imports until after authenticating with Earth Engine
     admin = import_module("lyra_app.routes.admin")
@@ -85,6 +92,9 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     metrics = import_module("lyra_app.routes.metrics")
 
     app = FastAPI(title="Lyra API", version=APP_VERSION, lifespan=lifespan)
+    app.add_exception_handler(
+        registry.CatalogUnavailableError, catalog_unavailable_response
+    )
     app.state.database = ApplicationDatabaseRuntime(config)
     app.include_router(admin.router)
     app.include_router(health.router)
@@ -102,6 +112,26 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
         app.state.mcp_app = mcp_app
         app.mount(config.mcp.mount_path, mcp_app)
     return app
+
+
+def catalog_unavailable_response(_request: Request, _exc: Exception) -> JSONResponse:
+    """Report a retryable catalog startup failure without exposing source details.
+
+    Returns:
+        A service-unavailable response.
+    """
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": {
+                "code": "catalog_unavailable",
+                "message": (
+                    "Plugin catalog is unavailable; inspect administrative status."
+                ),
+                "retryable": True,
+            }
+        },
+    )
 
 
 def run_server(config: LyraConfig | None = None) -> None:

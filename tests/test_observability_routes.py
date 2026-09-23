@@ -11,11 +11,11 @@ from lyra.sdk.models import DatabaseHealth
 from redis.exceptions import RedisError
 
 from lyra_app import worker_control
-from lyra_app.config import clear_config_cache, get_config
-from lyra_app.registry import refresh_catalog, reset_catalog
+from lyra_app.config import clear_config_cache
+from lyra_app.registry import initialize_catalog, reset_catalog
 from lyra_app.routes import admin, health
 from lyra_app.worker_control import WorkerInspectSnapshot, WorkerInspectState
-from tests.config_helpers import load_test_config, plugin_state_path, plugin_state_store
+from tests.config_helpers import load_test_config
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
     SMOKE_PLUGIN_DIR,
@@ -80,17 +80,15 @@ def _configure_admin(
     repos: list[str] | None = None,
 ) -> None:
     load_test_config(tmp_path, metric_queues=metric_queues, repos=repos)
-    monkeypatch.setattr(
-        admin,
-        "get_plugin_state_path",
-        lambda: plugin_state_path(tmp_path),
-    )
+    if metric_queues and repos is None:
+        monkeypatch.setattr(admin, "get_loaded_metric_queues", lambda: metric_queues)
 
 
 def test_readiness_reports_healthy_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(health, "redis_client", FakeRedisAsync())
+    monkeypatch.setattr(health, "is_catalog_loaded", lambda: True)
 
     async def database_health(  # ruff: ignore[unused-async] -- awaited double
         *_: object,
@@ -238,7 +236,7 @@ def test_catalog_metadata_reports_smoke_directory_plugin(
         metric_queues=SMOKE_METRIC_QUEUES,
         repos=[smoke_plugin_uri()],
     )
-    refresh_catalog(plugin_state_store(tmp_path, get_config()))
+    initialize_catalog()
 
     response = admin.get_catalog()
 

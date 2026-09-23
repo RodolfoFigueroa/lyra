@@ -130,7 +130,7 @@ admin = LyraAdminClient(
 
 status = admin.status()
 jobs = admin.jobs.list(status="running")
-admin.workers.restart(timeout=30)
+workers = admin.workers.list()
 ```
 
 Use `AsyncLyraAdminClient` for the equivalent asynchronous interface. Both

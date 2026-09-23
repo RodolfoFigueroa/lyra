@@ -2,27 +2,19 @@
 
 import hmac
 import logging
-import subprocess  # ruff: ignore[suspicious-subprocess-import] -- diagnostics
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from lyra.sdk.config import PluginRepoConfig
 from lyra.sdk.models import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
-    CreatePluginRepoRequest,
-    CreatePluginRepoResponse,
-    DeleteMetricQueueResponse,
-    DeletePluginRepoResponse,
     JobCancelResponse,
     JobLifecycleStatus,
     JobListResponse,
     JobStatusInfo,
-    MetricQueueAssignmentResponse,
-    PluginCatalogRefreshResponse,
-    PluginCatalogRefreshStatus,
     PluginRepoListResponse,
     PluginRepoResponse,
     PluginRoutingResponse,
@@ -30,14 +22,9 @@ from lyra.sdk.models import (
     QueuesResponse,
     QueueSummary,
     RedisHealth,
-    SetMetricQueueRequest,
-    SyncPluginRepoResponse,
-    UpdatePluginRepoRequest,
-    UpdatePluginRepoResponse,
     WorkerConfigSummary,
     WorkerDetail,
     WorkerInspectMetadata,
-    WorkerRestartResponse,
     WorkersResponse,
     WorkerSummary,
     WorkerTaskSummary,
@@ -46,41 +33,19 @@ from redis.exceptions import RedisError
 
 from lyra_app import job_store
 from lyra_app.config import ConfigLoadError, ConfigSecretError, LyraConfig, get_config
-from lyra_app.plugin_state import (
-    DEFAULT_PLUGIN_STATE_PATH,
-    PluginRepoRecord,
-    PluginState,
-    PluginStateLoadError,
-    PluginStateNotFoundError,
-    PluginStateStore,
-    PluginStateValidationError,
-    metric_queue_mapping,
-    normalize_repo_source,
-    repo_record_to_source,
-)
-from lyra_app.plugins import (
-    PluginSyncError,
-    format_update_message,
-    remove_plugin_snapshot,
-)
-from lyra_app.plugins import (
-    sync_plugin_repo as sync_plugin_source,
-)
 from lyra_app.registry import (
-    CatalogRefreshResult,
+    catalog_error,
     get_loaded_catalog_fingerprint,
     get_loaded_metric_names,
     get_loaded_metric_queues,
-    get_metric_entry,
-    refresh_catalog_from_state,
-    reset_catalog,
+    is_catalog_loaded,
+    resolved_source_refs,
 )
 from lyra_app.version import APP_VERSION
 from lyra_app.worker_control import (
     WorkerInspectSnapshot,
     WorkerInspectState,
     get_worker_inspect_state,
-    graceful_worker_restart,
     revoke_job,
     safe_task_summary,
 )
@@ -137,15 +102,6 @@ _JOB_LIMIT_QUERY = Query(
 )
 
 
-def get_plugin_state_path() -> Path:
-    """Return the durable plugin-state path used by administrative operations.
-
-    Returns:
-        The configured default plugin-state file path.
-    """
-    return DEFAULT_PLUGIN_STATE_PATH
-
-
 def _load_config() -> LyraConfig:
     try:
         return get_config()
@@ -156,31 +112,14 @@ def _load_config() -> LyraConfig:
         ) from exc
 
 
-def _state_store(config: LyraConfig | None = None) -> PluginStateStore:
-    loaded_config = _load_config() if config is None else config
-    return PluginStateStore(
-        get_plugin_state_path(),
-        allowed_queues=loaded_config.plugins.allowed_queues,
-    )
-
-
-def _repo_response(repo: PluginRepoRecord) -> PluginRepoResponse:
+def _repo_response(repo: PluginRepoConfig) -> PluginRepoResponse:
     return PluginRepoResponse(
         id=repo.id,
         source=repo.source,
         ref=repo.ref,
         enabled=repo.enabled,
+        resolved_ref=resolved_source_refs().get(repo.id),
     )
-
-
-def _load_state(store: PluginStateStore) -> PluginState:
-    try:
-        return store.load()
-    except PluginStateLoadError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Plugin state could not be loaded: {exc}",
-        ) from exc
 
 
 def _redis_health() -> RedisHealth:
@@ -189,107 +128,6 @@ def _redis_health() -> RedisHealth:
     except RedisError:
         return RedisHealth(status="unavailable")
     return RedisHealth(status="ok" if pong else "unavailable")
-
-
-def _sync_error_detail(exc: PluginSyncError | subprocess.CalledProcessError) -> str:
-    if isinstance(exc, PluginSyncError):
-        return str(exc)
-
-    detail = exc.stderr or exc.stdout or str(exc)
-    if isinstance(detail, bytes):
-        detail = detail.decode(errors="replace")
-    return str(detail).strip() or str(exc)
-
-
-def _catalog_refresh_error_detail(exc: Exception) -> str:
-    if isinstance(exc, (PluginSyncError, subprocess.CalledProcessError)):
-        return _sync_error_detail(exc)
-    return str(exc)
-
-
-def _remove_repo_snapshot(config: LyraConfig, repo: PluginRepoRecord) -> None:
-    try:
-        remove_plugin_snapshot(config.plugins.catalog_dir, repo_record_to_source(repo))
-    except (OSError, ValueError) as exc:
-        logger.warning(
-            "Failed to remove managed plugin snapshot for repo %s: %s",
-            repo.id,
-            exc,
-        )
-
-
-def _catalog_restart_recommended(result: CatalogRefreshResult) -> bool:
-    return bool(
-        result.updated_plugins
-        or result.catalog_changed
-        or result.assigned_metric_queues
-        or result.removed_metric_queues
-    )
-
-
-def _catalog_refresh_status_from_result(
-    result: CatalogRefreshResult,
-) -> PluginCatalogRefreshStatus:
-    return PluginCatalogRefreshStatus(
-        refreshed=True,
-        error=None,
-        catalog_changed=result.catalog_changed,
-        previous_catalog_fingerprint=result.previous_catalog_fingerprint,
-        catalog_fingerprint=result.catalog_fingerprint,
-        assigned_metric_queues=result.assigned_metric_queues,
-        removed_metric_queues=result.removed_metric_queues,
-        workers_restart_recommended=_catalog_restart_recommended(result),
-    )
-
-
-def _catalog_refresh_failure_status(exc: Exception) -> PluginCatalogRefreshStatus:
-    return PluginCatalogRefreshStatus(
-        refreshed=False,
-        error=_catalog_refresh_error_detail(exc),
-        catalog_changed=None,
-        previous_catalog_fingerprint=None,
-        catalog_fingerprint=None,
-        assigned_metric_queues=[],
-        removed_metric_queues=[],
-        workers_restart_recommended=False,
-    )
-
-
-def _refresh_catalog_status(store: PluginStateStore) -> PluginCatalogRefreshStatus:
-    try:
-        result = refresh_catalog_from_state(store)
-    except (
-        PluginSyncError,
-        subprocess.CalledProcessError,
-        PluginStateLoadError,
-        PluginStateValidationError,
-        RuntimeError,
-    ) as exc:
-        reset_catalog()
-        return _catalog_refresh_failure_status(exc)
-    return _catalog_refresh_status_from_result(result)
-
-
-def _catalog_refresh_response(
-    result: CatalogRefreshResult,
-) -> PluginCatalogRefreshResponse:
-    restart_recommended = _catalog_restart_recommended(result)
-    return PluginCatalogRefreshResponse(
-        updated_plugins=result.updated_plugins,
-        catalog_changed=result.catalog_changed,
-        previous_catalog_fingerprint=result.previous_catalog_fingerprint,
-        catalog_fingerprint=result.catalog_fingerprint,
-        assigned_metric_queues=result.assigned_metric_queues,
-        removed_metric_queues=result.removed_metric_queues,
-        workers_restarted=False,
-        workers_restart_recommended=restart_recommended,
-        message=format_update_message(
-            result.updated_plugins,
-            catalog_changed=result.catalog_changed,
-            catalog_fingerprint=result.catalog_fingerprint,
-            workers_restarting=False,
-        ),
-    )
 
 
 def _worker_config_summary(config: LyraConfig, worker_name: str) -> WorkerConfigSummary:
@@ -303,14 +141,14 @@ def _worker_config_summary(config: LyraConfig, worker_name: str) -> WorkerConfig
     )
 
 
-def _plugin_source_summary(repo: PluginRepoRecord) -> PluginSourceSummary:
-    normalized = normalize_repo_source(repo.source)
+def _plugin_source_summary(repo: PluginRepoConfig) -> PluginSourceSummary:
     return PluginSourceSummary(
         id=repo.id,
         source=repo.source,
-        source_kind=normalized.source_kind,
+        source_kind=repo.source_kind,
         ref=repo.ref,
         enabled=repo.enabled,
+        resolved_ref=resolved_source_refs().get(repo.id),
     )
 
 
@@ -464,171 +302,10 @@ def list_plugin_repos() -> PluginRepoListResponse:
     Returns:
         Repository metadata in persisted order.
     """
-    store = _state_store()
-    state = _load_state(store)
-    return PluginRepoListResponse(repos=[_repo_response(repo) for repo in state.repos])
-
-
-@router.post("/plugin-repos")
-def create_plugin_repo(request: CreatePluginRepoRequest) -> CreatePluginRepoResponse:
-    """Persist a new plugin repository and refresh the active catalog.
-
-    Returns:
-        The normalized repository and catalog-refresh status.
-
-    Raises:
-        HTTPException: If the repository record fails validation.
-    """
-    store = _state_store()
-    try:
-        repo = store.add_repo(
-            request.source,
-            repo_id=request.id,
-            enabled=request.enabled,
-        )
-    except (PluginStateValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return CreatePluginRepoResponse(
-        repo=_repo_response(repo),
-        catalog_refresh=_refresh_catalog_status(store),
-    )
-
-
-@router.patch("/plugin-repos/{repo_id}")
-def update_plugin_repo(
-    repo_id: str,
-    request: UpdatePluginRepoRequest,
-) -> UpdatePluginRepoResponse:
-    """Update a plugin repository and refresh the active catalog.
-
-    Returns:
-        The updated repository and catalog-refresh status.
-
-    Raises:
-        HTTPException: If the repository is absent or the update is invalid.
-    """
-    store = _state_store()
-    try:
-        repo = store.update_repo(
-            repo_id,
-            source=request.source,
-            enabled=request.enabled,
-        )
-    except PluginStateNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (PluginStateValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return UpdatePluginRepoResponse(
-        repo=_repo_response(repo),
-        catalog_refresh=_refresh_catalog_status(store),
-    )
-
-
-@router.delete("/plugin-repos/{repo_id}")
-def delete_plugin_repo(repo_id: str) -> DeletePluginRepoResponse:
-    """Delete a plugin repository, its routes, and its managed snapshot.
-
-    Returns:
-        Deletion metadata and the resulting catalog-refresh status.
-
-    Raises:
-        HTTPException: If the repository does not exist.
-    """
     config = _load_config()
-    store = _state_store(config)
-    state = _load_state(store)
-    repo = next(
-        (candidate for candidate in state.repos if candidate.id == repo_id), None
+    return PluginRepoListResponse(
+        repos=[_repo_response(repo) for repo in config.plugins.repos]
     )
-    if repo is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"unknown plugin repo id: {repo_id}",
-        )
-
-    try:
-        result = store.delete_repo(repo_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if not result.deleted:
-        raise HTTPException(
-            status_code=404,
-            detail=f"unknown plugin repo id: {repo_id}",
-        )
-
-    _remove_repo_snapshot(config, repo)
-    return DeletePluginRepoResponse(
-        deleted=True,
-        repo_id=repo_id,
-        removed_metric_queues=result.removed_metric_queues,
-        catalog_refresh=_refresh_catalog_status(store),
-    )
-
-
-@router.post("/plugin-repos/{repo_id}/sync")
-def sync_plugin_repo(repo_id: str) -> SyncPluginRepoResponse:
-    """Synchronize one enabled plugin source and refresh the active catalog.
-
-    Returns:
-        Source synchronization and catalog-refresh metadata.
-
-    Raises:
-        HTTPException: If the repository is absent, disabled, or cannot be synced.
-    """
-    config = _load_config()
-    store = _state_store(config)
-    state = _load_state(store)
-    repo = next(
-        (candidate for candidate in state.repos if candidate.id == repo_id), None
-    )
-    if repo is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"unknown plugin repo id: {repo_id}",
-        )
-    if not repo.enabled:
-        raise HTTPException(
-            status_code=409,
-            detail=f"plugin repo is disabled: {repo_id}",
-        )
-
-    try:
-        synced = sync_plugin_source(
-            config.plugins.catalog_dir, repo_record_to_source(repo)
-        )
-    except (PluginSyncError, subprocess.CalledProcessError) as exc:
-        raise HTTPException(status_code=502, detail=_sync_error_detail(exc)) from exc
-
-    return SyncPluginRepoResponse(
-        repo_id=repo.id,
-        changed=synced.changed,
-        display_name=synced.entry.display_name,
-        catalog_refresh=_refresh_catalog_status(store),
-    )
-
-
-@router.post("/plugin-catalog/refresh")
-def refresh_plugin_catalog() -> PluginCatalogRefreshResponse:
-    """Rebuild the active metric catalog from durable plugin state.
-
-    Returns:
-        Catalog changes, routing updates, and restart guidance.
-
-    Raises:
-        HTTPException: If a source cannot be synced or plugin state is invalid.
-    """
-    config = _load_config()
-    store = _state_store(config)
-    try:
-        result = refresh_catalog_from_state(store)
-    except (PluginSyncError, subprocess.CalledProcessError) as exc:
-        raise HTTPException(status_code=502, detail=_sync_error_detail(exc)) from exc
-    except (PluginStateLoadError, PluginStateValidationError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Plugin state could not be used: {exc}",
-        ) from exc
-    return _catalog_refresh_response(result)
 
 
 @router.get("/status")
@@ -648,6 +325,8 @@ def get_status() -> AdminStatusResponse:
         configured_worker_count=len(config.workers),
         job_store_ttl_seconds=config.job_store.ttl_seconds,
         catalog_fingerprint=get_loaded_catalog_fingerprint(),
+        catalog_available=is_catalog_loaded(),
+        catalog_error=catalog_error(),
     )
 
 
@@ -670,7 +349,6 @@ def get_config_summary() -> ConfigSummaryResponse:
         ],
         job_store_ttl_seconds=config.job_store.ttl_seconds,
         plugin_catalog_dir=str(config.plugins.catalog_dir),
-        plugin_state_path=str(get_plugin_state_path()),
         plugin_runner_base_dir=str(config.plugins.runner_base_dir),
     )
 
@@ -683,15 +361,15 @@ def get_catalog() -> CatalogSummaryResponse:
         Catalog identity, metric names, sources, and effective queue assignments.
     """
     config = _load_config()
-    store = _state_store(config)
-    state = _load_state(store)
     metric_names = get_loaded_metric_names()
     return CatalogSummaryResponse(
         metric_count=len(metric_names),
         metric_names=metric_names,
         catalog_fingerprint=get_loaded_catalog_fingerprint(),
-        plugin_sources=[_plugin_source_summary(repo) for repo in state.repos],
-        metric_queues=get_loaded_metric_queues() or metric_queue_mapping(state),
+        catalog_available=is_catalog_loaded(),
+        catalog_error=catalog_error(),
+        plugin_sources=[_plugin_source_summary(repo) for repo in config.plugins.repos],
+        metric_queues=get_loaded_metric_queues(),
     )
 
 
@@ -741,12 +419,10 @@ def list_queues() -> QueuesResponse:
         Queue assignment counts and configured and observed consumers.
     """
     config = _load_config()
-    store = _state_store(config)
-    state = _load_state(store)
     inspect_state = get_worker_inspect_state()
     snapshot = inspect_state.snapshot
     metric_counts = dict.fromkeys(config.plugins.allowed_queues, 0)
-    for queue in metric_queue_mapping(state).values():
+    for queue in get_loaded_metric_queues().values():
         metric_counts[queue] = metric_counts.get(queue, 0) + 1
 
     configured_consumers: dict[str, set[str]] = {
@@ -768,6 +444,7 @@ def list_queues() -> QueuesResponse:
         allowed_queues=config.plugins.allowed_queues,
         default_queue=config.plugins.default_queue,
         inspect_metadata=_inspect_metadata(inspect_state),
+        catalog_available=is_catalog_loaded(),
         queues=[
             QueueSummary(
                 name=queue,
@@ -780,23 +457,6 @@ def list_queues() -> QueuesResponse:
             )
             for queue in config.plugins.allowed_queues
         ],
-    )
-
-
-@router.post("/workers/restart")
-def restart_workers(
-    timeout: Annotated[float, _TIMEOUT_QUERY] = 30.0,
-) -> WorkerRestartResponse:
-    """Request a graceful restart of every Celery worker.
-
-    Returns:
-        Confirmation containing the requested drain timeout.
-    """
-    graceful_worker_restart(timeout=timeout)
-    return WorkerRestartResponse(
-        requested=True,
-        timeout=timeout,
-        message="Worker restart requested.",
     )
 
 
@@ -874,60 +534,10 @@ def list_plugin_routing() -> PluginRoutingResponse:
         Explicit metric routes, allowed queues, and the default queue.
     """
     config = _load_config()
-    store = _state_store(config)
-    state = _load_state(store)
     return PluginRoutingResponse(
-        metric_queues=metric_queue_mapping(state),
+        metric_queues=get_loaded_metric_queues(),
+        overrides={repo.id: repo.routing for repo in config.plugins.repos},
+        disabled_repos=[repo.id for repo in config.plugins.repos if not repo.enabled],
         allowed_queues=config.plugins.allowed_queues,
         default_queue=config.plugins.default_queue,
     )
-
-
-@router.put("/plugin-routing/{metric_name}")
-def set_plugin_routing(
-    metric_name: str,
-    request: SetMetricQueueRequest,
-) -> MetricQueueAssignmentResponse:
-    """Assign a known metric to an allowed worker queue.
-
-    Returns:
-        The normalized metric name and persisted queue assignment.
-
-    Raises:
-        HTTPException: If the metric is not present in the active catalog.
-    """
-    store = _state_store()
-    stripped_metric_name = metric_name.strip()
-    entry = get_metric_entry(stripped_metric_name)
-    if entry is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Metric '{stripped_metric_name}' not found.",
-        )
-    try:
-        queue = store.set_metric_queue(
-            stripped_metric_name,
-            request.queue,
-            repo_id=entry.repo_id,
-        )
-    except (PluginStateValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return MetricQueueAssignmentResponse(metric_name=stripped_metric_name, queue=queue)
-
-
-@router.delete("/plugin-routing/{metric_name}")
-def delete_plugin_routing(metric_name: str) -> DeleteMetricQueueResponse:
-    """Remove a metric's explicit queue assignment when present.
-
-    Returns:
-        The normalized metric name and whether an assignment was deleted.
-
-    Raises:
-        HTTPException: If the metric name is invalid.
-    """
-    store = _state_store()
-    try:
-        deleted = store.delete_metric_queue(metric_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DeleteMetricQueueResponse(deleted=deleted, metric_name=metric_name.strip())

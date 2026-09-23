@@ -8,7 +8,7 @@ import pytest
 
 from lyra_app import worker_launcher
 from lyra_app.config import LyraConfig, WorkerConfig, clear_config_cache
-from tests.config_helpers import load_test_config, plugin_state_store
+from tests.config_helpers import load_test_config
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -99,9 +99,7 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
         worker_name: str,
         *,
         config: LyraConfig,
-        store: object,
     ) -> None:
-        assert store is state_store
         refreshed.append((worker_name, config))
 
     monkeypatch.setitem(
@@ -125,8 +123,7 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
         database_probes.append,
     )
 
-    state_store = plugin_state_store(tmp_path, config)
-    worker_launcher.launch_worker("interactive", config=config, store=state_store)
+    worker_launcher.launch_worker("interactive", config=config)
 
     assert fake_celery.conf == {
         "broker_url": "redis://redis:6379/0",
@@ -141,25 +138,11 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
     assert not (tmp_path / "secrets" / "generated_secret").exists()
 
 
-def test_launch_worker_rejects_missing_plugin_state(tmp_path: Path) -> None:
-    config = _local_worker_dirs(load_test_config(tmp_path), tmp_path)
-    state_store = plugin_state_store(tmp_path, config)
-    state_store.path.unlink()
-
-    with pytest.raises(RuntimeError, match="Plugin state is not initialized"):
-        worker_launcher.launch_worker(
-            "interactive",
-            config=config,
-            store=state_store,
-        )
-
-
 def test_launch_worker_stops_before_initialization_when_database_probe_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _local_worker_dirs(load_test_config(tmp_path), tmp_path)
-    state_store = plugin_state_store(tmp_path, config)
     earth_engine_configs: list[LyraConfig] = []
 
     def fail_probe(_: LyraConfig) -> None:
@@ -177,7 +160,6 @@ def test_launch_worker_stops_before_initialization_when_database_probe_fails(
         worker_launcher.launch_worker(
             "interactive",
             config=config,
-            store=state_store,
         )
 
     assert earth_engine_configs == []

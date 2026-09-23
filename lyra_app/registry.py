@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import shutil
 import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -32,14 +33,20 @@ from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.config import LyraConfig, get_config
-from lyra_app.plugin_state import (
-    PluginState,
-    PluginStateStore,
-    make_repo_record,
-    metric_queue_mapping,
-    repo_record_to_source,
+from lyra_app.plugin_runtime import (
+    SourceSnapshot,
+    StartupSnapshot,
+    config_fingerprint,
+    copy_source,
+    publish_snapshot,
+    snapshot_path,
+    source_hash,
 )
-from lyra_app.plugins import MANIFEST_FILENAME, sync_plugin_repos
+from lyra_app.plugins import (
+    MANIFEST_FILENAME,
+    prepare_configured_repo,
+    resolved_git_ref,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +65,8 @@ class MetricRegistryEntry:
     catalog_fingerprint: str
 
 
-@dataclass(frozen=True)
-class CatalogRefreshResult:
-    """Summarize repository updates and routing changes from a catalog refresh."""
-
-    updated_plugins: list[str]
-    previous_catalog_fingerprint: str | None
-    catalog_fingerprint: str
-    catalog_changed: bool
-    assigned_metric_queues: list[str] = field(default_factory=list)
-    removed_metric_queues: list[str] = field(default_factory=list)
+class CatalogUnavailableError(RuntimeError):
+    """The startup catalog failed or has not been initialized."""
 
 
 class MetricPayloadValidationError(Exception):
@@ -80,8 +79,17 @@ class MetricPayloadValidationError(Exception):
 
 
 TASK_REGISTRY: dict[str, MetricRegistryEntry] = {}
-_CATALOG_LOADED = False
-_CATALOG_FINGERPRINT: str | None = None
+
+
+@dataclass
+class _CatalogState:
+    loaded: bool = False
+    fingerprint: str | None = None
+    error: str | None = None
+    sources: list[SourceSnapshot] = field(default_factory=list)
+
+
+_catalog = _CatalogState()
 
 
 def _empty_catalog_fingerprint() -> str:
@@ -183,174 +191,144 @@ def _build_registry(
     return registry
 
 
-def sync_catalog_state_repos(config: LyraConfig, state: PluginState) -> list[Any]:
-    """Synchronize enabled state repositories into the local plugin catalog.
-
-    Returns:
-        Synchronization results for every enabled repository source.
-    """
-    raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
-    return sync_plugin_repos(
-        config.plugins.catalog_dir,
-        raw_entries,
-        raise_on_error=True,
-    )
-
-
-def _enabled_repo_ids_by_source(state: PluginState) -> dict[str, str]:
-    return {
-        repo_record_to_source(repo): repo.id for repo in state.repos if repo.enabled
-    }
-
-
-def _synced_repo_id(raw_source: str, repo_ids_by_source: dict[str, str]) -> str:
-    try:
-        return repo_ids_by_source[raw_source]
-    except KeyError as exc:
-        msg = f"Synced plugin source {raw_source!r} is not in enabled plugin state."
-        raise RuntimeError(msg) from exc
-
-
-def refresh_catalog(
-    store: PluginStateStore | None = None,
-    *,
-    config: LyraConfig | None = None,
-) -> CatalogRefreshResult:
-    """Synchronize plugins, reconcile routes, and atomically replace the registry.
-
-    Returns:
-        Repository updates, catalog identity changes, and routing changes.
-    """
-    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # ruff:ignore[global-statement]
-
-    previous_fingerprint = _CATALOG_FINGERPRINT
-    config = get_config() if config is None else config
-    state_store = store or PluginStateStore(
-        allowed_queues=config.plugins.allowed_queues,
-    )
-    state = state_store.load()
-    synced = sync_catalog_state_repos(config, state)
-    repo_ids_by_source = _enabled_repo_ids_by_source(state)
-    manifests = [
-        (
-            load_plugin_manifest(repo.path),
-            repo.path,
-            _synced_repo_id(repo.entry.raw, repo_ids_by_source),
+def _prepare_catalog(
+    config: LyraConfig, temporary: Path
+) -> tuple[dict[str, MetricRegistryEntry], StartupSnapshot]:
+    manifests: list[tuple[CompiledPluginManifestV4, Path, str]] = []
+    sources: list[SourceSnapshot] = []
+    routing: dict[str, str] = {}
+    destination = config.plugins.catalog_dir / "sources"
+    captured = temporary / "captured"
+    captured.mkdir()
+    checkouts = temporary / "checkouts"
+    checkouts.mkdir()
+    for repo in config.plugins.repos:
+        if not repo.enabled:
+            continue
+        synced = prepare_configured_repo(checkouts / repo.id, repo)
+        revision = (
+            resolved_git_ref(synced.path) if repo.source_kind != "directory" else None
         )
-        for repo in synced
-    ]
-    metric_repo_ids = {
-        metric.name: repo_id
-        for manifest, _path, repo_id in manifests
-        for metric in manifest.metrics
-    }
-    queue_sync = state_store.sync_metric_queues(
-        metric_repo_ids,
-        default_queue=config.plugins.default_queue,
+        target = captured / repo.id
+        copy_source(synced.path, target)
+        manifest = load_plugin_manifest(target)
+        names = {metric.name for metric in manifest.metrics}
+        unknown = set(repo.routing) - names
+        if unknown:
+            msg = (
+                f"Repository {repo.id!r} has routing overrides for missing "
+                f"metrics: {', '.join(sorted(unknown))}"
+            )
+            raise ValueError(msg)
+        routing.update(
+            {
+                name: repo.routing.get(name, config.plugins.default_queue)
+                for name in names
+            }
+        )
+        manifests.append((manifest, target, repo.id))
+        sources.append(
+            SourceSnapshot(
+                repo_id=repo.id,
+                path=destination / repo.id,
+                resolved_ref=revision,
+                content_hash=source_hash(target),
+            )
+        )
+    registry = _build_registry(manifests, routing)
+    if destination.exists():
+        shutil.rmtree(destination)
+    captured.replace(destination)
+    return registry, StartupSnapshot(
+        status="ready",
+        config_fingerprint=config_fingerprint(config),
+        sources=sources,
+        metric_queues=routing,
+        catalog_fingerprint=_fingerprint_payload(
+            _normalised_manifest_payload(manifests, routing)
+        ),
     )
-    if queue_sync.assigned or queue_sync.removed:
-        state = state_store.reload()
-    metric_queues = metric_queue_mapping(state)
-
-    fingerprint = _fingerprint_payload(
-        _normalised_manifest_payload(manifests, metric_queues)
-    )
-    TASK_REGISTRY.clear()
-    TASK_REGISTRY.update(_build_registry(manifests, metric_queues))
-    _CATALOG_FINGERPRINT = fingerprint
-    _CATALOG_LOADED = True
-
-    updated = [repo.entry.display_name for repo in synced if repo.changed]
-    catalog_changed = previous_fingerprint != fingerprint
-    logger.info(
-        "Loaded %d state-backed metric manifest(s); catalog fingerprint=%s; changed=%s",
-        len(TASK_REGISTRY),
-        fingerprint,
-        catalog_changed,
-    )
-    return CatalogRefreshResult(
-        updated_plugins=updated,
-        previous_catalog_fingerprint=previous_fingerprint,
-        catalog_fingerprint=fingerprint,
-        catalog_changed=catalog_changed,
-        assigned_metric_queues=queue_sync.assigned,
-        removed_metric_queues=queue_sync.removed,
-    )
 
 
-def refresh_catalog_from_state(
-    store: PluginStateStore | None = None,
-) -> CatalogRefreshResult:
-    """Refresh the metric catalog using persisted plugin state.
+def initialize_catalog(config: LyraConfig | None = None) -> None:
+    """Prepare and publish the catalog once during API startup.
 
-    Returns:
-        Repository, catalog, and routing changes from the refresh.
-    """
-    return refresh_catalog(store)
-
-
-def initialize_catalog(
-    config: LyraConfig | None = None,
-    *,
-    store: PluginStateStore | None = None,
-) -> CatalogRefreshResult:
-    """Seed missing plugin state and load the initial metric catalog.
-
-    Returns:
-        Repository, catalog, and routing changes from initial loading.
+    Plugin failures leave diagnostics available and the catalog unavailable.
     """
     config = get_config() if config is None else config
-    state_store = store or PluginStateStore(
-        allowed_queues=config.plugins.allowed_queues,
-    )
-    state_path = state_store.path
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with FileLock(f"{state_path}.lock"):
-        if state_path.exists():
-            return refresh_catalog(state_store, config=config)
-
-        initial_state = PluginState(
-            repos=[make_repo_record(source) for source in config.plugins.initial_repos]
+    reset_catalog()
+    config.plugins.catalog_dir.mkdir(parents=True, exist_ok=True)
+    with FileLock(f"{snapshot_path(config)}.lock"):
+        pending = StartupSnapshot(
+            status="initializing", config_fingerprint=config_fingerprint(config)
         )
-        with tempfile.NamedTemporaryFile(
-            dir=state_path.parent,
-            prefix=f".{state_path.name}.",
-            suffix=".initial",
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-        temp_path.unlink()
-        temp_store = type(state_store)(
-            temp_path,
-            allowed_queues=state_store.allowed_queues,
-        )
-
+        publish_snapshot(config, pending)
         try:
-            temp_store.save(initial_state)
-            result = refresh_catalog(temp_store, config=config)
-            temp_path.replace(state_path)
-        finally:
-            temp_path.unlink(missing_ok=True)
+            with tempfile.TemporaryDirectory(
+                dir=config.plugins.catalog_dir, prefix=".startup-"
+            ) as root:
+                registry, snapshot = _prepare_catalog(config, Path(root))
+            publish_snapshot(config, snapshot)
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+        ) as exc:
+            _catalog.error = (
+                f"Plugin initialization failed ({type(exc).__name__}); "
+                "inspect server logs, correct the source or configuration, "
+                "and restart."
+            )
+            logger.exception("Plugin catalog initialization failed")
+            pending.status = "failed"
+            publish_snapshot(config, pending)
+            return
+        TASK_REGISTRY.update(registry)
+        _catalog.sources.extend(snapshot.sources)
+        _catalog.fingerprint = snapshot.catalog_fingerprint
+        _catalog.error = None
+        _catalog.loaded = True
 
-        return result
+
+def catalog_error() -> str | None:
+    """Return the sanitized initialization failure, if any.
+
+    Returns:
+        The failure message or ``None``.
+    """
+    return _catalog.error
+
+
+def resolved_source_refs() -> dict[str, str | None]:
+    """Expose resolved Git commits for the loaded source snapshots.
+
+    Returns:
+        Repository IDs mapped to captured Git revisions.
+    """
+    return {source.repo_id: source.resolved_ref for source in _catalog.sources}
 
 
 def ensure_catalog_loaded() -> None:
-    """Initialize the catalog on first access."""
-    if not _CATALOG_LOADED:
-        initialize_catalog()
+    """Require a successful startup catalog without retrying initialization.
+
+    Raises:
+        CatalogUnavailableError: If catalog initialization has not succeeded.
+    """
+    if not _catalog.loaded:
+        raise CatalogUnavailableError(
+            _catalog.error or "Plugin catalog is not initialized."
+        )
 
 
 def get_catalog_fingerprint() -> str:
     """Return the internal fingerprint after ensuring the catalog is loaded."""
     ensure_catalog_loaded()
-    return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
+    return _catalog.fingerprint or _empty_catalog_fingerprint()
 
 
 def get_loaded_catalog_fingerprint() -> str:
     """Return the current internal fingerprint without loading the catalog."""
-    return _CATALOG_FINGERPRINT or _empty_catalog_fingerprint()
+    return _catalog.fingerprint or _empty_catalog_fingerprint()
 
 
 def _public_metric_payload(metrics: list[MetricInfoV4]) -> list[dict[str, Any]]:
@@ -382,7 +360,7 @@ def get_public_catalog_fingerprint() -> str:
 
 def is_catalog_loaded() -> bool:
     """Return whether the process has initialized its metric registry."""
-    return _CATALOG_LOADED
+    return _catalog.loaded
 
 
 def get_loaded_metric_names() -> list[str]:
@@ -543,15 +521,10 @@ def _metric_info_from_manifest(metric: CompiledMetricManifestV4) -> MetricInfoV4
     )
 
 
-def reload_tasks() -> None:
-    """Refresh task metadata from current plugin state."""
-    refresh_catalog()
-
-
 def reset_catalog() -> None:
     """Clear all loaded metrics and catalog initialization state."""
-    global _CATALOG_FINGERPRINT, _CATALOG_LOADED  # ruff:ignore[global-statement]
-
     TASK_REGISTRY.clear()
-    _CATALOG_FINGERPRINT = None
-    _CATALOG_LOADED = False
+    _catalog.fingerprint = None
+    _catalog.loaded = False
+    _catalog.sources.clear()
+    _catalog.error = None

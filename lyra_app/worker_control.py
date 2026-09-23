@@ -449,33 +449,3 @@ def revoke_job(job_id: str) -> None:
     """Request non-terminating Celery revocation for a job identifier."""
     celery_app.control.revoke(job_id)
     logger.info("Requested cancellation for task %s.", job_id)
-
-
-def graceful_worker_restart(timeout: float = 30.0) -> None:
-    """Drain workers before shutdown, terminating tasks only after the timeout."""
-    inspector = celery_app.control.inspect()
-    deadline = time.monotonic() + timeout
-
-    while time.monotonic() < deadline:
-        active = inspector.active()
-        if not active or all(len(tasks) == 0 for tasks in active.values()):
-            logger.info("All workers idle; issuing graceful shutdown.")
-            celery_app.control.broadcast("shutdown")
-            return
-        time.sleep(1)
-
-    active = inspector.active() or {}
-    interrupted_ids: list[str] = [
-        task["id"] for tasks in active.values() for task in tasks
-    ]
-
-    if interrupted_ids:
-        logger.warning(
-            "Timeout exceeded with %d task(s) still running; terminating.",
-            len(interrupted_ids),
-        )
-        notify_interrupted_tasks(interrupted_ids)
-        for task_id in interrupted_ids:
-            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
-
-    celery_app.control.broadcast("shutdown")

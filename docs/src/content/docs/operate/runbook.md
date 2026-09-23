@@ -10,7 +10,8 @@ For example, run `uv run lyra-admin health`, then authenticated
 ## Health
 
 `GET /live` is dependency-free process liveness. `GET /ready` checks Redis and
-PostGIS concurrently and returns `503` when either is unavailable. Use liveness
+PostGIS concurrently and also checks startup catalog availability. It returns
+`503` when any of these is unavailable. Use liveness
 for process restart and readiness for traffic and worker startup gates.
 
 Admin status, config summary, catalog, workers, queues, and recent jobs provide
@@ -62,7 +63,7 @@ state is not inferred automatically.
 4. Confirm at least one observed worker consumes that queue.
 5. Inspect worker startup/install logs for plugin failures.
 6. Check job events and terminal error details.
-7. Refresh the catalog and restart workers only when source or routing changed.
+7. Correct the TOML or plugin, drain jobs, and restart the API and all workers.
 
 Do not restart workers repeatedly to compensate for an invalid manifest,
 unreachable source, missing database data, or incompatible plugin package.

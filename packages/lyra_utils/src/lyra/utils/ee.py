@@ -71,7 +71,7 @@ def _get_reducer_name(reducer: ee.Reducer) -> str:
     raise ValueError(err)
 
 
-def _compute_gdf(
+def compute_gdf(
     img: ee.Image,
     gdf: gpd.GeoDataFrame,
     *,
@@ -145,11 +145,11 @@ def reduce_ee_image_over_gdf(
     gdf = gdf[["geometry"]].to_crs("EPSG:4326")
 
     try:
-        return _compute_gdf(img, gdf, reducer=reducer, scale=scale)
+        return compute_gdf(img, gdf, reducer=reducer, scale=scale)
     except ee.EEException as e:
         if str(e).startswith(r"Request payload size exceeds the limit"):
             processed_chunks = [
-                _compute_gdf(img, chunk, reducer=reducer, scale=scale)
+                compute_gdf(img, chunk, reducer=reducer, scale=scale)
                 for chunk in _chunk_gdf(gdf)
             ]
             return pd.concat(processed_chunks)

@@ -12,10 +12,12 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] -- invokes Git/u
 import sys
 import tempfile
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, unquote, urlparse
+
+from lyra.sdk.config import PluginRepoConfig
 
 logger = logging.getLogger(__name__)
 
@@ -217,52 +219,46 @@ def parse_repo_entry(entry: str) -> PluginRepoEntry:
     )
 
 
-def iter_plugin_entries(
-    raw_entries: Iterable[str] | None = None,
-) -> Iterable[PluginRepoEntry]:
-    """Parse configured plugin sources while skipping malformed entries.
+def _sync_git_repo(target: Path, entry: PluginRepoEntry) -> bool:
+    local = None
+    if (target / ".git").exists():
+        local = _run_git("rev-parse", "HEAD", cwd=target)
+        _run_git("remote", "set-url", "origin", entry.clone_url, cwd=target)
+    else:
+        target.mkdir(parents=True, exist_ok=True)
+        _run_git("init", str(target))
+        _run_git("remote", "add", "origin", entry.clone_url, cwd=target)
+    _run_git("fetch", "--depth=1", "origin", entry.ref or "HEAD", cwd=target)
+    remote = _run_git("rev-parse", "FETCH_HEAD", cwd=target)
+    _run_git("checkout", "--force", "--detach", remote, cwd=target)
+    return local != remote
+
+
+def prepare_configured_repo(target: Path, repo: PluginRepoConfig) -> SyncedPluginRepo:
+    """Capture a configured source in an API-owned startup directory.
 
     Returns:
-        Valid normalized entries in their configured order.
+        The synchronized source and its path.
+
+    Raises:
+        PluginSyncError: If Git cannot fetch the configured revision.
     """
-    if raw_entries is None:
-        return []
-
-    entries_to_parse = [value.strip() for value in raw_entries if value.strip()]
-    if not entries_to_parse:
-        return []
-
-    entries: list[PluginRepoEntry] = []
-    for entry in entries_to_parse:
-        try:
-            entries.append(parse_repo_entry(entry))
-        except ValueError:
-            logger.warning("Skipping malformed plugin entry: %r", entry)
-    return entries
+    entry = replace(parse_repo_entry(repo.source), ref=repo.ref)
+    try:
+        changed = _sync_plugin_source(target, entry)
+    except subprocess.CalledProcessError as exc:
+        msg = f"Could not capture plugin source {repo.id!r}."
+        raise PluginSyncError(msg) from exc
+    return SyncedPluginRepo(entry=entry, path=target, changed=changed)
 
 
-def _sync_git_repo(target: Path, entry: PluginRepoEntry) -> bool:
-    if not target.exists():
-        cmd = ["clone", "--depth=1"]
-        if entry.ref:
-            cmd += ["--branch", entry.ref]
-        cmd += [entry.clone_url, str(target)]
-        logger.info("Cloning plugin repo %s -> %s", entry.clone_url, target)
-        _run_git(*cmd)
-        return True
+def resolved_git_ref(path: Path) -> str:
+    """Read the exact commit captured in a prepared Git source.
 
-    fetch_args = ["fetch", "--depth=1", "origin"]
-    if entry.ref:
-        fetch_args.append(entry.ref)
-    _run_git(*fetch_args, cwd=target)
-
-    local = _run_git("rev-parse", "HEAD", cwd=target)
-    remote = _run_git("rev-parse", "FETCH_HEAD", cwd=target)
-    if local == remote:
-        return False
-
-    _run_git("reset", "--hard", "FETCH_HEAD", cwd=target)
-    return True
+    Returns:
+        The checkout's commit ID.
+    """
+    return _run_git("rev-parse", "HEAD", cwd=path)
 
 
 def _directory_name_ignored(name: str) -> bool:
@@ -363,6 +359,10 @@ def _sync_directory_source(target: Path, entry: PluginRepoEntry) -> bool:
         msg = f"Directory plugin source is not a directory: {source}"
         raise PluginSyncError(msg)
 
+    if target.resolve().is_relative_to(source.resolve()):
+        msg = "Plugin capture directory must not be inside the source directory."
+        raise PluginSyncError(msg)
+
     fingerprint = _directory_fingerprint(source)
     fingerprint_path = target.parent / f".{target.name}.fingerprint"
     if target.exists() and fingerprint_path.exists():
@@ -402,75 +402,6 @@ def _sync_plugin_source(target: Path, entry: PluginRepoEntry) -> bool:
     return _sync_git_repo(target, entry)
 
 
-def sync_plugin_repos(
-    target_dir: Path,
-    raw_entries: Iterable[str] | None = None,
-    *,
-    raise_on_error: bool = False,
-) -> list[SyncedPluginRepo]:
-    """Synchronize a collection of plugin sources into managed snapshots.
-
-    Returns:
-        Successfully synchronized repositories in source order.
-
-    Raises:
-        subprocess.CalledProcessError: If Git synchronization fails while
-            ``raise_on_error`` is enabled.
-        PluginSyncError: If a non-Git source fails while ``raise_on_error`` is
-            enabled.
-    """
-    entries = list(iter_plugin_entries(raw_entries))
-    if not entries:
-        return []
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-    synced: list[SyncedPluginRepo] = []
-    used_targets: set[str] = set()
-
-    for entry in entries:
-        if entry.target_name in used_targets:
-            logger.warning(
-                "Skipping duplicate plugin target %r from %s",
-                entry.target_name,
-                entry.raw,
-            )
-            continue
-        used_targets.add(entry.target_name)
-
-        target = target_dir / entry.target_name
-        try:
-            changed = _sync_plugin_source(target, entry)
-        except subprocess.CalledProcessError:
-            if raise_on_error:
-                raise
-            logger.warning(
-                "Failed to sync plugin repo %r from %s",
-                entry.display_name,
-                entry.clone_url,
-            )
-            if target.exists():
-                logger.warning(
-                    "Using existing plugin checkout for %r at %s.",
-                    entry.display_name,
-                    target,
-                )
-                synced.append(SyncedPluginRepo(entry=entry, path=target, changed=False))
-            continue
-        except PluginSyncError as exc:
-            if raise_on_error:
-                raise
-            logger.warning(
-                "Failed to sync plugin source %r from %s: %s",
-                entry.display_name,
-                entry.clone_url,
-                exc,
-            )
-            continue
-        synced.append(SyncedPluginRepo(entry=entry, path=target, changed=changed))
-
-    return synced
-
-
 def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
     """Synchronize one plugin source into its managed snapshot.
 
@@ -482,15 +413,6 @@ def sync_plugin_repo(target_dir: Path, raw_entry: str) -> SyncedPluginRepo:
     target = target_dir / entry.target_name
     changed = _sync_plugin_source(target, entry)
     return SyncedPluginRepo(entry=entry, path=target, changed=changed)
-
-
-def remove_plugin_snapshot(target_dir: Path, raw_entry: str) -> None:
-    """Remove one managed plugin snapshot and its directory fingerprint."""
-    entry = parse_repo_entry(raw_entry)
-    target = target_dir / entry.target_name
-    fingerprint_path = target_dir / f".{target.name}.fingerprint"
-    _remove_managed_path(target)
-    _remove_managed_path(fingerprint_path)
 
 
 def _check_compatible(plugin_dir: Path) -> bool:
@@ -506,7 +428,7 @@ def _check_compatible(plugin_dir: Path) -> bool:
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # ruff:ignore[subprocess-without-shell-equals-true]
     if result.returncode != 0:
         logger.warning(
-            "Plugin %s failed compatibility check and will be skipped. Reason: %s.",
+            "Plugin %s failed compatibility check. Reason: %s.",
             plugin_dir.name,
             result.stderr,
         )
@@ -533,47 +455,15 @@ def install_runner_plugins(repos: Iterable[SyncedPluginRepo]) -> list[SyncedPlug
 
     Returns:
         Repositories whose compatibility check and installation both succeeded.
+
+    Raises:
+        RuntimeError: If a required plugin is incompatible.
     """
     installed: list[SyncedPluginRepo] = []
     for repo in repos:
         if not _check_compatible(repo.path):
-            continue
-        try:
-            install_plugin(repo.path)
-        except subprocess.CalledProcessError as exc:
-            logger.warning(
-                "Failed to install plugin %r: %s\n%s",
-                repo.entry.display_name,
-                exc,
-                exc.stderr,
-            )
-            continue
+            msg = f"Required plugin {repo.entry.display_name!r} is incompatible."
+            raise RuntimeError(msg)
+        install_plugin(repo.path)
         installed.append(repo)
     return installed
-
-
-def format_update_message(
-    updated: list[str],
-    *,
-    catalog_changed: bool,
-    catalog_fingerprint: str,
-    workers_restarting: bool = True,
-) -> str:
-    """Summarize plugin, catalog, fingerprint, and worker-restart changes.
-
-    Returns:
-        A concise status message suitable for administrative responses.
-    """
-    if updated:
-        names = ", ".join(updated)
-        prefix = f"Updated {len(updated)} plugin repo(s): {names}."
-    else:
-        prefix = "No plugin repo changes detected."
-
-    changed = "changed" if catalog_changed else "unchanged"
-    worker_message = (
-        "Workers are restarting."
-        if workers_restarting
-        else "Workers were not restarted."
-    )
-    return f"{prefix} Catalog {changed} ({catalog_fingerprint}). {worker_message}"

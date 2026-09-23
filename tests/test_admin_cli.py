@@ -34,6 +34,7 @@ REPO: dict[str, JsonValue] = {
     "source": "owner/plugin@main",
     "ref": "main",
     "enabled": True,
+    "resolved_ref": None,
 }
 METADATA: dict[str, JsonValue] = {
     "observed_at": None,
@@ -56,6 +57,8 @@ READINESS: dict[str, JsonValue] = {
     "api_version": "1.0.0",
     "redis": {"status": "ok"},
     "database": {"status": "ok"},
+    "catalog_available": True,
+    "catalog_error": None,
 }
 
 
@@ -85,6 +88,8 @@ CASES = (
             "configured_worker_count": 1,
             "job_store_ttl_seconds": 600,
             "catalog_fingerprint": "catalog",
+            "catalog_available": True,
+            "catalog_error": None,
         },
     ),
     Case(
@@ -99,7 +104,6 @@ CASES = (
             "workers": [],
             "job_store_ttl_seconds": 600,
             "plugin_catalog_dir": "/lyra_data/plugins/catalog",
-            "plugin_state_path": "/lyra_data/state/plugins.toml",
             "plugin_runner_base_dir": "/lyra_data/plugins/runners",
         },
     ),
@@ -134,17 +138,11 @@ CASES = (
         {**WORKER, "inspect_metadata": METADATA},
     ),
     Case(
-        "workers restart --restart-timeout 0",
-        "POST",
-        "admin/workers/restart",
-        {"requested": True, "timeout": 0.0, "message": "Worker restart requested."},
-        params={"timeout": 0.0},
-    ),
-    Case(
         "queues list",
         "GET",
         "admin/queues",
         {
+            "catalog_available": True,
             "allowed_queues": ["batch"],
             "default_queue": "batch",
             "inspect_metadata": METADATA,
@@ -163,56 +161,6 @@ CASES = (
     ),
     Case("repos list", "GET", "admin/plugin-repos", {"repos": [REPO]}),
     Case(
-        "repos add owner/plugin@main --id repo --disabled",
-        "POST",
-        "admin/plugin-repos",
-        {"repo": REPO, "catalog_refresh": REFRESH},
-        body={"source": "owner/plugin@main", "id": "repo", "enabled": False},
-    ),
-    Case(
-        "repos update repo --source owner/plugin@main",
-        "PATCH",
-        "admin/plugin-repos/repo",
-        {"repo": REPO, "catalog_refresh": REFRESH},
-        body={"source": "owner/plugin@main"},
-    ),
-    Case(
-        "repos enable repo",
-        "PATCH",
-        "admin/plugin-repos/repo",
-        {"repo": REPO, "catalog_refresh": REFRESH},
-        body={"enabled": True},
-    ),
-    Case(
-        "repos disable repo",
-        "PATCH",
-        "admin/plugin-repos/repo",
-        {"repo": REPO, "catalog_refresh": REFRESH},
-        body={"enabled": False},
-    ),
-    Case(
-        "repos delete repo",
-        "DELETE",
-        "admin/plugin-repos/repo",
-        {
-            "deleted": True,
-            "repo_id": "repo",
-            "removed_metric_queues": [],
-            "catalog_refresh": REFRESH,
-        },
-    ),
-    Case(
-        "repos sync repo",
-        "POST",
-        "admin/plugin-repos/repo/sync",
-        {
-            "repo_id": "repo",
-            "changed": False,
-            "display_name": "owner/plugin",
-            "catalog_refresh": REFRESH,
-        },
-    ),
-    Case(
         "catalog show",
         "GET",
         "admin/catalog",
@@ -220,24 +168,10 @@ CASES = (
             "metric_count": 1,
             "metric_names": ["metric"],
             "catalog_fingerprint": "catalog",
+            "catalog_available": True,
+            "catalog_error": None,
             "plugin_sources": [],
             "metric_queues": {"metric": "batch"},
-        },
-    ),
-    Case(
-        "catalog refresh",
-        "POST",
-        "admin/plugin-catalog/refresh",
-        {
-            "updated_plugins": [],
-            "catalog_changed": False,
-            "previous_catalog_fingerprint": "same",
-            "catalog_fingerprint": "same",
-            "assigned_metric_queues": [],
-            "removed_metric_queues": [],
-            "workers_restarted": False,
-            "workers_restart_recommended": True,
-            "message": "Refresh completed.",
         },
     ),
     Case(
@@ -249,19 +183,6 @@ CASES = (
             "allowed_queues": ["batch"],
             "default_queue": "batch",
         },
-    ),
-    Case(
-        "routing set metric batch",
-        "PUT",
-        "admin/plugin-routing/metric",
-        {"metric_name": "metric", "queue": "batch"},
-        body={"queue": "batch"},
-    ),
-    Case(
-        "routing delete metric",
-        "DELETE",
-        "admin/plugin-routing/metric",
-        {"metric_name": "metric", "deleted": False},
     ),
 )
 MUTATIONS = tuple(case for case in CASES if case.method != "GET")
@@ -358,11 +279,16 @@ def test_interactive_confirmation(
     http: HTTPStub,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    http.payload = {"metric_name": "metric", "deleted": False}
+    http.payload = {
+        "job_id": "metric",
+        "status": "cancelled",
+        "cancellation_requested": True,
+        "revoke_requested": False,
+    }
     prompt = Terminal()
     monkeypatch.setattr(admin_cli.sys, "stdin", Terminal(answer))
     monkeypatch.setattr(admin_cli.sys, "stderr", prompt)
-    assert admin_cli.main(["routing", "delete", "metric"]) == code
+    assert admin_cli.main(["jobs", "cancel", "metric"]) == code
     assert len(http.calls) == (1 if code == 0 else 0)
     assert "metric" in prompt.getvalue()
     assert "localhost:5219" in prompt.getvalue()
@@ -477,7 +403,7 @@ def test_request_exceptions_do_not_retry_mutations(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     http.error = error
-    assert admin_cli.main(["--json", "routing", "delete", "metric", "--yes"]) == code
+    assert admin_cli.main(["--json", "jobs", "cancel", "metric", "--yes"]) == code
     assert len(http.calls) == 1
     assert not capsys.readouterr().out
 
@@ -504,28 +430,9 @@ def test_unhealthy_readiness_preserves_response(
     assert json.loads(output.err)["error"]["kind"] == "operation"
 
 
-def test_partial_mutation_preserves_response(
-    http: HTTPStub,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    http.payload = {
-        "repo": REPO,
-        "catalog_refresh": {**REFRESH, "refreshed": False, "error": "invalid manifest"},
-    }
-    assert admin_cli.main(["--json", "repos", "enable", "repo", "--yes"]) == 1
-    output = capsys.readouterr()
-    assert json.loads(output.out) == http.payload
-    assert "state may have changed" in json.loads(output.err)["error"]["message"]
-    assert len(http.calls) == 1
-
-
 @pytest.mark.parametrize(
     ("command", "payload"),
     [
-        (
-            ["workers", "restart"],
-            {"requested": False, "timeout": 30.0, "message": "Not requested."},
-        ),
         (
             ["jobs", "cancel", "job"],
             {

@@ -10,10 +10,6 @@ APP_FILE_MOUNTS = [
     "${LYRA_SERVICE_ACCOUNT_FILE}:/lyra_data/secrets/service-account.json:ro",
 ]
 APP_ENVIRONMENT_ENTRIES = [
-    "LYRA_POSTGRES_HOST: ${LYRA_POSTGRES_HOST}",
-    "LYRA_POSTGRES_PORT: ${LYRA_POSTGRES_PORT}",
-    "LYRA_POSTGRES_DB: ${LYRA_POSTGRES_DB}",
-    "LYRA_POSTGRES_USER: ${LYRA_POSTGRES_USER}",
     "LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}",
     "LYRA_ADMIN_API_KEY: ${LYRA_ADMIN_API_KEY}",
 ]
@@ -84,10 +80,6 @@ def test_env_example_defines_host_mount_paths_and_runtime_env() -> None:
 
     assert "LYRA_CONFIG_FILE=./lyra_data/config/lyra.toml" in contents
     assert "LYRA_SERVICE_ACCOUNT_FILE=./secrets/service-account.json" in contents
-    assert "LYRA_POSTGRES_HOST=replace-with-reachable-postgis-host" in contents
-    assert "LYRA_POSTGRES_PORT=5432" in contents
-    assert "LYRA_POSTGRES_DB=lyra" in contents
-    assert "LYRA_POSTGRES_USER=lyra" in contents
     assert "LYRA_POSTGRES_PASSWORD=change-me" in contents
     assert "LYRA_AGENT_API_KEY=replace-with-a-random-agent-secret" in contents
     assert "LYRA_ADMIN_API_KEY=replace-with-a-different-admin-secret" in contents
@@ -100,7 +92,7 @@ def test_dockerfile_declares_lyra_data_volume_only() -> None:
 
     assert "VOLUME /lyra_data" in contents
     assert "/lyra_data/secrets" in contents
-    assert "/lyra_data/state" in contents
+    assert "/lyra_data/state" not in contents
     assert "VOLUME /lyra_plugin_catalog" not in contents
     assert "VOLUME /lyra_plugins" not in contents
     assert "LYRA_PLUGIN_REPOS" not in contents

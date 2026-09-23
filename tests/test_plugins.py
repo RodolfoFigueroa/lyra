@@ -1,18 +1,24 @@
 import json
+import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] -- test doubles
 from pathlib import Path
 
 import pytest
+from lyra.sdk.config import PluginRepoConfig
 
+from lyra_app import registry
+from lyra_app.config import clear_config_cache
+from lyra_app.plugin_runtime import read_snapshot
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
     PluginSyncError,
-    iter_plugin_entries,
     parse_repo_entry,
+    prepare_configured_repo,
+    resolved_git_ref,
     sync_plugin_repo,
-    sync_plugin_repos,
 )
-from tests.smoke_plugin_helpers import directory_uri
+from tests.config_helpers import load_test_config
+from tests.smoke_plugin_helpers import SMOKE_PLUGIN_DIR, directory_uri
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -197,12 +203,6 @@ def test_parse_repo_entry_rejects_raw_directory_path(tmp_path: Path) -> None:
         parse_repo_entry(str(tmp_path / "mock-plugin"))
 
 
-def test_iter_plugin_entries_skips_malformed_local_entries() -> None:
-    entries = list(iter_plugin_entries(["file:relative-plugin", "owner/repo"]))
-
-    assert [entry.display_name for entry in entries] == ["owner/repo"]
-
-
 def test_sync_plugin_repos_clones_local_repo(
     tmp_path: Path,
 ) -> None:
@@ -210,7 +210,7 @@ def test_sync_plugin_repos_clones_local_repo(
     _init_local_plugin_repo(source)
     target_dir = tmp_path / "targets"
 
-    synced = sync_plugin_repos(target_dir, [source.as_uri()])
+    synced = [sync_plugin_repo(target_dir, source.as_uri())]
 
     assert len(synced) == 1
     repo = synced[0]
@@ -227,11 +227,11 @@ def test_sync_plugin_repos_updates_local_repo_after_commit(
     source = tmp_path / "source"
     _init_local_plugin_repo(source)
     target_dir = tmp_path / "targets"
-    sync_plugin_repos(target_dir, [source.as_uri()])
+    [sync_plugin_repo(target_dir, source.as_uri())]
 
     _write_manifest(source, "committed")
     _commit_all(source, "Update manifest")
-    synced = sync_plugin_repos(target_dir, [source.as_uri()])
+    synced = [sync_plugin_repo(target_dir, source.as_uri())]
 
     assert len(synced) == 1
     repo = synced[0]
@@ -247,10 +247,10 @@ def test_sync_plugin_repos_ignores_uncommitted_local_repo_changes(
     source = tmp_path / "source"
     _init_local_plugin_repo(source)
     target_dir = tmp_path / "targets"
-    sync_plugin_repos(target_dir, [source.as_uri()])
+    [sync_plugin_repo(target_dir, source.as_uri())]
 
     _write_manifest(source, "uncommitted")
-    synced = sync_plugin_repos(target_dir, [source.as_uri()])
+    synced = [sync_plugin_repo(target_dir, source.as_uri())]
 
     assert len(synced) == 1
     repo = synced[0]
@@ -266,7 +266,7 @@ def test_sync_plugin_repos_copies_directory_source(tmp_path: Path) -> None:
     _write_manifest(source, "initial")
     target_dir = tmp_path / "targets"
 
-    synced = sync_plugin_repos(target_dir, [f"dir://{source}"])
+    synced = [sync_plugin_repo(target_dir, f"dir://{source}")]
 
     assert len(synced) == 1
     repo = synced[0]
@@ -286,9 +286,9 @@ def test_sync_plugin_repos_reports_unchanged_directory_source(
     source.mkdir()
     _write_manifest(source, "initial")
     target_dir = tmp_path / "targets"
-    sync_plugin_repos(target_dir, [f"dir://{source}"])
+    [sync_plugin_repo(target_dir, f"dir://{source}")]
 
-    synced = sync_plugin_repos(target_dir, [f"dir://{source}"])
+    synced = [sync_plugin_repo(target_dir, f"dir://{source}")]
 
     assert len(synced) == 1
     assert synced[0].changed is False
@@ -387,25 +387,6 @@ def test_sync_plugin_repos_preserves_directory_symlinks(tmp_path: Path) -> None:
     assert copied_link.readlink() == Path("target.txt")
 
 
-def test_sync_plugin_repos_skips_missing_directory_source_by_default(
-    tmp_path: Path,
-) -> None:
-    synced = sync_plugin_repos(tmp_path / "targets", [f"dir://{tmp_path / 'missing'}"])
-
-    assert synced == []
-
-
-def test_sync_plugin_repos_raises_for_missing_directory_source(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(PluginSyncError, match="does not exist"):
-        sync_plugin_repos(
-            tmp_path / "targets",
-            [f"dir://{tmp_path / 'missing'}"],
-            raise_on_error=True,
-        )
-
-
 def test_sync_plugin_repo_raises_for_missing_directory_source(
     tmp_path: Path,
 ) -> None:
@@ -419,3 +400,71 @@ def test_sync_plugin_repo_raises_for_file_directory_source(tmp_path: Path) -> No
 
     with pytest.raises(PluginSyncError, match="not a directory"):
         sync_plugin_repo(tmp_path / "targets", f"dir://{source}")
+
+
+@pytest.mark.parametrize("revision", ["branch", "tag", "commit", "default"])
+def test_configured_git_source_resolves_branch_tag_commit_and_default(
+    tmp_path: Path, revision: str
+) -> None:
+    source = tmp_path / "git-source"
+    _init_local_plugin_repo(source)
+    expected = _git(source, "rev-parse", "HEAD")
+    _git(source, "branch", "selected-branch")
+    _git(source, "tag", "selected-tag")
+    _write_manifest(source, "newer")
+    _commit_all(source, "Newer default branch")
+    refs = {"branch": "selected-branch", "tag": "selected-tag", "commit": expected}
+    if revision == "default":
+        expected = _git(source, "rev-parse", "HEAD")
+    config = PluginRepoConfig(id="git", source=source.as_uri(), ref=refs.get(revision))
+
+    prepared = prepare_configured_repo(tmp_path / "captured", config)
+
+    assert resolved_git_ref(prepared.path) == expected
+    assert _git(prepared.path, "rev-parse", "HEAD") == expected
+
+
+def test_directory_capture_rejects_a_destination_inside_its_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_manifest(source, "initial")
+    with pytest.raises(PluginSyncError, match="must not be inside"):
+        prepare_configured_repo(
+            source / "capture", PluginRepoConfig(id="self", source=f"dir://{source}")
+        )
+
+
+def test_git_branch_is_captured_once_per_api_startup(tmp_path: Path) -> None:
+    source = tmp_path / "git-source"
+    _init_local_plugin_repo(source)
+    shutil.copyfile(SMOKE_PLUGIN_DIR / MANIFEST_FILENAME, source / MANIFEST_FILENAME)
+    _commit_all(source, "Plugin manifest")
+    _git(source, "branch", "selected")
+    config = load_test_config(tmp_path)
+    config.plugins.repos = [
+        PluginRepoConfig(id="git", source=source.as_uri(), ref="selected")
+    ]
+    try:
+        registry.initialize_catalog()
+        initial = read_snapshot(config).sources[0]
+        assert initial.resolved_ref == _git(source, "rev-parse", "selected")
+        manifest = json.loads((source / MANIFEST_FILENAME).read_text())
+        manifest["metrics"][0]["description"] = "Changed after startup"
+        (source / MANIFEST_FILENAME).write_text(json.dumps(manifest))
+        _commit_all(source, "Change manifest")
+        _git(source, "branch", "--force", "selected", "HEAD")
+        assert read_snapshot(config).sources[0].resolved_ref == initial.resolved_ref
+        assert (
+            "Changed after startup"
+            not in (initial.path / MANIFEST_FILENAME).read_text()
+        )
+        registry.initialize_catalog()
+        updated = read_snapshot(config).sources[0]
+        assert updated.resolved_ref == _git(source, "rev-parse", "HEAD")
+        assert updated.resolved_ref != initial.resolved_ref
+        assert registry.resolved_source_refs() == {"git": updated.resolved_ref}
+    finally:
+        registry.reset_catalog()
+        clear_config_cache()

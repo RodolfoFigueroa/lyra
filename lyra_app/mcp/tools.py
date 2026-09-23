@@ -43,6 +43,7 @@ from lyra_app.job_submission import (
 )
 from lyra_app.loaders.db import get_met_zone_code_from_name_async
 from lyra_app.registry import (
+    CatalogUnavailableError,
     MetricPayloadValidationError,
     get_metric_catalog,
     get_metric_info,
@@ -134,6 +135,9 @@ class ToolCallError(Exception):
         return {"error": error}
 
 
+_CATALOG_UNAVAILABLE_ERROR = "catalog_unavailable"
+
+
 class InProcessLyraBackend(LyraMCPBackend):
     """Implement MCP domain operations directly against this Lyra process."""
 
@@ -143,7 +147,14 @@ class InProcessLyraBackend(LyraMCPBackend):
 
     @override
     async def get_metrics(self) -> MetricCatalogResponse:
-        return await asyncio.to_thread(get_metric_catalog)
+        try:
+            return await asyncio.to_thread(get_metric_catalog)
+        except CatalogUnavailableError as exc:
+            raise ToolCallError(
+                _CATALOG_UNAVAILABLE_ERROR,
+                "Plugin catalog is unavailable.",
+                {"retryable": True},
+            ) from exc
 
     @override
     async def lookup_met_zone(self, name: str) -> dict[str, str] | None:
@@ -176,7 +187,14 @@ class InProcessLyraBackend(LyraMCPBackend):
 
     @override
     async def get_metric(self, metric: str) -> MetricInfoV4 | None:
-        return await asyncio.to_thread(get_metric_info, metric)
+        try:
+            return await asyncio.to_thread(get_metric_info, metric)
+        except CatalogUnavailableError as exc:
+            raise ToolCallError(
+                _CATALOG_UNAVAILABLE_ERROR,
+                "Plugin catalog is unavailable.",
+                {"retryable": True},
+            ) from exc
 
     @override
     async def create_job(
@@ -195,6 +213,12 @@ class InProcessLyraBackend(LyraMCPBackend):
                 ),
                 database=self.database,
             )
+        except CatalogUnavailableError as exc:
+            raise ToolCallError(
+                _CATALOG_UNAVAILABLE_ERROR,
+                "Plugin catalog is unavailable.",
+                {"retryable": True},
+            ) from exc
         except UnknownMetricError as exc:
             raise ToolCallError(_UNKNOWN_METRIC_ERROR, str(exc)) from exc
         except (MetricPayloadValidationError, SpatialInputValidationError) as exc:

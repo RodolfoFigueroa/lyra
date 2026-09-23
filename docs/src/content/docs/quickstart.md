@@ -26,12 +26,12 @@ cp config.example.toml lyra_data/config/lyra.toml
 cp .env.example .env
 ```
 
-Edit `lyra_data/config/lyra.toml` and set the Earth Engine project. Its checked-in
+Edit `lyra_data/config/lyra.toml` and set the Earth Engine project and `[database]` host, port, name, and user. Its checked-in
 defaults target the development Compose Redis service and use
 `http://localhost:5219` as the public API URL.
 
 Put the service-account JSON at `secrets/service-account.json`. Edit `.env` with
-PostGIS connection values and two different secrets:
+`LYRA_POSTGRES_PASSWORD` and two different API secrets:
 
 ```text
 LYRA_AGENT_API_KEY=replace-with-a-random-agent-secret
@@ -52,29 +52,26 @@ curl http://localhost:5219/ready
 ```
 
 `/live` only proves the API process is running. `/ready` returns `200` only when
-Redis and PostGIS are reachable.
+Redis and PostGIS are reachable and the plugin catalog initialized successfully.
 
-## Add a plugin
+## Configure plugins
 
-For a local checkout, make the example visible inside every app container or
-push it to a reachable Git repository. Register the source with the admin key:
+Declare sources in the TOML before startup:
 
-```bash
-curl -X POST http://localhost:5219/admin/plugin-repos \
-  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}" \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"owner/plugin-repository@main"}'
+```toml
+[[plugins.repos]]
+id = "example"
+source = "owner/plugin-repository"
+ref = "main"
 ```
 
-Refresh manifests, then restart workers when recommended:
+For local development, use `source = "dir:///absolute/path/to/plugin"` and make
+that path visible inside the API container. The API captures it for workers.
+Git sources accept branches, tags, or commits in the separate `ref` field.
 
-```bash
-curl -X POST http://localhost:5219/admin/plugin-catalog/refresh \
-  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
-
-curl -X POST 'http://localhost:5219/admin/workers/restart?timeout=30' \
-  -H "Authorization: Bearer ${LYRA_ADMIN_API_KEY}"
-```
+Validate with `uv run lyra-admin config validate lyra_data/config/lyra.toml`.
+After editing a running deployment, follow the [drain and restart procedure](../operate/deployment/#updates).
+No admin API registration is needed.
 
 ## Submit a job
 

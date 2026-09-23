@@ -37,6 +37,10 @@ class ReadinessResponse(StrictBaseModel):
     api_version: str = Field(min_length=1, description="Running Lyra API version.")
     redis: RedisHealth = Field(description="Redis readiness details.")
     database: DatabaseHealth = Field(description="PostgreSQL readiness details.")
+    catalog_available: bool = Field(
+        description="Whether startup catalog initialization succeeded."
+    )
+    catalog_error: str | None = None
 
 
 class WorkerConfigSummary(StrictBaseModel):
@@ -59,7 +63,6 @@ class ConfigSummaryResponse(StrictBaseModel):
     workers: list[WorkerConfigSummary]
     job_store_ttl_seconds: int = Field(gt=0)
     plugin_catalog_dir: str
-    plugin_state_path: str
     plugin_runner_base_dir: str
 
 
@@ -70,6 +73,7 @@ class PluginSourceSummary(StrictBaseModel):
     source: str = Field(min_length=1)
     source_kind: Literal["github", "local", "directory"]
     ref: str | None = None
+    resolved_ref: str | None = None
     enabled: bool
 
 
@@ -79,6 +83,8 @@ class CatalogSummaryResponse(StrictBaseModel):
     metric_count: int = Field(ge=0)
     metric_names: list[str]
     catalog_fingerprint: str
+    catalog_available: bool
+    catalog_error: str | None = None
     plugin_sources: list[PluginSourceSummary]
     metric_queues: dict[str, str]
 
@@ -154,6 +160,7 @@ class QueuesResponse(StrictBaseModel):
 
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
+    catalog_available: bool
     inspect_metadata: WorkerInspectMetadata = Field(
         default_factory=WorkerInspectMetadata
     )
@@ -171,6 +178,8 @@ class AdminStatusResponse(StrictBaseModel):
     configured_worker_count: int = Field(ge=0)
     job_store_ttl_seconds: int = Field(gt=0)
     catalog_fingerprint: str
+    catalog_available: bool
+    catalog_error: str | None = None
 
 
 __all__ = [

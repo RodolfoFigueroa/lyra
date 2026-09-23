@@ -9,23 +9,15 @@ from lyra_app.config import (
     DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_AGENT_API_KEY_ENV,
-    LYRA_POSTGRES_DB_ENV,
-    LYRA_POSTGRES_HOST_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
-    LYRA_POSTGRES_PORT_ENV,
-    LYRA_POSTGRES_USER_ENV,
     LyraConfig,
-    render_config_toml,
 )
+from tests.config_serialization import render_config_toml
 
 
 def test_example_config_matches_config_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(LYRA_POSTGRES_HOST_ENV, "postgres")
-    monkeypatch.setenv(LYRA_POSTGRES_PORT_ENV, "5432")
-    monkeypatch.setenv(LYRA_POSTGRES_DB_ENV, "lyra")
-    monkeypatch.setenv(LYRA_POSTGRES_USER_ENV, "lyra")
     monkeypatch.setenv(LYRA_POSTGRES_PASSWORD_ENV, "postgres-secret")
     monkeypatch.setenv(LYRA_ADMIN_API_KEY_ENV, "admin-secret")
     monkeypatch.setenv(LYRA_AGENT_API_KEY_ENV, "agent-secret")
@@ -38,7 +30,7 @@ def test_example_config_matches_config_contract(
     assert "metric_queues" not in raw_config["plugins"]
     assert config.plugins.default_queue in config.plugins.allowed_queues
     assert "password" not in raw_config["database"]
-    assert "host" not in raw_config["database"]
+    assert "host" in raw_config["database"]
     assert config.database.api.pool_size == 5
     assert "admin" not in raw_config
     assert "agent" not in raw_config
@@ -61,7 +53,7 @@ def test_example_config_matches_config_contract(
     assert "[database.spatial]" in rendered
     assert "[database.worker]" in rendered
     rendered_config = tomllib.loads(rendered)
-    assert "host" not in rendered_config["database"]
+    assert "host" in rendered_config["database"]
     assert "password" not in rendered_config["database"]
     assert "[admin]" not in rendered
     assert "[agent]" not in rendered

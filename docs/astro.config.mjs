@@ -1,4 +1,5 @@
 import starlight from '@astrojs/starlight';
+import starlightPydocs, { pydocsSidebarGroup } from 'starlight-pydocs';
 import { defineConfig } from 'astro/config';
 import { copyFile, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -11,7 +12,9 @@ const docsRef = process.env.LYRA_DOCS_REF ?? 'dev';
 
 const sidebar = navigation.map((group) => ({
   label: group.label,
-  items: group.items.map((item) => item === 'reference/generated'
+  items: group.items.map((item) => item === 'api/lyra'
+    ? { label: 'Python API', items: [pydocsSidebarGroup] }
+    : item === 'reference/generated'
     ? { autogenerate: { directory: item } }
     : item.replace(/\/index$/, '')),
 }));
@@ -76,6 +79,28 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Lyra',
+      plugins: [starlightPydocs({
+        runner: {
+          command: ['uv', 'run', '--frozen', '--group', 'dev', 'python', '-m', 'griffe'],
+        },
+        packages: [{
+          name: 'lyra',
+          base: 'api/lyra',
+          search: [
+            '../packages/lyra_sdk/src',
+            '../packages/lyra_api/src',
+            '../packages/lyra_utils/src',
+          ],
+          docstringStyle: 'google',
+          extensions: ['griffe_pydantic'],
+          sourceLink: {
+            host: 'github',
+            repo: 'RodolfoFigueroa/lyra',
+            ref: docsRef,
+            root: '..',
+          },
+        }],
+      })],
       expressiveCode: {
         styleOverrides: {
           windowFrameBoxShadow: 'none',

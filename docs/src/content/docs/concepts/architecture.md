@@ -7,8 +7,8 @@ Lyra separates public contracts from trusted execution.
 
 ## Catalog path
 
-1. Operators configure plugin sources and queue assignments in Lyra-owned state.
-2. The API syncs enabled sources into its catalog directory.
+1. Operators configure plugin sources and queue assignments in the authoritative `lyra.toml`.
+2. At startup the API captures enabled sources and their exact Git commits.
 3. It parses committed schema-v4 manifests without importing Python code.
 4. The registry compiles semantic inputs into effective request schemas and
    runtime spatial/batch metadata.

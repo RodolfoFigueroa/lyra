@@ -30,7 +30,8 @@ from lyra_app.config import clear_config_cache, get_config
 from lyra_app.mcp.tools import InProcessLyraBackend
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import admin, data_types, health, jobs, metrics
-from tests.config_helpers import load_test_config, plugin_state_store
+from tests.catalog_helpers import configure_catalog_sources, restart_catalog
+from tests.config_helpers import load_test_config
 
 Parameters = ParamSpec("Parameters")
 ReturnT = TypeVar("ReturnT")
@@ -496,11 +497,6 @@ def reset_catalog(
             "heavy_metric": "priority-lane",
         },
     )
-    monkeypatch.setattr(
-        registry,
-        "PluginStateStore",
-        lambda *_args, **_kwargs: plugin_state_store(tmp_path, get_config()),
-    )
     yield
     registry.reset_catalog()
     clear_config_cache()
@@ -508,7 +504,7 @@ def reset_catalog(
 
 def _use_repo(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    _monkeypatch: pytest.MonkeyPatch,
     *,
     manifest: dict[str, Any] | None = None,
 ) -> None:
@@ -518,12 +514,8 @@ def _use_repo(
         json.dumps(manifest or _manifest()),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        registry,
-        "sync_catalog_state_repos",
-        lambda _config, _state: [_synced_repo(repo)],
-    )
-    registry.refresh_catalog()
+    configure_catalog_sources([_synced_repo(repo)])
+    restart_catalog()
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis: FakeRedisAsync) -> None:
@@ -654,6 +646,7 @@ def test_discovery_and_lookup_routes_remain_public(
     from lyra_app.routes import met_zone  # ruff:ignore[import-outside-top-level]
 
     monkeypatch.setattr(health, "redis_client", FakeRedisAsync())
+    monkeypatch.setattr(health, "is_catalog_loaded", lambda: True)
     monkeypatch.setattr(
         metrics,
         "get_metric_catalog",
@@ -1192,11 +1185,7 @@ def test_create_job_rejects_unknown_metric(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_redis(monkeypatch, FakeRedisAsync())
-    monkeypatch.setattr(
-        registry,
-        "sync_catalog_state_repos",
-        lambda _config, _state: [],
-    )
+    configure_catalog_sources([])
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -1399,7 +1388,7 @@ def test_stored_provenance_survives_catalog_refresh(
         json.dumps(changed_manifest),
         encoding="utf-8",
     )
-    registry.refresh_catalog()
+    restart_catalog()
 
     new_entry = registry.get_metric_entry("heavy_metric")
     assert new_entry is not None

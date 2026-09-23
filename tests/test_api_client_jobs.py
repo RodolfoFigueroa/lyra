@@ -155,6 +155,7 @@ def _liveness_response() -> dict[str, Any]:
 
 def _readiness_response() -> dict[str, Any]:
     return {
+        "catalog_available": True,
         "status": "ready",
         "api_version": "0.1.0",
         "redis": {"status": "ok"},
@@ -174,6 +175,7 @@ def _database_unavailable_response() -> dict[str, Any]:
 
 def _admin_status_response() -> dict[str, Any]:
     return {
+        "catalog_available": True,
         "api_version": "0.1.0",
         "redis": {"status": "ok"},
         "metric_count": 1,
@@ -202,13 +204,13 @@ def _config_summary_response() -> dict[str, Any]:
         ],
         "job_store_ttl_seconds": 86400,
         "plugin_catalog_dir": "/lyra_data/plugins/catalog",
-        "plugin_state_path": "/lyra_data/state/plugins.toml",
         "plugin_runner_base_dir": "/lyra_data/plugins/runners",
     }
 
 
 def _catalog_summary_response() -> dict[str, Any]:
     return {
+        "catalog_available": True,
         "metric_count": 1,
         "metric_names": ["smoke_table_metric"],
         "catalog_fingerprint": "abc",
@@ -261,6 +263,7 @@ def _worker_detail_response() -> dict[str, Any]:
 
 def _queues_response() -> dict[str, Any]:
     return {
+        "catalog_available": True,
         "allowed_queues": ["interactive"],
         "default_queue": "interactive",
         "inspect_metadata": {
@@ -303,95 +306,11 @@ def _plugin_repo_list_response() -> dict[str, Any]:
     return {"repos": [_plugin_repo_response()]}
 
 
-def _delete_plugin_repo_response() -> dict[str, Any]:
-    return {
-        "deleted": True,
-        "repo_id": "smoke",
-        "removed_metric_queues": ["smoke_table_metric"],
-        "catalog_refresh": _plugin_catalog_refresh_status(),
-    }
-
-
-def _sync_plugin_repo_response() -> dict[str, Any]:
-    return {
-        "repo_id": "smoke",
-        "changed": True,
-        "display_name": "smoke",
-        "catalog_refresh": _plugin_catalog_refresh_status(),
-    }
-
-
-def _create_plugin_repo_response() -> dict[str, Any]:
-    return {
-        "repo": _plugin_repo_response(),
-        "catalog_refresh": _plugin_catalog_refresh_status(),
-    }
-
-
-def _update_plugin_repo_response() -> dict[str, Any]:
-    repo = _plugin_repo_response()
-    repo["source"] = "dir:///plugins/smoke-updated"
-    repo["enabled"] = False
-    return {
-        "repo": repo,
-        "catalog_refresh": _plugin_catalog_refresh_status(),
-    }
-
-
-def _plugin_catalog_refresh_status() -> dict[str, Any]:
-    return {
-        "refreshed": True,
-        "error": None,
-        "catalog_changed": True,
-        "previous_catalog_fingerprint": "before",
-        "catalog_fingerprint": "after",
-        "assigned_metric_queues": ["smoke_table_metric"],
-        "removed_metric_queues": [],
-        "workers_restart_recommended": True,
-    }
-
-
-def _plugin_catalog_refresh_response() -> dict[str, Any]:
-    return {
-        "updated_plugins": ["smoke"],
-        "catalog_changed": True,
-        "previous_catalog_fingerprint": "before",
-        "catalog_fingerprint": "after",
-        "assigned_metric_queues": ["smoke_table_metric"],
-        "removed_metric_queues": [],
-        "workers_restarted": False,
-        "workers_restart_recommended": True,
-        "message": "Plugin catalog refreshed.",
-    }
-
-
-def _worker_restart_response() -> dict[str, Any]:
-    return {
-        "requested": True,
-        "timeout": 12.5,
-        "message": "Worker restart requested.",
-    }
-
-
 def _plugin_routing_response() -> dict[str, Any]:
     return {
         "metric_queues": {"smoke_table_metric": "interactive"},
         "allowed_queues": ["interactive", "batch"],
         "default_queue": "interactive",
-    }
-
-
-def _metric_queue_assignment_response() -> dict[str, Any]:
-    return {
-        "metric_name": "smoke_table_metric",
-        "queue": "batch",
-    }
-
-
-def _delete_metric_queue_response() -> dict[str, Any]:
-    return {
-        "deleted": True,
-        "metric_name": "smoke_table_metric",
     }
 
 
@@ -880,22 +799,12 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
     responses = [
         _met_zone_response(),
         _plugin_repo_list_response(),
-        _create_plugin_repo_response(),
-        _update_plugin_repo_response(),
-        _delete_plugin_repo_response(),
-        _sync_plugin_repo_response(),
-        _plugin_catalog_refresh_response(),
-        _worker_restart_response(),
         _plugin_routing_response(),
-        _metric_queue_assignment_response(),
-        _delete_metric_queue_response(),
     ]
     requests_seen: list[dict[str, Any]] = []
 
     def request(
-        method: str,
-        url: str,
-        **options: Unpack[_SyncRequestOptions],
+        method: str, url: str, **options: Unpack[_SyncRequestOptions]
     ) -> FakeSyncResponse:
         requests_seen.append(
             {
@@ -910,34 +819,13 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
         return FakeSyncResponse(payload=responses.pop(0))
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
-    client = LyraClient(
-        "example.test/",
-        secure=False,
-        timeout=12.0,
-    )
+    client = LyraClient("example.test/", secure=False, timeout=12.0)
     admin = LyraAdminClient(
-        "example.test/",
-        secure=False,
-        timeout=12.0,
-        admin_api_key="admin-secret",
+        "example.test/", secure=False, timeout=12.0, admin_api_key="admin-secret"
     )
-
     met_zone = client.lookups.met_zone_code("Valle de Mexico")
     repos = admin.plugin_repos.list()
-    created = admin.plugin_repos.create("dir:///plugins/smoke", repo_id="smoke")
-    updated = admin.plugin_repos.update(
-        "smoke",
-        source="dir:///plugins/smoke-updated",
-        enabled=False,
-    )
-    deleted = admin.plugin_repos.delete("smoke")
-    synced = admin.plugin_repos.sync("smoke")
-    refreshed = admin.catalog.refresh()
-    restarted = admin.workers.restart(timeout=12.5)
     routing = admin.routing.list()
-    assignment = admin.routing.set("smoke_table_metric", "batch")
-    routing_deleted = admin.routing.delete("smoke_table_metric")
-
     assert requests_seen == [
         {
             "method": "GET",
@@ -956,79 +844,8 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
             "headers": {"Authorization": "Bearer admin-secret"},
         },
         {
-            "method": "POST",
-            "url": "http://example.test/admin/plugin-repos",
-            "params": None,
-            "json": {
-                "source": "dir:///plugins/smoke",
-                "id": "smoke",
-                "enabled": True,
-            },
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "PATCH",
-            "url": "http://example.test/admin/plugin-repos/smoke",
-            "params": None,
-            "json": {
-                "source": "dir:///plugins/smoke-updated",
-                "enabled": False,
-            },
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "DELETE",
-            "url": "http://example.test/admin/plugin-repos/smoke",
-            "params": None,
-            "json": None,
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "POST",
-            "url": "http://example.test/admin/plugin-repos/smoke/sync",
-            "params": None,
-            "json": None,
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "POST",
-            "url": "http://example.test/admin/plugin-catalog/refresh",
-            "params": None,
-            "json": None,
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "POST",
-            "url": "http://example.test/admin/workers/restart",
-            "params": {"timeout": 12.5},
-            "json": None,
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
             "method": "GET",
             "url": "http://example.test/admin/plugin-routing",
-            "params": None,
-            "json": None,
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "PUT",
-            "url": "http://example.test/admin/plugin-routing/smoke_table_metric",
-            "params": None,
-            "json": {"queue": "batch"},
-            "timeout": 12.0,
-            "headers": {"Authorization": "Bearer admin-secret"},
-        },
-        {
-            "method": "DELETE",
-            "url": "http://example.test/admin/plugin-routing/smoke_table_metric",
             "params": None,
             "json": None,
             "timeout": 12.0,
@@ -1037,16 +854,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
     ]
     assert met_zone.cve_met == "0901"
     assert repos.repos[0].source == "dir:///plugins/smoke"
-    assert created.repo.id == "smoke"
-    assert updated.repo.enabled is False
-    assert deleted.deleted is True
-    assert synced.changed is True
-    assert synced.catalog_refresh.refreshed is True
-    assert refreshed.workers_restart_recommended is True
-    assert restarted.timeout == pytest.approx(12.5)
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
-    assert assignment.queue == "batch"
-    assert routing_deleted.deleted is True
 
 
 def test_sync_client_reports_operator_route_errors(
@@ -1063,9 +871,9 @@ def test_sync_client_reports_operator_route_errors(
 
     with pytest.raises(
         DownloadError,
-        match=r"Failed to sync plugin repo\. HTTP 409: plugin disabled",
+        match=r"Failed to list plugin repos\. HTTP 409: plugin disabled",
     ):
-        LyraAdminClient("example.test", secure=False).plugin_repos.sync("smoke")
+        LyraAdminClient("example.test", secure=False).plugin_repos.list()
 
 
 def test_sync_client_returns_grouped_data_type_schemas(
@@ -1669,6 +1477,7 @@ def test_async_client_exposes_structured_database_unavailability(
 def test_async_client_uses_lookup_plugin_and_routing_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+
     class RecordingSession(FakeSession):
         requests_seen: ClassVar[list[dict[str, Any]]] = []
 
@@ -1679,66 +1488,24 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
     RecordingSession.responses = [
         FakeAsyncResponse(payload=_met_zone_response()),
         FakeAsyncResponse(payload=_plugin_repo_list_response()),
-        FakeAsyncResponse(payload=_create_plugin_repo_response()),
-        FakeAsyncResponse(payload=_update_plugin_repo_response()),
-        FakeAsyncResponse(payload=_delete_plugin_repo_response()),
-        FakeAsyncResponse(payload=_sync_plugin_repo_response()),
-        FakeAsyncResponse(payload=_plugin_catalog_refresh_response()),
-        FakeAsyncResponse(payload=_worker_restart_response()),
         FakeAsyncResponse(payload=_plugin_routing_response()),
-        FakeAsyncResponse(payload=_metric_queue_assignment_response()),
-        FakeAsyncResponse(payload=_delete_metric_queue_response()),
     ]
     monkeypatch.setattr(
-        "lyra.api.client.async_.aiohttp.ClientSession",
-        RecordingSession,
+        "lyra.api.client.async_.aiohttp.ClientSession", RecordingSession
     )
-    client = AsyncLyraClient(
-        "example.test/",
-        secure=False,
-    )
+    client = AsyncLyraClient("example.test/", secure=False)
     admin = AsyncLyraAdminClient(
-        "example.test/",
-        secure=False,
-        admin_api_key="admin-secret",
+        "example.test/", secure=False, admin_api_key="admin-secret"
     )
 
     async def run_requests() -> tuple[Any, ...]:
         return (
             await client.lookups.met_zone_code("Valle de Mexico"),
             await admin.plugin_repos.list(),
-            await admin.plugin_repos.create(
-                "dir:///plugins/smoke",
-                repo_id="smoke",
-            ),
-            await admin.plugin_repos.update(
-                "smoke",
-                source="dir:///plugins/smoke-updated",
-                enabled=False,
-            ),
-            await admin.plugin_repos.delete("smoke"),
-            await admin.plugin_repos.sync("smoke"),
-            await admin.catalog.refresh(),
-            await admin.workers.restart(timeout=12.5),
             await admin.routing.list(),
-            await admin.routing.set("smoke_table_metric", "batch"),
-            await admin.routing.delete("smoke_table_metric"),
         )
 
-    (
-        met_zone,
-        repos,
-        created,
-        updated,
-        deleted,
-        synced,
-        refreshed,
-        restarted,
-        routing,
-        assignment,
-        routing_deleted,
-    ) = asyncio.run(run_requests())
-
+    met_zone, repos, routing = asyncio.run(run_requests())
     assert RecordingSession.requests_seen == [
         {
             "args": ("GET", "http://example.test/lookups/met-zones"),
@@ -1757,84 +1524,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
             },
         },
         {
-            "args": ("POST", "http://example.test/admin/plugin-repos"),
-            "kwargs": {
-                "params": None,
-                "json": {
-                    "source": "dir:///plugins/smoke",
-                    "id": "smoke",
-                    "enabled": True,
-                },
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": ("PATCH", "http://example.test/admin/plugin-repos/smoke"),
-            "kwargs": {
-                "params": None,
-                "json": {
-                    "source": "dir:///plugins/smoke-updated",
-                    "enabled": False,
-                },
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": ("DELETE", "http://example.test/admin/plugin-repos/smoke"),
-            "kwargs": {
-                "params": None,
-                "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": ("POST", "http://example.test/admin/plugin-repos/smoke/sync"),
-            "kwargs": {
-                "params": None,
-                "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": ("POST", "http://example.test/admin/plugin-catalog/refresh"),
-            "kwargs": {
-                "params": None,
-                "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": ("POST", "http://example.test/admin/workers/restart"),
-            "kwargs": {
-                "params": {"timeout": 12.5},
-                "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
             "args": ("GET", "http://example.test/admin/plugin-routing"),
-            "kwargs": {
-                "params": None,
-                "json": None,
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": (
-                "PUT",
-                "http://example.test/admin/plugin-routing/smoke_table_metric",
-            ),
-            "kwargs": {
-                "params": None,
-                "json": {"queue": "batch"},
-                "headers": {"Authorization": "Bearer admin-secret"},
-            },
-        },
-        {
-            "args": (
-                "DELETE",
-                "http://example.test/admin/plugin-routing/smoke_table_metric",
-            ),
             "kwargs": {
                 "params": None,
                 "json": None,
@@ -1844,16 +1534,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
     ]
     assert met_zone.cve_met == "0901"
     assert repos.repos[0].source == "dir:///plugins/smoke"
-    assert created.repo.id == "smoke"
-    assert updated.repo.enabled is False
-    assert deleted.deleted is True
-    assert synced.changed is True
-    assert synced.catalog_refresh.refreshed is True
-    assert refreshed.workers_restart_recommended is True
-    assert restarted.timeout == pytest.approx(12.5)
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
-    assert assignment.queue == "batch"
-    assert routing_deleted.deleted is True
 
 
 def test_async_client_reports_operator_route_errors(
@@ -1872,12 +1553,10 @@ def test_async_client_reports_operator_route_errors(
 
     with pytest.raises(
         DownloadError,
-        match=r"Failed to sync plugin repo\. HTTP 409: plugin disabled",
+        match=r"Failed to list plugin repos\. HTTP 409: plugin disabled",
     ):
         asyncio.run(
-            AsyncLyraAdminClient("example.test", secure=False).plugin_repos.sync(
-                "smoke"
-            )
+            AsyncLyraAdminClient("example.test", secure=False).plugin_repos.list()
         )
 
 

@@ -65,7 +65,6 @@ COPY lyra_app ./lyra_app
 RUN mkdir -p \
         /lyra_data/config \
         /lyra_data/secrets \
-        /lyra_data/state \
         /lyra_data/cache/jobs \
         /lyra_data/plugins/catalog \
         /lyra_data/plugins/runners \

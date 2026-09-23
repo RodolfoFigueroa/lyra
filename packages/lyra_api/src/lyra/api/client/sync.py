@@ -33,11 +33,7 @@ from lyra.sdk.models import (
     CancelledJobResult,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
-    CreatePluginRepoRequest,
-    CreatePluginRepoResponse,
     DataTypesResponse,
-    DeleteMetricQueueResponse,
-    DeletePluginRepoResponse,
     FailedJobResult,
     FileJobResult,
     JobCancelResponse,
@@ -50,22 +46,15 @@ from lyra.sdk.models import (
     JobProgressEvent,
     JobStatusInfo,
     LivenessResponse,
-    MetricQueueAssignmentResponse,
     MetZoneCodeResponse,
-    PluginCatalogRefreshResponse,
     PluginRepoListResponse,
     PluginRoutingResponse,
     QueuesResponse,
     ReadinessResponse,
     ResultDescriptor,
-    SetMetricQueueRequest,
-    SyncPluginRepoResponse,
     TableJobResult,
     TerminalJobResult,
-    UpdatePluginRepoRequest,
-    UpdatePluginRepoResponse,
     WorkerDetail,
-    WorkerRestartResponse,
     WorkersResponse,
     parse_job_result,
 )
@@ -232,7 +221,7 @@ def _validate_max_reconnect_attempts(max_reconnect_attempts: int) -> None:
 class JobHandle(Generic[_SuccessResultT]):
     """Observe a submitted job and retrieve its successful result synchronously.
 
-    Instances are returned by :meth:`LyraClient.raw.submit`; applications normally
+    Instances are returned by `LyraClient.raw.submit`; applications normally
     do not construct handles directly.
 
     Attributes:
@@ -590,103 +579,12 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
             error_context="list plugin repos",
         )
 
-    def create_plugin_repo(
-        self,
-        source: str,
-        *,
-        repo_id: str | None = None,
-        enabled: bool = True,
-    ) -> CreatePluginRepoResponse:
-        request = CreatePluginRepoRequest(
-            source=source,
-            id=repo_id,
-            enabled=enabled,
-        )
-        return self._request_model(
-            "POST",
-            "admin/plugin-repos",
-            CreatePluginRepoResponse,
-            error_context="create plugin repo",
-            json_body=request.model_dump(mode="json", exclude_none=True),
-        )
-
-    def update_plugin_repo(
-        self,
-        repo_id: str,
-        *,
-        source: str | None = None,
-        enabled: bool | None = None,
-    ) -> UpdatePluginRepoResponse:
-        request = UpdatePluginRepoRequest(source=source, enabled=enabled)
-        return self._request_model(
-            "PATCH",
-            f"admin/plugin-repos/{repo_id}",
-            UpdatePluginRepoResponse,
-            error_context="update plugin repo",
-            json_body=request.model_dump(mode="json", exclude_none=True),
-        )
-
-    def delete_plugin_repo(self, repo_id: str) -> DeletePluginRepoResponse:
-        return self._request_model(
-            "DELETE",
-            f"admin/plugin-repos/{repo_id}",
-            DeletePluginRepoResponse,
-            error_context="delete plugin repo",
-        )
-
-    def sync_plugin_repo(self, repo_id: str) -> SyncPluginRepoResponse:
-        return self._request_model(
-            "POST",
-            f"admin/plugin-repos/{repo_id}/sync",
-            SyncPluginRepoResponse,
-            error_context="sync plugin repo",
-        )
-
-    def refresh_plugin_catalog(self) -> PluginCatalogRefreshResponse:
-        return self._request_model(
-            "POST",
-            "admin/plugin-catalog/refresh",
-            PluginCatalogRefreshResponse,
-            error_context="refresh plugin catalog",
-        )
-
-    def restart_workers(self, *, timeout: float = 30.0) -> WorkerRestartResponse:
-        return self._request_model(
-            "POST",
-            "admin/workers/restart",
-            WorkerRestartResponse,
-            error_context="restart workers",
-            params={"timeout": timeout},
-        )
-
     def list_plugin_routing(self) -> PluginRoutingResponse:
         return self._request_model(
             "GET",
             "admin/plugin-routing",
             PluginRoutingResponse,
             error_context="list plugin routing",
-        )
-
-    def set_plugin_routing(
-        self,
-        metric_name: str,
-        queue: str,
-    ) -> MetricQueueAssignmentResponse:
-        request = SetMetricQueueRequest(queue=queue)
-        return self._request_model(
-            "PUT",
-            f"admin/plugin-routing/{metric_name}",
-            MetricQueueAssignmentResponse,
-            error_context="set plugin routing",
-            json_body=request.model_dump(mode="json"),
-        )
-
-    def delete_plugin_routing(self, metric_name: str) -> DeleteMetricQueueResponse:
-        return self._request_model(
-            "DELETE",
-            f"admin/plugin-routing/{metric_name}",
-            DeleteMetricQueueResponse,
-            error_context="delete plugin routing",
         )
 
     def get_admin_status(self) -> AdminStatusResponse:
@@ -1204,38 +1102,6 @@ class _AdminPluginReposResource:
     def list(self) -> PluginRepoListResponse:
         return self._transport.list_plugin_repos()
 
-    def create(
-        self,
-        source: str,
-        *,
-        repo_id: str | None = None,
-        enabled: bool = True,
-    ) -> CreatePluginRepoResponse:
-        return self._transport.create_plugin_repo(
-            source,
-            repo_id=repo_id,
-            enabled=enabled,
-        )
-
-    def update(
-        self,
-        repo_id: str,
-        *,
-        source: str | None = None,
-        enabled: bool | None = None,
-    ) -> UpdatePluginRepoResponse:
-        return self._transport.update_plugin_repo(
-            repo_id,
-            source=source,
-            enabled=enabled,
-        )
-
-    def delete(self, repo_id: str) -> DeletePluginRepoResponse:
-        return self._transport.delete_plugin_repo(repo_id)
-
-    def sync(self, repo_id: str) -> SyncPluginRepoResponse:
-        return self._transport.sync_plugin_repo(repo_id)
-
 
 class _AdminCatalogResource:
     def __init__(self, transport: _SyncTransport) -> None:
@@ -1243,13 +1109,6 @@ class _AdminCatalogResource:
 
     def summary(self) -> CatalogSummaryResponse:
         return self._transport.get_admin_catalog()
-
-    def refresh(self) -> PluginCatalogRefreshResponse:
-        return self._transport.refresh_plugin_catalog()
-
-
-class _WorkerRestartOptions(TypedDict):
-    timeout: NotRequired[float]
 
 
 class _AdminWorkersResource:
@@ -1261,12 +1120,6 @@ class _AdminWorkersResource:
 
     def get(self, name: str) -> WorkerDetail:
         return self._transport.get_admin_worker(name)
-
-    def restart(
-        self,
-        **options: Unpack[_WorkerRestartOptions],
-    ) -> WorkerRestartResponse:
-        return self._transport.restart_workers(timeout=options.get("timeout", 30.0))
 
 
 class _AdminQueuesResource:
@@ -1283,12 +1136,6 @@ class _AdminRoutingResource:
 
     def list(self) -> PluginRoutingResponse:
         return self._transport.list_plugin_routing()
-
-    def set(self, metric: str, queue: str) -> MetricQueueAssignmentResponse:
-        return self._transport.set_plugin_routing(metric, queue)
-
-    def delete(self, metric: str) -> DeleteMetricQueueResponse:
-        return self._transport.delete_plugin_routing(metric)
 
 
 class LyraClient:
@@ -1356,7 +1203,7 @@ class LyraClient:
 class LyraAdminClient:
     """Access Lyra's administrator API with synchronous requests.
 
-    Administrator credentials are intentionally isolated from :class:`LyraClient`.
+    Administrator credentials are intentionally isolated from `LyraClient`.
     This client exposes operational state and mutation endpoints, plus the public
     health checks, but does not expose consumer metric execution.
 

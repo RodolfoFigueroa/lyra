@@ -9,9 +9,10 @@ from lyra.sdk.models import JobEnvelope, TableJobResult, expand_table_output_col
 from lyra.sdk.models.plugin_v4 import TableOutputV4
 
 from lyra_app import registry
-from lyra_app.config import clear_config_cache, get_config
+from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
-from tests.config_helpers import load_test_config, plugin_state_store
+from tests.catalog_helpers import configure_catalog_sources, restart_catalog
+from tests.config_helpers import load_test_config
 from tests.redis_job_scripts import eval_job_script
 
 if TYPE_CHECKING:
@@ -173,14 +174,9 @@ class FakeRedisSync:
 
 
 @pytest.fixture(autouse=True)
-def reset_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def reset_catalog(tmp_path: Path) -> Iterator[None]:
     registry.reset_catalog()
     load_test_config(tmp_path, metric_queues={"light_metric": "lightweight"})
-    monkeypatch.setattr(
-        registry,
-        "PluginStateStore",
-        lambda *_args, **_kwargs: plugin_state_store(tmp_path, get_config()),
-    )
     yield
     registry.reset_catalog()
     clear_config_cache()
@@ -206,17 +202,12 @@ def _decode_stored_result(
 
 def test_catalog_refresh_preserves_batched_column_metadata(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _v4_batched_manifest())
-    monkeypatch.setattr(
-        registry,
-        "sync_catalog_state_repos",
-        lambda _config, _state: [_synced_repo(repo)],
-    )
+    configure_catalog_sources([_synced_repo(repo)])
 
-    registry.refresh_catalog()
+    restart_catalog()
     info = registry.get_metric_info("light_metric")
 
     assert info is not None

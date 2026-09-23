@@ -343,10 +343,10 @@ async def submit_job(
     if job_id_factory is None:
         job_id_factory = _new_job_id
 
-    await _ensure_redis_available(client)
     entry = get_metric_entry(request.metric)
     if entry is None:
         raise UnknownMetricError(request.metric)
+    await _ensure_redis_available(client)
 
     validated_input = validate_metric_entry_payload(entry, request.input)
     job_id = job_id_factory()

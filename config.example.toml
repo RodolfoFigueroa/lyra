@@ -1,9 +1,9 @@
 # Copy this file to /lyra_data/config/lyra.toml and adjust values for your
-# deployment. PostgreSQL connection settings plus the separate admin and agent
-# API keys are supplied through environment variables, not this TOML file.
+# deployment. PostgreSQL passwords and the separate admin and agent API keys
+# are supplied through environment variables, not this TOML file.
 # LYRA_AGENT_API_KEY authenticates MCP and every /jobs lifecycle route.
 
-schema_version = 1
+schema_version = 2
 
 [api]
 host = "0.0.0.0"
@@ -23,6 +23,10 @@ forwarded_allow_ips = ["127.0.0.1"]
 url = "redis://lyra-redis-dev:6379/0"
 
 [database]
+host = "replace-with-reachable-postgis-host"
+port = 5432
+name = "lyra"
+user = "lyra"
 readiness_timeout_seconds = 1.0
 retry_after_seconds = 5
 
@@ -83,11 +87,17 @@ mount_path = "/mcp"
 [plugins]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
-# Applied only when /lyra_data/state/plugins.toml does not exist. IDs are
-# generated from each source and all initial repositories are enabled.
-# initial_repos = ["owner/plugin-repo@main"]
 # catalog_dir = "/lyra_data/plugins/catalog"
 # runner_base_dir = "/lyra_data/plugins/runners"
+# Declare repositories explicitly. Branches and tags are resolved on each startup.
+# For repeatable Git source versions, set ref to a full commit ID.
+# [[plugins.repos]]
+# id = "example"
+# source = "owner/plugin-repo"
+# ref = "main"
+# enabled = true
+# [plugins.repos.routing]
+# "expensive_metric" = "batch"
 
 [workers.interactive]
 queues = ["interactive"]

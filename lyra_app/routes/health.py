@@ -16,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from lyra_app.db.connection import ApplicationDatabaseRuntime
 from lyra_app.db.dependencies import DatabaseRuntimeDependency
 from lyra_app.db.redis import redis_client
+from lyra_app.registry import catalog_error, is_catalog_loaded
 from lyra_app.version import APP_VERSION
 
 router = APIRouter(tags=["Health"])
@@ -84,7 +85,7 @@ async def readiness(
         redis_health(timeout_seconds),
         database_health(database, timeout_seconds),
     )
-    is_ready = redis.status == "ok" and postgres.status == "ok"
+    is_ready = redis.status == "ok" and postgres.status == "ok" and is_catalog_loaded()
     response.status_code = (
         status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE
     )
@@ -94,6 +95,8 @@ async def readiness(
         api_version=APP_VERSION,
         redis=redis,
         database=postgres,
+        catalog_available=is_catalog_loaded(),
+        catalog_error=catalog_error(),
     )
 
 

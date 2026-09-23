@@ -11,6 +11,7 @@ from pathlib import Path
 
 from celery import Task
 from celery.signals import task_failure
+from filelock import FileLock
 from lyra.sdk.db import LyraDB
 from lyra.sdk.models import (
     CancelledJobResult,
@@ -48,17 +49,17 @@ from lyra_app.config import LyraConfig, get_config
 from lyra_app.db import connection as database_connection
 from lyra_app.db.client import LyraDBImplicit
 from lyra_app.db.connection import is_database_unavailable_error
-from lyra_app.plugin_state import (
-    PluginState,
-    PluginStateStore,
-    metric_queue_mapping,
-    repo_record_to_source,
+from lyra_app.plugin_runtime import (
+    copy_source,
+    read_snapshot,
+    snapshot_path,
+    source_hash,
 )
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
     SyncedPluginRepo,
     install_runner_plugins,
-    sync_plugin_repos,
+    parse_repo_entry,
 )
 from lyra_app.registry import load_plugin_manifest
 
@@ -263,21 +264,30 @@ def _validated_plugin_definition(
     return definition
 
 
-def _runner_sync_repos(
-    worker_name: str,
-    config: LyraConfig,
-    state: PluginState,
-) -> list[SyncedPluginRepo]:
-    raw_entries = [repo_record_to_source(repo) for repo in state.repos if repo.enabled]
-    return sync_plugin_repos(
-        config.worker_install_dir(worker_name),
-        raw_entries,
-        raise_on_error=True,
-    )
-
-
-def _runner_queue_assignments(state: PluginState) -> dict[str, str]:
-    return metric_queue_mapping(state)
+def _runner_snapshot_repos(
+    worker_name: str, config: LyraConfig
+) -> tuple[list[SyncedPluginRepo], dict[str, str]]:
+    repos: list[SyncedPluginRepo] = []
+    configured = {repo.id: repo for repo in config.plugins.repos}
+    with FileLock(f"{snapshot_path(config)}.lock"):
+        snapshot = read_snapshot(config)
+        for source in snapshot.sources:
+            if source_hash(source.path) != source.content_hash:
+                msg = (
+                    f"Prepared source {source.repo_id!r} no longer matches the "
+                    f"API snapshot."
+                )
+                raise RuntimeError(msg)
+            target = config.worker_install_dir(worker_name) / source.repo_id
+            copy_source(source.path, target)
+            repos.append(
+                SyncedPluginRepo(
+                    entry=parse_repo_entry(configured[source.repo_id].source),
+                    path=target,
+                    changed=True,
+                )
+            )
+    return repos, snapshot.metric_queues
 
 
 def _runner_queues(worker_name: str, config: LyraConfig) -> set[str]:
@@ -292,8 +302,8 @@ def _resolve_metric_queue(
         return metric_queues[metric.name]
     except KeyError as exc:
         msg = (
-            f"Metric {metric.name!r} has no queue assignment. Run API catalog "
-            "refresh before starting workers."
+            f"Metric {metric.name!r} has no queue assignment. Restart the API "
+            "before starting workers."
         )
         raise RuntimeError(msg) from exc
 
@@ -302,7 +312,6 @@ def load_runner_metric_entries(
     worker_name: str,
     *,
     config: LyraConfig | None = None,
-    store: PluginStateStore | None = None,
 ) -> dict[str, RunnerMetricEntry]:
     """Load executable metric entries assigned to one worker pool.
 
@@ -315,13 +324,9 @@ def load_runner_metric_entries(
     if config is None:
         config = get_config()
 
-    state_store = store or PluginStateStore(
-        allowed_queues=config.plugins.allowed_queues,
-    )
-    state = state_store.load()
     queues = _runner_queues(worker_name, config)
-    metric_queues = _runner_queue_assignments(state)
-    repos = install_runner_plugins(_runner_sync_repos(worker_name, config, state))
+    captured, metric_queues = _runner_snapshot_repos(worker_name, config)
+    repos = install_runner_plugins(captured)
     entries: dict[str, RunnerMetricEntry] = {}
 
     for repo in repos:
@@ -352,7 +357,6 @@ def refresh_runner_registry(
     worker_name: str,
     *,
     config: LyraConfig | None = None,
-    store: PluginStateStore | None = None,
 ) -> dict[str, RunnerMetricEntry]:
     """Replace the process runner registry for one configured worker pool.
 
@@ -364,7 +368,7 @@ def refresh_runner_registry(
     if config is None:
         config = get_config()
 
-    registry = load_runner_metric_entries(worker_name, config=config, store=store)
+    registry = load_runner_metric_entries(worker_name, config=config)
     RUNNER_REGISTRY.clear()
     RUNNER_REGISTRY.update(registry)
     _RUNNER_TEMP_BASE = config.worker_temp_dir(worker_name)

@@ -319,12 +319,6 @@ def ensure_catalog_loaded() -> None:
         )
 
 
-def get_catalog_fingerprint() -> str:
-    """Return the internal fingerprint after ensuring the catalog is loaded."""
-    ensure_catalog_loaded()
-    return _catalog.fingerprint or _empty_catalog_fingerprint()
-
-
 def get_loaded_catalog_fingerprint() -> str:
     """Return the current internal fingerprint without loading the catalog."""
     return _catalog.fingerprint or _empty_catalog_fingerprint()

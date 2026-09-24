@@ -235,31 +235,6 @@ def load_bounds_from_met_zone_code(
     )
 
 
-def get_met_zone_code_from_name(
-    name: str,
-    *,
-    conn: Connection,
-) -> tuple[str, str] | None:
-    """Return (cve_met, nom_met) for the closest matching metropolitan zone name.
-
-    Uses PostgreSQL trigram similarity (pg_trgm extension required).
-    Returns None if no zone exceeds the similarity threshold.
-
-    Args:
-        name: The (possibly misspelled) metropolitan zone name to search for.
-        conn: Active SQLAlchemy database connection.
-
-    Returns:
-        A tuple of (cve_met, nom_met) for the best match, or None.
-
-    """
-    result = conn.execute(_MET_ZONE_LOOKUP_QUERY, {"name": name})
-    row = result.fetchone()
-    if row is None:
-        return None
-    return row.cve_met, row.nom_met
-
-
 async def get_met_zone_code_from_name_async(
     name: str,
     *,

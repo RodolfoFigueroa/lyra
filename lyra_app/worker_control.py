@@ -1,4 +1,4 @@
-"""Administrative controls for inspecting and restarting workers."""
+"""Worker inspection, failure reconciliation, and job revocation."""
 
 import asyncio
 import logging
@@ -18,14 +18,10 @@ from lyra_app.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-_INTERRUPTED_TASK_MESSAGE = (
-    "This task was interrupted because plugins were updated. Please retry."
-)
 _UNEXPECTED_TASK_FAILURE_MESSAGE = (
     "Worker execution ended unexpectedly before Lyra could persist a result."
 )
 DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS = 0.5
-WORKER_INSPECT_CACHE_TTL_SECONDS = 1.0
 WORKER_INSPECT_SNAPSHOT_REFRESH_INTERVAL_SECONDS = 2.0
 WORKER_INSPECT_SNAPSHOT_STALE_AFTER_SECONDS = 10.0
 
@@ -69,23 +65,15 @@ class WorkerInspectState:
 
 
 @dataclass
-class _WorkerInspectCache:
-    snapshot: WorkerInspectSnapshot | None = None
-    observed_at: float | None = None
-
-
-@dataclass
 class _WorkerInspectCollectorState:
     snapshot: WorkerInspectSnapshot | None = None
     observed_at: datetime | None = None
     observed_at_monotonic: float | None = None
-    last_attempt_at: datetime | None = None
     last_error: str | None = None
     task: asyncio.Task[None] | None = None
     stop_event: asyncio.Event | None = None
 
 
-_WORKER_INSPECT_CACHE = _WorkerInspectCache()
 _WORKER_INSPECT_COLLECTOR = _WorkerInspectCollectorState()
 _WORKER_INSPECT_COLLECTOR_LOCK = Lock()
 
@@ -179,43 +167,12 @@ def inspect_workers() -> WorkerInspectSnapshot:
     )
 
 
-def clear_worker_inspect_snapshot_cache() -> None:
-    """Clear the short-lived synchronous worker inspection cache."""
-    _WORKER_INSPECT_CACHE.snapshot = None
-    _WORKER_INSPECT_CACHE.observed_at = None
-
-
-def get_worker_inspect_snapshot(
-    *,
-    force_refresh: bool = False,
-) -> WorkerInspectSnapshot:
-    """Return a fresh or briefly cached synchronous worker inspection snapshot.
-
-    Returns:
-        The cached snapshot when still current, otherwise a newly collected one.
-    """
-    now = time.monotonic()
-    if (
-        not force_refresh
-        and _WORKER_INSPECT_CACHE.snapshot is not None
-        and _WORKER_INSPECT_CACHE.observed_at is not None
-        and now - _WORKER_INSPECT_CACHE.observed_at < WORKER_INSPECT_CACHE_TTL_SECONDS
-    ):
-        return _WORKER_INSPECT_CACHE.snapshot
-
-    snapshot = inspect_workers()
-    _WORKER_INSPECT_CACHE.snapshot = snapshot
-    _WORKER_INSPECT_CACHE.observed_at = time.monotonic()
-    return snapshot
-
-
 def reset_worker_inspect_collector_state() -> None:
     """Clear background collector observations and error metadata."""
     with _WORKER_INSPECT_COLLECTOR_LOCK:
         _WORKER_INSPECT_COLLECTOR.snapshot = None
         _WORKER_INSPECT_COLLECTOR.observed_at = None
         _WORKER_INSPECT_COLLECTOR.observed_at_monotonic = None
-        _WORKER_INSPECT_COLLECTOR.last_attempt_at = None
         _WORKER_INSPECT_COLLECTOR.last_error = None
 
 
@@ -257,13 +214,11 @@ async def refresh_worker_inspect_snapshot() -> WorkerInspectState:
     Returns:
         The resulting state, retaining the previous snapshot if inspection fails.
     """
-    attempt_at = datetime.now(UTC)
     try:
         snapshot = await asyncio.to_thread(inspect_workers)
     except Exception as exc:  # pragma: no cover - transport setup varies
         logger.warning("Background worker inspect refresh failed.", exc_info=True)
         with _WORKER_INSPECT_COLLECTOR_LOCK:
-            _WORKER_INSPECT_COLLECTOR.last_attempt_at = attempt_at
             _WORKER_INSPECT_COLLECTOR.last_error = str(exc) or type(exc).__name__
         return get_worker_inspect_state()
 
@@ -272,7 +227,6 @@ async def refresh_worker_inspect_snapshot() -> WorkerInspectState:
         _WORKER_INSPECT_COLLECTOR.snapshot = snapshot
         _WORKER_INSPECT_COLLECTOR.observed_at = observed_at
         _WORKER_INSPECT_COLLECTOR.observed_at_monotonic = time.monotonic()
-        _WORKER_INSPECT_COLLECTOR.last_attempt_at = attempt_at
         _WORKER_INSPECT_COLLECTOR.last_error = None
     return get_worker_inspect_state()
 
@@ -354,21 +308,6 @@ def safe_task_summary(task: JsonObject, *, worker_name: str) -> JsonObject:
         ),
         "time_start": time_start if isinstance(time_start, int | float) else None,
     }
-
-
-def notify_interrupted_tasks(task_ids: list[str]) -> None:
-    """Persist terminal worker-interruption results for a collection of tasks."""
-    for task_id in task_ids:
-        job_store.save_job_result(
-            FailedJobResult(
-                job_id=task_id,
-                error={
-                    "type": "worker",
-                    "message": _INTERRUPTED_TASK_MESSAGE,
-                },
-            )
-        )
-        logger.info("Notified task %s of interruption.", task_id)
 
 
 def persist_unexpected_task_failure(task_id: str) -> bool:

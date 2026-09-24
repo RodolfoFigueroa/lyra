@@ -1,5 +1,4 @@
 import asyncio
-import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -142,42 +141,11 @@ def _worker_snapshot(worker_name: str) -> worker_control.WorkerInspectSnapshot:
 
 @pytest.fixture(autouse=True)
 def _load_config(tmp_path: Path) -> Iterator[None]:
-    worker_control.clear_worker_inspect_snapshot_cache()
     worker_control.reset_worker_inspect_collector_state()
     load_test_config(tmp_path)
     yield
     worker_control.reset_worker_inspect_collector_state()
-    worker_control.clear_worker_inspect_snapshot_cache()
     clear_config_cache()
-
-
-def test_notify_interrupted_tasks_persists_failed_job_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    redis = FakeRedisSync()
-    monkeypatch.setattr(worker_control.job_store, "redis_client_sync", redis)
-
-    worker_control.notify_interrupted_tasks(["job-1"])
-
-    result = json.loads(redis.values[job_store.result_key("job-1")])
-    status = json.loads(redis.values[job_store.status_key("job-1")])
-    events = redis.streams[job_store.events_key("job-1")]
-    assert result == {
-        "kind": "failed",
-        "job_id": "job-1",
-        "status": "failed",
-        "error": {
-            "type": "worker",
-            "message": (
-                "This task was interrupted because plugins were updated. Please retry."
-            ),
-        },
-    }
-    assert status["status"] == "failed"
-    assert [json.loads(fields["payload"])["status"] for _, fields in events] == [
-        "queued",
-        "failed",
-    ]
 
 
 def test_persist_unexpected_task_failure_uses_conditional_finalizer(
@@ -350,130 +318,6 @@ def test_inspect_workers_uses_explicit_short_timeout(
         {"timeout": worker_control.DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS}
     ]
     assert 0 < worker_control.DEFAULT_WORKER_INSPECT_TIMEOUT_SECONDS < 1.0
-
-
-def test_get_worker_inspect_snapshot_inspects_live_on_first_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected = _worker_snapshot("worker-1")
-    calls = 0
-
-    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
-        nonlocal calls
-        calls += 1
-        return expected
-
-    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
-
-    snapshot = worker_control.get_worker_inspect_snapshot()
-
-    assert snapshot is expected
-    assert calls == 1
-
-
-def test_get_worker_inspect_snapshot_reuses_snapshot_within_ttl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = FakeClock()
-    snapshots = [_worker_snapshot("worker-1"), _worker_snapshot("worker-2")]
-    calls = 0
-
-    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
-        nonlocal calls
-        snapshot = snapshots[calls]
-        calls += 1
-        return snapshot
-
-    monkeypatch.setattr(worker_control.time, "monotonic", clock.monotonic)
-    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
-
-    first = worker_control.get_worker_inspect_snapshot()
-    second = worker_control.get_worker_inspect_snapshot()
-
-    assert first is snapshots[0]
-    assert second is first
-    assert calls == 1
-
-
-def test_get_worker_inspect_snapshot_refreshes_after_ttl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = FakeClock()
-    snapshots = [_worker_snapshot("worker-1"), _worker_snapshot("worker-2")]
-    calls = 0
-
-    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
-        nonlocal calls
-        snapshot = snapshots[calls]
-        calls += 1
-        return snapshot
-
-    monkeypatch.setattr(worker_control.time, "monotonic", clock.monotonic)
-    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
-
-    first = worker_control.get_worker_inspect_snapshot()
-    clock.now += worker_control.WORKER_INSPECT_CACHE_TTL_SECONDS + 0.01
-    second = worker_control.get_worker_inspect_snapshot()
-
-    assert first is snapshots[0]
-    assert second is snapshots[1]
-    assert calls == 2
-
-
-def test_get_worker_inspect_snapshot_force_refresh_bypasses_cache(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = FakeClock()
-    snapshots = [_worker_snapshot("worker-1"), _worker_snapshot("worker-2")]
-    calls = 0
-
-    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
-        nonlocal calls
-        snapshot = snapshots[calls]
-        calls += 1
-        return snapshot
-
-    monkeypatch.setattr(worker_control.time, "monotonic", clock.monotonic)
-    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
-
-    first = worker_control.get_worker_inspect_snapshot()
-    second = worker_control.get_worker_inspect_snapshot(force_refresh=True)
-
-    assert first is snapshots[0]
-    assert second is snapshots[1]
-    assert calls == 2
-
-
-def test_get_worker_inspect_snapshot_caches_unknown_state_briefly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = FakeClock()
-    unknown = worker_control.WorkerInspectSnapshot(
-        inspect_available=False,
-        active=None,
-        reserved=None,
-        scheduled=None,
-        stats=None,
-        active_queues=None,
-    )
-    snapshots = [unknown, _worker_snapshot("worker-1")]
-    calls = 0
-
-    def inspect_workers() -> worker_control.WorkerInspectSnapshot:
-        nonlocal calls
-        snapshot = snapshots[calls]
-        calls += 1
-        return snapshot
-
-    monkeypatch.setattr(worker_control.time, "monotonic", clock.monotonic)
-    monkeypatch.setattr(worker_control, "inspect_workers", inspect_workers)
-
-    first = worker_control.get_worker_inspect_snapshot()
-    second = worker_control.get_worker_inspect_snapshot()
-
-    assert first is unknown
-    assert second is unknown
-    assert calls == 1
 
 
 def test_get_worker_inspect_state_returns_unknown_before_background_refresh(

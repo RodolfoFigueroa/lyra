@@ -1579,11 +1579,8 @@ dependencies = [
     { name = "earthengine-api" },
     { name = "geopandas" },
     { name = "lyra-sdk" },
-    { name = "networkx" },
-    { name = "osmnx" },
     { name = "pandas" },
     { name = "shapely" },
-    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
@@ -1591,11 +1588,8 @@ requires-dist = [
     { name = "earthengine-api", specifier = ">=1.7.26" },
     { name = "geopandas", specifier = ">=1.1.3" },
     { name = "lyra-sdk", editable = "packages/lyra_sdk" },
-    { name = "networkx", specifier = ">=3.6.1" },
-    { name = "osmnx", specifier = ">=2.1.0" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "shapely", specifier = ">=2.1.2" },
-    { name = "sqlalchemy", specifier = ">=2.0.49" },
 ]
 
 [[package]]
@@ -1762,15 +1756,6 @@ wheels = [
 ]
 
 [[package]]
-name = "networkx"
-version = "3.6.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
-]
-
-[[package]]
 name = "nodeenv"
 version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1917,24 +1902,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/94/a8/f98e50356cf167df656c526c2dfeec2d7dde182f2a3da4b458a5938e2776/numpy-2.5.1-cp314-cp314t-win32.whl", hash = "sha256:6eab239876581b2b3c5a242281b6007bbdbcd1c7085d7709bb57c5929b11e6bf", size = 6263298, upload-time = "2026-07-04T17:07:53.445Z" },
     { url = "https://files.pythonhosted.org/packages/72/ac/96ae880cdecad0b3275d9359fcec72667b49a4863c9f12942e43679dda02/numpy-2.5.1-cp314-cp314t-win_amd64.whl", hash = "sha256:83ce9c80d5b521b0d77ddcbe5447c218d247929b6cc056ca5351342accfff0af", size = 12748623, upload-time = "2026-07-04T17:07:55.384Z" },
     { url = "https://files.pythonhosted.org/packages/a1/5a/4d2b1601df3602dba7a14f3348ba9bfe94a18adb428e693df6154c293831/numpy-2.5.1-cp314-cp314t-win_arm64.whl", hash = "sha256:5a6db61f9aaa57e369905c67d852045d3c4f7126405b29d09b19dec118e9c9cb", size = 10697674, upload-time = "2026-07-04T17:07:58.506Z" },
-]
-
-[[package]]
-name = "osmnx"
-version = "2.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "geopandas" },
-    { name = "networkx" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pandas" },
-    { name = "requests" },
-    { name = "shapely" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/6d/42279fb31b09f0532ec4de90604ee8078adad66b89865887cdf014f651f1/osmnx-2.1.1.tar.gz", hash = "sha256:0785166487d4d8da5a551dac3d1562fe114fb39f3bf66f261c8b4d60baee9295", size = 90368, upload-time = "2026-07-21T19:24:06.779Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/08/450c5c707493cf3a1da91050cf6b9b92e5279676f28e85d85b81d9e46f85/osmnx-2.1.1-py3-none-any.whl", hash = "sha256:6680c98312a8c327dea01da8ec59328bf1d7b0e0cab42db6ce500d0cb83b87e5", size = 104711, upload-time = "2026-07-21T19:24:05.274Z" },
 ]
 
 [[package]]

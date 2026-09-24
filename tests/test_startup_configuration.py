@@ -166,11 +166,40 @@ def test_failure_invalidates_previous_snapshot_and_never_retries_on_reads(
     def unexpected_fetch(*_: object) -> None:
         pytest.fail("Catalog reads must never fetch sources")
 
-    monkeypatch.setattr(registry, "prepare_configured_repo", unexpected_fetch)
+    monkeypatch.setattr(registry, "capture_plugin_source", unexpected_fetch)
     with pytest.raises(registry.CatalogUnavailableError):
         registry.get_metric_catalog()
     assert admin.get_catalog().catalog_available is False
     assert admin.get_catalog().catalog_error
+
+
+def test_capture_failure_invalidates_readiness_and_cleans_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = get_config()
+    source = tmp_path / "source"
+    shutil.copytree(SMOKE_PLUGIN_DIR, source)
+    config.plugins.repos = [PluginRepoConfig(id="smoke", source=f"dir://{source}")]
+    registry.initialize_catalog()
+    assert read_snapshot(config).status == "ready"
+    (source / "broken").symlink_to("missing")
+
+    registry.initialize_catalog()
+
+    assert not registry.is_catalog_loaded()
+    assert registry.TASK_REGISTRY == {}
+    assert json.loads(snapshot_path(config).read_text())["status"] == "failed"
+    assert not list(config.plugins.catalog_dir.glob(".startup-*"))
+    with pytest.raises(RuntimeError, match="not ready"):
+        read_snapshot(config)
+
+    def unexpected_capture(*_: object) -> None:
+        pytest.fail("Catalog reads must not retry a failed source capture")
+
+    monkeypatch.setattr(registry, "capture_plugin_source", unexpected_capture)
+    with pytest.raises(registry.CatalogUnavailableError):
+        registry.get_metric_catalog()
 
 
 def test_workers_reject_missing_malformed_and_mismatched_snapshots() -> None:
@@ -264,10 +293,9 @@ def test_removed_mutation_routes_and_client_methods() -> None:
 
 
 def test_install_failure_is_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = plugins.SyncedPluginRepo(
-        entry=plugins.parse_repo_entry(smoke_plugin_uri()),
+    repo = plugins.PluginLocation(
+        repo_id="smoke",
         path=SMOKE_PLUGIN_DIR,
-        changed=False,
     )
     monkeypatch.setattr(plugins, "_check_compatible", lambda _: False)
     with pytest.raises(RuntimeError, match="incompatible"):

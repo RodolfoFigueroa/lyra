@@ -30,8 +30,27 @@ Before publishing:
 | `dir:///absolute/directory` | Copy a development snapshot, including uncommitted files. |
 
 Raw filesystem paths are rejected. `file://` sources support Git refs; `dir://`
-sources do not. Mount local sources in the API container. Workers install copies
-of the shared startup snapshot, even if the original source subsequently changes.
+sources do not. Specify branches, tags, and commits in `ref`, never as an
+`owner/repo@ref` suffix. GitHub forms may include a trailing `.git`; configuration
+normalizes them to `owner/repo`.
+
+Local URIs accept an empty host or `localhost`, which is normalized to an empty
+host. Spaces and other special filename characters are percent-encoded in the
+normalized URI. `@` is allowed in local filenames and never denotes a revision.
+Queries and fragments are rejected; encode literal `?` and `#` filename characters
+as `%3F` and `%23`. Configuration validation checks syntax without accessing local
+paths or Git. Mount local sources in the API container.
+
+Each API startup captures enabled sources into fresh staging directories. Git
+sources capture the selected commit; directory sources copy current files while
+excluding Git metadata, Python caches, virtual environments, and build artifacts.
+Symlink contents are materialized in the captured tree; broken links fail startup.
+The catalog becomes ready only after all sources and routing have been validated.
+There is no incremental synchronization or refresh on catalog reads.
+
+Workers verify the captured content hash and install private copies of that
+snapshot, even if the original source subsequently changes. Restart the API and
+workers together to capture source updates.
 
 ## Connect and route
 

@@ -9,7 +9,7 @@ from fastapi import HTTPException, Response
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache
-from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from lyra_app.routes import metrics
 from tests.catalog_helpers import configure_catalog_sources
 from tests.config_helpers import load_test_config
@@ -72,17 +72,6 @@ def _batched_manifest() -> dict[str, Any]:
     return manifest
 
 
-def _synced_repo(repo: Path) -> SyncedPluginRepo:
-    entry = PluginRepoEntry(
-        raw="owner/repo",
-        clone_url="https://github.com/owner/repo.git",
-        owner="owner",
-        repo="repo",
-        ref=None,
-    )
-    return SyncedPluginRepo(entry=entry, path=repo, changed=False)
-
-
 @pytest.fixture(autouse=True)
 def reset_catalog(tmp_path: Path) -> Iterator[None]:
     registry.reset_catalog()
@@ -93,7 +82,7 @@ def reset_catalog(tmp_path: Path) -> Iterator[None]:
 
 
 def _use_repo(repo: Path, _monkeypatch: pytest.MonkeyPatch) -> None:
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
 
 def test_metrics_route_returns_empty_catalog() -> None:

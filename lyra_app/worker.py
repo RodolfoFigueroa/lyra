@@ -57,9 +57,8 @@ from lyra_app.plugin_runtime import (
 )
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
-    SyncedPluginRepo,
+    PluginLocation,
     install_runner_plugins,
-    parse_repo_entry,
 )
 from lyra_app.registry import load_plugin_manifest
 
@@ -266,9 +265,8 @@ def _validated_plugin_definition(
 
 def _runner_snapshot_repos(
     worker_name: str, config: LyraConfig
-) -> tuple[list[SyncedPluginRepo], dict[str, str]]:
-    repos: list[SyncedPluginRepo] = []
-    configured = {repo.id: repo for repo in config.plugins.repos}
+) -> tuple[list[PluginLocation], dict[str, str]]:
+    repos: list[PluginLocation] = []
     with FileLock(f"{snapshot_path(config)}.lock"):
         snapshot = read_snapshot(config)
         for source in snapshot.sources:
@@ -281,10 +279,9 @@ def _runner_snapshot_repos(
             target = config.worker_install_dir(worker_name) / source.repo_id
             copy_source(source.path, target)
             repos.append(
-                SyncedPluginRepo(
-                    entry=parse_repo_entry(configured[source.repo_id].source),
+                PluginLocation(
+                    repo_id=source.repo_id,
                     path=target,
-                    changed=True,
                 )
             )
     return repos, snapshot.metric_queues
@@ -325,8 +322,8 @@ def load_runner_metric_entries(
         config = get_config()
 
     queues = _runner_queues(worker_name, config)
-    captured, metric_queues = _runner_snapshot_repos(worker_name, config)
-    repos = install_runner_plugins(captured)
+    repos, metric_queues = _runner_snapshot_repos(worker_name, config)
+    install_runner_plugins(repos)
     entries: dict[str, RunnerMetricEntry] = {}
 
     for repo in repos:

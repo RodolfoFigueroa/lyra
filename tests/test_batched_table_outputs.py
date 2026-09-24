@@ -10,7 +10,7 @@ from lyra.sdk.models.plugin_v4 import TableOutputV4, expand_table_output_columns
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache
-from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
 from tests.redis_job_scripts import eval_job_script
@@ -117,17 +117,6 @@ def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
     (repo / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def _synced_repo(repo: Path) -> SyncedPluginRepo:
-    entry = PluginRepoEntry(
-        raw="owner/repo",
-        clone_url="https://github.com/owner/repo.git",
-        owner="owner",
-        repo="repo",
-        ref=None,
-    )
-    return SyncedPluginRepo(entry=entry, path=repo, changed=False)
-
-
 class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
@@ -205,7 +194,7 @@ def test_catalog_refresh_preserves_batched_column_metadata(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _v4_batched_manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     restart_catalog()
     info = registry.get_metric_info("light_metric")

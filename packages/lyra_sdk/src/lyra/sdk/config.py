@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import re
 import tomllib
 from pathlib import Path
 from typing import Literal, Self
-from urllib.parse import unquote, urlparse, urlsplit
+from urllib.parse import urlparse, urlsplit
 
+from lyra.sdk.plugin_sources import PluginSource, PluginSourceKind, parse_plugin_source
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 LYRA_DATA_DIR = Path("/lyra_data")
@@ -496,7 +496,11 @@ class PluginRepoConfig(StrictConfigModel):
         description="Stable repository identifier.",
     )
     source: str = Field(
-        min_length=1, description="GitHub owner/repository, file URI, or directory URI."
+        min_length=1,
+        description=(
+            "GitHub owner/repository or HTTPS URL, absolute file:// Git repository, "
+            "or absolute dir:// directory. Revisions belong in ref."
+        ),
     )
     ref: str | None = Field(
         default=None,
@@ -512,13 +516,14 @@ class PluginRepoConfig(StrictConfigModel):
     )
 
     @property
-    def source_kind(self) -> Literal["github", "local", "directory"]:
+    def parsed_source(self) -> PluginSource:
+        """The source interpreted by the shared offline parser."""
+        return parse_plugin_source(self.source)
+
+    @property
+    def source_kind(self) -> PluginSourceKind:
         """The source transport inferred without accessing the source."""
-        if self.source.startswith("file://"):
-            return "local"
-        if self.source.startswith("dir://"):
-            return "directory"
-        return "github"
+        return self.parsed_source.kind
 
     @model_validator(mode="after")
     def validate_source(self) -> Self:
@@ -530,36 +535,14 @@ class PluginRepoConfig(StrictConfigModel):
         Raises:
             ValueError: If a source, revision, or routing value is invalid.
         """
-        if self.id != self.id.strip() or self.source != self.source.strip():
-            msg = "repository IDs and sources must not contain surrounding whitespace"
+        if self.id != self.id.strip():
+            msg = "repository IDs must not contain surrounding whitespace"
             raise ValueError(msg)
-        if self.source_kind == "github":
-            source = self.source.removeprefix("https://github.com/").removesuffix(
-                ".git"
-            )
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source):
-                msg = (
-                    "source must be owner/repository or an absolute file:// "
-                    "or dir:// URI; specify revisions in ref"
-                )
-                raise ValueError(msg)
-            self.source = source
-        else:
-            parsed = urlsplit(self.source)
-            if (
-                parsed.netloc not in {"", "localhost"}
-                or parsed.query
-                or parsed.fragment
-                or not Path(unquote(parsed.path)).is_absolute()
-            ):
-                msg = (
-                    "local plugin sources must use absolute file:// or dir:// "
-                    "paths without queries or fragments"
-                )
-                raise ValueError(msg)
-            if self.source_kind == "directory" and self.ref is not None:
-                msg = "directory sources cannot specify ref"
-                raise ValueError(msg)
+        source = self.parsed_source
+        self.source = source.canonical
+        if source.kind == "directory" and self.ref is not None:
+            msg = "directory sources cannot specify ref"
+            raise ValueError(msg)
         if self.ref is not None and (
             not self.ref.strip()
             or self.ref != self.ref.strip()

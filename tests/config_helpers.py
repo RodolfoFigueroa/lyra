@@ -13,7 +13,6 @@ from lyra_app.config import (
     clear_config_cache,
     get_config,
 )
-from lyra_app.plugins import parse_repo_entry
 from tests.config_serialization import save_config
 
 if TYPE_CHECKING:
@@ -89,20 +88,11 @@ def load_test_config(
     if metric_queues and not declarations:
         declarations = [DEFAULT_TEST_PLUGIN_REPO]
     records = []
-    for source in declarations:
-        entry = parse_repo_entry(source)
-        canonical = (
-            entry.clone_url
-            if entry.source_kind == "directory"
-            else entry.source_path.as_uri()
-            if entry.source_path is not None
-            else f"{entry.owner}/{entry.repo}"
-        )
+    for index, source in enumerate(declarations):
         records.append(
             PluginRepoConfig(
-                id=entry.target_name,
-                source=canonical,
-                ref=entry.ref,
+                id=f"repo-{index}",
+                source=source,
                 routing=metric_queues or {} if not records else {},
             )
         )

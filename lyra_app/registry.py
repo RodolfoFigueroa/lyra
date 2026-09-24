@@ -36,15 +36,13 @@ from lyra_app.plugin_runtime import (
     SourceSnapshot,
     StartupSnapshot,
     config_fingerprint,
-    copy_source,
     publish_snapshot,
     snapshot_path,
     source_hash,
 )
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
-    prepare_configured_repo,
-    resolved_git_ref,
+    capture_plugin_source,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,17 +197,11 @@ def _prepare_catalog(
     destination = config.plugins.catalog_dir / "sources"
     captured = temporary / "captured"
     captured.mkdir()
-    checkouts = temporary / "checkouts"
-    checkouts.mkdir()
     for repo in config.plugins.repos:
         if not repo.enabled:
             continue
-        synced = prepare_configured_repo(checkouts / repo.id, repo)
-        revision = (
-            resolved_git_ref(synced.path) if repo.source_kind != "directory" else None
-        )
         target = captured / repo.id
-        copy_source(synced.path, target)
+        revision = capture_plugin_source(repo, target)
         manifest = load_plugin_manifest(target)
         names = {metric.name for metric in manifest.metrics}
         unknown = set(repo.routing) - names

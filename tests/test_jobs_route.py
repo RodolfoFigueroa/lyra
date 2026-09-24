@@ -35,7 +35,7 @@ from lyra_app.converters import map as converter_map
 from lyra_app.db import connection
 from lyra_app.db.connection import ApplicationDatabaseRuntime
 from lyra_app.mcp.tools import InProcessLyraBackend, ToolCallError
-from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
@@ -115,17 +115,6 @@ def _batched_manifest() -> dict[str, Any]:
             }
         ],
     }
-
-
-def _synced_repo(repo: Path) -> SyncedPluginRepo:
-    entry = PluginRepoEntry(
-        raw="owner/repo",
-        clone_url="https://github.com/owner/repo.git",
-        owner="owner",
-        repo="repo",
-        ref=None,
-    )
-    return SyncedPluginRepo(entry=entry, path=repo, changed=False)
 
 
 def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
@@ -518,7 +507,7 @@ def _use_repo(
         json.dumps(manifest or _manifest()),
         encoding="utf-8",
     )
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
 

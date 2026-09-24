@@ -94,6 +94,8 @@ allowed_queues = ["interactive", "batch"]
 # [[plugins.repos]]
 # id = "example"
 # source = "owner/plugin-repo"
+# Also accepts GitHub HTTPS URLs, file:///absolute/git-repo, or
+# dir:///absolute/plugin-directory. Use ref only for Git sources, never @ref.
 # ref = "main"
 # enabled = true
 # [plugins.repos.routing]

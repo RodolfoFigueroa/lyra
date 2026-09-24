@@ -12,8 +12,7 @@ from lyra_app import registry
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.plugins import (
     MANIFEST_FILENAME,
-    PluginRepoEntry,
-    SyncedPluginRepo,
+    PluginLocation,
 )
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
@@ -77,24 +76,6 @@ def _write_manifest(repo: Path, manifest: dict[str, Any]) -> None:
     (repo / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def _synced_repo(
-    repo: Path,
-    *,
-    changed: bool = False,
-    raw: str = "owner/repo",
-    repo_name: str = "repo",
-    ref: str | None = None,
-) -> SyncedPluginRepo:
-    entry = PluginRepoEntry(
-        raw=raw,
-        clone_url=f"https://github.com/owner/{repo_name}.git",
-        owner="owner",
-        repo=repo_name,
-        ref=ref,
-    )
-    return SyncedPluginRepo(entry=entry, path=repo, changed=changed)
-
-
 @pytest.fixture(autouse=True)
 def reset_catalog(tmp_path: Path) -> Iterator[None]:
     registry.reset_catalog()
@@ -116,7 +97,7 @@ def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     def fail_import(name: str, package: str | None = None) -> object:  # ruff:ignore[unused-function-argument]
         msg = "API catalog loading must not import plugin code"
@@ -141,7 +122,7 @@ def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
     assert "GeoJSONLocation" in info_payload["request_schema"]["$defs"]
     assert entry is not None
     assert entry.queue == "lightweight"
-    assert entry.repo_id == "owner__repo"
+    assert entry.repo_id == "repo"
 
 
 def test_metric_search_text_is_derived_from_public_catalog_fields(
@@ -169,7 +150,7 @@ def test_metric_search_text_is_derived_from_public_catalog_fields(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
     search_text = registry.get_metric_search_text("light_metric")
@@ -263,7 +244,12 @@ def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
     second_repo = tmp_path / "repo-2"
     _write_manifest(first_repo, _manifest(plugin_name="plugin-a"))
     _write_manifest(second_repo, _manifest(plugin_name="plugin-b"))
-    configure_catalog_sources([_synced_repo(first_repo), _synced_repo(second_repo)])
+    configure_catalog_sources(
+        [
+            PluginLocation(repo_id="first", path=first_repo),
+            PluginLocation(repo_id="second", path=second_repo),
+        ]
+    )
 
     with pytest.raises(registry.CatalogUnavailableError):
         restart_catalog()
@@ -288,7 +274,7 @@ def test_catalog_refresh_reads_v4_file_metric(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     restart_catalog()
     info = registry.get_metric_info("raster_metric")
@@ -321,7 +307,7 @@ def test_catalog_refresh_rejects_invalid_request_json_schema(
         }
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     with pytest.raises(registry.CatalogUnavailableError):
         restart_catalog()
@@ -333,7 +319,7 @@ def test_catalog_fingerprint_changes_only_when_manifest_content_changes(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     first = restart_catalog()
     second = restart_catalog()
@@ -352,7 +338,7 @@ def test_public_catalog_fingerprint_changes_when_public_contract_changes(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     restart_catalog()
     first = registry.get_public_catalog_fingerprint()
@@ -370,7 +356,7 @@ def test_factory_change_only_updates_internal_catalog_fingerprint(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     first = restart_catalog()
     public_fingerprint = registry.get_public_catalog_fingerprint()
@@ -388,7 +374,7 @@ def test_public_catalog_fingerprint_includes_spatial_inputs(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
     info = registry.get_metric_info("light_metric")
     assert info is not None
@@ -405,7 +391,7 @@ def test_public_catalog_fingerprint_ignores_queue_assignment_and_repo_id(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     config = get_config()
 
     restart_catalog()
@@ -419,7 +405,7 @@ def test_public_catalog_fingerprint_ignores_queue_assignment_and_repo_id(
     config.plugins.repos[0].id = "custom-repo"
     configure_catalog_sources(
         [
-            _synced_repo(repo, raw="owner/renamed", repo_name="renamed"),
+            PluginLocation(repo_id="renamed", path=repo),
         ]
     )
     restart_catalog()
@@ -452,8 +438,8 @@ def test_public_catalog_fingerprint_is_deterministic_across_plugin_load_order(
     )
 
     first_order = [
-        _synced_repo(repo_a, raw="owner/repo-a", repo_name="repo-a"),
-        _synced_repo(repo_b, raw="owner/repo-b", repo_name="repo-b"),
+        PluginLocation(repo_id="repo-a", path=repo_a),
+        PluginLocation(repo_id="repo-b", path=repo_b),
     ]
     second_order = list(reversed(first_order))
 
@@ -472,7 +458,7 @@ def test_validate_metric_payload_uses_manifest_json_schema(
 ) -> None:
     repo = tmp_path / "repo"
     _write_manifest(repo, _manifest())
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
     payload = validate_json_object(
@@ -512,7 +498,7 @@ def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
         }
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
     valid_payload = validate_json_object(
@@ -565,7 +551,7 @@ def test_validate_metric_payload_rejects_duplicate_batch_keys(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
@@ -629,7 +615,7 @@ def test_validate_metric_payload_reports_duplicate_keys_per_batch_field(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
     with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
@@ -698,7 +684,7 @@ def test_catalog_refresh_rejects_legacy_v2_manifest(
             "metrics": [legacy_metric],
         },
     )
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
     with pytest.raises(registry.CatalogUnavailableError):
         restart_catalog()
@@ -717,7 +703,7 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
         },
     )
     _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([_synced_repo(repo)])
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
 
     payload = validate_json_object(

@@ -23,7 +23,7 @@ from lyra_app import registry, worker_control
 from lyra_app.config import clear_config_cache, get_config
 from lyra_app.db import connection as database_connection
 from lyra_app.plugin_runtime import read_snapshot
-from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
+from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from tests.catalog_helpers import configure_catalog_sources
 from tests.config_helpers import load_test_config
 from tests.redis_job_scripts import eval_job_script
@@ -87,17 +87,6 @@ def _manifest(metrics: list[dict[str, Any]]) -> dict[str, Any]:
             for metric in metrics
         ],
     }
-
-
-def _synced_repo(repo: Path) -> SyncedPluginRepo:
-    entry = PluginRepoEntry(
-        raw="owner/repo",
-        clone_url="https://github.com/owner/repo.git",
-        owner="owner",
-        repo="repo",
-        ref=None,
-    )
-    return SyncedPluginRepo(entry=entry, path=repo, changed=False)
 
 
 def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
@@ -302,31 +291,30 @@ def _configure_runner_repos(
     monkeypatch: pytest.MonkeyPatch,
     repo: Path,
 ) -> None:
-    configure_catalog_sources([_synced_repo(repo)])
-    monkeypatch.setattr(worker, "install_runner_plugins", list)
+    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
+    monkeypatch.setattr(worker, "install_runner_plugins", lambda _: None)
 
 
 def _load_smoke_runner_registry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     worker: ModuleType,
-) -> tuple[dict[str, Any], list[SyncedPluginRepo]]:
+) -> tuple[dict[str, Any], list[PluginLocation]]:
     load_test_config(
         tmp_path,
         metric_queues=SMOKE_METRIC_QUEUES,
         repos=[smoke_plugin_uri()],
     )
     registry.initialize_catalog()
-    installed: list[SyncedPluginRepo] = []
+    installed: list[PluginLocation] = []
 
-    def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+    def install_plugins(repos: list[PluginLocation]) -> None:
         sys.modules.pop("smoke_plugin.metrics", None)
         sys.modules.pop("smoke_plugin.plugin", None)
         sys.modules.pop("smoke_plugin", None)
         for repo in repos:
             monkeypatch.syspath_prepend(str(repo.path))
         installed.extend(repos)
-        return repos
 
     monkeypatch.setattr(worker, "install_runner_plugins", install_plugins)
     entries = worker.refresh_runner_registry("interactive")
@@ -407,13 +395,12 @@ def test_runner_loads_directory_source_from_copied_snapshot(
         )
     ]
     registry.initialize_catalog()
-    installed: list[SyncedPluginRepo] = []
+    installed: list[PluginLocation] = []
 
-    def install_plugins(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+    def install_plugins(repos: list[PluginLocation]) -> None:
         for repo in repos:
             monkeypatch.syspath_prepend(str(repo.path))
         installed.extend(repos)
-        return repos
 
     monkeypatch.setattr(worker_module, "install_runner_plugins", install_plugins)
 
@@ -1384,15 +1371,14 @@ def test_runner_uses_startup_copy_after_original_directory_changes(
     registry.initialize_catalog()
     before = (source / MANIFEST_FILENAME).read_bytes()
     (source / MANIFEST_FILENAME).write_text("broken after API startup")
-    installed: list[SyncedPluginRepo] = []
+    installed: list[PluginLocation] = []
 
-    def install(repos: list[SyncedPluginRepo]) -> list[SyncedPluginRepo]:
+    def install(repos: list[PluginLocation]) -> None:
         installed.extend(repos)
         for name in ("smoke_plugin.metrics", "smoke_plugin.plugin", "smoke_plugin"):
             sys.modules.pop(name, None)
         for repo in repos:
             monkeypatch.syspath_prepend(str(repo.path))
-        return repos
 
     monkeypatch.setattr(worker_module, "install_runner_plugins", install)
     entries = worker_module.load_runner_metric_entries("interactive", config=config)

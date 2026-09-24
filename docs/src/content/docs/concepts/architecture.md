@@ -18,6 +18,10 @@ Lyra separates public contracts from trusted execution.
 The public fingerprint excludes repository IDs, factories, queues, and job
 state.
 
+Source syntax is validated by the SDK's shared offline parser. Every startup
+captures fresh source trees; it does not compare against previous checkouts.
+Captured content hashes let workers verify source integrity before installation.
+
 ## Job path
 
 1. An authenticated caller submits a metric, input, and idempotency key.

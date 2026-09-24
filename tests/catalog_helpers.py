@@ -11,10 +11,10 @@ from lyra_app import registry
 from lyra_app.config import get_config
 
 if TYPE_CHECKING:
-    from lyra_app.plugins import SyncedPluginRepo
+    from lyra_app.plugins import PluginLocation
 
 
-def configure_catalog_sources(sources: list[SyncedPluginRepo]) -> None:
+def configure_catalog_sources(sources: list[PluginLocation]) -> None:
     config = get_config()
     overrides = {
         name: queue
@@ -22,14 +22,12 @@ def configure_catalog_sources(sources: list[SyncedPluginRepo]) -> None:
         for name, queue in repo.routing.items()
     }
     repos = []
-    for index, source in enumerate(sources):
+    for source in sources:
         raw = json.loads((source.path / "lyra.plugin.json").read_text())
         names = {metric.get("name") for metric in raw.get("metrics", [])}
         repos.append(
             PluginRepoConfig(
-                id=source.entry.target_name
-                if index == 0
-                else f"{source.entry.target_name}-{index}",
+                id=source.repo_id,
                 source=f"dir://{source.path}",
                 routing={
                     name: queue for name, queue in overrides.items() if name in names

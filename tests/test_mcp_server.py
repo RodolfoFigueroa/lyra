@@ -46,9 +46,9 @@ from starlette.routing import Mount
 
 from lyra_app import main, mcp, registry
 from lyra_app.db.dependencies import get_database_runtime
-from lyra_app.mcp import SERVER_INSTRUCTIONS
+from lyra_app.mcp import SERVER_INSTRUCTIONS, tools
 from lyra_app.mcp import create_mcp_app as _create_mcp_app
-from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME
+from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME, GetJobResultInput
 from lyra_app.mcp.server import ToolCallError
 from lyra_app.mcp.tools import InProcessLyraBackend
 from tests.config_helpers import load_test_config
@@ -327,7 +327,6 @@ class FakeMCPBackend:
             reused=reused,
             links=JobLinks(
                 self=f"/jobs/{job_id}",
-                events=f"/jobs/{job_id}/events",
                 result=f"/jobs/{job_id}/result",
             ),
         )
@@ -358,6 +357,7 @@ class FakeMCPBackend:
         return JobStatusInfo(
             job_id=job_id,
             status=status,
+            created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
             metric=metric,
         )
@@ -1183,7 +1183,7 @@ def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None
         "status": "running",
         "job_id": "job-1",
         "result_ref": "lyra://results/job-1",
-        "poll_after_seconds": 1,
+        "poll_after_seconds": 5,
         "next_tool": "lyra_get_job_result",
         "reused": False,
     }
@@ -1360,6 +1360,7 @@ def test_mcp_get_job_result_returns_running_continuation() -> None:
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
         status="running",
+        created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         metric="slow_metric",
     )
@@ -1377,7 +1378,7 @@ def test_mcp_get_job_result_returns_running_continuation() -> None:
         "status": "running",
         "job_id": "job-1",
         "result_ref": "lyra://results/job-1",
-        "poll_after_seconds": 1,
+        "poll_after_seconds": 5,
         "next_tool": "lyra_get_job_result",
     }
 
@@ -1419,6 +1420,7 @@ def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
         status="succeeded",
+        created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         metric="smoke_table_metric",
     )
@@ -1726,6 +1728,7 @@ def test_mcp_wait_ranges_are_rejected_before_polling(
     backend.jobs["job-1"] = JobStatusInfo(
         job_id="job-1",
         status="running",
+        created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         metric="slow_metric",
     )
@@ -1966,3 +1969,89 @@ def test_main_shares_database_runtime_with_rest_and_mcp(
     assert backend.database is app.state.database
     request = Request({"type": "http", "app": app})
     assert get_database_runtime(request) is backend.database
+
+
+@pytest.mark.parametrize("window", [0, 12])
+def test_mcp_wait_observes_immediately_and_at_window_boundary(
+    window: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    original_sleep = asyncio.sleep
+    now = [0.0]
+    observed: list[float] = []
+    sleeps: list[float] = []
+    backend = FakeMCPBackend([])
+
+    async def get_job(job_id: str) -> JobStatusInfo:
+        await original_sleep(0)
+        observed.append(now[0])
+        return JobStatusInfo(
+            job_id=job_id,
+            metric="metric",
+            status="running",
+            created_at=_COMPLETED_AT,
+            updated_at=_COMPLETED_AT,
+        )
+
+    async def sleep(seconds: float) -> None:
+        await original_sleep(0)
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(backend, "get_job", get_job)
+    monkeypatch.setattr(tools.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        tools.random.SystemRandom, "uniform", lambda _self, _low, _high: 1.0
+    )
+    monkeypatch.setattr(tools.asyncio, "sleep", sleep)
+    result = asyncio.run(
+        tools.execute_tool(
+            "lyra_get_job_result",
+            GetJobResultInput(result_ref="lyra://results/job-1", wait_seconds=window),
+            backend,
+            public_api_base_url="https://example.test",
+        )
+    )
+    assert result["status"] == "running"
+    assert observed == ([0] if window == 0 else [0, 5, 10, 12])
+    assert sleeps == ([] if window == 0 else [5, 5, 2])
+
+
+def test_mcp_observation_retries_preserve_structured_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    original_sleep = asyncio.sleep
+    now = [0.0]
+    calls: list[str] = []
+    error = tools.ToolCallError("backend_error", "unavailable", {"retryable": True})
+    backend = FakeMCPBackend([])
+
+    async def get_job(job_id: str) -> JobStatusInfo:
+        await original_sleep(0)
+        calls.append(job_id)
+        raise error
+
+    async def sleep(seconds: float) -> None:
+        await original_sleep(0)
+        now[0] += seconds
+
+    monkeypatch.setattr(backend, "get_job", get_job)
+    monkeypatch.setattr(tools.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        tools.random.SystemRandom, "uniform", lambda _self, _low, _high: 1.0
+    )
+    monkeypatch.setattr(tools.asyncio, "sleep", sleep)
+    with pytest.raises(tools.ToolCallError) as exc:
+        asyncio.run(
+            tools.execute_tool(
+                "lyra_get_job_result",
+                GetJobResultInput(result_ref="lyra://results/job-1", wait_seconds=30),
+                backend,
+                public_api_base_url="https://example.test",
+            )
+        )
+    assert exc.value is error
+    assert len(calls) == 6
+    assert now[0] == 30

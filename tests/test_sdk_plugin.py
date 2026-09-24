@@ -19,7 +19,7 @@ from lyra.sdk import (
     metric,
 )
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
-from lyra.sdk.models.job import JobEnvelope, JobMessageLevel, TableJobResult
+from lyra.sdk.models.job import JobEnvelope, TableJobResult
 from lyra.sdk.models.plugin_v4 import (
     BatchedTableOutputColumnV4,
     PluginInfoV4,
@@ -100,15 +100,6 @@ class FakeContext:
         message: str | None = None,
     ) -> None:
         del stage, current, total, unit, message
-
-    @staticmethod
-    def report_message(
-        message: str,
-        *,
-        level: JobMessageLevel = "info",
-        fields: dict[str, Any] | None = None,
-    ) -> None:
-        del message, level, fields
 
     @staticmethod
     def check_cancelled() -> None:

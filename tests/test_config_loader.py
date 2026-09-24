@@ -73,7 +73,7 @@ level = "INFO"
 file = {_q(base / "logs" / "lyra.log")}
 
 [job_store]
-ttl_seconds = 600
+result_retention_seconds = 86400
 
 [agent_submission_limit]
 limit = 10

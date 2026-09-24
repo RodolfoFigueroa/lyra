@@ -31,7 +31,6 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
-        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
@@ -46,21 +45,8 @@ class FakeRedisSync:
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
 
-    def xadd(self, key: str, fields: dict[str, str]) -> str:
-        stream = self.streams.setdefault(key, [])
-        stream_id = f"{len(stream) + 1}-0"
-        stream.append((stream_id, fields))
-        return stream_id
-
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
-
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
-        lower = float("-inf") if min == "-inf" else float(min)
-        sorted_set = self.sorted_sets.setdefault(key, {})
-        for member, score in list(sorted_set.items()):
-            if lower <= score <= max:
-                sorted_set.pop(member, None)
 
     def eval(
         self,
@@ -68,8 +54,7 @@ class FakeRedisSync:
         numkeys: int,
         *keys_and_args: str | float,
     ) -> int | str:
-        del script
-        return eval_job_script(self, numkeys, keys_and_args)
+        return eval_job_script(self, numkeys, keys_and_args, script)
 
 
 def _reload_test_config(config: LyraConfig, config_path: Path) -> None:
@@ -191,7 +176,7 @@ def test_job_store_uses_configured_ttl_seconds(tmp_path: Path) -> None:
     config = config.model_copy(
         update={
             "job_store": config.job_store.model_copy(
-                update={"ttl_seconds": ttl_seconds}
+                update={"result_retention_seconds": ttl_seconds}
             )
         }
     )
@@ -204,6 +189,8 @@ def test_job_store_uses_configured_ttl_seconds(tmp_path: Path) -> None:
             client=redis,
         )
 
+        assert not redis.expirations
+        job_store.cancel_job("job-ttl", client=redis)
         assert redis.expirations
         assert all(ttl == ttl_seconds for _key, ttl in redis.expirations)
     finally:

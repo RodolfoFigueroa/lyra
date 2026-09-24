@@ -19,44 +19,44 @@ class DownloadError(LyraAPIError):
     Ordinary requests, including submissions, are not retried automatically.
     """
 
-
-class JobEventStreamError(DownloadError):
-    """Raised when a job event stream exhausts consecutive reconnect attempts.
-
-    Connection/read failures and HTTP 5xx are retried, with five reconnection
-    attempts by default. Malformed events are DownloadError failures and are
-    never retried.
-    """
-
     def __init__(
         self,
         message: str,
         *,
-        job_id: str,
-        last_event_id: str | None,
-        attempts: int,
+        retryable: bool = False,
+        retry_after_seconds: float | None = None,
     ) -> None:
-        """Initialize an event-stream failure with resumability context."""
+        """Retain typed retry guidance without initiating retries."""
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+
+
+class JobWaitTimeoutError(LyraAPIError):
+    """The caller's wait deadline expired without cancelling the remote job."""
+
+    def __init__(self, message: str, *, job_id: str) -> None:
+        """Attach the job identity to a wait timeout."""
         super().__init__(message)
         self.job_id = job_id
-        self.last_event_id = last_event_id
+
+
+class JobPollingError(LyraAPIError):
+    """Consecutive transient observation retries were exhausted."""
+
+    def __init__(self, message: str, *, job_id: str, attempts: int) -> None:
+        """Attach job identity and retry count."""
+        super().__init__(message)
+        self.job_id = job_id
         self.attempts = attempts
-
-
-class JobEventCursorGapError(JobEventStreamError):
-    """Raised when retained events no longer include a requested cursor."""
-
-
-class JobWaitTimeoutError(JobEventStreamError):
-    """Raised when waiting for a job exceeds its caller-provided deadline."""
 
 
 class ServiceUnavailableError(LyraAPIError):
     """Structured unexpected HTTP 503 from an ordinary request or download.
 
-    Retains the service code, retryable flag, and integer Retry-After guidance.
+    Retains the service code, retryable flag, and Retry-After guidance.
     It does not initiate retries. Readiness accepts HTTP 503 as a normal response;
-    event streams use their own reconnection policy for all HTTP 5xx responses.
+    Job waits apply a bounded retry policy.
     """
 
     def __init__(
@@ -65,7 +65,7 @@ class ServiceUnavailableError(LyraAPIError):
         *,
         code: str,
         retryable: bool,
-        retry_after_seconds: int | None,
+        retry_after_seconds: float | None,
     ) -> None:
         """Initialize an unavailable-service error with retry guidance."""
         super().__init__(message)

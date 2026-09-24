@@ -61,7 +61,7 @@ class ConfigSummaryResponse(StrictBaseModel):
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
     workers: list[WorkerConfigSummary]
-    job_store_ttl_seconds: int = Field(gt=0)
+    result_retention_seconds: int = Field(gt=0)
     plugin_catalog_dir: str
     plugin_runner_base_dir: str
 
@@ -176,7 +176,7 @@ class AdminStatusResponse(StrictBaseModel):
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
     configured_worker_count: int = Field(ge=0)
-    job_store_ttl_seconds: int = Field(gt=0)
+    result_retention_seconds: int = Field(gt=0)
     catalog_fingerprint: str
     catalog_available: bool
     catalog_error: str | None = None

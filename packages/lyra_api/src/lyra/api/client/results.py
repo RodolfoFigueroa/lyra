@@ -13,14 +13,12 @@ from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
     FileJobResult,
-    JobMessageEvent,
-    JobProgressEvent,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
 
-    from lyra.sdk.models.job import JobEventRecord, TableJobResult, TerminalJobResult
+    from lyra.sdk.models.job import TableJobResult, TerminalJobResult
 
 
 def successful_result(result: TerminalJobResult) -> TableJobResult | FileJobResult:
@@ -101,22 +99,3 @@ def dataframe_path() -> Iterator[Path]:
         yield path
     finally:
         path.unlink(missing_ok=True)
-
-
-def invoke_callbacks(
-    record: JobEventRecord,
-    on_event: Callable[[JobEventRecord], object] | None,
-    on_progress: Callable[[JobProgressEvent], object] | None,
-    on_message: Callable[[JobMessageEvent], object] | None,
-) -> Iterator[object]:
-    """Invoke callbacks in order, allowing async callers to await each result.
-
-    Yields:
-        Each callback's return value, without catching callback exceptions.
-    """
-    if on_event is not None:
-        yield on_event(record)
-    if isinstance(record.event, JobProgressEvent) and on_progress is not None:
-        yield on_progress(record.event)
-    if isinstance(record.event, JobMessageEvent) and on_message is not None:
-        yield on_message(record.event)

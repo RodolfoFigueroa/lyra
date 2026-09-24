@@ -187,7 +187,7 @@ and return `FileJobResult`.
 ## Runtime context
 
 `RunContext` provides the job and metric names, logger, temporary directory,
-database helper, durable progress events, and cooperative cancellation. Every
+database helper, optional progress snapshots, and cooperative cancellation. Every
 worker validates database connectivity before accepting jobs, so plugins may use
 `context.db` directly without a `None` check. A later database outage becomes a
 retryable `database_unavailable` job failure.
@@ -198,16 +198,16 @@ are normalized by the worker. Unit-test contexts must provide a fake or mocked
 `LyraDB`; a strict fake that rejects unexpected calls is preferred for metrics
 that do not use the database.
 
-Use `context.report_progress(stage=..., current=..., total=..., unit=...)` for
-monotonic quantitative progress within a stage. A new stage may restart at zero;
-within one stage, `current` cannot decrease and `total` and `unit` must remain
-stable. The worker retains the first and final update and coalesces rapid
-intermediate updates.
+Use `context.report_progress(stage=..., current=..., total=..., unit=..., message=...)`
+for optional quantitative snapshots. Current must be finite and nonnegative;
+optional total must be finite and positive, with current no greater than total.
+Estimates may decrease and stages, totals, and units may change between updates.
+The first update is written immediately. Later updates are coalesced to the
+latest value at `job_progress.min_interval_ms` (default 1000), and pending
+progress is flushed before termination. Plugins may remain silent for hours.
 
-Use `context.report_message(message, level=..., fields=...)` for durable,
-structured milestones or warnings that clients should see. Continue using
-`context.logger` for diagnostic detail that belongs only in logs. Event payloads
-and rates are bounded by the deployment's `[job_events]` settings.
+Use `context.logger.info("Processed %s rows", count)` for ordinary diagnostic
+logging. Job and metric fields are attached automatically.
 
 ## Generated manifest
 

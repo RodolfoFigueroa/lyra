@@ -95,7 +95,7 @@ curl -X POST http://localhost:5219/jobs \
 Use the returned `job_id` to stream events and read the terminal descriptor:
 
 ```bash
-curl -N http://localhost:5219/jobs/JOB_ID/events \
+curl http://localhost:5219/jobs/JOB_ID \
   -H "Authorization: Bearer ${LYRA_AGENT_API_KEY}"
 
 curl http://localhost:5219/jobs/JOB_ID/result/descriptor \

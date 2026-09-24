@@ -21,30 +21,27 @@ and errors instead of pretending stale values are current.
 
 ## Retained jobs
 
-Each job has Redis status, result, event, provenance, and associated idempotency
-records. They expire with `job_store.ttl_seconds`. Downloads do not extend
-retention. A missing job after expiry is expected and cannot be reconstructed
-from Redis.
+Queued and running jobs have no expiration. Silent jobs remain visible even
+without connected clients or progress reports. After the first terminal
+transition, status, result, provenance, and idempotency records share one
+expiration deadline: `job_store.result_retention_seconds` (default 86400).
+Reads, duplicate deliveries, and late updates never extend it. Pre-acceptance
+idempotency reservations are bounded by the same configured duration.
 
-SSE events replay from retained history, support `Last-Event-ID`, and close on a
-terminal event. Each stream is approximately capped by
-`job_events.max_stream_events`; status projections remain available if older
-events have been trimmed. Queue depth may be explicitly unknown when broker
-inspection is unavailable.
+Retention controls Redis records and API access. Output files remain on disk;
+operators own filesystem cleanup. No automatic filesystem sweeper runs.
 
 ## Structured logs
 
 Lyra writes JSON Lines to standard output or `logging.file`. Every record has a
-UTC timestamp, level, logger, and message. Published job events add structured
-fields including `event_kind`, `job_id`, `metric`, and the relevant lifecycle,
-progress, or message fields. Lifecycle changes, progress stage boundaries and
-completion, and plugin messages at info or above are operational records;
-ordinary intermediate progress is debug-level. Configure collection as JSON
-rather than parsing human-readable message strings.
+UTC timestamp, level, logger, and message. Lifecycle transitions are logged
+independently of progress. Plugin `context.logger` adds `job_id` and `metric`
+automatically and supports normal logging arguments. Unexpected exceptions
+include full tracebacks in logs; public results contain concise error messages.
 
 ## Cancellation and interruption
 
-`POST /admin/jobs/{job_id}/cancel` marks active work cancelled, appends an event,
+`POST /admin/jobs/{job_id}/cancel` atomically saves cancelled status and its terminal result,
 and asks Celery to revoke the task. Cancellation is cooperative after plugin
 code begins. Terminal results win races and are not overwritten.
 
@@ -53,7 +50,10 @@ records so consumers keep using the same result endpoint. Unexpected Celery
 task failures are recorded by the surviving worker parent. Job reads also
 repair nonterminal Lyra state when Celery's result backend already reports a
 failure. A complete worker or host loss that leaves Celery without a terminal
-state is not inferred automatically.
+state is not inferred automatically. Such unresolved active jobs remain retained
+until reconciliation or administrative cancellation. Operators must investigate
+worker loss; absent progress alone never indicates failure. `completed_at` is the
+terminal state transition time and does not mean cancelled computation has stopped.
 
 ## Common response
 
@@ -62,7 +62,7 @@ state is not inferred automatically.
 3. Confirm the metric exists in the catalog and has a queue assignment.
 4. Confirm at least one observed worker consumes that queue.
 5. Inspect worker startup/install logs for plugin failures.
-6. Check job events and terminal error details.
+6. Check job status, diagnostic logs, and terminal error details.
 7. Correct the TOML or plugin, drain jobs, and restart the API and all workers.
 
 Do not restart workers repeatedly to compensate for an invalid manifest,

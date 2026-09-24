@@ -12,7 +12,7 @@ from lyra.api.client.async_ import AsyncLyraAdminClient, AsyncLyraClient
 from lyra.api.client.sync import LyraAdminClient, LyraClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
 from lyra.api.options import SubmitOptions
-from lyra.sdk.models.job import FileJobResult, JobProgressEvent, TableJobResult
+from lyra.sdk.models.job import FileJobResult, TableJobResult
 from lyra.sdk.types import JsonValue
 
 from lyra_app.config import DEFAULT_API_HOST
@@ -116,7 +116,6 @@ def _job_response(*, reused: bool = False) -> dict[str, Any]:
         "reused": reused,
         "links": {
             "self": "/jobs/job-1",
-            "events": "/jobs/job-1/events",
             "result": "/jobs/job-1/result",
         },
     }
@@ -127,6 +126,7 @@ def _status_response() -> dict[str, Any]:
         "job_id": "job-1",
         "metric": "heavy_metric",
         "status": "running",
+        "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:00Z",
     }
 
@@ -138,6 +138,7 @@ def _job_list_response() -> dict[str, Any]:
                 "job_id": "job-1",
                 "metric": "heavy_metric",
                 "status": "running",
+                "created_at": "2026-01-01T00:00:00Z",
                 "updated_at": "2026-01-01T00:00:00Z",
             }
         ]
@@ -189,7 +190,7 @@ def _admin_status_response() -> dict[str, Any]:
         "allowed_queues": ["interactive"],
         "default_queue": "interactive",
         "configured_worker_count": 1,
-        "job_store_ttl_seconds": 86400,
+        "result_retention_seconds": 86400,
         "catalog_fingerprint": "abc",
     }
 
@@ -209,7 +210,7 @@ def _config_summary_response() -> dict[str, Any]:
                 "temp_dir": "/lyra_data/cache/jobs/interactive",
             }
         ],
-        "job_store_ttl_seconds": 86400,
+        "result_retention_seconds": 86400,
         "plugin_catalog_dir": "/lyra_data/plugins/catalog",
         "plugin_runner_base_dir": "/lyra_data/plugins/runners",
     }
@@ -319,40 +320,6 @@ def _plugin_routing_response() -> dict[str, Any]:
         "allowed_queues": ["interactive", "batch"],
         "default_queue": "interactive",
     }
-
-
-def _terminal_event_lines(event_id: str = "1-0") -> list[str]:
-    event = {
-        "kind": "lifecycle",
-        "job_id": "job-1",
-        "metric": "heavy_metric",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "status": "succeeded",
-    }
-    return [
-        f"id: {event_id}",
-        "event: lifecycle",
-        f"data: {json.dumps(event)}",
-        "",
-    ]
-
-
-def _progress_event_lines(event_id: str = "1-0") -> list[str]:
-    event = {
-        "kind": "progress",
-        "job_id": "job-1",
-        "metric": "heavy_metric",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "stage": "compute",
-        "current": 1,
-        "total": 2,
-    }
-    return [
-        f"id: {event_id}",
-        "event: progress",
-        f"data: {json.dumps(event)}",
-        "",
-    ]
 
 
 def _result_response() -> dict[str, Any]:
@@ -566,11 +533,9 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
         headers: dict[str, str],  # ruff:ignore[unused-function-argument]
         stream: bool = False,  # ruff:ignore[unused-function-argument]
     ) -> FakeSyncResponse:
-        if url.endswith("/events"):
-            return FakeSyncResponse(lines=_terminal_event_lines())
         if url.endswith("/result"):
             return FakeSyncResponse(payload=_result_response())
-        return FakeSyncResponse(payload=_status_response())
+        return FakeSyncResponse(payload={**_status_response(), "status": "succeeded"})
 
     _mock_sync_http(monkeypatch, post=post)
     _mock_sync_http(monkeypatch, get=get)
@@ -585,7 +550,6 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
         "heavy_metric", {"value": 3}, options=SubmitOptions(idempotency_key="key-1")
     )
     status = client.jobs.get(job.job_id)
-    events = list(client.jobs.events(job.job_id))
     result = client.results.get(job.job_id)
     processed = client.raw.run("heavy_metric", {"value": 3})
 
@@ -598,70 +562,11 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert posted[0]["headers"] == {"Authorization": "Bearer agent-secret"}
     assert job.job_id == "job-1"
     assert job.reused is False
-    assert status.status == "running"
-    assert [event.event.name for event in events] == ["succeeded"]
+    assert status.status == "succeeded"
     assert result.kind == "table"
     assert result.data == [[6]]
     assert isinstance(processed, TableJobResult)
     assert processed.data == [[6]]
-
-
-def test_sync_job_handle_resumes_after_disconnect_and_dispatches_callbacks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    seen_headers: list[dict[str, str]] = []
-    progress_events: list[JobProgressEvent] = []
-
-    class DisconnectingResponse(FakeSyncResponse):
-        def iter_lines(self, *, decode_unicode: bool) -> Iterator[str]:
-            assert self.status_code == 200
-            del decode_unicode
-            yield from _progress_event_lines()
-            message = "stream disconnected"
-            raise requests.ConnectionError(message)
-
-    responses: Iterator[FakeSyncResponse] = iter(
-        [DisconnectingResponse(), FakeSyncResponse(lines=_terminal_event_lines("2-0"))]
-    )
-
-    def post(
-        url: str,
-        *,
-        json: dict[str, Any],
-        timeout: float,
-        headers: dict[str, str],
-    ) -> FakeSyncResponse:
-        del url, json, timeout, headers
-        return FakeSyncResponse(status_code=202, payload=_job_response())
-
-    def get(
-        url: str,
-        *,
-        timeout: float,
-        headers: dict[str, str],
-        stream: bool = False,
-    ) -> FakeSyncResponse:
-        del timeout, stream
-        if url.endswith("/result"):
-            return FakeSyncResponse(payload=_result_response())
-        seen_headers.append(headers)
-        return next(responses)
-
-    _mock_sync_http(monkeypatch, post=post)
-    _mock_sync_http(monkeypatch, get=get)
-    monkeypatch.setattr("lyra.api.client.sync.time.sleep", lambda _: None)
-    client = LyraClient("example.test", secure=False, agent_api_key="secret")
-
-    result = client.raw.submit("heavy_metric", {"value": 3}).wait(
-        on_progress=progress_events.append
-    )
-
-    assert result.status == "succeeded"
-    assert [event.current for event in progress_events] == [1]
-    assert seen_headers == [
-        {"Authorization": "Bearer secret"},
-        {"Authorization": "Bearer secret", "Last-Event-ID": "1-0"},
-    ]
 
 
 def test_sync_client_uses_admin_job_operations(
@@ -1281,7 +1186,7 @@ class FakeAsyncFile:
 def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeSession.responses = [
         FakeAsyncResponse(status=202, payload=_job_response()),
-        FakeAsyncResponse(lines=_terminal_event_lines()),
+        FakeAsyncResponse(payload={**_status_response(), "status": "succeeded"}),
         FakeAsyncResponse(payload=_result_response()),
     ]
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)

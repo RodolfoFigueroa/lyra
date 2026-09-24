@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
+import random
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypeVar, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from fastapi import HTTPException
@@ -25,6 +27,7 @@ from lyra.sdk.models.metric import (
 )
 from lyra.sdk.types import JsonObject, JsonValue, validate_json_value
 from pydantic import BaseModel
+from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from typing_extensions import override
 
@@ -55,7 +58,7 @@ from lyra_app.spatial_inputs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
     from lyra_app.mcp.models import (
         GetJobResultInput,
@@ -68,8 +71,10 @@ if TYPE_CHECKING:
         SearchMetricsInput,
     )
 
-_POLL_INTERVAL_SECONDS = 0.1
-_DEFAULT_POLL_AFTER_SECONDS = 1
+_ObservationT = TypeVar("_ObservationT")
+
+_POLL_INTERVAL_SECONDS = 5.0
+_DEFAULT_POLL_AFTER_SECONDS = 5
 _RESULT_REF_PATTERN = re.compile(r"^lyra://results/([^/?#\s]+)$")
 _UNKNOWN_METRIC_ERROR = "unknown_metric"
 _INVALID_PARAMETERS_ERROR = "invalid_parameters"
@@ -264,6 +269,11 @@ class InProcessLyraBackend(LyraMCPBackend):
                 return None
             raise _tool_error_from_http(exc, context="fetch job status") from exc
 
+        except RedisError as exc:
+            raise ToolCallError(
+                _BACKEND_ERROR, "Could not observe job status.", {"retryable": True}
+            ) from exc
+
     @override
     async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
         try:
@@ -272,6 +282,13 @@ class InProcessLyraBackend(LyraMCPBackend):
             if exc.status_code == 404:
                 return None
             raise _tool_error_from_http(exc, context="fetch result descriptor") from exc
+
+        except RedisError as exc:
+            raise ToolCallError(
+                _BACKEND_ERROR,
+                "Could not observe retained result.",
+                {"retryable": True},
+            ) from exc
 
 
 async def execute_tool(
@@ -425,13 +442,14 @@ async def _run_metric(
     deadline = time.monotonic() + arguments.wait_seconds
 
     while True:
-        status = await _job_status(
-            backend,
-            job_id,
-            fallback=getattr(job, "status", None),
-        )
+        snapshot = await _observe(lambda: backend.get_job(job_id), deadline)
+        if snapshot is None:
+            _raise_result_expired(job_id)
+        status = snapshot.status
         if _is_terminal_status(status):
-            descriptor = await backend.get_result_descriptor(job_id)
+            descriptor = await _observe(
+                lambda: backend.get_result_descriptor(job_id), deadline
+            )
             if descriptor is None:
                 _raise_tool_error(
                     "result_unavailable",
@@ -440,7 +458,15 @@ async def _run_metric(
             return {**_model_dump(descriptor), "reused": reused}
         if time.monotonic() >= deadline:
             return _running_payload(job_id, reused=reused)
-        await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - time.monotonic()))
+        await asyncio.sleep(
+            max(
+                0.0,
+                min(
+                    _POLL_INTERVAL_SECONDS * random.SystemRandom().uniform(0.9, 1.1),
+                    deadline - time.monotonic(),
+                ),
+            )
+        )
 
 
 async def _get_job_result(
@@ -451,23 +477,35 @@ async def _get_job_result(
     deadline = time.monotonic() + arguments.wait_seconds
 
     while True:
-        snapshot = await backend.get_job(job_id)
+        snapshot = await _observe(lambda: backend.get_job(job_id), deadline)
         if snapshot is None:
-            descriptor = await backend.get_result_descriptor(job_id)
+            descriptor = await _observe(
+                lambda: backend.get_result_descriptor(job_id), deadline
+            )
             if descriptor is not None:
                 return _model_dump(descriptor)
             _raise_result_expired(job_id)
 
         status = str(getattr(snapshot, "status", ""))
         if _is_terminal_status(status):
-            descriptor = await backend.get_result_descriptor(job_id)
+            descriptor = await _observe(
+                lambda: backend.get_result_descriptor(job_id), deadline
+            )
             if descriptor is None:
                 _raise_result_expired(job_id)
             return _model_dump(descriptor)
 
         if time.monotonic() >= deadline:
             return _running_payload(job_id)
-        await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - time.monotonic()))
+        await asyncio.sleep(
+            max(
+                0.0,
+                min(
+                    _POLL_INTERVAL_SECONDS * random.SystemRandom().uniform(0.9, 1.1),
+                    deadline - time.monotonic(),
+                ),
+            )
+        )
 
 
 async def _get_result_metadata(
@@ -649,15 +687,28 @@ def _run_payload_for_metric(
     return payload
 
 
-async def _job_status(
-    backend: LyraMCPBackend,
-    job_id: str,
-    *,
-    fallback: object,
-) -> str:
-    snapshot = await backend.get_job(job_id)
-    status = getattr(snapshot, "status", fallback)
-    return str(status)
+async def _observe(
+    operation: Callable[[], Awaitable[_ObservationT]], deadline: float
+) -> _ObservationT:
+    failures = 0
+    while True:
+        try:
+            return await operation()
+        except ToolCallError as exc:
+            details = exc.details if isinstance(exc.details, dict) else {}
+            remaining = deadline - time.monotonic()
+            if details.get("retryable") is not True or failures >= 5 or remaining <= 0:
+                raise
+            delay = min(30.0, 2.0**failures * random.SystemRandom().uniform(0.9, 1.1))
+            guidance = details.get("retry_after_seconds")
+            if (
+                isinstance(guidance, (int, float))
+                and math.isfinite(guidance)
+                and guidance >= 0
+            ):
+                delay = float(guidance)
+            failures += 1
+            await asyncio.sleep(min(delay, remaining))
 
 
 def _is_terminal_status(status: str) -> bool:
@@ -880,7 +931,22 @@ def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:
         code = "rate_limited"
     else:
         code = "backend_error"
-    return ToolCallError(code, f"Failed to {context}.", exc.detail)
+    details = (
+        dict(exc.detail) if isinstance(exc.detail, dict) else {"message": exc.detail}
+    )
+    details["retryable"] = (
+        exc.status_code in {429, 500, 502, 503, 504}
+        and details.get("retryable") is not False
+    )
+    if exc.headers and "Retry-After" in exc.headers:
+        try:
+            guidance = float(exc.headers["Retry-After"])
+        except ValueError:
+            pass
+        else:
+            if math.isfinite(guidance) and guidance >= 0:
+                details["retry_after_seconds"] = guidance
+    return ToolCallError(code, f"Failed to {context}.", details)
 
 
 def _raise_tool_error(

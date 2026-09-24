@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.job import (
+    FailedJobResult,
     JobCreateRequest,
     JobCreateResponse,
     JobEnvelope,
@@ -28,6 +29,7 @@ from lyra_app.converters import build_converter_map
 from lyra_app.db.redis import redis_client
 from lyra_app.registry import get_metric_entry, validate_metric_entry_payload
 from lyra_app.spatial_inputs import (
+    SpatialInputResolution,
     SpatialInputValidationError,
     resolve_spatial_inputs_with_metadata,
 )
@@ -43,7 +45,6 @@ if TYPE_CHECKING:
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.registry import MetricRegistryEntry
-    from lyra_app.spatial_inputs import SpatialInputResolution
 
 
 class TaskDispatcher(Protocol):
@@ -63,7 +64,6 @@ class TaskDispatcher(Protocol):
 
 class SubmissionRedisClient(
     job_store.AsyncIdempotencyClient,
-    job_store.AsyncJobWriter,
     Protocol,
 ):
     """Provide Redis operations required for job submission."""
@@ -164,7 +164,7 @@ def job_links(job_id: str) -> JobLinks:
         The canonical link set rooted at the job resource.
     """
     base = f"/jobs/{job_id}"
-    return JobLinks(self=base, events=f"{base}/events", result=f"{base}/result")
+    return JobLinks(self=base, result=f"{base}/result")
 
 
 async def _ensure_redis_available(client: SubmissionRedisClient) -> None:
@@ -317,6 +317,22 @@ def _submission_dispatcher(options: SubmissionOptions) -> TaskDispatcher:
     return cast("TaskDispatcher", module.celery_app)
 
 
+async def _prepare_spatial_submission(
+    validated_input: JsonObject,
+    entry: MetricRegistryEntry,
+    database: ApplicationDatabaseRuntime,
+) -> tuple[SpatialInputResolution, dict[str, float] | None]:
+    resolution = await _resolve_spatial_input(
+        validated_input,
+        entry.metric.spatial_inputs,
+        database,
+    )
+    location_areas_m2 = None
+    if _requires_location_areas(entry.metric.output):
+        location_areas_m2 = await _calculate_location_areas(resolution.input)
+    return resolution, location_areas_m2
+
+
 async def submit_job(
     request: JobCreateRequest,
     *,
@@ -356,17 +372,12 @@ async def submit_job(
     if reused_response is not None:
         return reused_response
 
-    dispatched = False
+    accepted = False
     limit_consumed = False
     try:
-        resolution = await _resolve_spatial_input(
-            validated_input,
-            entry.metric.spatial_inputs,
-            database,
+        resolution, location_areas_m2 = await _prepare_spatial_submission(
+            validated_input, entry, database
         )
-        location_areas_m2 = None
-        if _requires_location_areas(entry.metric.output):
-            location_areas_m2 = await _calculate_location_areas(resolution.input)
         await _consume_submission_limit(client)
         limit_consumed = True
         envelope, provenance = _build_submission_records(
@@ -378,15 +389,9 @@ async def submit_job(
             location_areas_m2=location_areas_m2,
         )
         await job_store.create_job_async(envelope, provenance, client=client)
-        _submission_dispatcher(options).send_task(
-            GENERIC_TASK_NAME,
-            args=[envelope.model_dump(mode="json")],
-            queue=entry.queue,
-            task_id=job_id,
-        )
-        dispatched = True
+        accepted = True
     finally:
-        if not dispatched:
+        if not accepted:
             await _release_failed_submission(
                 caller_key=request.idempotency_key,
                 reservation=reservation,
@@ -394,6 +399,23 @@ async def submit_job(
                 agent_scope=agent_scope,
                 client=client,
             )
+
+    try:
+        _submission_dispatcher(options).send_task(
+            GENERIC_TASK_NAME,
+            args=[envelope.model_dump(mode="json")],
+            queue=entry.queue,
+            task_id=job_id,
+        )
+    except Exception:
+        await job_store.fail_queued_job_async(
+            FailedJobResult(
+                job_id=job_id,
+                error={"type": "dispatch", "message": "Job dispatch failed."},
+            ),
+            client=client,
+        )
+        raise
 
     return JobCreateResponse(
         job_id=job_id,

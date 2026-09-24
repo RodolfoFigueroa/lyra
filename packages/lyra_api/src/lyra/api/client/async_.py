@@ -17,16 +17,10 @@ import aiohttp
 from lyra.api.client import endpoints
 from lyra.api.client.base import BaseTransport, load_pandas
 from lyra.api.client.endpoints import RequestSpec, validate_response
-from lyra.api.client.events import (
-    RetryableEventError,
-    SSEBuffer,
-    StreamState,
-    terminal_event,
-)
+from lyra.api.client.polling import PollingState
 from lyra.api.client.results import (
     dataframe_path,
     download_needs_text,
-    invoke_callbacks,
     require_file_result,
     successful_result,
     validate_download,
@@ -34,17 +28,15 @@ from lyra.api.client.results import (
 )
 from lyra.api.exceptions import (
     DownloadError,
-    JobEventStreamError,
+    ServiceUnavailableError,
 )
 from lyra.sdk.models.job import (
     FileJobResult,
     JobCancelResponse,
     JobCreateResponse,
-    JobEventRecord,
     JobLifecycleStatus,
     JobListResponse,
-    JobMessageEvent,
-    JobProgressEvent,
+    JobProgress,
     JobStatusInfo,
     ResultDescriptor,
     TableJobResult,
@@ -53,7 +45,7 @@ from lyra.sdk.models.job import (
 
 if TYPE_CHECKING:
     import os
-    from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+    from collections.abc import Awaitable, Callable
 
     import pandas as pd
     from lyra.api.options import RunOptions, SubmitOptions
@@ -76,22 +68,6 @@ if TYPE_CHECKING:
 _ResponseT = TypeVar("_ResponseT")
 _SuccessResultT = TypeVar("_SuccessResultT", bound=TableJobResult | FileJobResult)
 SuccessfulJobResult = TableJobResult | FileJobResult
-
-
-async def _aiter_sse_job_events(
-    lines: AsyncIterable[bytes],
-    state: StreamState,
-) -> AsyncIterator[JobEventRecord]:
-    buffer = SSEBuffer()
-    async for line in lines:
-        state.check_deadline()
-        record = buffer.add(line)
-        if record is not None:
-            yield record
-    state.check_deadline()
-    record = buffer.flush()
-    if record is not None:
-        yield record
 
 
 class AsyncJobHandle(Generic[_SuccessResultT]):
@@ -133,39 +109,6 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         """
         return await self._client.get_job(self.job_id)
 
-    def events(
-        self,
-        *,
-        after_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> AsyncIterator[JobEventRecord]:
-        """Stream job events asynchronously until a terminal state is reached.
-
-        The stream reconnects automatically after transient connection failures and
-        resumes after the last received event.
-
-        Args:
-            after_id: Resume after this server-sent event identifier.
-            kinds: Event kinds to yield. All events are yielded when omitted.
-            timeout: Maximum total number of seconds to wait. ``None`` waits without
-                a deadline.
-            max_reconnect_attempts: Number of consecutive reconnection attempts
-                allowed after the initial connection.
-
-        Returns:
-            An asynchronous iterator of job event records in server order.
-
-        """
-        return self._client.iter_job_events(
-            self.job_id,
-            last_event_id=after_id,
-            kinds=kinds,
-            timeout=timeout,
-            max_reconnect_attempts=max_reconnect_attempts,
-        )
-
     async def result(self) -> _SuccessResultT:
         """Fetch and return the job's successful terminal result.
 
@@ -182,63 +125,69 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         self,
         *,
         timeout: float | None = None,
-        on_event: Callable[[JobEventRecord], object] | None = None,
-        on_progress: Callable[[JobProgressEvent], object] | None = None,
-        on_message: Callable[[JobMessageEvent], object] | None = None,
+        poll_interval: float = 5.0,
+        on_progress: Callable[[JobProgress], object] | None = None,
     ) -> Awaitable[_SuccessResultT]:
-        """Return an awaitable that waits for and returns the successful result.
+        """Poll immediately, then periodically, until a terminal result is available.
 
-        Callbacks may be regular functions or return awaitables; awaitable callback
-        results are awaited before the next event is processed.
-
-        Args:
-            timeout: Maximum total number of seconds to wait. ``None`` waits without
-                a deadline.
-            on_event: Called for every event received from the job stream.
-            on_progress: Called for every progress event.
-            on_message: Called for every message event.
+        Progress callbacks receive changed snapshots. Callback failures propagate.
+        A local timeout or cancellation never cancels the remote job.
 
         Returns:
-            An awaitable resolving to the table or file result produced by the job.
-
+            The successful result; failed or cancelled results raise MetricRunError.
         """
         return self._wait(
-            wait_seconds=timeout,
-            on_event=on_event,
-            on_progress=on_progress,
-            on_message=on_message,
+            wait_seconds=timeout, poll_interval=poll_interval, on_progress=on_progress
         )
 
     async def _wait(
         self,
         *,
         wait_seconds: float | None,
-        on_event: Callable[[JobEventRecord], object] | None,
-        on_progress: Callable[[JobProgressEvent], object] | None,
-        on_message: Callable[[JobMessageEvent], object] | None,
+        poll_interval: float,
+        on_progress: Callable[[JobProgress], object] | None,
     ) -> _SuccessResultT:
-        async for record in self.events(timeout=wait_seconds):
-            for callback_result in invoke_callbacks(
-                record, on_event, on_progress, on_message
-            ):
+        state = PollingState(self.job_id, wait_seconds, poll_interval)
+        terminal = False
+        while True:
+            try:
+                request = (
+                    endpoints.get_job_result(self.job_id)
+                    if terminal
+                    else endpoints.get_job(self.job_id)
+                )
+                response = await self._client.observe(
+                    request, request_timeout=state.request_timeout(self._client.timeout)
+                )
+                state.remaining()
+            except (DownloadError, ServiceUnavailableError) as exc:
+                await asyncio.sleep(state.retry_delay(exc))
+                continue
+            state.failures = 0
+            if terminal:
+                return cast(
+                    "_SuccessResultT",
+                    successful_result(cast("TerminalJobResult", response)),
+                )
+            snapshot = cast("JobStatusInfo", response)
+            if state.changed(snapshot.progress) and on_progress is not None:
+                callback_result = on_progress(cast("JobProgress", snapshot.progress))
                 if inspect.isawaitable(callback_result):
                     await callback_result
-            if terminal_event(record):
-                return await self.result()
-        err = f"Job {self.job_id} event stream ended before a terminal event."
-        raise JobEventStreamError(
-            err,
-            job_id=self.job_id,
-            last_event_id=None,
-            attempts=0,
-        )
+            terminal = snapshot.status in {"succeeded", "failed", "cancelled"}
+            if not terminal:
+                await asyncio.sleep(state.delay())
 
 
 class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -- API surface
     """Private asynchronous HTTP implementation used by resource clients."""
 
-    async def _request(self, spec: RequestSpec[_ResponseT]) -> _ResponseT:
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
+    async def _request(
+        self, spec: RequestSpec[_ResponseT], *, request_timeout: float | None = None
+    ) -> _ResponseT:
+        timeout = aiohttp.ClientTimeout(
+            total=self.timeout if request_timeout is None else request_timeout
+        )
         try:
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -259,7 +208,23 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
                 )
         except (aiohttp.ClientError, TimeoutError, UnicodeError) as exc:
             err = f"Failed to {spec.operation}: request error: {exc}"
-            raise DownloadError(err) from exc
+            raise DownloadError(
+                err,
+                retryable=isinstance(exc, (aiohttp.ClientConnectionError, TimeoutError))
+                and not isinstance(
+                    exc,
+                    (
+                        aiohttp.ClientSSLError,
+                        aiohttp.ServerFingerprintMismatch,
+                        aiohttp.InvalidURL,
+                    ),
+                ),
+            ) from exc
+
+    async def observe(
+        self, spec: RequestSpec[_ResponseT], *, request_timeout: float
+    ) -> _ResponseT:
+        return await self._request(spec, request_timeout=request_timeout)
 
     async def get_liveness(self) -> LivenessResponse:
         return await self._request(endpoints.get_liveness())
@@ -333,60 +298,6 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
 
     async def get_admin_queues(self) -> QueuesResponse:
         return await self._request(endpoints.get_admin_queues())
-
-    def iter_job_events(
-        self,
-        job_id: str,
-        *,
-        last_event_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> AsyncIterator[JobEventRecord]:
-        return self._iter_job_events(
-            job_id,
-            last_event_id=last_event_id,
-            kinds=kinds,
-            wait_seconds=timeout,
-            max_reconnect_attempts=max_reconnect_attempts,
-        )
-
-    async def _iter_job_events(
-        self,
-        job_id: str,
-        *,
-        last_event_id: str | None = None,
-        kinds: set[str] | None = None,
-        wait_seconds: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> AsyncIterator[JobEventRecord]:
-        state = StreamState(
-            job_id, last_event_id, kinds, wait_seconds, max_reconnect_attempts
-        )
-        while True:
-            state.check_deadline()
-            stream_timeout = aiohttp.ClientTimeout(
-                total=None,
-                sock_connect=state.read_timeout(self.timeout),
-                sock_read=state.read_timeout(self.timeout),
-            )
-            try:
-                async with (
-                    aiohttp.ClientSession(timeout=stream_timeout) as session,
-                    session.get(
-                        self._http_url(f"jobs/{job_id}/events"),
-                        headers=state.headers(self._auth_headers),
-                    ) as response,
-                ):
-                    state.validate_status(response.status)
-                    async for record in _aiter_sse_job_events(response.content, state):
-                        if state.accept(record):
-                            yield record  # ruff: ignore[yield-in-context-manager-in-async-generator] -- live response
-                        if state.terminal:
-                            return
-            except (aiohttp.ClientError, TimeoutError, RetryableEventError):
-                pass
-            await asyncio.sleep(state.retry_delay())
 
     async def get_job_result(self, job_id: str) -> TerminalJobResult:
         return await self._request(endpoints.get_job_result(job_id))
@@ -515,23 +426,6 @@ class _JobsResource:
     async def get(self, job_id: str) -> JobStatusInfo:
         return await self._transport.get_job(job_id)
 
-    def events(
-        self,
-        job_id: str,
-        *,
-        after_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> AsyncIterator[JobEventRecord]:
-        return self._transport.iter_job_events(
-            job_id,
-            last_event_id=after_id,
-            kinds=kinds,
-            timeout=timeout,
-            max_reconnect_attempts=max_reconnect_attempts,
-        )
-
 
 class _ResultsResource:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -609,7 +503,10 @@ class _RawMetricsResource:
             arguments,
             idempotency_key=key,
         )
-        return await handle.wait(timeout=wait_seconds)
+        return await handle.wait(
+            timeout=wait_seconds,
+            poll_interval=options.poll_interval if options else 5.0,
+        )
 
     async def run_to_file(
         self,

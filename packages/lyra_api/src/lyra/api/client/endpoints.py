@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from lyra.api.client.base import service_unavailable_error
+from lyra.api.client.base import parse_retry_after, service_unavailable_error
 from lyra.api.exceptions import DownloadError
 from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
 from lyra.sdk.models.data_types import DataTypesResponse
@@ -67,15 +67,25 @@ def check_status(
     if status in accepted_statuses:
         return
     err = f"Failed to {operation}. HTTP {status}: {text}"
-    if status == 503:
-        try:
-            payload = json.loads(text)
-        except ValueError as exc:
-            raise DownloadError(err) from exc
-        unavailable = service_unavailable_error(payload, retry_after)
-        if unavailable is not None:
-            raise unavailable
-    raise DownloadError(err)
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        payload = None
+    unavailable = service_unavailable_error(payload, retry_after)
+    if unavailable is not None:
+        unavailable.retryable = unavailable.retryable and status in {
+            429,
+            500,
+            502,
+            503,
+            504,
+        }
+        raise unavailable
+    raise DownloadError(
+        err,
+        retryable=status in {429, 500, 502, 503, 504},
+        retry_after_seconds=parse_retry_after(retry_after),
+    )
 
 
 def decode_response(

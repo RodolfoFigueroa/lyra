@@ -66,13 +66,10 @@ level = "INFO"
 # file = "/lyra_data/logs/lyra.log"
 
 [job_store]
-ttl_seconds = 600
+result_retention_seconds = 86400
 
-[job_events]
-progress_min_interval_ms = 250
-max_events_per_second = 20
-max_payload_bytes = 16384
-max_stream_events = 1000
+[job_progress]
+min_interval_ms = 1000
 
 [agent_submission_limit]
 # New REST and MCP jobs share this fixed-window quota. Idempotent replays do not

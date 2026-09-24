@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -11,12 +10,14 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import aiohttp
 import pytest
 import requests
+from aiohttp.client_reqrep import ConnectionKey
 from lyra.api import (
+    AsyncJobHandle,
     AsyncLyraAdminClient,
     AsyncLyraClient,
     DownloadError,
-    JobEventCursorGapError,
-    JobEventStreamError,
+    JobHandle,
+    JobPollingError,
     JobWaitTimeoutError,
     LyraAdminClient,
     LyraClient,
@@ -24,7 +25,6 @@ from lyra.api import (
     ServiceUnavailableError,
     SubmitOptions,
 )
-from lyra.api.client.events import StreamState
 from lyra.api.client.results import dataframe_path
 
 from tests.test_api_client_jobs import (
@@ -35,16 +35,15 @@ from tests.test_api_client_jobs import (
     FakeSyncResponse,
     _database_unavailable_response,
     _job_response,
-    _progress_event_lines,
     _readiness_response,
     _result_response,
-    _terminal_event_lines,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
     from pathlib import Path
 
-    from lyra.sdk.models.job import JobEventRecord
+    from lyra.sdk.models.job import JobProgress
     from lyra.sdk.types import JsonValue
 
 _T = TypeVar("_T")
@@ -152,29 +151,6 @@ class Scenario:
             raise reply
         return reply
 
-    def collect(
-        self,
-        *,
-        after_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> list[JobEventRecord]:
-        stream = self.client.jobs.events(
-            "job-1",
-            after_id=after_id,
-            kinds=kinds,
-            timeout=timeout,
-            max_reconnect_attempts=max_reconnect_attempts,
-        )
-        if isinstance(stream, AsyncIterator):
-
-            async def collect() -> list[JobEventRecord]:
-                return [event async for event in stream]
-
-            return asyncio.run(collect())
-        return list(stream)
-
     def advance(self, seconds: float = 1.0) -> None:
         self.now += seconds
 
@@ -211,10 +187,10 @@ def scenario(
     monkeypatch.setattr(requests, "get", sync_get)
     monkeypatch.setattr(aiohttp, "ClientSession", Session)
     monkeypatch.setattr(
-        "lyra.api.client.events.time", SimpleNamespace(monotonic=lambda: scenario.now)
+        "lyra.api.client.polling.time", SimpleNamespace(monotonic=lambda: scenario.now)
     )
     monkeypatch.setattr(
-        "lyra.api.client.events.random.SystemRandom.uniform",
+        "lyra.api.client.polling.random.SystemRandom.uniform",
         lambda _self, _low, high: high,
     )
     monkeypatch.setattr(
@@ -242,9 +218,7 @@ def test_request_failures_have_context_and_close(
     }
     with pytest.raises(DownloadError, match="Failed to") as error:
         resolve(operations[resource]())
-    if (status == 200 and resource != "submission") or (
-        status == 503 and text == "oops"
-    ):
+    if status == 200 and resource != "submission":
         assert error.value.__cause__ is not None
     assert reply.closed
     assert len(scenario.calls) == 1
@@ -378,192 +352,6 @@ def test_dataframe_temp_cleanup(
     assert not paths[0].exists()
 
 
-@pytest.mark.parametrize(
-    "lines", [["data: {}", ""], ["id: 1", "data: {", ""], ["id: 1", "data: {}", ""]]
-)
-def test_malformed_events_fail_without_retry(
-    scenario: Scenario, lines: list[str]
-) -> None:
-    reply = Reply(lines=lines)
-    scenario.replies = [reply]
-    with pytest.raises(DownloadError):
-        scenario.collect()
-    assert reply.closed
-    assert len(scenario.calls) == 1
-    assert not scenario.sleeps
-
-
-def test_multiline_eof_event_and_comment(scenario: Scenario) -> None:
-    lines = _terminal_event_lines()
-    data = next(line for line in lines if line.startswith("data: "))
-    split = data.index(",") + 1
-    scenario.replies = [
-        Reply(lines=[": heartbeat", lines[0], data[:split], "data: " + data[split:]])
-    ]
-    assert [record.event.name for record in scenario.collect()] == ["succeeded"]
-
-
-def test_resume_duplicate_filter_and_retry_reset(scenario: Scenario) -> None:
-    disconnect = (
-        aiohttp.ClientConnectionError("lost")
-        if scenario.asynchronous
-        else requests.ConnectionError("lost")
-    )
-    scenario.replies = [
-        Reply(status=500),
-        Reply(lines=_progress_event_lines(), read_error=disconnect),
-        Reply(lines=_progress_event_lines() + _terminal_event_lines("2-0")),
-    ]
-    assert scenario.collect(kinds={"message"}, max_reconnect_attempts=1) == []
-    assert scenario.sleeps == [0.5, 0.5]
-    assert scenario.calls[2][2]["headers"]["Last-Event-ID"] == "1-0"
-    assert len(scenario.calls) == 3
-
-
-def test_replayed_event_is_not_yielded(scenario: Scenario) -> None:
-    scenario.replies = [
-        Reply(lines=_progress_event_lines() + _terminal_event_lines("2-0"))
-    ]
-    assert [record.id for record in scenario.collect(after_id="1-0")] == ["2-0"]
-
-
-@pytest.mark.parametrize(
-    ("status", "error_type"),
-    [(409, JobEventCursorGapError), (403, DownloadError), (503, JobEventStreamError)],
-)
-def test_stream_status_policy(
-    scenario: Scenario, status: int, error_type: type[DownloadError]
-) -> None:
-    reply = Reply(status=status)
-    scenario.replies = [reply]
-    with pytest.raises(error_type) as error:
-        scenario.collect(after_id="old", max_reconnect_attempts=0)
-    if isinstance(error.value, JobEventStreamError):
-        assert error.value.last_event_id == "old"
-        assert error.value.job_id == "job-1"
-    assert reply.closed
-    assert not scenario.sleeps
-
-
-def test_retry_exhaustion_and_jitter_cap(scenario: Scenario) -> None:
-    scenario.replies = [Reply() for _ in range(7)]
-    with pytest.raises(JobEventStreamError) as error:
-        scenario.collect(max_reconnect_attempts=6)
-    assert error.value.attempts == 7
-    assert scenario.sleeps == [0.5, 1, 2, 4, 8, 8]
-
-
-def test_heartbeat_deadline(scenario: Scenario) -> None:
-    reply = Reply(lines=[": heartbeat"] * 4, on_line=scenario.advance)
-    scenario.replies = [reply]
-    with pytest.raises(JobWaitTimeoutError):
-        scenario.collect(timeout=2)
-    assert reply.closed
-    assert not scenario.sleeps
-
-
-def test_backoff_deadline(scenario: Scenario) -> None:
-    scenario.replies = [Reply(status=500)]
-    with pytest.raises(JobWaitTimeoutError):
-        scenario.collect(timeout=0.25)
-    assert scenario.sleeps == [0.25]
-    assert len(scenario.calls) == 1
-
-
-def test_stream_state_read_timeout_and_negative_limit() -> None:
-    state = StreamState("job", timeout=2, clock=lambda: 10)
-    assert state.read_timeout(30) == 2
-    assert state.read_timeout(1) == 1
-    with pytest.raises(ValueError, match="non-negative"):
-        StreamState("job", max_reconnect_attempts=-1)
-
-
-@pytest.mark.parametrize("scenario", [True], indirect=True)
-def test_async_callbacks_are_awaited_in_event_order(scenario: Scenario) -> None:
-    observed: list[str] = []
-    scenario.replies = [
-        Reply(status=202, payload=_job_response()),
-        Reply(lines=_progress_event_lines() + _terminal_event_lines("2-0")),
-        Reply(payload=_result_response()),
-    ]
-
-    async def on_event(record: JobEventRecord) -> None:
-        await asyncio.sleep(0)
-        observed.append(record.id)
-
-    async def run() -> None:
-        client = scenario.client
-        assert isinstance(client, AsyncLyraClient)
-        handle = await client.raw.submit("metric", {})
-        result = await handle.wait(on_event=on_event)
-        assert result.status == "succeeded"
-        assert observed == ["1-0", "2-0"]
-
-    asyncio.run(run())
-
-
-def test_callback_exceptions_propagate_unchanged(scenario: Scenario) -> None:
-    cause = ValueError("callback failed")
-    scenario.replies = [
-        Reply(status=202, payload=_job_response()),
-        Reply(lines=_progress_event_lines()),
-    ]
-
-    def on_event(_record: JobEventRecord) -> None:
-        raise cause
-
-    handle = resolve(scenario.client.raw.submit("metric", {}))
-    with pytest.raises(ValueError, match="callback failed") as error:
-        resolve(handle.wait(on_event=on_event))
-    assert error.value is cause
-    assert not scenario.sleeps
-
-
-def test_async_cancellation_closes_live_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    reply = Reply()
-
-    async def run() -> None:
-        started = asyncio.Event()
-        blocked = asyncio.Event()
-
-        class BlockingContent(FakeContent):
-            async def _iter_lines(self) -> AsyncIterator[bytes]:
-                assert isinstance(self, BlockingContent)
-                started.set()
-                await blocked.wait()
-                yield b": heartbeat"
-
-        response = AsyncReply(reply)
-        response.content = BlockingContent()
-        FakeSession.responses = [response]
-        monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
-        stream = AsyncLyraClient("example.test").jobs.events("job-1")
-
-        async def receive() -> JobEventRecord:
-            return await anext(stream)
-
-        task = asyncio.create_task(receive())
-        await started.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert reply.closed
-        assert FakeSession.responses == []
-
-    asyncio.run(run())
-
-
-def test_stream_read_timeouts_reconnect(scenario: Scenario) -> None:
-    cause = TimeoutError("late") if scenario.asynchronous else requests.Timeout("late")
-    first = Reply(read_error=cause)
-    scenario.replies = [first, Reply(lines=_terminal_event_lines())]
-    assert len(scenario.collect()) == 1
-    assert first.closed
-    assert scenario.sleeps == [0.5]
-
-
 @pytest.mark.parametrize("resource", ["file", "jsonl"])
 def test_streaming_download_and_cleanup(
     scenario: Scenario, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resource: str
@@ -639,3 +427,256 @@ def test_async_invalid_response_encoding_is_chained(
         asyncio.run(call)
     assert error.value.__cause__ is cause
     assert reply.closed
+
+
+def status_reply(
+    status: str = "running", *, current: float | None = None, stamp: int = 0
+) -> Reply:
+    payload: dict[str, Any] = {
+        "job_id": "job-1",
+        "metric": "heavy_metric",
+        "status": status,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    if current is not None:
+        payload["progress"] = {
+            "timestamp": f"2026-01-01T00:00:0{stamp}Z",
+            "stage": "work",
+            "current": current,
+        }
+    return Reply(payload=payload)
+
+
+def submit_handle(scenario: Scenario) -> JobHandle | AsyncJobHandle:
+    scenario.replies.insert(0, Reply(status=202, payload=_job_response()))
+    return resolve(scenario.client.raw.submit("heavy_metric", {}))
+
+
+def test_wait_polls_and_compares_progress_content(scenario: Scenario) -> None:
+    scenario.replies = [
+        status_reply(current=2),
+        status_reply(current=2, stamp=1),
+        status_reply(current=1, stamp=2),
+        status_reply("succeeded"),
+        Reply(payload=_result_response()),
+    ]
+    seen: list[float] = []
+    handle = submit_handle(scenario)
+
+    def progress(snapshot: JobProgress) -> None:
+        seen.append(snapshot.current)
+
+    assert resolve(handle.wait(on_progress=progress)).status == "succeeded"
+    assert seen == [2, 1]
+    assert scenario.sleeps == [5.5, 5.5, 5.5]
+    assert len(scenario.calls) == 6
+    assert all("events" not in url for _, url, _ in scenario.calls)
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_wait_retries_transient_status_with_guidance(
+    scenario: Scenario, status: int
+) -> None:
+    scenario.replies = [
+        Reply(status=status, text="temporary", headers={"Retry-After": "3"}),
+        status_reply("succeeded"),
+        Reply(payload=_result_response()),
+    ]
+    assert resolve(submit_handle(scenario).wait()).status == "succeeded"
+    assert scenario.sleeps == [3]
+
+
+def test_wait_retries_result_and_resets_counter(scenario: Scenario) -> None:
+    scenario.replies = [
+        *[Reply(status=503)] * 5,
+        status_reply("succeeded"),
+        *[Reply(status=503)] * 5,
+        Reply(payload=_result_response()),
+    ]
+    assert resolve(submit_handle(scenario).wait()).status == "succeeded"
+    assert scenario.sleeps[:5] == scenario.sleeps[5:]
+
+
+def test_wait_exhausts_five_retries(scenario: Scenario) -> None:
+    scenario.replies = [Reply(status=503)] * 6
+    with pytest.raises(JobPollingError) as exc:
+        resolve(submit_handle(scenario).wait())
+    assert exc.value.job_id == "job-1"
+    assert exc.value.attempts == 5
+    assert len(scenario.sleeps) == 5
+
+
+@pytest.mark.parametrize("seconds", [0, 2])
+def test_wait_deadline_bounds_observations_and_sleep(
+    scenario: Scenario, seconds: int
+) -> None:
+    scenario.replies = [status_reply()]
+    with pytest.raises(JobWaitTimeoutError) as exc:
+        resolve(submit_handle(scenario).wait(timeout=seconds))
+    assert exc.value.job_id == "job-1"
+    assert scenario.now == seconds
+    assert len(scenario.calls) == (1 if seconds == 0 else 2)
+    if seconds:
+        options = scenario.calls[-1][2]
+        if not scenario.asynchronous:
+            assert options["timeout"] == seconds
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422])
+def test_wait_permanent_errors_do_not_retry(scenario: Scenario, status: int) -> None:
+    scenario.replies = [Reply(status=status)]
+    with pytest.raises(DownloadError):
+        resolve(submit_handle(scenario).wait())
+    assert scenario.sleeps == []
+
+
+def test_wait_explicit_nonretryable_service_response(scenario: Scenario) -> None:
+    scenario.replies = [
+        Reply(
+            status=503,
+            payload={
+                "detail": {"code": "unavailable", "message": "stop", "retryable": False}
+            },
+        )
+    ]
+    with pytest.raises(ServiceUnavailableError):
+        resolve(submit_handle(scenario).wait())
+    assert scenario.sleeps == []
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_wait_raises_terminal_failure(scenario: Scenario, status: str) -> None:
+    scenario.replies = [
+        status_reply(status),
+        Reply(
+            payload={
+                "job_id": "job-1",
+                "kind": status,
+                "status": status,
+                "error": {"type": "test"},
+            }
+        ),
+    ]
+    with pytest.raises(MetricRunError) as exc:
+        resolve(submit_handle(scenario).wait())
+    assert exc.value.status == status
+
+
+def test_progress_callback_failure_is_not_retried(scenario: Scenario) -> None:
+    error = DownloadError("callback failed", retryable=True)
+
+    def callback(_: JobProgress) -> None:
+        raise error
+
+    scenario.replies = [status_reply(current=1)]
+    with pytest.raises(DownloadError) as exc:
+        resolve(submit_handle(scenario).wait(on_progress=callback))
+    assert exc.value is error
+    assert scenario.sleeps == []
+
+
+def test_async_progress_callback_is_awaited(scenario: Scenario) -> None:
+    if not scenario.asynchronous:
+        return
+    seen: list[float] = []
+
+    async def callback(snapshot: JobProgress) -> None:
+        await asyncio.sleep(0)
+        seen.append(snapshot.current)
+
+    scenario.replies = [
+        status_reply("succeeded", current=1),
+        Reply(payload=_result_response()),
+    ]
+    handle = submit_handle(scenario)
+    assert isinstance(handle, AsyncJobHandle)
+    resolve(handle.wait(on_progress=callback))
+    assert seen == [1]
+
+
+@pytest.mark.parametrize("interval", [0, -1, float("inf"), float("nan")])
+def test_poll_interval_must_be_positive_finite(
+    scenario: Scenario, interval: float
+) -> None:
+    with pytest.raises(ValueError, match="poll_interval"):
+        resolve(submit_handle(scenario).wait(poll_interval=interval))
+
+
+def test_wait_transport_timeout_retry_and_certificate_failure(
+    scenario: Scenario,
+) -> None:
+    transient = TimeoutError() if scenario.asynchronous else requests.Timeout()
+    scenario.replies = [
+        transient,
+        status_reply("succeeded"),
+        Reply(payload=_result_response()),
+    ]
+    assert resolve(submit_handle(scenario).wait()).status == "succeeded"
+    assert len(scenario.sleeps) == 1
+    permanent = (
+        aiohttp.ClientSSLError(
+            ConnectionKey(
+                host="test",
+                port=443,
+                is_ssl=True,
+                ssl=True,
+                proxy=None,
+                proxy_auth=None,
+                proxy_headers_hash=None,
+            ),
+            OSError("certificate"),
+        )
+        if scenario.asynchronous
+        else requests.exceptions.SSLError("certificate")
+    )
+    scenario.replies = [permanent]
+    with pytest.raises(DownloadError):
+        resolve(submit_handle(scenario).wait())
+    assert len(scenario.sleeps) == 1
+
+
+def test_async_cancelling_wait_does_not_cancel_remote_job(
+    scenario: Scenario,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not scenario.asynchronous:
+        return
+    scenario.replies = [status_reply()]
+    handle = submit_handle(scenario)
+    assert isinstance(handle, AsyncJobHandle)
+    entered = asyncio.Event()
+
+    async def sleep(_: float) -> None:
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr("lyra.api.client.async_.asyncio", SimpleNamespace(sleep=sleep))
+
+    async def run() -> None:
+        task = asyncio.ensure_future(handle.wait())
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert [method for method, _, _ in scenario.calls] == ["POST", "GET"]
+
+
+def test_terminal_result_retries_are_bounded_by_deadline(scenario: Scenario) -> None:
+    scenario.replies = [
+        status_reply("succeeded"),
+        Reply(status=503, headers={"Retry-After": "60"}),
+    ]
+    with pytest.raises(JobWaitTimeoutError):
+        resolve(submit_handle(scenario).wait(timeout=2))
+    assert scenario.now == 2
+    assert scenario.sleeps == [2]
+
+
+def test_malformed_polling_payload_is_permanent(scenario: Scenario) -> None:
+    scenario.replies = [Reply(text="not json")]
+    with pytest.raises(DownloadError):
+        resolve(submit_handle(scenario).wait())
+    assert not scenario.sleeps

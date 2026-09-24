@@ -16,16 +16,10 @@ import requests
 from lyra.api.client import endpoints
 from lyra.api.client.base import BaseTransport, load_pandas
 from lyra.api.client.endpoints import RequestSpec, validate_response
-from lyra.api.client.events import (
-    RetryableEventError,
-    SSEBuffer,
-    StreamState,
-    terminal_event,
-)
+from lyra.api.client.polling import PollingState
 from lyra.api.client.results import (
     dataframe_path,
     download_needs_text,
-    invoke_callbacks,
     require_file_result,
     successful_result,
     validate_download,
@@ -33,17 +27,15 @@ from lyra.api.client.results import (
 )
 from lyra.api.exceptions import (
     DownloadError,
-    JobEventStreamError,
+    ServiceUnavailableError,
 )
 from lyra.sdk.models.job import (
     FileJobResult,
     JobCancelResponse,
     JobCreateResponse,
-    JobEventRecord,
     JobLifecycleStatus,
     JobListResponse,
-    JobMessageEvent,
-    JobProgressEvent,
+    JobProgress,
     JobStatusInfo,
     ResultDescriptor,
     TableJobResult,
@@ -52,7 +44,7 @@ from lyra.sdk.models.job import (
 
 if TYPE_CHECKING:
     import os
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable
 
     import pandas as pd
     from lyra.api.options import RunOptions, SubmitOptions
@@ -75,22 +67,6 @@ if TYPE_CHECKING:
 _ResponseT = TypeVar("_ResponseT")
 _SuccessResultT = TypeVar("_SuccessResultT", bound=TableJobResult | FileJobResult)
 SuccessfulJobResult = TableJobResult | FileJobResult
-
-
-def _iter_sse_job_events(
-    lines: Iterable[str | bytes],
-    state: StreamState,
-) -> Iterator[JobEventRecord]:
-    buffer = SSEBuffer()
-    for line in lines:
-        state.check_deadline()
-        record = buffer.add(line)
-        if record is not None:
-            yield record
-    state.check_deadline()
-    record = buffer.flush()
-    if record is not None:
-        yield record
 
 
 class JobHandle(Generic[_SuccessResultT]):
@@ -132,39 +108,6 @@ class JobHandle(Generic[_SuccessResultT]):
         """
         return self._client.get_job(self.job_id)
 
-    def events(
-        self,
-        *,
-        after_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> Iterator[JobEventRecord]:
-        """Stream job events until the job reaches a terminal state.
-
-        The stream reconnects automatically after transient connection failures and
-        resumes after the last received event.
-
-        Args:
-            after_id: Resume after this server-sent event identifier.
-            kinds: Event kinds to yield. All events are yielded when omitted.
-            timeout: Maximum total number of seconds to wait. ``None`` waits without
-                a deadline.
-            max_reconnect_attempts: Number of consecutive reconnection attempts
-                allowed after the initial connection.
-
-        Returns:
-            An iterator of job event records in server order.
-
-        """
-        return self._client.iter_job_events(
-            self.job_id,
-            last_event_id=after_id,
-            kinds=kinds,
-            timeout=timeout,
-            max_reconnect_attempts=max_reconnect_attempts,
-        )
-
     def result(self) -> _SuccessResultT:
         """Fetch and return the job's successful terminal result.
 
@@ -181,53 +124,60 @@ class JobHandle(Generic[_SuccessResultT]):
         self,
         *,
         timeout: float | None = None,
-        on_event: Callable[[JobEventRecord], None] | None = None,
-        on_progress: Callable[[JobProgressEvent], None] | None = None,
-        on_message: Callable[[JobMessageEvent], None] | None = None,
+        poll_interval: float = 5.0,
+        on_progress: Callable[[JobProgress], None] | None = None,
     ) -> _SuccessResultT:
-        """Wait for the job to finish and return its successful result.
+        """Poll immediately, then periodically, until a terminal result is available.
 
-        Args:
-            timeout: Maximum total number of seconds to wait. ``None`` waits without
-                a deadline.
-            on_event: Called for every event received from the job stream.
-            on_progress: Called for every progress event.
-            on_message: Called for every message event.
+        Progress callbacks receive changed snapshots. Callback failures propagate.
+        A local timeout or cancellation never cancels the remote job.
 
         Returns:
-            The table or file result produced by the job.
-
-        Raises:
-            JobEventStreamError: If the event stream ends before a terminal event.
-
+            The successful result; failed or cancelled results raise MetricRunError.
         """
-        for record in self.events(timeout=timeout):
-            for _callback_result in invoke_callbacks(
-                record, on_event, on_progress, on_message
-            ):
-                pass
-            if terminal_event(record):
-                return self.result()
-        err = f"Job {self.job_id} event stream ended before a terminal event."
-        raise JobEventStreamError(
-            err,
-            job_id=self.job_id,
-            last_event_id=None,
-            attempts=0,
-        )
+        state = PollingState(self.job_id, timeout, poll_interval)
+        terminal = False
+        while True:
+            try:
+                request = (
+                    endpoints.get_job_result(self.job_id)
+                    if terminal
+                    else endpoints.get_job(self.job_id)
+                )
+                response = self._client.observe(
+                    request, request_timeout=state.request_timeout(self._client.timeout)
+                )
+                state.remaining()
+            except (DownloadError, ServiceUnavailableError) as exc:
+                time.sleep(state.retry_delay(exc))
+                continue
+            state.failures = 0
+            if terminal:
+                return cast(
+                    "_SuccessResultT",
+                    successful_result(cast("TerminalJobResult", response)),
+                )
+            snapshot = cast("JobStatusInfo", response)
+            if state.changed(snapshot.progress) and on_progress is not None:
+                on_progress(cast("JobProgress", snapshot.progress))
+            terminal = snapshot.status in {"succeeded", "failed", "cancelled"}
+            if not terminal:
+                time.sleep(state.delay())
 
 
 class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -- API surface
     """Private synchronous HTTP implementation used by resource clients."""
 
-    def _request(self, spec: RequestSpec[_ResponseT]) -> _ResponseT:
+    def _request(
+        self, spec: RequestSpec[_ResponseT], *, request_timeout: float | None = None
+    ) -> _ResponseT:
         try:
             with requests.request(
                 spec.method,
                 self._http_url(spec.path),
                 params=spec.params,
                 json=spec.json_body,
-                timeout=self.timeout,
+                timeout=self.timeout if request_timeout is None else request_timeout,
                 headers=self._auth_headers if spec.authenticated else self.headers,
             ) as response:
                 return validate_response(
@@ -239,7 +189,16 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
                 )
         except requests.RequestException as exc:
             err = f"Failed to {spec.operation}: request error: {exc}"
-            raise DownloadError(err) from exc
+            raise DownloadError(
+                err,
+                retryable=isinstance(exc, (requests.ConnectionError, requests.Timeout))
+                and not isinstance(exc, requests.exceptions.SSLError),
+            ) from exc
+
+    def observe(
+        self, spec: RequestSpec[_ResponseT], *, request_timeout: float
+    ) -> _ResponseT:
+        return self._request(spec, request_timeout=request_timeout)
 
     def get_liveness(self) -> LivenessResponse:
         return self._request(endpoints.get_liveness())
@@ -313,40 +272,6 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
 
     def get_admin_queues(self) -> QueuesResponse:
         return self._request(endpoints.get_admin_queues())
-
-    def iter_job_events(
-        self,
-        job_id: str,
-        *,
-        last_event_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> Iterator[JobEventRecord]:
-        state = StreamState(
-            job_id, last_event_id, kinds, timeout, max_reconnect_attempts
-        )
-        while True:
-            state.check_deadline()
-            try:
-                with requests.get(
-                    self._http_url(f"jobs/{job_id}/events"),
-                    timeout=state.read_timeout(self.timeout),
-                    headers=state.headers(self._auth_headers),
-                    stream=True,
-                ) as response:
-                    state.validate_status(response.status_code)
-                    for record in _iter_sse_job_events(
-                        response.iter_lines(decode_unicode=True),
-                        state,
-                    ):
-                        if state.accept(record):
-                            yield record
-                        if state.terminal:
-                            return
-            except (requests.RequestException, RetryableEventError):
-                pass
-            time.sleep(state.retry_delay())
 
     def get_job_result(self, job_id: str) -> TerminalJobResult:
         return self._request(endpoints.get_job_result(job_id))
@@ -472,23 +397,6 @@ class _JobsResource:
     def get(self, job_id: str) -> JobStatusInfo:
         return self._transport.get_job(job_id)
 
-    def events(
-        self,
-        job_id: str,
-        *,
-        after_id: str | None = None,
-        kinds: set[str] | None = None,
-        timeout: float | None = None,
-        max_reconnect_attempts: int = 5,
-    ) -> Iterator[JobEventRecord]:
-        return self._transport.iter_job_events(
-            job_id,
-            last_event_id=after_id,
-            kinds=kinds,
-            timeout=timeout,
-            max_reconnect_attempts=max_reconnect_attempts,
-        )
-
 
 class _ResultsResource:
     def __init__(self, transport: _SyncTransport) -> None:
@@ -554,7 +462,10 @@ class _RawMetricsResource:
             arguments,
             idempotency_key=key,
         )
-        return handle.wait(timeout=wait_seconds)
+        return handle.wait(
+            timeout=wait_seconds,
+            poll_interval=options.poll_interval if options else 5.0,
+        )
 
     def run_to_file(
         self,

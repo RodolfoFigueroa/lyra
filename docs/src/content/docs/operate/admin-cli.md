@@ -29,7 +29,7 @@ set the request timeout with `--timeout SECONDS`.
 `--admin-api-key TOKEN` overrides `LYRA_ADMIN_API_KEY`. Health checks are public;
 remote inspection and cancellation commands require the admin key. Offline
 `config validate PATH` requires no credentials. Agent credentials and consumer job
-event streams are outside this CLI's interface.
+continuous observation is outside this CLI's interface.
 
 ## Inspection
 

@@ -13,11 +13,11 @@ from lyra_app.config import (
     DEFAULT_API_PORT,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
     DEFAULT_FORWARDED_ALLOW_IPS,
-    DEFAULT_JOB_STORE_TTL_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MCP_MOUNT_PATH,
     DEFAULT_PLUGIN_CATALOG_DIR,
     DEFAULT_PLUGIN_RUNNER_BASE_DIR,
+    DEFAULT_RESULT_RETENTION_SECONDS,
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_AGENT_API_KEY_ENV,
     LYRA_DATA_DIR,
@@ -63,7 +63,7 @@ def _valid_config(base: Path) -> dict[str, Any]:
             "file": str(base / "logs" / "lyra.log"),
         },
         "job_store": {
-            "ttl_seconds": 600,
+            "result_retention_seconds": 600,
         },
         "agent_submission_limit": {
             "limit": 10,
@@ -132,7 +132,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
-    assert config.job_store.ttl_seconds == 600
+    assert config.job_store.result_retention_seconds == 600
     assert config.agent_submission_limit.limit == 10
     assert config.agent_submission_limit.window_seconds == 60
     assert config.plugins.allowed_queues == ["interactive", "batch"]
@@ -170,7 +170,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
-    assert config.job_store.ttl_seconds == DEFAULT_JOB_STORE_TTL_SECONDS
+    assert config.job_store.result_retention_seconds == DEFAULT_RESULT_RETENTION_SECONDS
     assert config.agent_submission_limit.limit == DEFAULT_AGENT_SUBMISSION_LIMIT
     assert (
         config.agent_submission_limit.window_seconds
@@ -268,7 +268,7 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
         ("api", "port", 0, "greater than or equal to 1"),
         ("redis", "url", "postgres://db:5432/lyra", "redis.url"),
         ("logging", "level", "NOPE", "logging.level"),
-        ("job_store", "ttl_seconds", 0, "greater than 0"),
+        ("job_store", "result_retention_seconds", 0, "greater than 0"),
         ("agent_submission_limit", "limit", 0, "greater than 0"),
         ("agent_submission_limit", "limit", -1, "greater than 0"),
         ("agent_submission_limit", "window_seconds", 0, "greater than 0"),

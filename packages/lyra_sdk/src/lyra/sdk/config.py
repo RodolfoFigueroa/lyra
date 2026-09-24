@@ -17,11 +17,8 @@ DEFAULT_CONFIG_PATH = LYRA_DATA_DIR / "config" / "lyra.toml"
 DEFAULT_API_HOST = str(ipaddress.IPv4Address(0))
 DEFAULT_API_PORT = 5219
 DEFAULT_FORWARDED_ALLOW_IPS = ["127.0.0.1"]
-DEFAULT_JOB_STORE_TTL_SECONDS = 600
-DEFAULT_JOB_EVENT_PROGRESS_MIN_INTERVAL_MS = 250
-DEFAULT_JOB_EVENT_MAX_EVENTS_PER_SECOND = 20
-DEFAULT_JOB_EVENT_MAX_PAYLOAD_BYTES = 16384
-DEFAULT_JOB_EVENT_MAX_STREAM_EVENTS = 1000
+DEFAULT_RESULT_RETENTION_SECONDS = 86400
+DEFAULT_PROGRESS_MIN_INTERVAL_MS = 1000
 DEFAULT_AGENT_SUBMISSION_LIMIT = 10
 DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = 60
 DEFAULT_LOG_LEVEL = "INFO"
@@ -434,39 +431,24 @@ class LoggingConfig(StrictConfigModel):
 class JobStoreConfig(StrictConfigModel):
     """Configure retention for persisted job data."""
 
-    ttl_seconds: int = Field(
-        default=DEFAULT_JOB_STORE_TTL_SECONDS,
+    result_retention_seconds: int = Field(
+        default=DEFAULT_RESULT_RETENTION_SECONDS,
         gt=0,
-        description="Retention time for job state, events, results, and idempotency.",
+        description=(
+            "Retention after termination for status, results, provenance, "
+            "and idempotency."
+        ),
     )
 
 
-class JobEventsConfig(StrictConfigModel):
-    """Configure durable job-event throttling, size, and retention limits."""
+class JobProgressConfig(StrictConfigModel):
+    """Configure optional progress snapshot writes."""
 
-    progress_min_interval_ms: int = Field(
-        default=DEFAULT_JOB_EVENT_PROGRESS_MIN_INTERVAL_MS,
+    min_interval_ms: int = Field(
+        default=DEFAULT_PROGRESS_MIN_INTERVAL_MS,
         ge=0,
         strict=True,
-        description="Minimum interval between retained progress events.",
-    )
-    max_events_per_second: int = Field(
-        default=DEFAULT_JOB_EVENT_MAX_EVENTS_PER_SECOND,
-        gt=0,
-        strict=True,
-        description="Maximum plugin-authored events retained per job each second.",
-    )
-    max_payload_bytes: int = Field(
-        default=DEFAULT_JOB_EVENT_MAX_PAYLOAD_BYTES,
-        gt=0,
-        strict=True,
-        description="Maximum UTF-8 encoded payload size for one job event.",
-    )
-    max_stream_events: int = Field(
-        default=DEFAULT_JOB_EVENT_MAX_STREAM_EVENTS,
-        gt=0,
-        strict=True,
-        description="Approximate retained event count limit for each job.",
+        description="Minimum elapsed time between progress writes.",
     )
 
 
@@ -734,9 +716,9 @@ class LyraConfig(StrictConfigModel):
     )
     logging: LoggingConfig = Field(description="Application logging settings.")
     job_store: JobStoreConfig = Field(description="Retained job-store settings.")
-    job_events: JobEventsConfig = Field(
-        default_factory=JobEventsConfig,
-        description="Durable job event limits and coalescing settings.",
+    job_progress: JobProgressConfig = Field(
+        default_factory=JobProgressConfig,
+        description="Progress snapshot coalescing settings.",
     )
     agent_submission_limit: AgentSubmissionLimitConfig = Field(
         default_factory=AgentSubmissionLimitConfig,

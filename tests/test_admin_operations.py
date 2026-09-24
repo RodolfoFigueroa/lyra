@@ -12,7 +12,7 @@ from lyra_app.config import clear_config_cache
 from lyra_app.registry import reset_catalog
 from lyra_app.routes import admin
 from tests.config_helpers import load_test_config
-from tests.redis_job_scripts import eval_job_script
+from tests.redis_job_scripts import eval_job_script, seed_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -23,7 +23,6 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
-        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
@@ -37,26 +36,6 @@ class FakeRedisSync:
 
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
-
-    def xadd(self, key: str, fields: dict[str, str]) -> str:
-        stream = self.streams.setdefault(key, [])
-        stream_id = f"{len(stream) + 1}-0"
-        stream.append((stream_id, fields))
-        return stream_id
-
-    def xrange(
-        self,
-        key: str,
-        minimum: str,
-        /,
-        *,
-        count: int | None = None,
-    ) -> list[tuple[str, dict[str, str]]]:
-        records = self.streams.get(key, [])
-        if minimum.startswith("("):
-            after_id = minimum[1:]
-            records = [record for record in records if record[0] > after_id]
-        return records if count is None else records[:count]
 
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
@@ -74,25 +53,17 @@ class FakeRedisSync:
         for member in members:
             sorted_set.pop(member, None)
 
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
-        lower = float("-inf") if min == "-inf" else float(min)
-        sorted_set = self.sorted_sets.setdefault(key, {})
-        for member, score in list(sorted_set.items()):
-            if lower <= score <= max:
-                sorted_set.pop(member, None)
-
     def eval(
         self,
         script: str,
         numkeys: int,
         *keys_and_args: str | float,
     ) -> int | str:
-        del script
-        return eval_job_script(self, numkeys, keys_and_args)
+        return eval_job_script(self, numkeys, keys_and_args, script)
 
 
 class FailingRedisSync(FakeRedisSync):
-    def zremrangebyscore(self, *_args: object, **_kwargs: object) -> None:
+    def zrevrange(self, *_args: object, **_kwargs: object) -> list[str]:
         assert isinstance(self, FailingRedisSync)
         raise RedisError
 
@@ -162,11 +133,11 @@ def test_admin_jobs_list_filters_by_status_and_metric(
 ) -> None:
     redis = FakeRedisSync()
     monkeypatch.setattr(admin.job_store, "redis_client_sync", redis)
-    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-2", "queued", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-2", "running", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-3", "queued", metric="light_metric", client=redis)
-    job_store.set_job_status("job-3", "running", metric="light_metric", client=redis)
+    seed_status("job-1", "queued", metric="heavy_metric", client=redis)
+    seed_status("job-2", "queued", metric="heavy_metric", client=redis)
+    seed_status("job-2", "running", metric="heavy_metric", client=redis)
+    seed_status("job-3", "queued", metric="light_metric", client=redis)
+    seed_status("job-3", "running", metric="light_metric", client=redis)
 
     response = admin.list_jobs(limit=10, status="running", metric="heavy_metric")
 
@@ -207,8 +178,8 @@ def test_admin_cancel_job_marks_active_job_and_revokes_task(
     revoked: list[str] = []
     monkeypatch.setattr(admin.job_store, "redis_client_sync", redis)
     monkeypatch.setattr(admin, "revoke_job", revoked.append)
-    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-1", "running", metric="heavy_metric", client=redis)
+    seed_status("job-1", "queued", metric="heavy_metric", client=redis)
+    seed_status("job-1", "running", metric="heavy_metric", client=redis)
 
     response = admin.cancel_job("job-1")
 
@@ -221,13 +192,9 @@ def test_admin_cancel_job_marks_active_job_and_revokes_task(
     stored_snapshot = job_store.get_job_status("job-1", client=redis)
     assert stored_snapshot is not None
     assert stored_snapshot.status == "cancelled"
-    assert [
-        event.event.name for event in job_store.read_job_events("job-1", client=redis)
-    ] == [
-        "queued",
-        "running",
-        "cancelled",
-    ]
+    result = job_store.get_job_result("job-1", client=redis)
+    assert result is not None
+    assert result["status"] == "cancelled"
     assert revoked == ["job-1"]
 
 
@@ -239,8 +206,8 @@ def test_admin_cancel_job_rejects_terminal_job(
     revoked: list[str] = []
     monkeypatch.setattr(admin.job_store, "redis_client_sync", redis)
     monkeypatch.setattr(admin, "revoke_job", revoked.append)
-    job_store.set_job_status("job-1", "queued", metric="heavy_metric", client=redis)
-    job_store.set_job_status("job-1", "succeeded", metric="heavy_metric", client=redis)
+    seed_status("job-1", "queued", metric="heavy_metric", client=redis)
+    seed_status("job-1", "succeeded", metric="heavy_metric", client=redis)
 
     failed = _assert_http_error(409, admin.cancel_job, "job-1")
 

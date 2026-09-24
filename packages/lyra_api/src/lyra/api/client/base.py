@@ -2,10 +2,32 @@
 
 import importlib
 import logging
+import math
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from types import ModuleType
 from urllib.parse import urlparse
 
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Parse finite nonnegative seconds or an HTTP date.
+
+    Returns:
+        Valid delay guidance, otherwise None.
+    """
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            return None
+        seconds = max(0.0, seconds)
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def service_unavailable_error(
@@ -29,10 +51,7 @@ def service_unavailable_error(
         return None
     if not isinstance(retryable, bool):
         return None
-    try:
-        retry_after_seconds = int(retry_after) if retry_after is not None else None
-    except ValueError:
-        retry_after_seconds = None
+    retry_after_seconds = parse_retry_after(retry_after)
     return ServiceUnavailableError(
         message,
         code=code,

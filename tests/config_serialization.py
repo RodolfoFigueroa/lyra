@@ -17,7 +17,7 @@ from lyra_app.config import (
     DatabaseConfig,
     DatabasePoolConfig,
     EarthEngineConfig,
-    JobEventsConfig,
+    JobProgressConfig,
     JobStoreConfig,
     LoggingConfig,
     LyraConfig,
@@ -137,20 +137,19 @@ def _append_mcp_section(lines: list[str], mcp: McpConfig) -> None:
 
 def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> None:
     lines.append("[job_store]")
-    _append_key(lines, "ttl_seconds", job_store.ttl_seconds)
+    _append_key(lines, "result_retention_seconds", job_store.result_retention_seconds)
     lines.append("")
 
 
-def _append_job_events_section(lines: list[str], job_events: JobEventsConfig) -> None:
-    lines.append("[job_events]")
+def _append_job_progress_section(
+    lines: list[str], job_progress: JobProgressConfig
+) -> None:
+    lines.append("[job_progress]")
     _append_key(
         lines,
-        "progress_min_interval_ms",
-        job_events.progress_min_interval_ms,
+        "min_interval_ms",
+        job_progress.min_interval_ms,
     )
-    _append_key(lines, "max_events_per_second", job_events.max_events_per_second)
-    _append_key(lines, "max_payload_bytes", job_events.max_payload_bytes)
-    _append_key(lines, "max_stream_events", job_events.max_stream_events)
     lines.append("")
 
 
@@ -221,7 +220,7 @@ def render_config_toml(config: LyraConfig) -> str:
     _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)
     _append_job_store_section(lines, config.job_store)
-    _append_job_events_section(lines, config.job_events)
+    _append_job_progress_section(lines, config.job_progress)
     _append_agent_submission_limit_section(lines, config.agent_submission_limit)
     _append_plugins_section(lines, config.plugins)
     _append_workers_section(lines, config.workers)

@@ -12,7 +12,6 @@ from lyra.sdk.config import PluginRepoConfig
 from lyra.sdk.models.job import (
     FileJobResult,
     JobEnvelope,
-    JobProgressEvent,
     TableJobResult,
     TerminalJobResult,
 )
@@ -26,7 +25,7 @@ from lyra_app.plugin_runtime import read_snapshot
 from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from tests.catalog_helpers import configure_catalog_sources
 from tests.config_helpers import load_test_config
-from tests.redis_job_scripts import eval_job_script
+from tests.redis_job_scripts import eval_job_script, seed_status
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
     SMOKE_PLUGIN_DIR,
@@ -167,7 +166,6 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
-        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
@@ -182,21 +180,8 @@ class FakeRedisSync:
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
 
-    def xadd(self, key: str, fields: dict[str, str]) -> str:
-        stream = self.streams.setdefault(key, [])
-        stream_id = f"{len(stream) + 1}-0"
-        stream.append((stream_id, fields))
-        return stream_id
-
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
-
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
-        lower = float("-inf") if min == "-inf" else float(min)
-        sorted_set = self.sorted_sets.setdefault(key, {})
-        for member, score in list(sorted_set.items()):
-            if lower <= score <= max:
-                sorted_set.pop(member, None)
 
     def eval(
         self,
@@ -204,22 +189,7 @@ class FakeRedisSync:
         numkeys: int,
         *keys_and_args: str | float,
     ) -> int | str:
-        del script
-        return eval_job_script(self, numkeys, keys_and_args)
-
-    def xrange(
-        self,
-        key: str,
-        minimum: str,
-        /,
-        *,
-        count: int | None = None,
-    ) -> list[tuple[str, dict[str, str]]]:
-        records = self.streams.get(key, [])
-        if minimum.startswith("("):
-            after_id = minimum[1:]
-            records = [record for record in records if record[0] > after_id]
-        return records if count is None else records[:count]
+        return eval_job_script(self, numkeys, keys_and_args, script)
 
 
 @pytest.fixture
@@ -595,6 +565,8 @@ def test_generic_task_executes_factory_and_persists_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-1") is None:
+        seed_status("job-1", "queued", metric="heavy_metric")
     payload = worker_module.execute_job(
         {
             "job_id": "job-1",
@@ -622,15 +594,6 @@ def test_generic_task_executes_factory_and_persists_result(
     assert descriptor.preview.rows == [{"_result_index": "area-1", "value": 6}]
     assert _decode_stored_result(worker_module, fake_redis, "job-1") == payload
     assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "succeeded"
-    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
-    assert [event.event.name for event in events] == [
-        "queued",
-        "running",
-        "progress",
-        "succeeded",
-    ]
-    assert isinstance(events[2].event, JobProgressEvent)
-    assert events[2].event.current == 50
 
 
 def test_smoke_table_metric_executes_from_directory_fixture(
@@ -643,6 +606,8 @@ def test_smoke_table_metric_executes_from_directory_fixture(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-smoke-table") is None:
+        seed_status("job-smoke-table", "queued", metric="smoke_table_metric")
     payload = worker_module.execute_job(
         {
             "job_id": "job-smoke-table",
@@ -666,18 +631,6 @@ def test_smoke_table_metric_executes_from_directory_fixture(
     assert (
         _decode_stored_result(worker_module, fake_redis, "job-smoke-table") == payload
     )
-    events = worker_module.job_store.read_job_events(
-        "job-smoke-table",
-        client=fake_redis,
-    )
-    assert [event.event.name for event in events] == [
-        "queued",
-        "running",
-        "progress",
-        "succeeded",
-    ]
-    assert isinstance(events[2].event, JobProgressEvent)
-    assert events[2].event.stage == "table"
 
 
 def test_unknown_metric_persists_failed_result(
@@ -687,6 +640,8 @@ def test_unknown_metric_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-unknown") is None:
+        seed_status("job-unknown", "queued", metric="missing")
     result = worker_module.execute_job(
         {"job_id": "job-unknown", "metric": "missing", "input": {}},
         task_id="task-id",
@@ -707,6 +662,8 @@ def test_invalid_job_envelope_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("task-id") is None:
+        seed_status("task-id", "queued")
     result = worker_module.execute_job({"metric": "missing"}, task_id="task-id")
 
     assert result["job_id"] == "task-id"
@@ -733,13 +690,18 @@ def test_plugin_exception_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-bad") is None:
+        seed_status("job-bad", "queued", metric="bad_metric")
     result = worker_module.execute_job(
         {"job_id": "job-bad", "metric": "bad_metric", "input": {}},
         task_id="task-id",
     )
 
     assert result["status"] == "failed"
-    assert result["error"] == {"type": "worker", "message": "boom"}
+    assert result["error"] == {
+        "type": "worker",
+        "message": "Metric execution failed unexpectedly.",
+    }
     assert _decode_stored_result(worker_module, fake_redis, "job-bad") == result
 
 
@@ -761,6 +723,8 @@ def test_database_exception_persists_retryable_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-database") is None:
+        seed_status("job-database", "queued", metric="database_metric")
     result = worker_module.execute_job(
         {"job_id": "job-database", "metric": "database_metric", "input": {}},
         task_id="task-id",
@@ -807,6 +771,8 @@ def test_invalid_plugin_result_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-invalid") is None:
+        seed_status("job-invalid", "queued", metric="invalid_metric")
     result = worker_module.execute_job(
         {"job_id": "job-invalid", "metric": "invalid_metric", "input": {}},
         task_id="task-id",
@@ -866,6 +832,8 @@ def test_invalid_table_result_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-invalid-table") is None:
+        seed_status("job-invalid-table", "queued", metric="invalid_table_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-invalid-table",
@@ -903,6 +871,8 @@ def test_worker_appends_fractional_area_column(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-area") is None:
+        seed_status("job-area", "queued", metric="area_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-area",
@@ -939,6 +909,8 @@ def test_worker_normalizes_fraction_within_range_tolerance(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-area-tolerance") is None:
+        seed_status("job-area-tolerance", "queued", metric="area_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-area-tolerance",
@@ -976,6 +948,8 @@ def test_worker_rejects_fraction_outside_unit_interval(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-area-range") is None:
+        seed_status("job-area-range", "queued", metric="area_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-area-range",
@@ -1021,6 +995,8 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-area-missing") is None:
+        seed_status("job-area-missing", "queued", metric="area_metric")
     missing = worker_module.execute_job(
         {
             "job_id": "job-area-missing",
@@ -1030,6 +1006,8 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
         },
         task_id="task-id",
     )
+    if worker_module.job_store.get_job_status("job-area-null") is None:
+        seed_status("job-area-null", "queued", metric="area_metric")
     succeeded = worker_module.execute_job(
         {
             "job_id": "job-area-null",
@@ -1071,6 +1049,10 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-duplicate-location") is None:
+        seed_status(
+            "job-duplicate-location", "queued", metric="duplicate_location_metric"
+        )
     result = worker_module.execute_job(
         {
             "job_id": "job-duplicate-location",
@@ -1121,6 +1103,8 @@ def test_file_result_persists_through_generic_result_path(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-file") is None:
+        seed_status("job-file", "queued", metric="file_metric")
     result = worker_module.execute_job(
         {"job_id": "job-file", "metric": "file_metric", "input": {}},
         task_id="task-id",
@@ -1147,6 +1131,8 @@ def test_smoke_file_metric_executes_from_directory_fixture(
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
     expected_path = tmp_path / "tmp" / "job-smoke-file" / "smoke-result.txt"
 
+    if worker_module.job_store.get_job_status("job-smoke-file") is None:
+        seed_status("job-smoke-file", "queued", metric="smoke_file_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-smoke-file",
@@ -1204,6 +1190,8 @@ def test_invalid_file_result_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-invalid-file") is None:
+        seed_status("job-invalid-file", "queued", metric="invalid_file_metric")
     result = worker_module.execute_job(
         {"job_id": "job-invalid-file", "metric": "invalid_file_metric", "input": {}},
         task_id="task-id",
@@ -1221,7 +1209,7 @@ def test_check_cancelled_persists_cancelled_result(
     worker_module: ModuleType,
 ) -> None:
     def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:
-        worker_module.job_store.set_job_status(job.job_id, "cancelled")
+        seed_status(job.job_id, "cancelled")
         context.check_cancelled()
         return TableJobResult(
             job_id=job.job_id,
@@ -1239,6 +1227,8 @@ def test_check_cancelled_persists_cancelled_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    if worker_module.job_store.get_job_status("job-cancel") is None:
+        seed_status("job-cancel", "queued", metric="cancel_metric")
     result = worker_module.execute_job(
         {"job_id": "job-cancel", "metric": "cancel_metric", "input": {}},
         task_id="task-id",
@@ -1263,17 +1253,19 @@ def test_smoke_cancel_metric_respects_pre_cancelled_job(
     _load_smoke_runner_registry(tmp_path, monkeypatch, worker_module)
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
-    worker_module.job_store.set_job_status(
+    seed_status(
         "job-smoke-cancel",
         "queued",
         metric="smoke_cancel_metric",
     )
-    worker_module.job_store.set_job_status(
+    seed_status(
         "job-smoke-cancel",
         "cancelled",
         metric="smoke_cancel_metric",
     )
 
+    if worker_module.job_store.get_job_status("job-smoke-cancel") is None:
+        seed_status("job-smoke-cancel", "queued", metric="smoke_cancel_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-smoke-cancel",
@@ -1297,7 +1289,7 @@ def test_smoke_cancel_metric_respects_pre_cancelled_job(
     )
 
 
-def test_run_context_report_progress_writes_typed_event(
+def test_run_context_report_progress_writes_snapshot(
     worker_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1312,18 +1304,14 @@ def test_run_context_report_progress_writes_typed_event(
         db=None,
     )
 
-    worker_module.job_store.set_job_status(
-        "job-1", "queued", metric="metric", client=fake_redis
-    )
-    worker_module.job_store.set_job_status(
-        "job-1", "running", metric="metric", client=fake_redis
-    )
+    seed_status("job-1", "queued", metric="metric", client=fake_redis)
+    seed_status("job-1", "running", metric="metric", client=fake_redis)
     context.report_progress(stage="compute", current=50, total=100)
 
-    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
-    assert events[-1].event.name == "progress"
-    assert isinstance(events[-1].event, JobProgressEvent)
-    assert events[-1].event.current == 50
+    snapshot = worker_module.job_store.get_job_status("job-1", client=fake_redis)
+    assert snapshot is not None
+    assert snapshot.progress is not None
+    assert snapshot.progress.current == 50
     assert _decode_status(worker_module, fake_redis, "job-1")["status"] == "running"
 
 
@@ -1336,8 +1324,8 @@ def test_run_context_coalesces_progress_and_flushes_latest(
     config = get_config()
     coalescing_config = config.model_copy(
         update={
-            "job_events": config.job_events.model_copy(
-                update={"progress_min_interval_ms": 1_000}
+            "job_progress": config.job_progress.model_copy(
+                update={"min_interval_ms": 1_000}
             )
         }
     )
@@ -1351,25 +1339,20 @@ def test_run_context_coalesces_progress_and_flushes_latest(
         temp_dir=tmp_path,
         db=None,
     )
-    worker_module.job_store.set_job_status(
-        "job-1", "queued", metric="metric", client=fake_redis
-    )
-    worker_module.job_store.set_job_status(
-        "job-1", "running", metric="metric", client=fake_redis
-    )
+    seed_status("job-1", "queued", metric="metric", client=fake_redis)
+    seed_status("job-1", "running", metric="metric", client=fake_redis)
 
     context.report_progress(stage="compute", current=0, total=10)
     context.report_progress(stage="compute", current=1, total=10)
-    context.report_progress(stage="compute", current=2, total=10)
-    context.flush_events()
+    context.report_progress(stage="revised", current=0.5, total=20, unit="items")
+    context.flush_progress()
 
-    events = worker_module.job_store.read_job_events("job-1", client=fake_redis)
-    progress = [
-        event.event.current
-        for event in events
-        if isinstance(event.event, JobProgressEvent)
-    ]
-    assert progress == [0, 2]
+    snapshot = worker_module.job_store.get_job_status("job-1", client=fake_redis)
+    assert snapshot is not None
+    assert snapshot.progress is not None
+    assert snapshot.progress.current == pytest.approx(0.5)
+    assert snapshot.progress.stage == "revised"
+    assert snapshot.progress.total == 20
 
 
 def test_runner_uses_startup_copy_after_original_directory_changes(
@@ -1410,3 +1393,34 @@ def test_runner_rejects_modified_captured_source(
     monkeypatch.setattr(worker_module, "install_runner_plugins", unexpected_install)
     with pytest.raises(RuntimeError, match="no longer matches"):
         worker_module.load_runner_metric_entries("interactive", config=config)
+
+
+@pytest.mark.parametrize("state", ["missing", "running", "cancelled", "succeeded"])
+def test_late_or_duplicate_delivery_never_invokes_plugin(
+    state: str,
+    worker_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", redis)
+    called: list[str] = []
+
+    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:
+        del context
+        called.append(job.job_id)
+        return TableJobResult(
+            job_id=job.job_id, index=["a"], columns=["value"], data=[[1]]
+        )
+
+    worker_module.RUNNER_REGISTRY["heavy_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="heavy_metric", queue="heavy", output=_table_output(), run=run
+    )
+    if state != "missing":
+        seed_status("job-1", "queued", client=redis)
+        seed_status("job-1", state, client=redis)
+    before = dict(redis.values)
+    worker_module.execute_job(
+        {"job_id": "job-1", "metric": "heavy_metric", "input": {}}, task_id="job-1"
+    )
+    assert called == []
+    assert redis.values == before

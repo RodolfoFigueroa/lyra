@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     import logging
     from pathlib import Path
 
     from lyra.sdk.db import LyraDB
-    from lyra.sdk.models.job import JobMessageLevel
 
 
 class RunContext(Protocol):
@@ -26,7 +25,7 @@ class RunContext(Protocol):
         ...
 
     @property
-    def logger(self) -> logging.Logger:
+    def logger(self) -> logging.Logger | logging.LoggerAdapter:
         """The logger for diagnostic, non-client-facing run details."""
         ...
 
@@ -51,10 +50,8 @@ class RunContext(Protocol):
     ) -> None:
         """Publish quantitative progress for the current stage.
 
-        Progress must be monotonic within a stage. Once provided, ``total`` and
-        ``unit`` must remain stable until the stage changes. The worker may
-        coalesce rapid intermediate updates while retaining stage boundaries
-        and completed progress.
+        Estimates, stages, and units may change between snapshots. Rapid
+        updates are coalesced to the latest value.
 
         Args:
             stage: Stable name of the current unit of work.
@@ -64,30 +61,7 @@ class RunContext(Protocol):
             message: Optional concise client-facing description of this update.
 
         Raises:
-            ValueError: If the values are invalid or progress regresses.
-
-        """
-        ...
-
-    def report_message(
-        self,
-        message: str,
-        *,
-        level: JobMessageLevel = "info",
-        fields: dict[str, Any] | None = None,
-    ) -> None:
-        """Publish a durable structured message for clients observing the job.
-
-        Use :attr:`logger` for diagnostic detail that does not belong in the
-        client-visible job event stream.
-
-        Args:
-            message: Concise client-facing message text.
-            level: Severity used by clients and structured logs.
-            fields: Optional JSON-compatible structured context.
-
-        Raises:
-            ValueError: If the message or encoded event exceeds runtime limits.
+            ValueError: If the values are invalid.
 
         """
         ...

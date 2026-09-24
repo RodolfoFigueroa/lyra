@@ -16,7 +16,6 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
-        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
@@ -31,21 +30,8 @@ class FakeRedisSync:
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
 
-    def xadd(self, key: str, fields: dict[str, str]) -> str:
-        stream = self.streams.setdefault(key, [])
-        stream_id = f"{len(stream) + 1}-0"
-        stream.append((stream_id, fields))
-        return stream_id
-
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
-
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
-        lower = float("-inf") if min == "-inf" else float(min)
-        sorted_set = self.sorted_sets.setdefault(key, {})
-        for member, score in list(sorted_set.items()):
-            if lower <= score <= max:
-                sorted_set.pop(member, None)
 
     def eval(
         self,
@@ -53,8 +39,7 @@ class FakeRedisSync:
         numkeys: int,
         *keys_and_args: str | float,
     ) -> int | str:
-        del script
-        return eval_job_script(self, numkeys, keys_and_args)
+        return eval_job_script(self, numkeys, keys_and_args, script)
 
 
 class FakeCeleryControl:
@@ -176,6 +161,7 @@ def test_reconcile_celery_failure_repairs_nonterminal_job(
     snapshot = job_store.JobStatusSnapshot(
         job_id="job-1",
         status="running",
+        created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         metric="heavy_metric",
     )
@@ -211,6 +197,7 @@ def test_reconcile_celery_failure_ignores_nonfailure_states(
     snapshot = job_store.JobStatusSnapshot(
         job_id="job-1",
         status="running",
+        created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
     monkeypatch.setattr(worker_control, "celery_app", celery)
@@ -227,6 +214,7 @@ def test_reconcile_celery_failure_preserves_status_when_backend_lookup_fails(
     snapshot = job_store.JobStatusSnapshot(
         job_id="job-1",
         status="running",
+        created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
 

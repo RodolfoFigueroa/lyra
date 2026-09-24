@@ -68,8 +68,8 @@ elif isinstance(result, FileJobResult):
     client.results.download_file(handle.job_id, "result.bin")
 ```
 
-`submit()` returns a `JobHandle`. Its `events()` method streams durable job
-events; `wait()` consumes events until completion and returns the successful
+`submit()` returns a `JobHandle`. Its `wait()` method polls status until
+completion and returns the successful
 table or file result. Once the job is complete, `handle.result()` fetches its
 result again. Failed or cancelled jobs raise `MetricRunError` through these
 handle methods, with the job ID, status, structured error, and terminal result.
@@ -117,9 +117,9 @@ result = await handle.wait(timeout=300)
 
 Await asynchronous catalog, submission, result, and download operations. An
 `AsyncJobHandle` provides `status()`, `result()`, and `wait()` as awaitable
-operations. Consume `handle.events()` with `async for`.
+operations.
 
-## Errors and event reconnection
+## Errors and polling
 
 Both clients raise `DownloadError` for transport failures, unexpected HTTP
 statuses, malformed JSON, and responses that do not match the expected model.
@@ -129,28 +129,29 @@ submission, are never retried automatically.
 
 An unexpected HTTP 503 with structured service details raises
 `ServiceUnavailableError`. Its `code`, `retryable`, and `retry_after_seconds`
-attributes provide retry guidance; an absent or non-integer `Retry-After` header
-produces `None`. Unstructured or malformed 503 responses raise `DownloadError`.
+attributes provide retry guidance. `Retry-After` accepts nonnegative seconds
+or an HTTP date; absent or invalid guidance produces `None`. Unstructured or malformed 503 responses raise `DownloadError`.
 `health.readiness()` accepts both HTTP 200 and HTTP 503 and returns the validated
 readiness response.
 
-Job event streams reconnect after connection/read failures and HTTP 5xx responses.
-They allow five consecutive reconnection attempts by default, using exponential
-full jitter capped at eight seconds. Each newly accepted event resets the retry
-count. The `timeout` on `events()` or `wait()` bounds the total wait, including
-heartbeats and backoff delays. Exhausted retries raise `JobEventStreamError`;
-an expired deadline raises `JobWaitTimeoutError`.
+`wait()` polls immediately, then every five seconds with ±10% jitter. Pass a
+positive finite `poll_interval` to `wait()` or `RunOptions` to change the cadence.
+`timeout=None` waits indefinitely; zero expires immediately. Finite monotonic
+deadlines bound observations, retries, sleeps, and terminal-result retrieval.
+Timing out or cancelling an async wait never cancels the remote job.
 
-Use `handle.events(after_id=cursor, kinds={"progress"})` to resume and filter a
-stream. Cursors advance for filtered events too, replayed cursors are suppressed,
-and terminal events end the stream even when filtered out. HTTP 409 raises
-`JobEventCursorGapError`; other unsuccessful statuses and malformed events fail
-immediately without reconnection. Async cancellation propagates and closes the
-active response.
+Waiting retries connection failures, timeouts, and HTTP 429/500/502/503/504 up to
+five consecutive times, resetting after a successful response. Backoff starts
+at one second and doubles up to 30 seconds with jitter. Valid `Retry-After`
+guidance takes precedence. Explicitly non-retryable service errors,
+authentication failures, other client errors, invalid payloads, and certificate
+or configuration errors fail immediately. Exhaustion raises `JobPollingError`;
+deadline expiry raises `JobWaitTimeoutError`, both with job context. Missing
+jobs or results fail explicitly and never trigger resubmission.
 
-`wait()` accepts `on_event`, `on_progress`, and `on_message` callbacks. Sync handles
-invoke synchronous callbacks; async handles also await callback results before
-processing the next event. Callback exceptions propagate unchanged.
+`on_progress` receives the first available `JobProgress` snapshot and subsequent
+content changes, ignoring timestamp-only changes. Async handles await callbacks
+that return awaitables. Callback exceptions propagate unchanged.
 
 File downloads reject JSON terminal results before opening the destination.
 `results.download(ref, path, format="jsonl")` streams table data without pandas;

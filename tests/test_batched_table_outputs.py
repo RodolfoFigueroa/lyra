@@ -19,7 +19,7 @@ from lyra_app.config import clear_config_cache
 from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
-from tests.redis_job_scripts import eval_job_script
+from tests.redis_job_scripts import eval_job_script, seed_status
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -127,7 +127,6 @@ class FakeRedisSync:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: list[tuple[str, int]] = []
-        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
 
     def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
@@ -142,21 +141,8 @@ class FakeRedisSync:
     def expire(self, key: str, ttl: int) -> None:
         self.expirations.append((key, ttl))
 
-    def xadd(self, key: str, fields: dict[str, str]) -> str:
-        stream = self.streams.setdefault(key, [])
-        stream_id = f"{len(stream) + 1}-0"
-        stream.append((stream_id, fields))
-        return stream_id
-
     def zadd(self, key: str, mapping: dict[str, float]) -> None:
         self.sorted_sets.setdefault(key, {}).update(mapping)
-
-    def zremrangebyscore(self, key: str, min: str | float, max: float) -> None:  # ruff:ignore[builtin-argument-shadowing]
-        lower = float("-inf") if min == "-inf" else float(min)
-        sorted_set = self.sorted_sets.setdefault(key, {})
-        for member, score in list(sorted_set.items()):
-            if lower <= score <= max:
-                sorted_set.pop(member, None)
 
     def eval(
         self,
@@ -164,8 +150,7 @@ class FakeRedisSync:
         numkeys: int,
         *keys_and_args: str | float,
     ) -> int | str:
-        del script
-        return eval_job_script(self, numkeys, keys_and_args)
+        return eval_job_script(self, numkeys, keys_and_args, script)
 
 
 @pytest.fixture(autouse=True)
@@ -266,6 +251,7 @@ def test_batched_table_result_expands_columns_from_key_order(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    seed_status("job-batched", "queued", metric="batched_metric", client=fake_redis)
     result = worker_module.execute_job(
         {
             "job_id": "job-batched",
@@ -331,6 +317,9 @@ def test_mixed_static_and_batched_table_result_persists_success(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    seed_status(
+        "job-mixed-batched", "queued", metric="mixed_batched_metric", client=fake_redis
+    )
     result = worker_module.execute_job(
         {
             "job_id": "job-mixed-batched",
@@ -394,6 +383,7 @@ def test_table_processing_avoids_repeated_expansion_and_validation(
     monkeypatch.setattr(plugin_v4, "_batched_template_context", batch_expansion)
     monkeypatch.setattr(worker_module, "_cell_error", cell_validation)
 
+    seed_status("job-processing", "queued", metric="processing_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-processing",
@@ -458,6 +448,7 @@ def test_derived_and_batched_column_collision_persists_failed_result(
     )
     redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", redis)
+    seed_status("job-collision", "queued", metric="collision_metric")
     result = worker_module.execute_job(
         {
             "job_id": "job-collision",
@@ -522,6 +513,12 @@ def test_invalid_batched_table_columns_persist_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    seed_status(
+        "job-invalid-batched-columns",
+        "queued",
+        metric="invalid_batched_columns_metric",
+        client=fake_redis,
+    )
     result = worker_module.execute_job(
         {
             "job_id": "job-invalid-batched-columns",
@@ -574,6 +571,12 @@ def test_invalid_batched_table_values_persist_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    seed_status(
+        "job-invalid-batched-value",
+        "queued",
+        metric="invalid_batched_value_metric",
+        client=fake_redis,
+    )
     result = worker_module.execute_job(
         {
             "job_id": "job-invalid-batched-value",
@@ -632,6 +635,12 @@ def test_invalid_batched_source_values_persist_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    seed_status(
+        "job-invalid-batched-source",
+        "queued",
+        metric="invalid_batched_source_metric",
+        client=fake_redis,
+    )
     result = worker_module.execute_job(
         {
             "job_id": "job-invalid-batched-source",
@@ -672,6 +681,12 @@ def test_batched_table_generated_column_collision_persists_failed_result(
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
 
+    seed_status(
+        "job-batched-collision",
+        "queued",
+        metric="batched_collision_metric",
+        client=fake_redis,
+    )
     result = worker_module.execute_job(
         {
             "job_id": "job-batched-collision",

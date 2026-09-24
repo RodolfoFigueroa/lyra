@@ -1,18 +1,17 @@
 """HTTP endpoints for submitting and inspecting metric jobs."""
 
 import json
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Annotated, cast
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from anyio import Path
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from lyra.sdk.models.job import (
     FileJobResult,
     JobCreateRequest,
     JobCreateResponse,
-    JobLifecycleEvent,
     JobStatusInfo,
     TableJobResult,
     build_table_preview,
@@ -47,9 +46,6 @@ if TYPE_CHECKING:
 
 router = APIRouter(tags=["Jobs"], dependencies=[Depends(require_agent_key)])
 
-TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
-SSE_KEEPALIVE = ": keepalive\n\n"
-
 
 async def _ensure_redis_available() -> None:
     try:
@@ -69,16 +65,6 @@ async def _get_reconciled_job_status(
     if snapshot is None:
         return None
     return await reconcile_celery_failure(snapshot)
-
-
-def _sse_message(stored_event: job_store.StoredJobEvent) -> str:
-    payload = stored_event.event.model_dump(mode="json")
-    data = json.dumps(payload, separators=(",", ":"))
-    return (
-        f"id: {stored_event.stream_id}\n"
-        f"event: {stored_event.event.kind}\n"
-        f"data: {data}\n\n"
-    )
 
 
 def _result_status_payload(
@@ -101,23 +87,7 @@ def _result_status_payload(
             mode="json",
             exclude_none=True,
         )
-    if snapshot.latest_message is not None:
-        payload["latest_message"] = snapshot.latest_message.model_dump(
-            mode="json", exclude_none=True
-        )
     return payload
-
-
-def _is_terminal_event(event: object) -> bool:
-    return isinstance(event, JobLifecycleEvent) and event.status in TERMINAL_EVENTS
-
-
-def _stream_id_parts(value: str) -> tuple[int, int]:
-    try:
-        milliseconds, sequence = value.split("-", maxsplit=1)
-        return int(milliseconds), int(sequence)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid Last-Event-ID") from exc
 
 
 def _table_jsonl_stream(result: TableJobResult) -> Iterator[str]:
@@ -126,47 +96,6 @@ def _table_jsonl_stream(result: TableJobResult) -> Iterator[str]:
         row = {index_field: result_index}
         row.update(dict(zip(result.columns, values, strict=True)))
         yield json.dumps(row, separators=(",", ":")) + "\n"
-
-
-async def _job_event_stream(
-    job_id: str,
-    request: Request,
-    *,
-    last_event_id: str | None = None,
-) -> AsyncIterator[str]:
-    next_event_id = last_event_id
-    while True:
-        events = await job_store.read_job_events_async(
-            job_id,
-            after_id=next_event_id,
-        )
-        for event in events:
-            next_event_id = event.stream_id
-            yield _sse_message(event)
-            if _is_terminal_event(event.event):
-                return
-
-        if not events:
-            snapshot = await _get_reconciled_job_status(job_id)
-            if snapshot is None or snapshot.status in TERMINAL_EVENTS:
-                return
-
-        if await request.is_disconnected():
-            return
-
-        events = await job_store.read_new_job_events_async(
-            job_id,
-            after_id=next_event_id or job_store.STREAM_LATEST,
-        )
-        if not events:
-            yield SSE_KEEPALIVE
-            continue
-
-        for event in events:
-            next_event_id = event.stream_id
-            yield _sse_message(event)
-            if _is_terminal_event(event.event):
-                return
 
 
 async def create_job(
@@ -247,7 +176,7 @@ async def get_job(job_id: str) -> JobStatusInfo:
     """Return the latest reconciled status for a retained job.
 
     Returns:
-        The current lifecycle, progress, message, and error metadata.
+        The current lifecycle, progress, and error metadata.
 
     Raises:
         HTTPException: If Redis is unavailable or the job is no longer retained.
@@ -257,49 +186,6 @@ async def get_job(job_id: str) -> JobStatusInfo:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job expired or not found")
     return JobStatusInfo.model_validate(snapshot.model_dump(mode="json"))
-
-
-@router.get("/jobs/{job_id}/events", response_model=None)
-async def get_job_events(
-    job_id: str,
-    request: Request,
-    last_event_id: Annotated[
-        str | None,
-        Header(alias="Last-Event-ID"),
-    ] = None,
-) -> StreamingResponse:
-    """Stream retained and live job events using Server-Sent Events.
-
-    Returns:
-        An event stream beginning after the optional cursor.
-
-    Raises:
-        HTTPException: If the job is absent, Redis is unavailable, or the requested
-            cursor predates retained history.
-    """
-    await _ensure_redis_available()
-    snapshot = await _get_reconciled_job_status(job_id)
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="Job expired or not found")
-    if last_event_id is not None and last_event_id != job_store.STREAM_START:
-        earliest = await job_store.read_job_events_async(job_id, count=1)
-        if earliest and _stream_id_parts(last_event_id) < _stream_id_parts(
-            earliest[0].stream_id
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "event_cursor_gap",
-                    "message": "Requested job event history is no longer retained.",
-                    "earliest_event_id": earliest[0].stream_id,
-                },
-            )
-
-    return StreamingResponse(
-        _job_event_stream(job_id, request, last_event_id=last_event_id),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
-    )
 
 
 @router.get("/jobs/{job_id}/result", response_model=None)

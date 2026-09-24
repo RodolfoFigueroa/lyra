@@ -41,9 +41,6 @@ JobLifecycleStatus = Literal[
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
 """Lifecycle state that prevents any further job transitions."""
 
-JobMessageLevel = Literal["debug", "info", "warning", "error"]
-"""Severity attached to a durable plugin-authored job message."""
-
 ResultKind = Literal["table", "file", "failed", "cancelled"]
 """Discriminator identifying the shape of a terminal job result."""
 
@@ -278,192 +275,6 @@ class JobProgress(StrictBaseModel):
             msg = "progress current must not exceed total"
             raise ValueError(msg)
         return self
-
-
-class JobMessage(StrictBaseModel):
-    """Latest durable message reported by a running metric."""
-
-    timestamp: datetime = Field(description="UTC time of this message.")
-    level: JobMessageLevel = Field(description="Message severity.")
-    message: str = Field(
-        min_length=1,
-        max_length=2048,
-        description="Client-facing message text.",
-    )
-    fields: dict[str, JsonValue] = Field(
-        default_factory=dict,
-        description="JSON-compatible structured context for the message.",
-    )
-
-
-class JobLifecycleEvent(StrictBaseModel):
-    """A durable job lifecycle transition."""
-
-    kind: Literal["lifecycle"] = Field(
-        default="lifecycle",
-        description="Event-union discriminator.",
-    )
-    job_id: str = Field(min_length=1, description="Job whose state changed.")
-    metric: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Metric associated with the job, when available.",
-    )
-    timestamp: datetime = Field(description="UTC time of the state transition.")
-    status: JobLifecycleStatus = Field(description="Lifecycle state after the change.")
-    error: dict[str, Any] | None = Field(
-        default=None,
-        description="Structured terminal failure details, when applicable.",
-    )
-
-    @property
-    def name(self) -> str:
-        """The lifecycle status used as a concise event name."""
-        return self.status
-
-
-class JobProgressEvent(StrictBaseModel):
-    """A durable quantitative progress update."""
-
-    kind: Literal["progress"] = Field(
-        default="progress",
-        description="Event-union discriminator.",
-    )
-    job_id: str = Field(min_length=1, description="Job reporting progress.")
-    metric: str = Field(min_length=1, description="Metric reporting progress.")
-    timestamp: datetime = Field(description="UTC time of the progress update.")
-    stage: str = Field(
-        min_length=1,
-        max_length=128,
-        description="Stable name of the stage being measured.",
-    )
-    current: int | float = Field(
-        ge=0,
-        description="Non-negative amount completed in the current stage.",
-    )
-    total: int | float | None = Field(
-        default=None,
-        gt=0,
-        description="Positive amount that completes the stage, when known.",
-    )
-    unit: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=64,
-        description="Human-readable unit for current and total values.",
-    )
-    message: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=2048,
-        description="Optional concise description of the progress update.",
-    )
-
-    @property
-    def name(self) -> str:
-        """The ``"progress"`` event name."""
-        return self.kind
-
-    @model_validator(mode="after")
-    def validate_numbers(self) -> Self:
-        """Validate the event's quantitative progress fields.
-
-        Returns:
-            The event unchanged after progress validation.
-        """
-        JobProgress.model_validate(
-            {
-                "timestamp": self.timestamp,
-                "stage": self.stage,
-                "current": self.current,
-                "total": self.total,
-                "unit": self.unit,
-                "message": self.message,
-            }
-        )
-        return self
-
-    def snapshot(self) -> JobProgress:
-        """Return the status-projection form of this progress event.
-
-        Returns:
-            Progress fields suitable for embedding in a job status snapshot.
-
-        """
-        return JobProgress.model_validate(
-            self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
-        )
-
-
-class JobMessageEvent(StrictBaseModel):
-    """A durable structured message from a running metric."""
-
-    kind: Literal["message"] = Field(
-        default="message",
-        description="Event-union discriminator.",
-    )
-    job_id: str = Field(min_length=1, description="Job publishing the message.")
-    metric: str = Field(min_length=1, description="Metric publishing the message.")
-    timestamp: datetime = Field(description="UTC time the message was published.")
-    level: JobMessageLevel = Field(description="Message severity.")
-    message: str = Field(
-        min_length=1,
-        max_length=2048,
-        description="Client-facing message text.",
-    )
-    fields: dict[str, JsonValue] = Field(
-        default_factory=dict,
-        description="JSON-compatible structured context for the message.",
-    )
-
-    @property
-    def name(self) -> str:
-        """The ``"message"`` event name."""
-        return self.kind
-
-    def snapshot(self) -> JobMessage:
-        """Return the status-projection form of this message event.
-
-        Returns:
-            Message fields suitable for embedding in a job status snapshot.
-
-        """
-        return JobMessage.model_validate(
-            self.model_dump(mode="python", exclude={"kind", "job_id", "metric"})
-        )
-
-
-JobEvent: TypeAlias = Annotated[
-    JobLifecycleEvent | JobProgressEvent | JobMessageEvent,
-    Field(discriminator="kind"),
-]
-"""Typed durable event published for a job, discriminated by ``kind``."""
-
-
-class JobEventRecord(StrictBaseModel):
-    """One retained event and its resumable stream cursor."""
-
-    id: str = Field(
-        min_length=1,
-        description="Opaque stream cursor used to resume after this event.",
-    )
-    event: JobEvent = Field(description="Validated typed job event.")
-
-
-_JOB_EVENT_ADAPTER: TypeAdapter[JobEvent] = TypeAdapter(JobEvent)
-
-
-def parse_job_event(value: object) -> JobEvent:
-    """Validate a value as one member of the typed job event union.
-
-    Args:
-        value: Model instance or mapping containing a supported ``kind``.
-
-    Returns:
-        The validated lifecycle, progress, or message event.
-
-    """
-    return _JOB_EVENT_ADAPTER.validate_python(value)
 
 
 class TableJobResult(StrictBaseModel):
@@ -1164,7 +975,6 @@ class JobLinks(StrictBaseModel):
     """Convenience links returned with a newly queued job."""
 
     self: str = Field(min_length=1, description="URL for the job status resource.")
-    events: str = Field(min_length=1, description="URL for the job event stream.")
     result: str = Field(min_length=1, description="URL for the terminal job result.")
 
 
@@ -1189,6 +999,13 @@ class JobStatusInfo(StrictBaseModel):
     job_id: str = Field(min_length=1, description="Identifier assigned to the job.")
     status: JobLifecycleStatus = Field(description="Current lifecycle status.")
     updated_at: datetime = Field(description="Timestamp for the latest status update.")
+    created_at: datetime = Field(description="Time the job was accepted.")
+    started_at: datetime | None = Field(
+        default=None, description="Time execution was claimed."
+    )
+    completed_at: datetime | None = Field(
+        default=None, description="Time of the terminal lifecycle transition."
+    )
     metric: str | None = Field(
         default=None,
         min_length=1,
@@ -1201,10 +1018,6 @@ class JobStatusInfo(StrictBaseModel):
     progress: JobProgress | None = Field(
         default=None,
         description="Most recently reported quantitative progress.",
-    )
-    latest_message: JobMessage | None = Field(
-        default=None,
-        description="Most recently reported durable plugin message.",
     )
 
 

@@ -327,7 +327,7 @@ def get_status() -> AdminStatusResponse:
         allowed_queues=config.plugins.allowed_queues,
         default_queue=config.plugins.default_queue,
         configured_worker_count=len(config.workers),
-        job_store_ttl_seconds=config.job_store.ttl_seconds,
+        result_retention_seconds=config.job_store.result_retention_seconds,
         catalog_fingerprint=get_loaded_catalog_fingerprint(),
         catalog_available=is_catalog_loaded(),
         catalog_error=catalog_error(),
@@ -351,7 +351,7 @@ def get_config_summary() -> ConfigSummaryResponse:
             _worker_config_summary(config, worker_name)
             for worker_name in sorted(config.workers)
         ],
-        job_store_ttl_seconds=config.job_store.ttl_seconds,
+        result_retention_seconds=config.job_store.result_retention_seconds,
         plugin_catalog_dir=str(config.plugins.catalog_dir),
         plugin_runner_base_dir=str(config.plugins.runner_base_dir),
     )

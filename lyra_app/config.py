@@ -26,14 +26,14 @@ DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE = (
     _sdk_config.DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
 )
 DEFAULT_FORWARDED_ALLOW_IPS = _sdk_config.DEFAULT_FORWARDED_ALLOW_IPS
-DEFAULT_JOB_STORE_TTL_SECONDS = _sdk_config.DEFAULT_JOB_STORE_TTL_SECONDS
+DEFAULT_RESULT_RETENTION_SECONDS = _sdk_config.DEFAULT_RESULT_RETENTION_SECONDS
 DEFAULT_LOG_LEVEL = _sdk_config.DEFAULT_LOG_LEVEL
 DEFAULT_MCP_MOUNT_PATH = _sdk_config.DEFAULT_MCP_MOUNT_PATH
 DEFAULT_PLUGIN_CATALOG_DIR = _sdk_config.DEFAULT_PLUGIN_CATALOG_DIR
 DEFAULT_PLUGIN_RUNNER_BASE_DIR = _sdk_config.DEFAULT_PLUGIN_RUNNER_BASE_DIR
 DatabasePoolConfig = _sdk_config.DatabasePoolConfig
 EarthEngineConfig = _sdk_config.EarthEngineConfig
-JobEventsConfig = _sdk_config.JobEventsConfig
+JobProgressConfig = _sdk_config.JobProgressConfig
 JobStoreConfig = _sdk_config.JobStoreConfig
 LYRA_DATA_DIR = _sdk_config.LYRA_DATA_DIR
 LoggingConfig = _sdk_config.LoggingConfig

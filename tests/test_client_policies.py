@@ -132,6 +132,7 @@ class Scenario:
     replies: list[Reply | BaseException] = field(default_factory=list)
     calls: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     sleeps: list[float] = field(default_factory=list)
+    timeouts: list[aiohttp.ClientTimeout] = field(default_factory=list)
     now: float = 0.0
 
     @property
@@ -172,6 +173,10 @@ def scenario(
         return sync_request("GET", url, **kwargs)
 
     class Session(FakeSession):
+        def __init__(self, *, timeout: aiohttp.ClientTimeout) -> None:
+            super().__init__(timeout=timeout)
+            scenario.timeouts.append(timeout)
+
         def request(self, *args: object, **kwargs: object) -> AsyncReply:
             assert isinstance(self, Session)
             return AsyncReply(scenario.request(str(args[0]), str(args[1]), **kwargs))
@@ -196,7 +201,14 @@ def scenario(
     monkeypatch.setattr(
         "lyra.api.client.sync.time", SimpleNamespace(sleep=scenario.sleep)
     )
-    monkeypatch.setattr("lyra.api.client.async_.asyncio", SimpleNamespace(sleep=sleep))
+    monkeypatch.setattr(
+        "lyra.api.client.async_.asyncio",
+        SimpleNamespace(
+            sleep=sleep,
+            get_running_loop=asyncio.get_running_loop,
+            shield=asyncio.shield,
+        ),
+    )
     return scenario
 
 
@@ -518,9 +530,8 @@ def test_wait_deadline_bounds_observations_and_sleep(
     assert scenario.now == seconds
     assert len(scenario.calls) == (1 if seconds == 0 else 2)
     if seconds:
-        options = scenario.calls[-1][2]
-        if not scenario.asynchronous:
-            assert options["timeout"] == seconds
+        assert scenario.timeouts[-1].total == seconds
+        assert scenario.sleeps == [seconds]
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422])
@@ -606,7 +617,7 @@ def test_poll_interval_must_be_positive_finite(
 def test_wait_transport_timeout_retry_and_certificate_failure(
     scenario: Scenario,
 ) -> None:
-    transient = TimeoutError() if scenario.asynchronous else requests.Timeout()
+    transient = TimeoutError()
     scenario.replies = [
         transient,
         status_reply("succeeded"),
@@ -614,21 +625,17 @@ def test_wait_transport_timeout_retry_and_certificate_failure(
     ]
     assert resolve(submit_handle(scenario).wait()).status == "succeeded"
     assert len(scenario.sleeps) == 1
-    permanent = (
-        aiohttp.ClientSSLError(
-            ConnectionKey(
-                host="test",
-                port=443,
-                is_ssl=True,
-                ssl=True,
-                proxy=None,
-                proxy_auth=None,
-                proxy_headers_hash=None,
-            ),
-            OSError("certificate"),
-        )
-        if scenario.asynchronous
-        else requests.exceptions.SSLError("certificate")
+    permanent = aiohttp.ClientSSLError(
+        ConnectionKey(
+            host="test",
+            port=443,
+            is_ssl=True,
+            ssl=True,
+            proxy=None,
+            proxy_auth=None,
+            proxy_headers_hash=None,
+        ),
+        OSError("certificate"),
     )
     scenario.replies = [permanent]
     with pytest.raises(DownloadError):
@@ -651,7 +658,14 @@ def test_async_cancelling_wait_does_not_cancel_remote_job(
         entered.set()
         await asyncio.Future()
 
-    monkeypatch.setattr("lyra.api.client.async_.asyncio", SimpleNamespace(sleep=sleep))
+    monkeypatch.setattr(
+        "lyra.api.client.async_.asyncio",
+        SimpleNamespace(
+            sleep=sleep,
+            get_running_loop=asyncio.get_running_loop,
+            shield=asyncio.shield,
+        ),
+    )
 
     async def run() -> None:
         task = asyncio.ensure_future(handle.wait())

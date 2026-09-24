@@ -138,7 +138,11 @@ readiness response.
 positive finite `poll_interval` to `wait()` or `RunOptions` to change the cadence.
 `timeout=None` waits indefinitely; zero expires immediately. Finite monotonic
 deadlines bound observations, retries, sleeps, and terminal-result retrieval.
-Timing out or cancelling an async wait never cancels the remote job.
+Individual requests remain bounded by the client's request timeout even with
+unlimited overall waiting. Deadline enforcement cannot preempt arbitrary user
+callbacks or synchronous CPU processing; it bounds network observation and
+scheduled waiting. Timing out, interrupting a synchronous wait, or cancelling an
+async wait never cancels the remote job.
 
 Waiting retries connection failures, timeouts, and HTTP 429/500/502/503/504 up to
 five consecutive times, resetting after a successful response. Backoff starts
@@ -157,6 +161,10 @@ File downloads reject JSON terminal results before opening the destination.
 `results.download(ref, path, format="jsonl")` streams table data without pandas;
 `results.dataframe(ref)` requires pandas and removes its temporary JSONL file on
 success or failure.
+The async client loads pandas and parses JSONL in an executor so other coroutines
+can continue running. Cancellation returns promptly. If parsing has already been
+submitted, the worker finishes parsing and then removes the temporary file;
+cancellation during downloading removes the file before returning.
 
 ## Validation and migration
 

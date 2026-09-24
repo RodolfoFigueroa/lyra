@@ -551,6 +551,11 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     )
     status = client.jobs.get(job.job_id)
     result = client.results.get(job.job_id)
+    FakeSession.responses = [
+        FakeAsyncResponse(payload={**_status_response(), "status": "succeeded"}),
+        FakeAsyncResponse(payload=_result_response()),
+    ]
+    monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
     processed = client.raw.run("heavy_metric", {"value": 3})
 
     assert posted[0]["url"] == "http://example.test/jobs"

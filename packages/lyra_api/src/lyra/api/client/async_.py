@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from contextlib import ExitStack
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,7 +17,7 @@ import aiofiles
 import aiohttp
 from lyra.api.client import endpoints
 from lyra.api.client.base import BaseTransport, load_pandas
-from lyra.api.client.endpoints import RequestSpec, validate_response
+from lyra.api.client.http import request_json
 from lyra.api.client.polling import PollingState
 from lyra.api.client.results import (
     dataframe_path,
@@ -46,8 +47,11 @@ from lyra.sdk.models.job import (
 if TYPE_CHECKING:
     import os
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
+    from types import ModuleType
 
     import pandas as pd
+    from lyra.api.client.endpoints import RequestSpec
     from lyra.api.options import RunOptions, SubmitOptions
     from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
     from lyra.sdk.models.data_types import DataTypesResponse
@@ -68,6 +72,16 @@ if TYPE_CHECKING:
 _ResponseT = TypeVar("_ResponseT")
 _SuccessResultT = TypeVar("_SuccessResultT", bound=TableJobResult | FileJobResult)
 SuccessfulJobResult = TableJobResult | FileJobResult
+
+
+def _read_dataframe(pandas: ModuleType, path: Path, cleanup: ExitStack) -> pd.DataFrame:
+    with cleanup:
+        return pandas.read_json(path, lines=True)
+
+
+def _consume_exception(future: asyncio.Future[_ResponseT]) -> None:
+    if not future.cancelled():
+        future.exception()
 
 
 class AsyncJobHandle(Generic[_SuccessResultT]):
@@ -131,7 +145,11 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         """Poll immediately, then periodically, until a terminal result is available.
 
         Progress callbacks receive changed snapshots. Callback failures propagate.
-        A local timeout or cancellation never cancels the remote job.
+        Local timeout, cancellation, or interruption never cancels the remote job.
+        The monotonic deadline bounds network observations and scheduled waiting,
+        including terminal-result retrieval. It cannot preempt arbitrary user
+        callbacks or synchronous CPU processing. Zero expires immediately;
+        None permits unlimited overall waiting with bounded individual requests.
 
         Returns:
             The successful result; failed or cancelled results raise MetricRunError.
@@ -185,41 +203,13 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
     async def _request(
         self, spec: RequestSpec[_ResponseT], *, request_timeout: float | None = None
     ) -> _ResponseT:
-        timeout = aiohttp.ClientTimeout(
-            total=self.timeout if request_timeout is None else request_timeout
+        return await request_json(
+            spec,
+            self._http_url(spec.path),
+            self._auth_headers if spec.authenticated else self.headers,
+            self.timeout if request_timeout is None else request_timeout,
+            exact_timeout=request_timeout is not None,
         )
-        try:
-            async with (
-                aiohttp.ClientSession(timeout=timeout) as session,
-                session.request(
-                    spec.method,
-                    self._http_url(spec.path),
-                    params=spec.params,
-                    json=spec.json_body,
-                    headers=self._auth_headers if spec.authenticated else self.headers,
-                ) as response,
-            ):
-                return validate_response(
-                    spec,
-                    response.status,
-                    await response.text(),
-                    response.headers.get("content-type", ""),
-                    response.headers.get("Retry-After"),
-                )
-        except (aiohttp.ClientError, TimeoutError, UnicodeError) as exc:
-            err = f"Failed to {spec.operation}: request error: {exc}"
-            raise DownloadError(
-                err,
-                retryable=isinstance(exc, (aiohttp.ClientConnectionError, TimeoutError))
-                and not isinstance(
-                    exc,
-                    (
-                        aiohttp.ClientSSLError,
-                        aiohttp.ServerFingerprintMismatch,
-                        aiohttp.InvalidURL,
-                    ),
-                ),
-            ) from exc
 
     async def observe(
         self, spec: RequestSpec[_ResponseT], *, request_timeout: float
@@ -371,10 +361,21 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
         )
 
     async def result_dataframe(self, result_ref_or_job_id: str) -> pd.DataFrame:
-        pandas = load_pandas()
-        with dataframe_path() as temp_path:
+        loop = asyncio.get_running_loop()
+        pandas = await loop.run_in_executor(None, load_pandas)
+        cleanup = ExitStack()
+        try:
+            temp_path = cleanup.enter_context(dataframe_path())
             await self.download_result(result_ref_or_job_id, temp_path, format="jsonl")
-            return pandas.read_json(temp_path, lines=True)
+            parsing = loop.run_in_executor(
+                None, _read_dataframe, pandas, temp_path, cleanup
+            )
+        except BaseException:
+            cleanup.close()
+            raise
+        # Submission transfers cleanup to the worker, even if it has not started.
+        parsing.add_done_callback(_consume_exception)
+        return await asyncio.shield(parsing)
 
     async def get_data_types(self) -> DataTypesResponse:
         return await self._request(endpoints.get_data_types())
@@ -454,6 +455,14 @@ class _ResultsResource:
         await self._transport.download_job_result_to_file(job_id, path)
 
     async def dataframe(self, ref: str) -> pd.DataFrame:
+        """Download and parse JSONL without blocking the event loop.
+
+        Cancellation returns promptly. If parsing was submitted, its worker
+        removes the temporary file after parsing finishes.
+
+        Returns:
+            The downloaded table as a pandas DataFrame.
+        """
         return await self._transport.result_dataframe(ref)
 
 
@@ -609,7 +618,7 @@ class AsyncLyraClient:
         health: Asynchronous liveness and readiness endpoints.
         lookups: Asynchronous public lookup endpoints.
         catalog: Asynchronous metric and data-type discovery endpoints.
-        jobs: Asynchronous job status and event-stream endpoints.
+        jobs: Asynchronous job status endpoints.
         results: Asynchronous job result inspection and download endpoints.
         raw: Asynchronous untyped metric submission and execution endpoints.
 
@@ -644,7 +653,7 @@ class AsyncLyraClient:
         self.catalog = _CatalogResource(transport)
         """Asynchronous metric and data-type discovery endpoints."""
         self.jobs = _JobsResource(transport)
-        """Asynchronous job status and event-stream endpoints."""
+        """Asynchronous job status endpoints."""
         self.results = _ResultsResource(transport)
         """Asynchronous job result inspection and download endpoints."""
         self.raw = _RawMetricsResource(transport)
@@ -670,10 +679,9 @@ class AsyncLyraAdminClient:
     Attributes:
         health: Asynchronous liveness and readiness endpoints.
         jobs: Asynchronous administrative job listing and cancellation endpoints.
-        plugin_repos: Asynchronous plugin repository configuration and
-            synchronization endpoints.
-        catalog: Asynchronous administrative catalog summary and refresh endpoints.
-        workers: Asynchronous worker inspection and restart endpoints.
+        plugin_repos: Asynchronous plugin repository inspection endpoints.
+        catalog: Asynchronous administrative catalog summary endpoints.
+        workers: Asynchronous worker inspection endpoints.
         queues: Asynchronous queue inspection endpoints.
         routing: Asynchronous metric-to-queue routing endpoints.
 
@@ -708,11 +716,11 @@ class AsyncLyraAdminClient:
         self.jobs = _AdminJobsResource(transport)
         """Asynchronous administrative job listing and cancellation endpoints."""
         self.plugin_repos = _AdminPluginReposResource(transport)
-        """Asynchronous plugin repository configuration and synchronization."""
+        """Asynchronous plugin repository inspection endpoints."""
         self.catalog = _AdminCatalogResource(transport)
-        """Asynchronous administrative catalog summary and refresh endpoints."""
+        """Asynchronous administrative catalog summary endpoints."""
         self.workers = _AdminWorkersResource(transport)
-        """Asynchronous worker inspection and restart endpoints."""
+        """Asynchronous worker inspection endpoints."""
         self.queues = _AdminQueuesResource(transport)
         """Asynchronous queue inspection endpoints."""
         self.routing = _AdminRoutingResource(transport)

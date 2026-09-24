@@ -15,7 +15,9 @@ from typing import (
 import requests
 from lyra.api.client import endpoints
 from lyra.api.client.base import BaseTransport, load_pandas
+from lyra.api.client.bridge import PollingBridge
 from lyra.api.client.endpoints import RequestSpec, validate_response
+from lyra.api.client.http import request_json
 from lyra.api.client.polling import PollingState
 from lyra.api.client.results import (
     dataframe_path,
@@ -130,39 +132,47 @@ class JobHandle(Generic[_SuccessResultT]):
         """Poll immediately, then periodically, until a terminal result is available.
 
         Progress callbacks receive changed snapshots. Callback failures propagate.
-        A local timeout or cancellation never cancels the remote job.
+        Local timeout, cancellation, or interruption never cancels the remote job.
+        The monotonic deadline bounds network observations and scheduled waiting,
+        including terminal-result retrieval. It cannot preempt arbitrary user
+        callbacks or synchronous CPU processing. Zero expires immediately;
+        None permits unlimited overall waiting with bounded individual requests.
 
         Returns:
             The successful result; failed or cancelled results raise MetricRunError.
         """
         state = PollingState(self.job_id, timeout, poll_interval)
-        terminal = False
-        while True:
-            try:
-                request = (
-                    endpoints.get_job_result(self.job_id)
-                    if terminal
-                    else endpoints.get_job(self.job_id)
-                )
-                response = self._client.observe(
-                    request, request_timeout=state.request_timeout(self._client.timeout)
-                )
-                state.remaining()
-            except (DownloadError, ServiceUnavailableError) as exc:
-                time.sleep(state.retry_delay(exc))
-                continue
-            state.failures = 0
-            if terminal:
-                return cast(
-                    "_SuccessResultT",
-                    successful_result(cast("TerminalJobResult", response)),
-                )
-            snapshot = cast("JobStatusInfo", response)
-            if state.changed(snapshot.progress) and on_progress is not None:
-                on_progress(cast("JobProgress", snapshot.progress))
-            terminal = snapshot.status in {"succeeded", "failed", "cancelled"}
-            if not terminal:
-                time.sleep(state.delay())
+        state.remaining()
+        with PollingBridge() as bridge:
+            terminal = False
+            while True:
+                try:
+                    request = (
+                        endpoints.get_job_result(self.job_id)
+                        if terminal
+                        else endpoints.get_job(self.job_id)
+                    )
+                    request_timeout = state.request_timeout(self._client.timeout)
+                    response = bridge.observe(
+                        self._client.observe(request, request_timeout=request_timeout),
+                        request_timeout=request_timeout,
+                    )
+                    state.remaining()
+                except (DownloadError, ServiceUnavailableError) as exc:
+                    time.sleep(state.retry_delay(exc))
+                    continue
+                state.failures = 0
+                if terminal:
+                    return cast(
+                        "_SuccessResultT",
+                        successful_result(cast("TerminalJobResult", response)),
+                    )
+                snapshot = cast("JobStatusInfo", response)
+                if state.changed(snapshot.progress) and on_progress is not None:
+                    on_progress(cast("JobProgress", snapshot.progress))
+                terminal = snapshot.status in {"succeeded", "failed", "cancelled"}
+                if not terminal:
+                    time.sleep(state.delay())
 
 
 class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -- API surface
@@ -195,10 +205,16 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
                 and not isinstance(exc, requests.exceptions.SSLError),
             ) from exc
 
-    def observe(
+    async def observe(
         self, spec: RequestSpec[_ResponseT], *, request_timeout: float
     ) -> _ResponseT:
-        return self._request(spec, request_timeout=request_timeout)
+        return await request_json(
+            spec,
+            self._http_url(spec.path),
+            self._auth_headers if spec.authenticated else self.headers,
+            request_timeout,
+            exact_timeout=True,
+        )
 
     def get_liveness(self) -> LivenessResponse:
         return self._request(endpoints.get_liveness())
@@ -568,7 +584,7 @@ class LyraClient:
         health: Liveness and readiness endpoints.
         lookups: Public lookup endpoints.
         catalog: Metric and data-type discovery endpoints.
-        jobs: Job status and event-stream endpoints.
+        jobs: Job status endpoints.
         results: Job result inspection and download endpoints.
         raw: Untyped metric submission and execution endpoints.
 
@@ -603,7 +619,7 @@ class LyraClient:
         self.catalog = _CatalogResource(transport)
         """Metric and data-type discovery endpoints."""
         self.jobs = _JobsResource(transport)
-        """Job status and event-stream endpoints."""
+        """Job status endpoints."""
         self.results = _ResultsResource(transport)
         """Job result inspection and download endpoints."""
         self.raw = _RawMetricsResource(transport)
@@ -628,9 +644,9 @@ class LyraAdminClient:
     Attributes:
         health: Liveness and readiness endpoints.
         jobs: Administrative job listing and cancellation endpoints.
-        plugin_repos: Plugin repository configuration and synchronization endpoints.
-        catalog: Administrative catalog summary and refresh endpoints.
-        workers: Worker inspection and restart endpoints.
+        plugin_repos: Plugin repository inspection endpoints.
+        catalog: Administrative catalog summary endpoints.
+        workers: Worker inspection endpoints.
         queues: Queue inspection endpoints.
         routing: Metric-to-queue routing endpoints.
 
@@ -663,11 +679,11 @@ class LyraAdminClient:
         self.jobs = _AdminJobsResource(transport)
         """Administrative job listing and cancellation endpoints."""
         self.plugin_repos = _AdminPluginReposResource(transport)
-        """Plugin repository configuration and synchronization endpoints."""
+        """Plugin repository inspection endpoints."""
         self.catalog = _AdminCatalogResource(transport)
-        """Administrative catalog summary and refresh endpoints."""
+        """Administrative catalog summary endpoints."""
         self.workers = _AdminWorkersResource(transport)
-        """Worker inspection and restart endpoints."""
+        """Worker inspection endpoints."""
         self.queues = _AdminQueuesResource(transport)
         """Queue inspection endpoints."""
         self.routing = _AdminRoutingResource(transport)

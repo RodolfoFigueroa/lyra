@@ -876,7 +876,10 @@ def test_file_descriptor_retains_run_provenance_without_table_columns(
     assert descriptor.file.media_type == "image/tiff"
 
 
-def test_table_descriptor_expands_fractional_area_column_contract() -> None:
+@pytest.mark.parametrize("with_batch", [False, True])
+def test_table_descriptor_expands_fractional_area_column_contract(
+    *, with_batch: bool
+) -> None:
     redis = FakeRedisSync()
     provenance_payload = _provenance().model_dump()
     provenance_payload["output"] = {
@@ -897,6 +900,21 @@ def test_table_descriptor_expands_fractional_area_column_contract() -> None:
             }
         ],
     }
+    if with_batch:
+        provenance_payload["input"]["filters"] = [{"key": "retail", "value": "46"}]
+        provenance_payload["output"]["batched_columns"] = [
+            {
+                "source": "filters",
+                "name": "jobs_{key}",
+                "type": "integer",
+                "unit": "jobs",
+                "description": "Jobs for {key}.",
+            }
+        ]
+    columns = ["covered_area_m2", "covered_area_fraction"] + (
+        ["jobs_retail"] if with_batch else []
+    )
+    data = [[25.0, 0.25, 3]] if with_batch else [[25.0, 0.25]]
     provenance = JobRunProvenance.model_validate(provenance_payload)
     job_store.create_job(
         JobEnvelope(job_id="job-area", metric=provenance.metric, input={}),
@@ -907,8 +925,8 @@ def test_table_descriptor_expands_fractional_area_column_contract() -> None:
         TableJobResult(
             job_id="job-area",
             index=["area-1"],
-            columns=["covered_area_m2", "covered_area_fraction"],
-            data=[[25.0, 0.25]],
+            columns=columns,
+            data=data,
         ),
         client=redis,
     )
@@ -918,16 +936,13 @@ def test_table_descriptor_expands_fractional_area_column_contract() -> None:
     assert descriptor is not None
     assert descriptor.table is not None
     contracts = descriptor.table.column_contracts
-    assert [column.name for column in contracts] == [
-        "covered_area_m2",
-        "covered_area_fraction",
-    ]
+    assert [column.name for column in contracts] == columns
     assert contracts[1].unit == "ratio"
     assert descriptor.preview.rows[0]["covered_area_fraction"] == pytest.approx(0.25)
-    assert [column.name for column in descriptor.summary.columns] == [
-        "covered_area_m2",
-        "covered_area_fraction",
-    ]
+    assert [column.name for column in descriptor.summary.columns] == columns
+    if with_batch:
+        assert contracts[-1].description == "Jobs for retail."
+        assert descriptor.preview.rows[0]["jobs_retail"] == 3
 
 
 def test_table_preview_uses_collision_free_named_index_field() -> None:

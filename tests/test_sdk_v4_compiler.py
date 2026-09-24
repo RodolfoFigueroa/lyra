@@ -174,10 +174,11 @@ def test_compile_v4_fractional_area_derivation_and_column_expansion() -> None:
             "description": "Fraction of the location that is urbanized.",
         }
     ]
-    assert [
-        column.name for column in expand_runner_table_output_columns(output, {})
-    ] == ["area_m2"]
-    effective = expand_table_output_columns(output, {})
+    runner_columns = expand_runner_table_output_columns(output, {})
+    before = [column.model_dump() for column in runner_columns]
+    assert [column.name for column in runner_columns] == ["area_m2"]
+    effective = expand_table_output_columns(runner_columns)
+    assert [column.model_dump() for column in runner_columns] == before
     assert [column.name for column in effective] == ["area_m2", "area_fraction"]
     assert effective[1].type == "number"
     assert effective[1].unit == "ratio"

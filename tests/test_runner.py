@@ -991,9 +991,18 @@ def test_worker_rejects_fraction_outside_unit_interval(
     assert "outside [0, 1]" in result["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("invalid_areas", "message"),
+    [
+        (None, "missing server-calculated"),
+        ({"other-area": 100.0}, "feature IDs must match"),
+    ],
+)
 def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
+    invalid_areas: dict[str, float] | None,
+    message: str,
 ) -> None:
     def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
         return TableJobResult(
@@ -1017,6 +1026,7 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
             "job_id": "job-area-missing",
             "metric": "area_metric",
             "input": {"location": _feature_collection()},
+            "location_areas_m2": invalid_areas,
         },
         task_id="task-id",
     )
@@ -1031,7 +1041,7 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     )
 
     assert missing["status"] == "failed"
-    assert "missing server-calculated" in missing["error"]["message"]
+    assert message in missing["error"]["message"]
     assert succeeded["data"] == [[None, None]]
 
 

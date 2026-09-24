@@ -564,9 +564,6 @@ def _derive_fractional_area_columns(
     job: JobEnvelope,
     runner_columns: list[TableOutputColumnV4],
 ) -> TableJobResult | FailedJobResult:
-    if not any(column.derivations for column in runner_columns):
-        return result
-
     areas = job.location_areas_m2
     if areas is None:
         return _failed_result(
@@ -659,7 +656,11 @@ def _validate_table_result(
 
     try:
         runner_columns = expand_runner_table_output_columns(output, job.input)
-        expanded_columns = expand_table_output_columns(output, job.input)
+        expanded_columns = (
+            expand_table_output_columns(runner_columns)
+            if any(column.derivations for column in runner_columns)
+            else None
+        )
     except (TypeError, ValueError) as exc:
         return _failed_result(job.job_id, "invalid_result", str(exc))
 
@@ -674,6 +675,9 @@ def _validate_table_result(
     if validation_error is not None:
         return validation_error
 
+    if expanded_columns is None:
+        return result
+
     derived_result = _derive_fractional_area_columns(result, job, runner_columns)
     if isinstance(derived_result, FailedJobResult):
         return derived_result
@@ -686,10 +690,7 @@ def _validate_table_result(
             "Derived table columns must match the effective output declaration."
         ),
     )
-    if validation_error is not None:
-        return validation_error
-
-    return derived_result
+    return validation_error if validation_error is not None else derived_result
 
 
 def _validate_file_result(

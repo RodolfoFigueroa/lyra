@@ -22,6 +22,7 @@ from lyra.sdk.models.plugin_v4 import (
     PluginInfoV4,
     TableOutputColumnV4,
     TableOutputV4,
+    expand_runner_table_output_columns,
     expand_table_output_columns,
 )
 from lyra.sdk.models.strict import StrictBaseModel
@@ -1069,8 +1070,7 @@ def build_result_descriptor(
                 msg = "table result provenance must declare a table output"
                 raise ValueError(msg)
             column_contracts = expand_table_output_columns(
-                provenance.output,
-                provenance.input,
+                expand_runner_table_output_columns(provenance.output, provenance.input),
             )
             if [column.name for column in column_contracts] != result.columns:
                 msg = (

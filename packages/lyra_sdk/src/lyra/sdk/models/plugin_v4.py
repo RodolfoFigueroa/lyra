@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Annotated, Literal, Self
 
@@ -604,10 +605,11 @@ def expand_runner_table_output_columns(
 
 
 def expand_table_output_columns(
-    output: TableOutputV4,
-    job_input: JsonObject,
+    runner_columns: Sequence[TableOutputColumnV4],
 ) -> list[TableOutputColumnV4]:
-    """Expand the effective table output contract for one validated job input.
+    """Insert derived contracts into already-expanded runner columns.
+
+    The input sequence and its column models are not modified.
 
     Returns:
         Runner columns with server-owned derived columns inserted after sources.
@@ -615,7 +617,6 @@ def expand_table_output_columns(
     Raises:
         ValueError: If expansion produces duplicate output column names.
     """
-    runner_columns = expand_runner_table_output_columns(output, job_input)
     columns: list[TableOutputColumnV4] = []
     for column in runner_columns:
         columns.append(column)

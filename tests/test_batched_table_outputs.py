@@ -3,10 +3,16 @@ from __future__ import annotations
 import importlib
 import json
 from typing import TYPE_CHECKING, Any
+from unittest.mock import Mock
 
 import pytest
+from lyra.sdk.models import plugin_v4
 from lyra.sdk.models.job import JobEnvelope, TableJobResult
-from lyra.sdk.models.plugin_v4 import TableOutputV4, expand_table_output_columns
+from lyra.sdk.models.plugin_v4 import (
+    TableOutputV4,
+    expand_runner_table_output_columns,
+    expand_table_output_columns,
+)
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache
@@ -211,7 +217,7 @@ def test_sdk_expands_batched_column_descriptions_from_label_or_key() -> None:
         description="Job accessibility for {label} ({key}).",
     )
 
-    columns = expand_table_output_columns(
+    runner_columns = expand_runner_table_output_columns(
         output,
         {
             "sector_filters": [
@@ -225,6 +231,7 @@ def test_sdk_expands_batched_column_descriptions_from_label_or_key() -> None:
         },
     )
 
+    columns = expand_table_output_columns(runner_columns)
     assert [column.name for column in columns] == [
         "job_accessibility_sectors_091_092",
         "job_accessibility_retail",
@@ -339,6 +346,137 @@ def test_mixed_static_and_batched_table_result_persists_success(
     assert result["status"] == "succeeded"
     assert result["columns"] == ["total_jobs", "job_accessibility_retail"]
     assert result["data"] == [[100, 3.5]]
+
+
+@pytest.mark.parametrize("layout", ["static", "batch", "mixed", "derived"])
+def test_table_processing_avoids_repeated_expansion_and_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: ModuleType,
+    layout: str,
+) -> None:
+    source_column: dict[str, Any] = {
+        "name": "area_m2",
+        "type": "number",
+        "unit": "m2",
+        "description": "Covered area.",
+    }
+    if layout == "derived":
+        source_column["derivations"] = [
+            {
+                "kind": "fraction_of_location_area",
+                "name": "area_fraction",
+                "description": "Covered fraction.",
+            }
+        ]
+    output = _table_output(columns=[] if layout == "batch" else [source_column])
+    if layout == "static":
+        output.batched_columns.clear()
+    columns = ([] if layout == "batch" else ["area_m2"]) + (
+        [] if layout == "static" else ["job_accessibility_retail"]
+    )
+    values = ([] if layout == "batch" else [25.0]) + (
+        [] if layout == "static" else [3.5]
+    )
+
+    def run(job: JobEnvelope, _context: WorkerRunContext) -> TableJobResult:
+        return TableJobResult(
+            job_id=job.job_id, index=["area-1"], columns=columns, data=[values]
+        )
+
+    worker_module.RUNNER_REGISTRY["processing_metric"] = (
+        worker_module.RunnerMetricEntry(
+            metric_name="processing_metric", queue="heavy", output=output, run=run
+        )
+    )
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", FakeRedisSync())
+    batch_expansion = Mock(wraps=vars(plugin_v4)["_batched_template_context"])
+    cell_validation = Mock(wraps=vars(worker_module)["_cell_error"])
+    monkeypatch.setattr(plugin_v4, "_batched_template_context", batch_expansion)
+    monkeypatch.setattr(worker_module, "_cell_error", cell_validation)
+
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-processing",
+            "metric": "processing_metric",
+            "input": {
+                "location": _feature_collection(),
+                "sector_filters": [{"key": "retail", "value": "^46.*"}],
+            },
+            **({"location_areas_m2": {"area-1": 100.0}} if layout == "derived" else {}),
+        },
+        task_id="job-processing",
+    )
+
+    assert result["status"] == "succeeded"
+    assert batch_expansion.call_count == (0 if layout == "static" else 1)
+    if layout == "derived":
+        assert result["columns"] == [
+            "area_m2",
+            "area_fraction",
+            "job_accessibility_retail",
+        ]
+        assert result["data"] == [[25.0, 0.25, 3.5]]
+        assert cell_validation.call_count == 5
+    else:
+        assert result["columns"] == columns
+        assert result["data"] == [values]
+        assert cell_validation.call_count == len(values)
+
+
+def test_derived_and_batched_column_collision_persists_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_module: ModuleType,
+) -> None:
+    output = _table_output(
+        columns=[
+            {
+                "name": "area_m2",
+                "type": "number",
+                "unit": "m2",
+                "description": "Covered area.",
+                "derivations": [
+                    {
+                        "kind": "fraction_of_location_area",
+                        "name": "job_accessibility_retail",
+                        "description": "Covered fraction.",
+                    }
+                ],
+            }
+        ]
+    )
+
+    def run(job: JobEnvelope, _context: WorkerRunContext) -> TableJobResult:
+        return TableJobResult(
+            job_id=job.job_id,
+            index=["area-1"],
+            columns=["area_m2", "job_accessibility_retail"],
+            data=[[25.0, 3.5]],
+        )
+
+    worker_module.RUNNER_REGISTRY["collision_metric"] = worker_module.RunnerMetricEntry(
+        metric_name="collision_metric", queue="heavy", output=output, run=run
+    )
+    redis = FakeRedisSync()
+    monkeypatch.setattr(worker_module.job_store, "redis_client_sync", redis)
+    result = worker_module.execute_job(
+        {
+            "job_id": "job-collision",
+            "metric": "collision_metric",
+            "input": {
+                "location": _feature_collection(),
+                "sector_filters": [{"key": "retail", "value": "^46.*"}],
+            },
+            "location_areas_m2": {"area-1": 100.0},
+        },
+        task_id="job-collision",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"] == {
+        "type": "invalid_result",
+        "message": "Expanded table output columns must be unique.",
+    }
+    assert _decode_stored_result(worker_module, redis, "job-collision") == result
 
 
 @pytest.mark.parametrize(

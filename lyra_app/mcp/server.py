@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -10,7 +9,7 @@ from urllib.parse import urlsplit
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
+from mcp.types import CallToolResult, Tool, ToolAnnotations
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.routing import Route
@@ -22,6 +21,7 @@ from lyra_app.mcp.models import (
     TOOL_CONTRACTS,
     TOOL_CONTRACTS_BY_NAME,
 )
+from lyra_app.mcp.serialization import serialize_result
 from lyra_app.mcp.tools import (
     LyraMCPBackend,
     ToolCallError,
@@ -43,8 +43,15 @@ SERVER_INSTRUCTIONS = (
     "lyra_get_metric. MCP v1 "
     "accepts only raw metropolitan zone codes for spatial input. Metric runs "
     "return lyra://results/{job_id} references; when a run is still running, "
-    "poll the result tools until terminal status before reading preview or raw "
-    "metadata. Administrative plugin, worker, queue, and server-management "
+    "call lyra_get_job_result every two seconds until terminal, then use "
+    "lyra_download_result for authenticated table or file access. Submission "
+    "returns only a reference; reused means idempotent replay. On a submission "
+    "timeout retry with the original idempotency key. Inspection previews are "
+    "limited to 10 rows, 20 data columns, 500 characters per display string, "
+    "and 64 KiB including both MCP representations. Truncation is explicit; "
+    "use the authenticated descriptor URL for complete provenance. Unknown "
+    "or expired references return result_not_found. Administrative plugin, "
+    "worker, queue, and server-management "
     "operations are not available through MCP."
 )
 
@@ -112,7 +119,7 @@ def create_mcp_app(
     async def call_tool(
         tool_name: str,
         arguments: dict[str, Any],
-    ) -> tuple[list[TextContent], dict[str, Any]] | CallToolResult:
+    ) -> CallToolResult:
         contract = TOOL_CONTRACTS_BY_NAME.get(tool_name)
         if contract is None:
             return _domain_error_result(
@@ -135,9 +142,11 @@ def create_mcp_app(
                 public_api_base_url=public_api_base_url,
             )
         except ToolCallError as exc:
-            return _domain_error_result(exc)
+            return _domain_error_result(exc, bounded=tool_name == "lyra_get_job_result")
 
-        return [_text_content(payload)], payload
+        return serialize_result(
+            payload.model_dump(mode="json"), bounded=tool_name == "lyra_get_job_result"
+        )
 
     session_manager = StreamableHTTPSessionManager(
         app=server,
@@ -172,20 +181,10 @@ class _StreamableHTTPApplication:
         await self._session_manager.handle_request(scope, receive, send)
 
 
-def _text_content(payload: dict[str, Any]) -> TextContent:
-    return TextContent(
-        type="text",
-        text=json.dumps(payload, sort_keys=True, separators=(",", ":")),
-    )
-
-
-def _domain_error_result(error: ToolCallError) -> CallToolResult:
-    payload = error.to_payload()
-    return CallToolResult(
-        content=[_text_content(payload)],
-        structuredContent=payload,
-        isError=True,
-    )
+def _domain_error_result(
+    error: ToolCallError, *, bounded: bool = False
+) -> CallToolResult:
+    return serialize_result(error.to_payload(), is_error=True, bounded=bounded)
 
 
 def _invalid_argument_result(
@@ -220,8 +219,6 @@ def _invalid_argument_result(
         f"Invalid arguments for {tool_name}.",
         details,
     ).to_payload()
-    return CallToolResult(
-        content=[_text_content(payload)],
-        structuredContent=payload,
-        isError=True,
+    return serialize_result(
+        payload, is_error=True, bounded=tool_name == "lyra_get_job_result"
     )

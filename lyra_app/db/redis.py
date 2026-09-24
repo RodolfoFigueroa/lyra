@@ -73,6 +73,15 @@ def _sync_client() -> redis.Redis:
 
 
 class _RedisAsyncProxy:
+    @staticmethod
+    def pipeline(*, transaction: bool = True) -> aioredis.client.Pipeline:
+        """Create a transaction pipeline on the configured async client.
+
+        Returns:
+            A pipeline bound to the active Redis connection pool.
+        """
+        return _async_client().pipeline(transaction=transaction)
+
     def __getattr__(self, name: str) -> AsyncRedisMethod:
         return getattr(_async_client(), name)
 

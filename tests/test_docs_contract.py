@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from jsonschema import validate
 
 from docs.scripts import generate_docs
 from docs.scripts.check_site import api_reference_failures
@@ -20,6 +23,7 @@ from docs.scripts.versioned_site import (
     version_manifest,
 )
 from lyra_app.config import LyraConfig
+from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME
 
 if TYPE_CHECKING:
     import pytest
@@ -199,3 +203,22 @@ def test_version_selector_marks_each_tree_and_is_idempotent(tmp_path: Path) -> N
         "/lyra/versions/0.7.0",
         "/lyra/versions/0.6.0",
     }
+
+
+def test_mcp_workflow_examples_match_serialization_schemas() -> None:
+    page = (CONTENT_DIR / "use" / "mcp.md").read_text()
+    examples = re.findall(r"```json\n(.*?)\n```", page, re.DOTALL)
+    assert len(examples) == 10
+    for example in examples:
+        payload = json.loads(example)
+        if "status" not in payload and "error" in payload:
+            assert payload["error"]["code"] == "result_not_found"
+            continue
+        name = (
+            "lyra_run_metric"
+            if "reused" in payload
+            else "lyra_download_result"
+            if "format" in payload
+            else "lyra_get_job_result"
+        )
+        validate(payload, TOOL_CONTRACTS_BY_NAME[name].output_schema)

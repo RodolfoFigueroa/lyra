@@ -425,7 +425,8 @@ def _result_retention_seconds(config: LyraConfig | None = None) -> int:
     return get_config().job_store.result_retention_seconds
 
 
-def _lifetime_from_ttl_ms(ttl_ms: int | None) -> ResultLifetime:
+def lifetime_from_ttl_ms(ttl_ms: int | None) -> ResultLifetime:
+    """Return available expiration metadata from a Redis millisecond TTL."""
     if ttl_ms is None or ttl_ms < 0:
         return ResultLifetime()
     return ResultLifetime(
@@ -453,7 +454,7 @@ def get_result_lifetime(
     client = _default_sync_client(client)
     key = result_key(job_id)
     if isinstance(client, SyncMillisecondLifetimeReader) and callable(client.pttl):
-        return _lifetime_from_ttl_ms(client.pttl(key))
+        return lifetime_from_ttl_ms(client.pttl(key))
     if isinstance(client, SyncSecondLifetimeReader) and callable(client.ttl):
         return _lifetime_from_ttl_seconds(client.ttl(key))
     return ResultLifetime()
@@ -472,7 +473,7 @@ async def get_result_lifetime_async(
     client = _default_async_client(client)
     key = result_key(job_id)
     if isinstance(client, AsyncMillisecondLifetimeReader):
-        return _lifetime_from_ttl_ms(await client.pttl(key))
+        return lifetime_from_ttl_ms(await client.pttl(key))
     if isinstance(client, AsyncSecondLifetimeReader):
         return _lifetime_from_ttl_seconds(await client.ttl(key))
     return ResultLifetime()

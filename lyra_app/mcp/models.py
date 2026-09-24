@@ -1,15 +1,26 @@
 """Data models exposed through Lyra's MCP tools."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, Unpack
+from datetime import datetime
+from typing import Any, Literal, NotRequired, TypedDict, Unpack
 
+from lyra.sdk.models.job import (
+    JobProgress,
+    ResultLifetime,
+    ResultSummary,
+    ResultTableMetadata,
+    ResultTablePreview,
+    RowIdentityMetadata,
+)
+from lyra.sdk.models.plugin_v4 import (
+    BatchedTableOutputColumnV4,
+    OutputSpecV4,
+    PluginInfoV4,
+    TableOutputColumnV4,
+)
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import TypeForm
 
-MAX_RUN_WAIT_SECONDS = 10.0
-MAX_RESULT_WAIT_SECONDS = 30.0
 MAX_METRIC_PAGE_SIZE = 20
 RESULT_REF_PATTERN = r"^lyra://results/[^/?#\s]+$"
 
@@ -80,7 +91,7 @@ class GetMetricInput(MCPContractModel):
 
 
 class RunMetricInput(MCPContractModel):
-    """Submit a metric with spatial inputs and an optional wait."""
+    """Submit a metric once with spatial inputs."""
 
     metric: str = Field(min_length=1, description="Public metric name.")
     met_zone_code: str = Field(
@@ -96,16 +107,6 @@ class RunMetricInput(MCPContractModel):
         min_length=1,
         description="Caller-provided key for safely retrying this metric submission.",
     )
-    wait_seconds: float = Field(
-        default=2,
-        ge=0,
-        le=MAX_RUN_WAIT_SECONDS,
-        allow_inf_nan=False,
-        description=(
-            "Maximum time to wait for a terminal result, in seconds. "
-            "Must be between 0 and 10 inclusive; defaults to 2."
-        ),
-    )
 
 
 class ResultRefInput(MCPContractModel):
@@ -118,29 +119,7 @@ class ResultRefInput(MCPContractModel):
 
 
 class GetJobResultInput(ResultRefInput):
-    """Retrieve a result with a bounded wait for completion."""
-
-    wait_seconds: float = Field(
-        default=MAX_RESULT_WAIT_SECONDS,
-        ge=0,
-        le=MAX_RESULT_WAIT_SECONDS,
-        allow_inf_nan=False,
-        description=(
-            "Maximum time to wait for a terminal result, in seconds. "
-            "Must be between 0 and 30 inclusive; defaults to 30."
-        ),
-    )
-
-
-class OutputColumn(MCPContractModel):
-    """Describe a declared metric output column."""
-
-    name: str = Field(min_length=1)
-    type: Literal["number", "integer", "string", "boolean"]
-    unit: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    nullable: bool
-    source: str | None = Field(default=None, min_length=1)
+    """Observe one result without waiting for completion."""
 
 
 class SpatialField(MCPContractModel):
@@ -158,7 +137,7 @@ class SearchCandidate(MCPContractModel):
     reason: str = Field(min_length=1)
     required_spatial_fields: list[SpatialField]
     output_kind: Literal["table", "file"]
-    relevant_columns: list[OutputColumn]
+    relevant_columns: list[TableOutputColumnV4 | BatchedTableOutputColumnV4]
 
 
 class SearchMetricsOutput(MCPContractModel):
@@ -198,28 +177,6 @@ class LookupMetZoneOutput(MCPContractModel):
     )
 
 
-class TableMetricOutput(MCPContractModel):
-    """Describe fixed and batched columns in a table output."""
-
-    kind: Literal["table"]
-    columns: list[OutputColumn]
-    batched_columns: list[OutputColumn]
-
-
-class FileMetricOutput(MCPContractModel):
-    """Describe a file output and its supported extensions."""
-
-    kind: Literal["file"]
-    media_type: str = Field(min_length=1)
-    extensions: list[str]
-
-
-MetricOutput = Annotated[
-    TableMetricOutput | FileMetricOutput,
-    Field(discriminator="kind"),
-]
-
-
 class GetMetricOutput(MCPContractModel):
     """Return a metric request schema and output contract."""
 
@@ -227,184 +184,52 @@ class GetMetricOutput(MCPContractModel):
     description: str
     request_schema: dict[str, Any]
     spatial_inputs: dict[str, Literal["location", "bounds"]]
-    output: MetricOutput
+    output: OutputSpecV4
 
 
-class RunningOutput(MCPContractModel):
-    """Direct a caller to poll an unfinished job."""
+class RunMetricOutput(MCPContractModel):
+    """Acknowledge submission without assuming execution status."""
 
-    status: Literal["running"]
-    job_id: str = Field(min_length=1)
+    job_id: str
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    poll_after_seconds: int = Field(ge=0)
-    next_tool: Literal["lyra_get_job_result"]
-
-
-class RunMetricRunningOutput(RunningOutput):
-    """Report an unfinished submission and whether it was reused."""
-
     reused: bool
+    next_tool: Literal["lyra_get_job_result"] = "lyra_get_job_result"
 
 
-class ResultLifetimeOutput(MCPContractModel):
-    """Describe when a retained result expires."""
+class TruncationOutput(MCPContractModel):
+    """Record all omissions from a bounded inspection."""
 
-    expires_in_seconds: int | None = Field(default=None, ge=0)
-    expires_at: str | None = None
+    omitted_rows: int = Field(default=0, ge=0)
+    omitted_columns: int = Field(default=0, ge=0)
+    shortened_strings: int = Field(default=0, ge=0)
+    omitted_sections: list[str] = Field(default_factory=list)
 
 
-class ResultRawAccessOutput(MCPContractModel):
-    """Describe formats and API paths for retrieving a result."""
+class CompactProvenance(MCPContractModel):
+    """Retain run identity without geometry or full output declarations."""
 
+    metric: str
+    catalog_fingerprint: str
+    plugin: PluginInfoV4
+    created_at: datetime
+    row_identity: RowIdentityMetadata | None = None
+    input: dict[str, Any] | None = None
+
+
+class ActiveResultOutput(MCPContractModel):
+    """Report the actual retained active state."""
+
+    job_id: str
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    formats: list[Literal["terminal_json", "jsonl"]]
-    terminal_json_path: str = Field(min_length=1)
-    jsonl_path: str | None = Field(default=None, min_length=1)
-
-
-class PluginInfoOutput(MCPContractModel):
-    """Identify the plugin that produced a result."""
-
-    name: str = Field(min_length=1)
-    version: str = Field(min_length=1)
-
-
-class RowIdentityOutput(MCPContractModel):
-    """Describe the authoritative identity of result rows."""
-
-    field: str = Field(min_length=1)
-    namespace: str | None = Field(default=None, min_length=1)
-    version: str | None = Field(default=None, min_length=1)
-
-
-class JobRunProvenanceOutput(MCPContractModel):
-    """Capture the inputs and contracts used to execute a job."""
-
-    metric: str = Field(min_length=1)
-    catalog_fingerprint: str = Field(min_length=1)
-    plugin: PluginInfoOutput
-    input: dict[str, Any]
-    output: MetricOutput
-    created_at: str = Field(min_length=1)
-    row_identity: RowIdentityOutput | None = None
-
-
-class ResultTableMetadataOutput(MCPContractModel):
-    """Describe table dimensions, columns, and row identity."""
-
-    row_count: int = Field(ge=0)
-    column_count: int = Field(ge=0)
-    columns: list[str]
-    column_contracts: list[OutputColumn]
-    index_field: str = Field(min_length=1)
-    row_identity: RowIdentityOutput | None = None
-
-
-class ResultTablePreviewOutput(MCPContractModel):
-    """Return a bounded sample of table rows."""
-
-    index_field: str = Field(min_length=1)
-    rows: list[dict[str, Any]]
-    row_limit: int = Field(ge=0)
-    truncated: bool
-
-
-class NumericColumnSummaryOutput(MCPContractModel):
-    """Summarize observed numeric values and null counts."""
-
-    count: int = Field(ge=0)
-    null_count: int = Field(ge=0)
-    min: int | float | None = None
-    max: int | float | None = None
-    mean: float | None = None
-
-
-class ResultColumnSummaryOutput(MCPContractModel):
-    """Summarize values in one result column."""
-
-    name: str = Field(min_length=1)
-    count: int = Field(ge=0)
-    null_count: int = Field(ge=0)
-    numeric: NumericColumnSummaryOutput | None = None
-
-
-class ResultSummaryOutput(MCPContractModel):
-    """Summarize a terminal result and any execution error."""
-
-    kind: Literal["table", "file", "failed", "cancelled"]
-    row_count: int | None = Field(default=None, ge=0)
-    column_count: int | None = Field(default=None, ge=0)
-    columns: list[ResultColumnSummaryOutput]
-    error: dict[str, Any] | None = None
-
-
-class ResultFileMetadataOutput(MCPContractModel):
-    """Describe the path and media type of a file result."""
-
-    file_path: str = Field(min_length=1)
-    media_type: str = Field(min_length=1)
-
-
-class ResultDescriptorOutput(MCPContractModel):
-    """Describe a retained terminal result and its retrieval options."""
-
-    schema_version: Literal[1]
-    job_id: str = Field(min_length=1)
-    status: Literal["succeeded", "failed", "cancelled"]
-    result_kind: Literal["table", "file", "failed", "cancelled"]
-    result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    provenance: JobRunProvenanceOutput | None = None
-    completed_at: str = Field(min_length=1)
-    lifetime: ResultLifetimeOutput
-    raw: ResultRawAccessOutput
-    table: ResultTableMetadataOutput | None = None
-    preview: ResultTablePreviewOutput
-    summary: ResultSummaryOutput
-    file: ResultFileMetadataOutput | None = None
-    error: dict[str, Any] | None = None
-
-
-class RunMetricResultDescriptorOutput(ResultDescriptorOutput):
-    """Return a completed submission and its reuse status."""
-
-    reused: bool
-
-
-RunMetricOutput = RunMetricRunningOutput | RunMetricResultDescriptorOutput
-GetJobResultOutput = RunningOutput | ResultDescriptorOutput
-
-
-class ResultMetadataOutput(MCPContractModel):
-    """Return result metadata without its table preview."""
-
-    schema_version: Literal[1]
-    job_id: str = Field(min_length=1)
-    status: Literal["succeeded", "failed", "cancelled"]
-    result_kind: Literal["table", "file", "failed", "cancelled"]
-    result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    provenance: JobRunProvenanceOutput | None
-    completed_at: str = Field(min_length=1)
-    lifetime: ResultLifetimeOutput
-    table: ResultTableMetadataOutput | None
-    file: ResultFileMetadataOutput | None
-    summary: ResultSummaryOutput
-    error: dict[str, Any] | None
-
-
-class ResultPreviewOutput(MCPContractModel):
-    """Return a bounded result preview with provenance and summary."""
-
-    schema_version: Literal[1]
-    job_id: str = Field(min_length=1)
-    status: Literal["succeeded", "failed", "cancelled"]
-    result_kind: Literal["table", "file", "failed", "cancelled"]
-    result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    provenance: JobRunProvenanceOutput | None
-    completed_at: str = Field(min_length=1)
-    lifetime: ResultLifetimeOutput
-    preview: ResultTablePreviewOutput
-    summary: ResultSummaryOutput
-    error: dict[str, Any] | None
+    status: Literal["queued", "running"]
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    metric: str | None = None
+    progress: JobProgress | None = None
+    poll_after_seconds: Literal[2] = 2
+    next_tool: Literal["lyra_get_job_result"] = "lyra_get_job_result"
+    truncation: TruncationOutput = Field(default_factory=TruncationOutput)
 
 
 class BearerAuthenticationOutput(MCPContractModel):
@@ -422,25 +247,45 @@ class LyraAPIHandoffOutput(MCPContractModel):
     authentication: BearerAuthenticationOutput
 
 
-class ClientHelpersOutput(MCPContractModel):
-    """Provide synchronous and asynchronous Python download examples."""
+class ResultFileOutput(MCPContractModel):
+    """Expose file media type and authenticated download access."""
 
-    python_sync: str = Field(min_length=1)
-    python_async: str = Field(min_length=1)
+    media_type: str
+    download: LyraAPIHandoffOutput
+
+
+class TerminalResultOutput(MCPContractModel):
+    """A compact terminal observation with complete-descriptor access."""
+
+    job_id: str
+    result_ref: str = Field(pattern=RESULT_REF_PATTERN)
+    status: Literal["succeeded", "failed", "cancelled"]
+    result_kind: Literal["table", "file", "failed", "cancelled"]
+    completed_at: datetime | None = None
+    lifetime: ResultLifetime
+    descriptor: LyraAPIHandoffOutput
+    provenance: CompactProvenance | None = None
+    table: ResultTableMetadata | None = None
+    preview: ResultTablePreview | None = None
+    summary: ResultSummary | None = None
+    file: ResultFileOutput | None = None
+    error: dict[str, Any] | None = None
+    truncation: TruncationOutput = Field(default_factory=TruncationOutput)
+
+
+GetJobResultOutput = ActiveResultOutput | TerminalResultOutput
 
 
 class DownloadResultOutput(MCPContractModel):
-    """Return download instructions and result expiration metadata."""
+    """Return authenticated download instructions and result lifetime."""
 
-    job_id: str = Field(min_length=1)
+    job_id: str
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    status: Literal["succeeded"]
-    format: Literal["jsonl"]
-    media_type: Literal["application/x-ndjson"]
+    status: Literal["succeeded"] = "succeeded"
+    format: Literal["jsonl", "file"]
+    media_type: str
+    lifetime: ResultLifetime
     lyra_api: LyraAPIHandoffOutput
-    client_helpers: ClientHelpersOutput
-    expires_in_seconds: int | None = Field(default=None, ge=0)
-    expires_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -463,7 +308,7 @@ class ToolContract:
     @property
     def output_schema(self) -> dict[str, Any]:
         """The JSON Schema generated for the complete output union."""
-        return self.output_adapter.json_schema()
+        return self.output_adapter.json_schema(mode="serialization")
 
 
 class ToolBehavior(TypedDict):
@@ -546,11 +391,9 @@ TOOL_CONTRACTS = (
     _contract(
         "lyra_run_metric",
         (
-            "Start one Lyra metric for a raw metropolitan zone code. Pass "
-            "non-spatial inputs in parameters. If the response has "
-            "status='running', do not rerun the metric; wait poll_after_seconds "
-            "and call lyra_get_job_result, the returned next_tool, with the "
-            "returned result_ref."
+            "Submit once, then inspect result_ref with lyra_get_job_result. "
+            "reused means idempotent replay, not caching or completion. "
+            "On submission timeout reuse the original idempotency key."
         ),
         RunMetricInput,
         RunMetricOutput,
@@ -561,11 +404,11 @@ TOOL_CONTRACTS = (
     _contract(
         "lyra_get_job_result",
         (
-            "Continue polling a Lyra result reference. Returns status='running' "
-            "with next_tool='lyra_get_job_result' while the job is active, or the "
-            "compact terminal descriptor for succeeded, failed, or cancelled jobs. "
-            "Expired references return a structured error telling the agent to "
-            "rerun the job if the user still needs data."
+            "Inspect once. Poll active queued/running jobs after two seconds. "
+            "Terminal failures are observations. Preview limits: 10 rows, 20 data "
+            "columns, 500 characters per display string, 64 KiB per response. "
+            "Use descriptor access for complete provenance; unknown or expired "
+            "references return result_not_found."
         ),
         GetJobResultInput,
         GetJobResultOutput,
@@ -573,32 +416,10 @@ TOOL_CONTRACTS = (
         idempotent=True,
     ),
     _contract(
-        "lyra_get_result_metadata",
-        (
-            "Return compact descriptor metadata for a Lyra result reference without "
-            "hydrating the raw table."
-        ),
-        ResultRefInput,
-        ResultMetadataOutput,
-        read_only=True,
-        idempotent=True,
-    ),
-    _contract(
-        "lyra_get_result_preview",
-        (
-            "Return only the descriptor preview rows and summary for a Lyra result "
-            "reference."
-        ),
-        ResultRefInput,
-        ResultPreviewOutput,
-        read_only=True,
-        idempotent=True,
-    ),
-    _contract(
         "lyra_download_result",
         (
             "Return authenticated Lyra API handoff metadata for downloading a table "
-            "result as JSONL. This does not inline raw rows."
+            "or file result. This does not inline raw data."
         ),
         ResultRefInput,
         DownloadResultOutput,

@@ -341,14 +341,31 @@ def notify_unexpected_task_failure(task_id: str) -> None:
 async def reconcile_celery_failure(
     snapshot: job_store.JobStatusSnapshot,
 ) -> job_store.JobStatusSnapshot:
+    """Repair unexpected Celery failures and return the latest status.
+
+    Returns:
+        The retained status after repair, or the last known snapshot.
+    """
+    if await repair_celery_failure(snapshot):
+        try:
+            return await job_store.get_job_status_async(snapshot.job_id) or snapshot
+        except Exception:  # Preserve REST's last readable status on backend failure.
+            logger.warning(
+                "Could not read repaired task %s.", snapshot.job_id, exc_info=True
+            )
+    return snapshot
+
+
+async def repair_celery_failure(
+    snapshot: job_store.JobStatusSnapshot,
+) -> bool:
     """Repair a nonterminal Lyra job when Celery has a terminal failure.
 
     Returns:
-        The repaired status snapshot, or the original if repair is unnecessary or
-        unavailable.
+        Whether a terminal failure repair was attempted successfully.
     """
     if job_store.is_terminal_status(snapshot.status):
-        return snapshot
+        return False
 
     try:
         celery_state = await asyncio.to_thread(
@@ -360,28 +377,27 @@ async def reconcile_celery_failure(
             snapshot.job_id,
             exc_info=True,
         )
-        return snapshot
+        return False
 
     if celery_state != states.FAILURE:
-        return snapshot
+        return False
 
     try:
         saved = await asyncio.to_thread(
             persist_unexpected_task_failure,
             snapshot.job_id,
         )
-        repaired = await job_store.get_job_status_async(snapshot.job_id)
     except Exception:  # Preserve the last readable Lyra state
         logger.warning(
             "Could not persist reconciled failure for task %s.",
             snapshot.job_id,
             exc_info=True,
         )
-        return snapshot
+        return False
 
     if saved:
         logger.info("Reconciled Celery failure for task %s.", snapshot.job_id)
-    return repaired or snapshot
+    return True
 
 
 def revoke_job(job_id: str) -> None:

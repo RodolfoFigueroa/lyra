@@ -7,11 +7,12 @@ import threading
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, Unpack
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 from fastapi import Request
+from jsonschema import validate
 from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
@@ -19,12 +20,11 @@ from lyra.sdk.models.job import (
     JobCreateResponse,
     JobLifecycleStatus,
     JobLinks,
+    JobProgress,
     JobRunProvenance,
     JobStatusInfo,
-    ResultDescriptor,
     ResultLifetime,
     TableJobResult,
-    build_result_descriptor,
 )
 from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
 from lyra.sdk.models.plugin_v4 import (
@@ -41,11 +41,13 @@ from lyra.sdk.types import (
 )
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from redis.exceptions import ConnectionError as RedisConnectionError
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
 from lyra_app import main, mcp, registry
 from lyra_app.db.dependencies import get_database_runtime
+from lyra_app.job_observation import JobObservation
 from lyra_app.mcp import SERVER_INSTRUCTIONS, tools
 from lyra_app.mcp import create_mcp_app as _create_mcp_app
 from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME, GetJobResultInput
@@ -228,7 +230,8 @@ class FakeMCPBackend:
             metrics=metrics,
         )
         self.jobs: dict[str, JobStatusInfo] = {}
-        self.descriptors: dict[str, ResultDescriptor] = {}
+        self.observations: dict[str, JobObservation] = {}
+        self.observed: list[str] = []
         self.payloads: list[dict[str, Any]] = []
         self.idempotency_records: dict[
             str,
@@ -299,18 +302,8 @@ class FakeMCPBackend:
         self.payloads.append(payload)
         if idempotency_key is not None:
             self.idempotency_records[idempotency_key] = (metric, payload, job_id)
-        self.jobs[job_id] = self._job_status(
-            job_id, self.job_status_sequence[0], metric
-        )
-        self.descriptors[job_id] = build_result_descriptor(
-            TableJobResult(
-                job_id=job_id,
-                index=["area-1"],
-                columns=["value"],
-                data=[[payload.get("value", 1)]],
-            ),
-            completed_at=_COMPLETED_AT,
-        )
+        self.jobs[job_id] = self.job_status(job_id, self.job_status_sequence[0], metric)
+        self.observations[job_id] = JobObservation(snapshot=self.jobs[job_id])
         return self._job_response(job_id, metric, reused=False)
 
     @staticmethod
@@ -331,25 +324,12 @@ class FakeMCPBackend:
             ),
         )
 
-    async def get_job(self, job_id: str) -> JobStatusInfo | None:
-        if job_id not in self.jobs:
-            return None
-        position = min(
-            len(self.payloads_for_job(job_id)), len(self.job_status_sequence) - 1
-        )
-        status = self.job_status_sequence[position]
-        self.payloads.append({"_poll": job_id})
-        self.jobs[job_id] = self._job_status(job_id, status, self.jobs[job_id].metric)
-        return self.jobs[job_id]
-
-    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
-        return self.descriptors.get(job_id)
-
-    def payloads_for_job(self, job_id: str) -> list[dict[str, Any]]:
-        return [payload for payload in self.payloads if payload.get("_poll") == job_id]
+    async def observe_job(self, job_id: str) -> JobObservation:
+        self.observed.append(job_id)
+        return self.observations.get(job_id, JobObservation())
 
     @staticmethod
-    def _job_status(
+    def job_status(
         job_id: str,
         status: JobLifecycleStatus,
         metric: str | None,
@@ -464,7 +444,7 @@ def test_mcp_package_initializes_with_bearer_auth() -> None:
     assert result["instructions"] == SERVER_INSTRUCTIONS
     assert "metropolitan zone codes" in result["instructions"]
     assert "lyra://results/{job_id}" in result["instructions"]
-    assert "poll the result tools" in result["instructions"]
+    assert "every two seconds" in result["instructions"]
 
 
 def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
@@ -537,44 +517,16 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
         "lyra_get_job_result",
         "lyra_search_metrics",
         "lyra_get_metric",
-        "lyra_get_result_metadata",
-        "lyra_get_result_preview",
         "lyra_list_metrics",
         "lyra_lookup_met_zone",
         "lyra_run_metric",
     }
     run_tool = next(tool for tool in tools.tools if tool.name == "lyra_run_metric")
-    assert "do not rerun" in (run_tool.description or "")
+    assert "Submit once" in (run_tool.description or "")
     assert "lyra_get_job_result" in (run_tool.description or "")
-    wait_contracts = {
-        tool.name: tool.inputSchema["properties"]["wait_seconds"]
-        for tool in tools.tools
-        if tool.name in {"lyra_run_metric", "lyra_get_job_result"}
-    }
-    assert wait_contracts == {
-        "lyra_run_metric": {
-            "default": 2,
-            "description": (
-                "Maximum time to wait for a terminal result, in seconds. "
-                "Must be between 0 and 10 inclusive; defaults to 2."
-            ),
-            "maximum": 10.0,
-            "minimum": 0.0,
-            "title": "Wait Seconds",
-            "type": "number",
-        },
-        "lyra_get_job_result": {
-            "default": 30.0,
-            "description": (
-                "Maximum time to wait for a terminal result, in seconds. "
-                "Must be between 0 and 30 inclusive; defaults to 30."
-            ),
-            "maximum": 30.0,
-            "minimum": 0.0,
-            "title": "Wait Seconds",
-            "type": "number",
-        },
-    }
+    assert all(
+        "wait_seconds" not in tool.inputSchema["properties"] for tool in tools.tools
+    )
     for tool in tools.tools:
         assert tool.inputSchema["type"] == "object"
         assert tool.inputSchema["additionalProperties"] is False
@@ -1089,7 +1041,7 @@ def test_mcp_get_metric_returns_public_contract() -> None:
     assert payload["output"]["kind"] == "table"
 
 
-def test_mcp_run_metric_translates_location_met_zone_and_returns_descriptor() -> None:
+def test_mcp_run_metric_translates_location_met_zone_and_returns_submission() -> None:
     backend = FakeMCPBackend([_table_metric("smoke_table_metric", "Return a table.")])
     client = _ManagedTestClient(
         create_mcp_app(agent_api_key="agent-secret", backend=backend)
@@ -1103,7 +1055,6 @@ def test_mcp_run_metric_translates_location_met_zone_and_returns_descriptor() ->
                 "metric": "smoke_table_metric",
                 "met_zone_code": "09.01",
                 "parameters": {"value": 7},
-                "wait_seconds": 1,
             },
         ),
         headers=_mcp_headers(),
@@ -1115,10 +1066,10 @@ def test_mcp_run_metric_translates_location_met_zone_and_returns_descriptor() ->
         "location": {"data_type": "met_zone_code", "value": "09.01"},
     }
     assert payload["job_id"] == "job-1"
-    assert payload["status"] == "succeeded"
+    assert "status" not in payload
     assert payload["result_ref"] == "lyra://results/job-1"
-    assert payload["preview"]["rows"] == [{"_result_index": "area-1", "value": 7}]
     assert payload["reused"] is False
+    assert backend.observed == []
 
 
 def test_mcp_run_metric_translates_bounds_met_zone() -> None:
@@ -1143,21 +1094,20 @@ def test_mcp_run_metric_translates_bounds_met_zone() -> None:
                 "metric": "smoke_bounds_metric",
                 "met_zone_code": "13.02",
                 "parameters": {"value": 3},
-                "wait_seconds": 1,
             },
         ),
         headers=_mcp_headers(),
     )
 
     payload = _tool_payload(response)
-    assert payload["status"] == "succeeded"
+    assert "status" not in payload
     assert backend.payloads[0] == {
         "value": 3,
         "bounds": {"data_type": "met_zone_code", "value": "13.02"},
     }
 
 
-def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None:
+def test_mcp_run_metric_never_observes_completion() -> None:
     backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
     backend.job_status_sequence = ["queued"]
     client = _ManagedTestClient(
@@ -1172,7 +1122,6 @@ def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None
                 "metric": "slow_metric",
                 "met_zone_code": "09.01",
                 "parameters": {"value": 7},
-                "wait_seconds": 0,
             },
         ),
         headers=_mcp_headers(),
@@ -1180,10 +1129,8 @@ def test_mcp_run_metric_returns_running_continuation_when_wait_expires() -> None
 
     payload = _tool_payload(response)
     assert payload == {
-        "status": "running",
         "job_id": "job-1",
         "result_ref": "lyra://results/job-1",
-        "poll_after_seconds": 5,
         "next_tool": "lyra_get_job_result",
         "reused": False,
     }
@@ -1200,7 +1147,6 @@ def test_mcp_run_metric_reuses_idempotent_submission() -> None:
         "met_zone_code": "09.01",
         "parameters": {"value": 7},
         "idempotency_key": "retry-key",
-        "wait_seconds": 0,
     }
 
     first = _tool_payload(
@@ -1219,6 +1165,7 @@ def test_mcp_run_metric_reuses_idempotent_submission() -> None:
     )
 
     assert first["job_id"] == replay["job_id"] == "job-1"
+    assert backend.observed == []
     assert first["reused"] is False
     assert replay["reused"] is True
     assert [payload for payload in backend.payloads if "_poll" not in payload] == [
@@ -1239,7 +1186,6 @@ def test_mcp_run_metric_reports_idempotency_conflict() -> None:
         "metric": "slow_metric",
         "met_zone_code": "09.01",
         "idempotency_key": "conflict-key",
-        "wait_seconds": 0,
     }
     client.post(
         "/",
@@ -1299,7 +1245,6 @@ def test_mcp_run_metric_reports_structured_rate_limit_retry_metadata() -> None:
                 "metric": "slow_metric",
                 "met_zone_code": "09.01",
                 "parameters": {"value": 7},
-                "wait_seconds": 0,
             },
         ),
         headers=_mcp_headers(),
@@ -1312,508 +1257,6 @@ def test_mcp_run_metric_reports_structured_rate_limit_retry_metadata() -> None:
         "message": "Agent job submission limit exceeded. Please try again later.",
         "details": {"retry_after_seconds": 17},
     }
-
-
-def test_mcp_get_job_result_polls_from_running_to_succeeded() -> None:
-    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["queued", "succeeded"]
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-
-    run_response = client.post(
-        "/",
-        json=_tool_call_payload(
-            "lyra_run_metric",
-            {
-                "metric": "slow_metric",
-                "met_zone_code": "09.01",
-                "parameters": {"value": 9},
-                "wait_seconds": 0,
-            },
-        ),
-        headers=_mcp_headers(),
-    )
-    running = _tool_payload(run_response)
-
-    response = client.post(
-        "/",
-        json=_tool_call_payload(
-            "lyra_get_job_result",
-            {"result_ref": running["result_ref"], "wait_seconds": 1},
-        ),
-        headers=_mcp_headers(),
-    )
-
-    payload = _tool_payload(response)
-    assert payload["status"] == "succeeded"
-    assert payload["result_ref"] == "lyra://results/job-1"
-    assert payload["preview"]["rows"] == [{"_result_index": "area-1", "value": 9}]
-
-
-def test_mcp_get_job_result_returns_running_continuation() -> None:
-    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["running"]
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-    backend.jobs["job-1"] = JobStatusInfo(
-        job_id="job-1",
-        status="running",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        metric="slow_metric",
-    )
-
-    response = client.post(
-        "/",
-        json=_tool_call_payload(
-            "lyra_get_job_result",
-            {"result_ref": "lyra://results/job-1", "wait_seconds": 0},
-        ),
-        headers=_mcp_headers(),
-    )
-
-    assert _tool_payload(response) == {
-        "status": "running",
-        "job_id": "job-1",
-        "result_ref": "lyra://results/job-1",
-        "poll_after_seconds": 5,
-        "next_tool": "lyra_get_job_result",
-    }
-
-
-def test_mcp_result_metadata_preview_and_download_tools_are_compact() -> None:
-    backend = FakeMCPBackend([_table_metric("smoke_table_metric", "Return a table.")])
-    provenance = JobRunProvenance.model_validate(
-        {
-            "metric": "smoke_table_metric",
-            "catalog_fingerprint": "catalog-1",
-            "plugin": {"name": "smoke-plugin", "version": "1.2.3"},
-            "input": {
-                "location": {"data_type": "met_zone_code", "value": "09.01"},
-                "value": 6,
-            },
-            "output": backend.catalog.metrics[0].output,
-            "created_at": "2026-07-09T12:00:00Z",
-            "row_identity": {
-                "field": "cvegeo",
-                "namespace": "inegi:cvegeo:ageb",
-                "version": "2020",
-            },
-        }
-    )
-    descriptor = build_result_descriptor(
-        TableJobResult(
-            job_id="job-1",
-            index=["area-1", "area-2"],
-            columns=["value"],
-            data=[[6], [8]],
-        ),
-        lifetime=ResultLifetime(
-            expires_in_seconds=3600,
-            expires_at=datetime(2026, 7, 9, 13, 5, tzinfo=UTC),
-        ),
-        completed_at=_COMPLETED_AT,
-        provenance=provenance,
-    )
-    backend.jobs["job-1"] = JobStatusInfo(
-        job_id="job-1",
-        status="succeeded",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        metric="smoke_table_metric",
-    )
-    backend.descriptors["job-1"] = descriptor
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-
-    metadata = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_get_result_metadata",
-                {"result_ref": "lyra://results/job-1"},
-                request_id=20,
-            ),
-            headers=_mcp_headers(),
-        )
-    )
-    preview = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_get_result_preview",
-                {"result_ref": "lyra://results/job-1"},
-                request_id=21,
-            ),
-            headers=_mcp_headers(),
-        )
-    )
-    download = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_download_result",
-                {"result_ref": "lyra://results/job-1"},
-                request_id=22,
-            ),
-            headers={
-                **_mcp_headers(),
-                "Forwarded": "host=proxy-only.internal;proto=http",
-                "X-Forwarded-Host": "proxy-only.internal",
-                "X-Forwarded-Proto": "http",
-            },
-        )
-    )
-
-    assert metadata == {
-        "schema_version": 1,
-        "job_id": "job-1",
-        "status": "succeeded",
-        "result_kind": "table",
-        "result_ref": "lyra://results/job-1",
-        "provenance": provenance.model_dump(mode="json", exclude_none=True),
-        "completed_at": "2026-07-09T12:05:00Z",
-        "lifetime": {
-            "expires_in_seconds": 3600,
-            "expires_at": "2026-07-09T13:05:00Z",
-        },
-        "table": {
-            "row_count": 2,
-            "column_count": 1,
-            "columns": ["value"],
-            "column_contracts": [
-                {
-                    "name": "value",
-                    "type": "integer",
-                    "unit": "count",
-                    "description": "Submitted value.",
-                    "nullable": False,
-                }
-            ],
-            "index_field": "_result_index",
-            "row_identity": {
-                "field": "cvegeo",
-                "namespace": "inegi:cvegeo:ageb",
-                "version": "2020",
-            },
-        },
-        "file": None,
-        "summary": metadata["summary"],
-        "error": None,
-    }
-    assert "preview" not in metadata
-    assert preview["preview"]["rows"] == [
-        {"_result_index": "area-1", "value": 6},
-        {"_result_index": "area-2", "value": 8},
-    ]
-    assert preview["schema_version"] == 1
-    assert preview["provenance"]["plugin"]["version"] == "1.2.3"
-    assert preview["completed_at"] == "2026-07-09T12:05:00Z"
-    assert "raw" not in preview
-    assert download == {
-        "job_id": "job-1",
-        "result_ref": "lyra://results/job-1",
-        "status": "succeeded",
-        "format": "jsonl",
-        "media_type": "application/x-ndjson",
-        "lyra_api": {
-            "method": "GET",
-            "url": ("https://lyra.example.test/api/jobs/job-1/result/table.jsonl"),
-            "authentication": {
-                "scheme": "Bearer",
-                "credential_env_var": "LYRA_AGENT_API_KEY",
-            },
-        },
-        "client_helpers": {
-            "python_sync": (
-                "LyraClient.results.download(result_ref, path, format='jsonl')"
-            ),
-            "python_async": (
-                "await AsyncLyraClient.results.download("
-                "result_ref, path, format='jsonl')"
-            ),
-        },
-        "expires_in_seconds": 3600,
-        "expires_at": "2026-07-09T13:05:00Z",
-    }
-    assert "agent-secret" not in json.dumps(download)
-    assert "proxy-only" not in json.dumps(download)
-    assert "?" not in download["lyra_api"]["url"]
-    assert "#" not in download["lyra_api"]["url"]
-
-
-def test_mcp_download_returns_structured_expired_error() -> None:
-    client = _ManagedTestClient(
-        create_mcp_app(
-            agent_api_key="agent-secret",
-            backend=FakeMCPBackend([_table_metric("metric", "Return a table.")]),
-        )
-    )
-
-    response = client.post(
-        "/",
-        json=_tool_call_payload(
-            "lyra_download_result",
-            {"result_ref": "lyra://results/job-expired"},
-        ),
-        headers=_mcp_headers(),
-    )
-
-    result = response.json()["result"]
-    assert result["isError"] is True
-    error = result["structuredContent"]["error"]
-    assert error["code"] == "result_expired"
-    assert error["details"] == {
-        "job_id": "job-expired",
-        "result_ref": "lyra://results/job-expired",
-        "rerun_required": True,
-    }
-    assert "Rerun the metric" in error["message"]
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        FileJobResult(
-            job_id="job-file",
-            file_path="/lyra_data/internal/result.tif",
-            media_type="image/tiff",
-        ),
-        FailedJobResult(
-            job_id="job-failed",
-            error={"type": "runtime_error", "message": "boom"},
-        ),
-        CancelledJobResult(job_id="job-cancelled"),
-    ],
-)
-def test_mcp_download_preserves_structured_result_kind_errors(
-    result: FileJobResult | FailedJobResult | CancelledJobResult,
-) -> None:
-    backend = FakeMCPBackend([_table_metric("metric", "Return a table.")])
-    backend.descriptors[result.job_id] = build_result_descriptor(
-        result,
-        completed_at=_COMPLETED_AT,
-    )
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-
-    response = client.post(
-        "/",
-        json=_tool_call_payload(
-            "lyra_download_result",
-            {"result_ref": f"lyra://results/{result.job_id}"},
-        ),
-        headers=_mcp_headers(),
-    )
-
-    tool_result = response.json()["result"]
-    assert tool_result["isError"] is True
-    error = tool_result["structuredContent"]["error"]
-    assert error["code"] == "unsupported_result_download"
-    assert error["details"]["result_kind"] == result.kind
-    assert "/lyra_data/" not in json.dumps(error)
-
-
-def test_mcp_get_job_result_returns_failed_and_cancelled_envelopes() -> None:
-    backend = FakeMCPBackend([_table_metric("metric", "Return a table.")])
-    failed_descriptor = build_result_descriptor(
-        FailedJobResult(
-            job_id="job-failed",
-            error={"type": "runtime_error", "message": "boom"},
-        ),
-        completed_at=_COMPLETED_AT,
-    )
-    cancelled_descriptor = build_result_descriptor(
-        CancelledJobResult(job_id="job-x"),
-        completed_at=_COMPLETED_AT,
-    )
-    backend.descriptors["job-failed"] = failed_descriptor
-    backend.descriptors["job-x"] = cancelled_descriptor
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-
-    failed = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_get_job_result",
-                {"result_ref": "lyra://results/job-failed", "wait_seconds": 0},
-                request_id=30,
-            ),
-            headers=_mcp_headers(),
-        )
-    )
-    cancelled = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_get_job_result",
-                {"result_ref": "lyra://results/job-x", "wait_seconds": 0},
-                request_id=31,
-            ),
-            headers=_mcp_headers(),
-        )
-    )
-
-    assert failed["status"] == "failed"
-    assert failed["result_kind"] == "failed"
-    assert failed["error"] == {"type": "runtime_error", "message": "boom"}
-    assert cancelled["status"] == "cancelled"
-    assert cancelled["result_kind"] == "cancelled"
-    assert cancelled["preview"]["rows"] == []
-
-
-def test_mcp_result_tools_reject_invalid_result_ref() -> None:
-    client = _ManagedTestClient(
-        create_mcp_app(
-            agent_api_key="agent-secret",
-            backend=FakeMCPBackend([_table_metric("metric", "Return a table.")]),
-        )
-    )
-
-    response = client.post(
-        "/",
-        json=_tool_call_payload(
-            "lyra_get_result_metadata",
-            {"result_ref": "https://example.test/results/job-1"},
-        ),
-        headers=_mcp_headers(),
-    )
-
-    result = response.json()["result"]
-    assert result["isError"] is True
-    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "arguments"),
-    [
-        (
-            "lyra_run_metric",
-            {
-                "metric": "slow_metric",
-                "met_zone_code": "09.01",
-                "wait_seconds": -0.01,
-            },
-        ),
-        (
-            "lyra_run_metric",
-            {
-                "metric": "slow_metric",
-                "met_zone_code": "09.01",
-                "wait_seconds": 10.01,
-            },
-        ),
-        (
-            "lyra_get_job_result",
-            {"result_ref": "lyra://results/job-1", "wait_seconds": -0.01},
-        ),
-        (
-            "lyra_get_job_result",
-            {"result_ref": "lyra://results/job-1", "wait_seconds": 30.01},
-        ),
-    ],
-)
-def test_mcp_wait_ranges_are_rejected_before_polling(
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> None:
-    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["running"]
-    backend.jobs["job-1"] = JobStatusInfo(
-        job_id="job-1",
-        status="running",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        metric="slow_metric",
-    )
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-
-    response = client.post(
-        "/",
-        json=_tool_call_payload(tool_name, arguments),
-        headers=_mcp_headers(),
-    )
-
-    result = response.json()["result"]
-    assert result["isError"] is True
-    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
-    assert backend.payloads == []
-
-
-@pytest.mark.parametrize("wait_seconds", [float("nan"), float("inf"), -float("inf")])
-def test_mcp_non_finite_waits_are_rejected_before_polling(
-    wait_seconds: float,
-) -> None:
-    backend = FakeMCPBackend([_table_metric("slow_metric", "Return later.")])
-    backend.job_status_sequence = ["running"]
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-    request = _tool_call_payload(
-        "lyra_run_metric",
-        {
-            "metric": "slow_metric",
-            "met_zone_code": "09.01",
-            "wait_seconds": wait_seconds,
-        },
-    )
-
-    response = client.post(
-        "/",
-        content=json.dumps(request),
-        headers={**_mcp_headers(), "Content-Type": "application/json"},
-    )
-
-    result = response.json()["result"]
-    assert result["isError"] is True
-    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
-    assert backend.payloads == []
-
-
-def test_mcp_wait_boundaries_are_accepted() -> None:
-    backend = FakeMCPBackend([_table_metric("metric", "Return a table.")])
-    client = _ManagedTestClient(
-        create_mcp_app(agent_api_key="agent-secret", backend=backend)
-    )
-
-    run_result = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_run_metric",
-                {
-                    "metric": "metric",
-                    "met_zone_code": "09.01",
-                    "wait_seconds": 10,
-                },
-            ),
-            headers=_mcp_headers(),
-        )
-    )
-    poll_result = _tool_payload(
-        client.post(
-            "/",
-            json=_tool_call_payload(
-                "lyra_get_job_result",
-                {
-                    "result_ref": run_result["result_ref"],
-                    "wait_seconds": 30,
-                },
-            ),
-            headers=_mcp_headers(),
-        )
-    )
-
-    assert run_result["status"] == "succeeded"
-    assert poll_result["status"] == "succeeded"
 
 
 def test_mcp_run_metric_surfaces_unknown_metric_as_tool_error() -> None:
@@ -1971,87 +1414,607 @@ def test_main_shares_database_runtime_with_rest_and_mcp(
     assert get_database_runtime(request) is backend.database
 
 
-@pytest.mark.parametrize("window", [0, 12])
-def test_mcp_wait_observes_immediately_and_at_window_boundary(
-    window: int,
+def _inspect(
+    backend: FakeMCPBackend, job_id: str = "job-1", *, tool: str = "lyra_get_job_result"
+) -> dict[str, Any]:
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    response = client.post(
+        "/",
+        json=_tool_call_payload(tool, {"result_ref": f"lyra://results/{job_id}"}),
+        headers=_mcp_headers(),
+    )
+    _tool_payload(response)
+    wire = response.json()["result"]
+    if not wire["isError"]:
+        validate(wire["structuredContent"], TOOL_CONTRACTS_BY_NAME[tool].output_schema)
+    return wire
+
+
+@pytest.mark.parametrize(
+    "status", ["queued", "running", "failed", "cancelled", "succeeded"]
+)
+def test_status_only_observations(status: JobLifecycleStatus) -> None:
+    backend = FakeMCPBackend([])
+    snapshot = backend.job_status("job-1", status, "metric")
+    backend.observations["job-1"] = JobObservation(snapshot=snapshot)
+    wire = _inspect(backend)
+    payload = wire["structuredContent"]
+    assert backend.observed == ["job-1"]
+    if status == "succeeded":
+        assert wire["isError"] is True
+        assert payload["error"]["code"] == "result_unavailable"
+    else:
+        assert wire["isError"] is False
+        assert payload["status"] == status
+        if status in {"queued", "running"}:
+            assert payload["poll_after_seconds"] == 2
+            assert payload["metric"] == "metric"
+            assert payload["created_at"] == snapshot.created_at.isoformat().replace(
+                "+00:00", "Z"
+            )
+        else:
+            assert payload["completed_at"] is None
+            assert payload["summary"] is None
+
+
+@pytest.mark.parametrize("snapshot_status", [None, "queued", "running"])
+def test_retained_result_precedes_missing_or_stale_status(
+    snapshot_status: JobLifecycleStatus | None,
+) -> None:
+    backend = FakeMCPBackend([])
+    backend.observations["job-1"] = JobObservation(
+        snapshot=backend.job_status("job-1", snapshot_status, "metric")
+        if snapshot_status
+        else None,
+        result=TableJobResult(
+            job_id="job-1",
+            index=["row"],
+            columns=["value"],
+            data=[[12345678901234567890]],
+        ),
+    )
+    payload = _inspect(backend)["structuredContent"]
+    assert payload["status"] == "succeeded"
+    assert payload["completed_at"] is None
+    assert payload["provenance"] is None
+    assert payload["preview"]["rows"] == [
+        {"_result_index": "row", "value": 12345678901234567890}
+    ]
+    assert (
+        payload["descriptor"]["url"]
+        == "https://lyra.example.test/api/jobs/job-1/result/descriptor"
+    )
+
+
+@pytest.mark.parametrize("result_type", [FailedJobResult, CancelledJobResult])
+def test_execution_failures_are_successful_observations(
+    result_type: type[FailedJobResult | CancelledJobResult],
+) -> None:
+    backend = FakeMCPBackend([])
+    backend.observations["job-1"] = JobObservation(
+        result=result_type(job_id="job-1", error={"message": "failed"})
+    )
+    wire = _inspect(backend)
+    assert wire["isError"] is False
+    assert wire["structuredContent"]["error"]["message"] == "failed"
+    download = _inspect(backend, tool="lyra_download_result")
+    assert download["isError"] is True
+    assert download["structuredContent"]["error"]["code"] == "result_not_downloadable"
+
+
+@pytest.mark.parametrize("tool", ["lyra_get_job_result", "lyra_download_result"])
+def test_unknown_or_expired_reference(tool: str) -> None:
+    wire = _inspect(FakeMCPBackend([]), tool=tool)
+    assert wire["isError"] is True
+    assert wire["structuredContent"]["error"]["code"] == "result_not_found"
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "lyra_get_result_metadata",
+        "lyra_get_result_preview",
+        "lyra_get_job_result",
+        "lyra_run_metric",
+    ],
+)
+def test_removed_tools_and_wait_arguments_are_rejected(tool: str) -> None:
+    backend = FakeMCPBackend([])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    arguments = (
+        {"result_ref": "lyra://results/job-1", "wait_seconds": 0}
+        if tool != "lyra_run_metric"
+        else {"metric": "metric", "met_zone_code": "09.01", "wait_seconds": 0}
+    )
+    payload = _tool_payload(
+        client.post(
+            "/", json=_tool_call_payload(tool, arguments), headers=_mcp_headers()
+        )
+    )
+    assert payload["error"]["code"] == (
+        "unknown_tool"
+        if tool in {"lyra_get_result_metadata", "lyra_get_result_preview"}
+        else "invalid_arguments"
+    )
+    assert backend.observed == []
+    assert backend.payloads == []
+
+
+def test_file_and_table_download_handoffs(tmp_path: Path) -> None:
+    artifact = tmp_path / "private.bin"
+    artifact.write_bytes(b"artifact")
+    backend = FakeMCPBackend([])
+    for job_id, result, suffix, media_type in [
+        (
+            "file%ü",
+            FileJobResult(
+                job_id="file%ü",
+                file_path=str(artifact),
+                media_type="application/octet-stream",
+            ),
+            "download",
+            "application/octet-stream",
+        ),
+        (
+            "table",
+            TableJobResult(job_id="table", index=["r"], columns=["v"], data=[[2]]),
+            "table.jsonl",
+            "application/x-ndjson",
+        ),
+    ]:
+        backend.observations[job_id] = JobObservation(
+            result=result, lifetime=ResultLifetime(expires_in_seconds=60)
+        )
+        wire = _inspect(backend, job_id, tool="lyra_download_result")
+        assert wire["isError"] is False
+        payload = wire["structuredContent"]
+        assert payload["media_type"] == media_type
+        assert payload["lifetime"]["expires_in_seconds"] == 60
+        assert payload["lyra_api"]["url"].endswith(suffix)
+        assert payload["lyra_api"]["authentication"] == {
+            "scheme": "Bearer",
+            "credential_env_var": "LYRA_AGENT_API_KEY",
+        }
+        assert "private.bin" not in json.dumps(wire)
+        assert "agent-secret" not in json.dumps(wire)
+        assert "python" not in json.dumps(wire)
+    assert (
+        "file%25%C3%BC"
+        in _inspect(backend, "file%ü", tool="lyra_download_result")[
+            "structuredContent"
+        ]["lyra_api"]["url"]
+    )
+    file_inspection = _inspect(backend, "file%ü")["structuredContent"]
+    assert file_inspection["file"]["media_type"] == "application/octet-stream"
+    assert "private.bin" not in json.dumps(file_inspection)
+    artifact.unlink()
+    assert (
+        _inspect(backend, "file%ü", tool="lyra_download_result")["structuredContent"][
+            "error"
+        ]["code"]
+        == "result_unavailable"
+    )
+
+
+def test_active_download_polling_guidance() -> None:
+    backend = FakeMCPBackend([])
+    backend.observations["job-1"] = JobObservation(
+        snapshot=backend.job_status("job-1", "queued", "metric")
+    )
+    payload = _inspect(backend, tool="lyra_download_result")["structuredContent"]
+    assert payload["error"]["code"] == "result_not_ready"
+    assert payload["error"]["details"]["poll_after_seconds"] == 2
+
+
+def test_wide_multibyte_preview_is_bounded_and_consistent() -> None:
+    backend = FakeMCPBackend([])
+    columns = [f"column_{i}" for i in range(40)]
+    backend.observations["job-1"] = JobObservation(
+        result=TableJobResult(
+            job_id="job-1",
+            index=[f"row{i}" for i in range(30)],
+            columns=columns,
+            data=[["界" * 1000] * 40 for _ in range(30)],
+        )
+    )
+    wire = _inspect(backend)
+    assert (
+        len(json.dumps(wire, ensure_ascii=False, separators=(",", ":")).encode())
+        <= 65536
+    )
+    payload = wire["structuredContent"]
+    assert payload["table"]["row_count"] == 30
+    assert payload["table"]["column_count"] == 40
+    assert payload["table"]["columns"] == [
+        entry["name"] for entry in payload["summary"]["columns"]
+    ]
+    assert payload["truncation"]["omitted_rows"] == 30 - len(payload["preview"]["rows"])
+    assert payload["truncation"]["omitted_columns"] == 40 - len(
+        payload["table"]["columns"]
+    )
+    assert payload["truncation"]["shortened_strings"] == 200
+    for row in payload["preview"]["rows"]:
+        assert list(row) == ["_result_index", *payload["table"]["columns"]]
+        assert all(len(value) <= 500 for value in row.values())
+
+
+def test_oversized_identifiers_and_errors_have_small_fallback() -> None:
+    backend = FakeMCPBackend([])
+    job_id = "x" * 40000
+    backend.observations[job_id] = JobObservation(
+        result=FailedJobResult(job_id=job_id, error={"message": "error"})
+    )
+    for identifier in [job_id, "unknown" * 10000]:
+        wire = _inspect(backend, identifier)
+        assert wire["isError"] is True
+        assert wire["structuredContent"]["error"]["code"] == "result_response_too_large"
+        assert len(json.dumps(wire).encode()) < 65536
+
+
+@pytest.mark.parametrize(
+    "tool", ["lyra_run_metric", "lyra_get_job_result", "lyra_download_result"]
+)
+def test_operation_deadlines_and_cancellation(
+    tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = FakeMCPBackend([_table_metric("metric", "metric")])
+    cancelled = []
+
+    async def blocked(*_args: object, **_kwargs: object) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+
+    method = "create_job" if tool == "lyra_run_metric" else "observe_job"
+    operation = AsyncMock(side_effect=blocked)
+    monkeypatch.setattr(backend, method, operation)
+    arguments = TOOL_CONTRACTS_BY_NAME[tool].input_model.model_validate(
+        {"metric": "metric", "met_zone_code": "09.01", "idempotency_key": "original"}
+        if tool == "lyra_run_metric"
+        else {"result_ref": "lyra://results/job-1"}
+    )
+    monkeypatch.setattr(tools, "OPERATION_TIMEOUT_SECONDS", 0.01)
+    with pytest.raises(ToolCallError) as error:
+        asyncio.run(
+            tools.execute_tool(
+                tool, arguments, backend, public_api_base_url="https://example.test"
+            )
+        )
+    assert error.value.code == "operation_timeout"
+    assert operation.call_count == 1
+    assert cancelled == [True]
+    if tool == "lyra_run_metric":
+        assert "original idempotency" in str(error.value.details)
+
+    async def externally_cancel() -> None:
+        monkeypatch.setattr(tools, "OPERATION_TIMEOUT_SECONDS", 30)
+        task = asyncio.create_task(
+            tools.execute_tool(
+                tool, arguments, backend, public_api_base_url="https://example.test"
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(externally_cancel())
+
+
+def test_retryable_observation_error_is_not_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-
-    original_sleep = asyncio.sleep
-    now = [0.0]
-    observed: list[float] = []
-    sleeps: list[float] = []
     backend = FakeMCPBackend([])
-
-    async def get_job(job_id: str) -> JobStatusInfo:
-        await original_sleep(0)
-        observed.append(now[0])
-        return JobStatusInfo(
-            job_id=job_id,
-            metric="metric",
-            status="running",
-            created_at=_COMPLETED_AT,
-            updated_at=_COMPLETED_AT,
-        )
-
-    async def sleep(seconds: float) -> None:
-        await original_sleep(0)
-        sleeps.append(seconds)
-        now[0] += seconds
-
-    monkeypatch.setattr(backend, "get_job", get_job)
-    monkeypatch.setattr(tools.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(
-        tools.random.SystemRandom, "uniform", lambda _self, _low, _high: 1.0
-    )
+    failure = ToolCallError("backend_error", "unavailable", {"retryable": True})
+    operation = AsyncMock(side_effect=failure)
+    sleep = AsyncMock()
+    monkeypatch.setattr(backend, "observe_job", operation)
     monkeypatch.setattr(tools.asyncio, "sleep", sleep)
-    result = asyncio.run(
-        tools.execute_tool(
-            "lyra_get_job_result",
-            GetJobResultInput(result_ref="lyra://results/job-1", wait_seconds=window),
-            backend,
-            public_api_base_url="https://example.test",
-        )
-    )
-    assert result["status"] == "running"
-    assert observed == ([0] if window == 0 else [0, 5, 10, 12])
-    assert sleeps == ([] if window == 0 else [5, 5, 2])
-
-
-def test_mcp_observation_retries_preserve_structured_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-
-    original_sleep = asyncio.sleep
-    now = [0.0]
-    calls: list[str] = []
-    error = tools.ToolCallError("backend_error", "unavailable", {"retryable": True})
-    backend = FakeMCPBackend([])
-
-    async def get_job(job_id: str) -> JobStatusInfo:
-        await original_sleep(0)
-        calls.append(job_id)
-        raise error
-
-    async def sleep(seconds: float) -> None:
-        await original_sleep(0)
-        now[0] += seconds
-
-    monkeypatch.setattr(backend, "get_job", get_job)
-    monkeypatch.setattr(tools.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(
-        tools.random.SystemRandom, "uniform", lambda _self, _low, _high: 1.0
-    )
-    monkeypatch.setattr(tools.asyncio, "sleep", sleep)
-    with pytest.raises(tools.ToolCallError) as exc:
+    with pytest.raises(ToolCallError) as error:
         asyncio.run(
             tools.execute_tool(
                 "lyra_get_job_result",
-                GetJobResultInput(result_ref="lyra://results/job-1", wait_seconds=30),
+                GetJobResultInput(result_ref="lyra://results/job-1"),
                 backend,
                 public_api_base_url="https://example.test",
             )
         )
-    assert exc.value is error
-    assert len(calls) == 6
-    assert now[0] == 30
+    assert error.value is failure
+    operation.assert_awaited_once()
+    sleep.assert_not_called()
+
+
+def test_compact_provenance_contracts_and_progress_are_schema_valid() -> None:
+    backend = FakeMCPBackend([])
+    columns = [
+        TableOutputColumnV4(
+            name=f"v{i}",
+            type="number",
+            unit="count",
+            description="x" * 600,
+            nullable=False,
+        )
+        for i in range(25)
+    ]
+    provenance = JobRunProvenance.model_validate(
+        {
+            "metric": "metric",
+            "catalog_fingerprint": "catalog",
+            "plugin": {"name": "plugin", "version": "1"},
+            "created_at": _COMPLETED_AT,
+            "output": TableOutputV4(kind="table", columns=columns, batched_columns=[]),
+            "row_identity": {"field": "cvegeo", "namespace": "inegi"},
+            "input": {
+                "year": 2026,
+                "zones": [1, 2, 3],
+                "geometry": {
+                    "data_type": "geojson",
+                    "value": {
+                        "type": "FeatureCollection",
+                        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "geometry": {"type": "Point", "coordinates": [99, 20]},
+                            }
+                        ]
+                        * 1000,
+                    },
+                },
+            },
+        }
+    )
+    unchanged = provenance.model_dump_json()
+    backend.observations["job-1"] = JobObservation(
+        provenance=provenance,
+        result=TableJobResult(
+            job_id="job-1",
+            columns=[column.name for column in columns],
+            index=["row"],
+            data=[[2.5] * 25],
+        ),
+    )
+    payload = _inspect(backend)["structuredContent"]
+    assert payload["provenance"]["input"] == {
+        "year": 2026,
+        "zones": {"type": "array", "count": 3},
+        "geometry": {
+            "type": "FeatureCollection",
+            "feature_count": 1000,
+            "crs": "EPSG:4326",
+        },
+    }
+    assert "coordinates" not in json.dumps(payload)
+    assert "output" not in payload["provenance"]
+    assert [
+        column["name"] for column in payload["table"]["column_contracts"]
+    ] == payload["table"]["columns"]
+    assert payload["table"]["row_identity"]["field"] == "cvegeo"
+    assert len(payload["table"]["column_contracts"][0]["description"]) == 500
+    assert provenance.model_dump_json() == unchanged
+    snapshot = backend.job_status("job-1", "running", "metric")
+    snapshot.progress = JobProgress(
+        timestamp=_COMPLETED_AT,
+        stage="compute",
+        current=1,
+        total=10,
+        message="x" * 1000,
+    )
+    backend.observations["job-1"] = JobObservation(snapshot=snapshot)
+    payload = _inspect(backend)["structuredContent"]
+    assert payload["progress"]["current"] == 1
+    assert payload["progress"]["total"] == 10
+    assert len(payload["progress"]["message"]) == 500
+    assert payload["truncation"]["shortened_strings"] == 1
+
+
+def test_large_errors_and_oversized_table_fields_are_omitted() -> None:
+    backend = FakeMCPBackend([])
+    backend.observations["job-1"] = JobObservation(
+        result=FailedJobResult(
+            job_id="job-1",
+            error={
+                "code": "x" * 50000,
+                "message": "界" * 1000,
+                "details": ["large"] * 10000,
+            },
+        )
+    )
+    wire = _inspect(backend)
+    assert wire["isError"] is False
+    assert wire["structuredContent"]["error"] is None
+    assert "error" in wire["structuredContent"]["truncation"]["omitted_sections"]
+    backend.observations["job-1"] = JobObservation(
+        result=TableJobResult(
+            job_id="job-1", columns=["x" * 1000], index=["y" * 1000], data=[[2]]
+        )
+    )
+    payload = _inspect(backend)["structuredContent"]
+    assert payload["table"]["columns"] == []
+    assert payload["preview"]["rows"] == []
+    assert payload["truncation"]["omitted_columns"] == 1
+    assert payload["truncation"]["omitted_rows"] == 1
+
+
+def test_backend_errors_are_retryable_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeMCPBackend([])
+    observe = AsyncMock(side_effect=RedisConnectionError("private backend location"))
+    monkeypatch.setattr(backend, "observe_job", observe)
+    wire = _inspect(backend)
+    assert wire["isError"] is True
+    assert wire["structuredContent"]["error"]["details"]["retryable"] is True
+    assert "private backend" not in json.dumps(wire)
+    observe.assert_awaited_once()
+
+
+@pytest.mark.parametrize("value", [10**400, 1e308])
+def test_large_numeric_values_remain_exact(value: float) -> None:
+    backend = FakeMCPBackend([])
+    backend.observations["job-1"] = JobObservation(
+        result=TableJobResult(
+            job_id="job-1", index=["a", "b"], columns=["value"], data=[[value], [value]]
+        )
+    )
+    wire = _inspect(backend)
+    assert wire["isError"] is False
+    payload = wire["structuredContent"]
+    assert payload["preview"]["rows"][0]["value"] == value
+    assert payload["truncation"]["omitted_sections"]
+
+
+def test_budget_trims_column_bundles_in_order() -> None:
+    backend = FakeMCPBackend([])
+    columns = [
+        TableOutputColumnV4(
+            name=f"value_{i}_" + "界" * 450,
+            type="number",
+            unit="count",
+            description="界" * 500,
+            nullable=False,
+        )
+        for i in range(20)
+    ]
+    provenance = JobRunProvenance.model_validate(
+        {
+            "metric": "metric",
+            "catalog_fingerprint": "catalog",
+            "plugin": {"name": "plugin", "version": "1"},
+            "created_at": _COMPLETED_AT,
+            "output": TableOutputV4(kind="table", columns=columns, batched_columns=[]),
+            "input": {"detail": "x" * 400},
+        }
+    )
+    backend.observations["job-1"] = JobObservation(
+        provenance=provenance,
+        result=TableJobResult(
+            job_id="job-1",
+            index=["row"],
+            columns=[column.name for column in columns],
+            data=[[3] * 20],
+        ),
+    )
+    wire = _inspect(backend)
+    payload = wire["structuredContent"]
+    assert payload["provenance"]["input"] is None
+    assert "provenance.input" in payload["truncation"]["omitted_sections"]
+    assert payload["preview"]["rows"] == []
+    retained = payload["table"]["columns"]
+    assert 0 < len(retained) < 20
+    assert retained == [column.name for column in columns[: len(retained)]]
+    assert retained == [
+        column["name"] for column in payload["table"]["column_contracts"]
+    ]
+    assert retained == [column["name"] for column in payload["summary"]["columns"]]
+    assert payload["truncation"]["omitted_columns"] == 20 - len(retained)
+    assert (
+        len(json.dumps(wire, ensure_ascii=False, separators=(",", ":")).encode())
+        <= 65536
+    )
+
+
+def test_budget_omits_optional_file_metadata() -> None:
+    backend = FakeMCPBackend([])
+    backend.observations["job-1"] = JobObservation(
+        result=FileJobResult(
+            job_id="job-1", file_path="/private/file", media_type="x" * 40000
+        )
+    )
+    wire = _inspect(backend)
+    payload = wire["structuredContent"]
+    assert wire["isError"] is False
+    assert payload["file"] is None
+    assert "file" in payload["truncation"]["omitted_sections"]
+    assert payload["descriptor"]["url"].endswith("/descriptor")
+
+
+@pytest.mark.parametrize("tool", ["lyra_get_job_result", "lyra_download_result"])
+@pytest.mark.parametrize(
+    "reference", ["https://example.test", "lyra://results/a/b", "lyra://results/"]
+)
+def test_result_reference_validation(tool: str, reference: str) -> None:
+    backend = FakeMCPBackend([])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    response = client.post(
+        "/",
+        json=_tool_call_payload(tool, {"result_ref": reference}),
+        headers=_mcp_headers(),
+    )
+    assert response.json()["result"]["isError"] is True
+    assert _tool_payload(response)["error"]["code"] == "invalid_arguments"
+    assert backend.observed == []
+
+
+def test_discovery_preserves_derived_output_declarations() -> None:
+    metric = _table_metric("area", "Area measurement")
+    metric.output = TableOutputV4.model_validate(
+        {
+            "kind": "table",
+            "columns": [
+                {
+                    "name": "area",
+                    "type": "number",
+                    "unit": "m2",
+                    "description": "Area",
+                    "derivations": [
+                        {
+                            "kind": "fraction_of_location_area",
+                            "name": "fraction",
+                            "description": "Fraction",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    backend = FakeMCPBackend([metric])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    for name, arguments in [
+        ("lyra_get_metric", {"metric": "area"}),
+        ("lyra_search_metrics", {"query": "area"}),
+    ]:
+        response = client.post(
+            "/", json=_tool_call_payload(name, arguments), headers=_mcp_headers()
+        )
+        assert response.json()["result"]["isError"] is False
+        payload = _tool_payload(response)
+        validate(payload, TOOL_CONTRACTS_BY_NAME[name].output_schema)
+        columns = (
+            payload["output"]["columns"]
+            if name == "lyra_get_metric"
+            else payload["candidates"][0]["relevant_columns"]
+        )
+        assert columns[0]["derivations"][0]["name"] == "fraction"
+    provenance = JobRunProvenance.model_validate(
+        {
+            "metric": "area",
+            "catalog_fingerprint": "catalog",
+            "plugin": {"name": "plugin", "version": "1"},
+            "created_at": _COMPLETED_AT,
+            "output": metric.output,
+            "input": {},
+        }
+    )
+    backend.observations["job-1"] = JobObservation(
+        provenance=provenance,
+        result=TableJobResult(
+            job_id="job-1",
+            columns=["area", "fraction"],
+            index=["row"],
+            data=[[10, 0.5]],
+        ),
+    )
+    payload = _inspect(backend)["structuredContent"]
+    assert payload["table"]["columns"] == ["area", "fraction"]
+    assert "derivations" not in payload["table"]["column_contracts"][0]
+    assert provenance.output == metric.output

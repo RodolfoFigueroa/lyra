@@ -5,20 +5,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import math
-import random
 import re
-import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypeVar, cast
-from urllib.parse import quote, urlsplit, urlunsplit
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 
-from fastapi import HTTPException
+from anyio import Path
 from lyra.sdk.models.job import (
+    FileJobResult,
     JobCreateRequest,
     JobCreateResponse,
-    JobStatusInfo,
-    ResultDescriptor,
+    TableJobResult,
 )
 from lyra.sdk.models.metric import (
     MetricCatalogResponse,
@@ -31,12 +27,12 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from typing_extensions import override
 
-from lyra_app import job_store
 from lyra_app.db.connection import (
     ApplicationDatabaseRuntime,
     DatabaseUnavailableError,
     is_database_unavailable_error,
 )
+from lyra_app.job_observation import JobObservation, observe_job
 from lyra_app.job_submission import (
     IdempotencyConflictError,
     SubmissionRateLimitedError,
@@ -45,20 +41,25 @@ from lyra_app.job_submission import (
     submit_job,
 )
 from lyra_app.loaders.db import get_met_zone_code_from_name_async
+from lyra_app.mcp.models import (
+    TOOL_CONTRACTS_BY_NAME,
+    DownloadResultOutput,
+    RunMetricOutput,
+)
+from lyra_app.mcp.results import handoff, project_observation
 from lyra_app.registry import (
     CatalogUnavailableError,
     MetricPayloadValidationError,
     get_metric_catalog,
     get_metric_info,
 )
-from lyra_app.routes import jobs
 from lyra_app.spatial_inputs import (
     SpatialInputResolutionUnavailableError,
     SpatialInputValidationError,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Mapping
 
     from lyra_app.mcp.models import (
         GetJobResultInput,
@@ -71,10 +72,7 @@ if TYPE_CHECKING:
         SearchMetricsInput,
     )
 
-_ObservationT = TypeVar("_ObservationT")
-
-_POLL_INTERVAL_SECONDS = 5.0
-_DEFAULT_POLL_AFTER_SECONDS = 5
+OPERATION_TIMEOUT_SECONDS = 30.0
 _RESULT_REF_PATTERN = re.compile(r"^lyra://results/([^/?#\s]+)$")
 _UNKNOWN_METRIC_ERROR = "unknown_metric"
 _INVALID_PARAMETERS_ERROR = "invalid_parameters"
@@ -111,12 +109,8 @@ class LyraMCPBackend(Protocol):
         """Validate and submit a metric job through the Lyra domain service."""
         ...
 
-    async def get_job(self, job_id: str) -> JobStatusInfo | None:
-        """Return current job status when the job is retained."""
-        ...
-
-    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
-        """Return the terminal result descriptor when it is retained."""
+    async def observe_job(self, job_id: str) -> JobObservation:
+        """Read retained state and reconcile an unexpected worker failure once."""
         ...
 
 
@@ -257,38 +251,22 @@ class InProcessLyraBackend(LyraMCPBackend):
                     {"retryable": True, "retry_after_seconds": retry_after},
                 ) from exc
             raise ToolCallError(
-                _BACKEND_ERROR, "Failed to create job.", str(exc)
-            ) from exc
-
-    @override
-    async def get_job(self, job_id: str) -> JobStatusInfo | None:
-        try:
-            return await jobs.get_job(job_id)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                return None
-            raise _tool_error_from_http(exc, context="fetch job status") from exc
-
-        except RedisError as exc:
-            raise ToolCallError(
-                _BACKEND_ERROR, "Could not observe job status.", {"retryable": True}
-            ) from exc
-
-    @override
-    async def get_result_descriptor(self, job_id: str) -> ResultDescriptor | None:
-        try:
-            return await job_store.get_job_result_descriptor_async(job_id)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                return None
-            raise _tool_error_from_http(exc, context="fetch result descriptor") from exc
-
-        except RedisError as exc:
-            raise ToolCallError(
                 _BACKEND_ERROR,
-                "Could not observe retained result.",
+                (
+                    "Failed to create job. Reuse the original idempotency key "
+                    "when retrying."
+                ),
                 {"retryable": True},
             ) from exc
+
+    @override
+    async def observe_job(self, job_id: str) -> JobObservation:
+        try:
+            return await observe_job(job_id)
+        except (ValueError, TypeError) as exc:
+            code = "result_observation_error"
+            message = "The retained job state could not be decoded."
+            raise ToolCallError(code, message) from exc
 
 
 async def execute_tool(
@@ -297,7 +275,60 @@ async def execute_tool(
     backend: LyraMCPBackend,
     *,
     public_api_base_url: str,
-) -> dict[str, Any]:
+) -> BaseModel:
+    """Execute once under a fixed job-operation deadline and validate the output.
+
+    Returns:
+        A typed output ready for serialization at the transport boundary.
+
+    Raises:
+        ToolCallError: For domain, timeout, or infrastructure failures.
+    """
+    try:
+        timeout = (
+            OPERATION_TIMEOUT_SECONDS
+            if name
+            in {"lyra_run_metric", "lyra_get_job_result", "lyra_download_result"}
+            else None
+        )
+        async with asyncio.timeout(timeout):
+            payload = await _execute_tool(
+                name, arguments, backend, public_api_base_url=public_api_base_url
+            )
+        return TOOL_CONTRACTS_BY_NAME[name].output_adapter.validate_python(payload)
+    except TimeoutError as exc:
+        action = (
+            "Retry observation."
+            if name != "lyra_run_metric"
+            else (
+                "Submission may have succeeded. Reuse your original idempotency "
+                "key when retrying; never submit with a new key."
+            )
+        )
+        code = "operation_timeout"
+        message = "The backend operation exceeded 30 seconds."
+        raise ToolCallError(
+            code,
+            message,
+            {"retryable": True, "action": action},
+        ) from exc
+    except (RedisError, OSError) as exc:
+        code = "backend_error"
+        message = "The result backend is temporarily unavailable."
+        raise ToolCallError(
+            code,
+            message,
+            {"retryable": True},
+        ) from exc
+
+
+async def _execute_tool(
+    name: str,
+    arguments: MCPContractModel,
+    backend: LyraMCPBackend,
+    *,
+    public_api_base_url: str,
+) -> BaseModel | dict[str, Any]:
     """Execute one validated tool call against the Lyra domain service.
 
     Returns:
@@ -317,11 +348,9 @@ async def execute_tool(
     elif name == "lyra_run_metric":
         payload = await _run_metric(cast("RunMetricInput", arguments), backend)
     elif name == "lyra_get_job_result":
-        payload = await _get_job_result(cast("GetJobResultInput", arguments), backend)
-    elif name == "lyra_get_result_metadata":
-        payload = await _get_result_metadata(cast("ResultRefInput", arguments), backend)
-    elif name == "lyra_get_result_preview":
-        payload = await _get_result_preview(cast("ResultRefInput", arguments), backend)
+        payload = await _get_job_result(
+            cast("GetJobResultInput", arguments), backend, public_api_base_url
+        )
     elif name == "lyra_download_result":
         payload = await _download_result(
             cast("ResultRefInput", arguments),
@@ -422,7 +451,7 @@ async def _get_metric(
 async def _run_metric(
     arguments: RunMetricInput,
     backend: LyraMCPBackend,
-) -> dict[str, Any]:
+) -> RunMetricOutput:
     metric = await backend.get_metric(arguments.metric)
     if metric is None:
         _raise_tool_error("unknown_metric", f"Unknown metric: {arguments.metric}")
@@ -437,208 +466,80 @@ async def _run_metric(
         payload,
         idempotency_key=arguments.idempotency_key,
     )
-    job_id = str(job.job_id)
-    reused = bool(getattr(job, "reused", False))
-    deadline = time.monotonic() + arguments.wait_seconds
+    return RunMetricOutput(
+        job_id=job.job_id, result_ref=_result_ref_for_job(job.job_id), reused=job.reused
+    )
 
-    while True:
-        snapshot = await _observe(lambda: backend.get_job(job_id), deadline)
+
+async def _observation_for_ref(
+    result_ref: str, backend: LyraMCPBackend
+) -> tuple[str, JobObservation]:
+    job_id = _job_id_from_result_ref(result_ref)
+    observation = await backend.observe_job(job_id)
+    if observation.result is None:
+        snapshot = observation.snapshot
         if snapshot is None:
-            _raise_result_expired(job_id)
-        status = snapshot.status
-        if _is_terminal_status(status):
-            descriptor = await _observe(
-                lambda: backend.get_result_descriptor(job_id), deadline
+            _raise_tool_error(
+                "result_not_found",
+                "This result reference is unknown or expired.",
+                {"job_id": job_id, "result_ref": result_ref},
             )
-            if descriptor is None:
-                _raise_tool_error(
-                    "result_unavailable",
-                    f"Job {job_id} finished but its result descriptor is unavailable.",
-                )
-            return {**_model_dump(descriptor), "reused": reused}
-        if time.monotonic() >= deadline:
-            return _running_payload(job_id, reused=reused)
-        await asyncio.sleep(
-            max(
-                0.0,
-                min(
-                    _POLL_INTERVAL_SECONDS * random.SystemRandom().uniform(0.9, 1.1),
-                    deadline - time.monotonic(),
-                ),
+        if snapshot.status == "succeeded":
+            _raise_tool_error(
+                "result_unavailable",
+                "The successful result payload is no longer available.",
+                {"job_id": job_id, "result_ref": result_ref},
             )
-        )
+    return job_id, observation
 
 
 async def _get_job_result(
-    arguments: GetJobResultInput,
-    backend: LyraMCPBackend,
-) -> dict[str, Any]:
-    job_id = _job_id_from_result_ref(arguments.result_ref)
-    deadline = time.monotonic() + arguments.wait_seconds
-
-    while True:
-        snapshot = await _observe(lambda: backend.get_job(job_id), deadline)
-        if snapshot is None:
-            descriptor = await _observe(
-                lambda: backend.get_result_descriptor(job_id), deadline
-            )
-            if descriptor is not None:
-                return _model_dump(descriptor)
-            _raise_result_expired(job_id)
-
-        status = str(getattr(snapshot, "status", ""))
-        if _is_terminal_status(status):
-            descriptor = await _observe(
-                lambda: backend.get_result_descriptor(job_id), deadline
-            )
-            if descriptor is None:
-                _raise_result_expired(job_id)
-            return _model_dump(descriptor)
-
-        if time.monotonic() >= deadline:
-            return _running_payload(job_id)
-        await asyncio.sleep(
-            max(
-                0.0,
-                min(
-                    _POLL_INTERVAL_SECONDS * random.SystemRandom().uniform(0.9, 1.1),
-                    deadline - time.monotonic(),
-                ),
-            )
-        )
-
-
-async def _get_result_metadata(
-    arguments: ResultRefInput,
-    backend: LyraMCPBackend,
-) -> dict[str, Any]:
-    descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
-    payload = _model_dump(descriptor)
-    return {
-        "schema_version": payload["schema_version"],
-        "job_id": payload["job_id"],
-        "status": payload["status"],
-        "result_kind": payload["result_kind"],
-        "result_ref": payload["result_ref"],
-        "provenance": payload.get("provenance"),
-        "completed_at": payload["completed_at"],
-        "lifetime": payload.get("lifetime", {}),
-        "table": payload.get("table"),
-        "file": payload.get("file"),
-        "summary": payload["summary"],
-        "error": payload.get("error"),
-    }
-
-
-async def _get_result_preview(
-    arguments: ResultRefInput,
-    backend: LyraMCPBackend,
-) -> dict[str, Any]:
-    descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
-    payload = _model_dump(descriptor)
-    return {
-        "schema_version": payload["schema_version"],
-        "job_id": payload["job_id"],
-        "status": payload["status"],
-        "result_kind": payload["result_kind"],
-        "result_ref": payload["result_ref"],
-        "provenance": payload.get("provenance"),
-        "completed_at": payload["completed_at"],
-        "lifetime": payload.get("lifetime", {}),
-        "preview": payload.get("preview", {}),
-        "summary": payload["summary"],
-        "error": payload.get("error"),
-    }
+    arguments: GetJobResultInput, backend: LyraMCPBackend, public_api_base_url: str
+) -> BaseModel:
+    job_id, observation = await _observation_for_ref(arguments.result_ref, backend)
+    return project_observation(job_id, observation, public_api_base_url)
 
 
 async def _download_result(
-    arguments: ResultRefInput,
-    backend: LyraMCPBackend,
-    *,
-    public_api_base_url: str,
-) -> dict[str, Any]:
-    referenced_job_id = _job_id_from_result_ref(arguments.result_ref)
-    descriptor = await _descriptor_for_result_ref(arguments.result_ref, backend)
-    payload = _model_dump(descriptor)
-    raw_value = payload["raw"]
-    if not isinstance(raw_value, dict):
+    arguments: ResultRefInput, backend: LyraMCPBackend, *, public_api_base_url: str
+) -> DownloadResultOutput:
+    job_id, observation = await _observation_for_ref(arguments.result_ref, backend)
+    result = observation.result
+    status = (
+        result.status
+        if result
+        else observation.snapshot.status
+        if observation.snapshot
+        else None
+    )
+    details: JsonObject = {"job_id": job_id, "result_ref": arguments.result_ref}
+    if status in {"queued", "running"}:
         _raise_tool_error(
-            "invalid_result_descriptor",
-            "Result descriptor raw metadata must be an object.",
+            "result_not_ready",
+            "Inspect again after two seconds.",
+            {**details, "poll_after_seconds": 2, "next_tool": "lyra_get_job_result"},
         )
-    raw = raw_value
-    jsonl_path = raw.get("jsonl_path")
-    formats = raw.get("formats", [])
-    supports_jsonl = isinstance(formats, list) and "jsonl" in formats
-    if (
-        payload["result_kind"] != "table"
-        or not supports_jsonl
-        or not isinstance(jsonl_path, str)
-        or not jsonl_path
-    ):
+    if not isinstance(result, TableJobResult | FileJobResult):
         _raise_tool_error(
-            "unsupported_result_download",
-            "Only table results can be downloaded as JSONL through MCP v1.",
-            validate_json_value(
-                {
-                    "job_id": payload["job_id"],
-                    "result_ref": payload["result_ref"],
-                    "result_kind": payload["result_kind"],
-                    "formats": formats,
-                }
-            ),
+            "result_not_downloadable",
+            "Failed and cancelled jobs have no downloadable result.",
+            details,
         )
-
-    lifetime = payload.get("lifetime")
-    if not isinstance(lifetime, dict):
-        lifetime = {}
-    return {
-        "job_id": payload["job_id"],
-        "result_ref": payload["result_ref"],
-        "status": payload["status"],
-        "format": "jsonl",
-        "media_type": "application/x-ndjson",
-        "lyra_api": {
-            "method": "GET",
-            "url": _jsonl_download_url(
-                public_api_base_url,
-                referenced_job_id,
-            ),
-            "authentication": {
-                "scheme": "Bearer",
-                "credential_env_var": "LYRA_AGENT_API_KEY",
-            },
-        },
-        "client_helpers": {
-            "python_sync": (
-                "LyraClient.results.download(result_ref, path, format='jsonl')"
-            ),
-            "python_async": (
-                "await AsyncLyraClient.results.download("
-                "result_ref, path, format='jsonl')"
-            ),
-        },
-        "expires_in_seconds": lifetime.get("expires_in_seconds"),
-        "expires_at": lifetime.get("expires_at"),
-    }
-
-
-def _jsonl_download_url(public_api_base_url: str, job_id: str) -> str:
-    base = urlsplit(public_api_base_url)
-    job_segment = quote(job_id, safe="-._~")
-    path = f"{base.path.rstrip('/')}/jobs/{job_segment}/result/table.jsonl"
-    return urlunsplit((base.scheme, base.netloc, path, "", ""))
-
-
-async def _descriptor_for_result_ref(
-    result_ref: str,
-    backend: LyraMCPBackend,
-) -> ResultDescriptor:
-    job_id = _job_id_from_result_ref(result_ref)
-    descriptor = await backend.get_result_descriptor(job_id)
-    if descriptor is None:
-        _raise_result_expired(job_id)
-    return descriptor
+    if isinstance(result, FileJobResult) and not await Path(result.file_path).is_file():
+        _raise_tool_error(
+            "result_unavailable", "The result artifact is no longer available.", details
+        )
+    is_table = isinstance(result, TableJobResult)
+    return DownloadResultOutput(
+        job_id=job_id,
+        result_ref=arguments.result_ref,
+        format="jsonl" if is_table else "file",
+        media_type="application/x-ndjson" if is_table else result.media_type,
+        lifetime=observation.lifetime,
+        lyra_api=handoff(
+            public_api_base_url, job_id, "table.jsonl" if is_table else "download"
+        ),
+    )
 
 
 def _run_payload_for_metric(
@@ -684,51 +585,6 @@ def _run_payload_for_metric(
 
     payload = dict(parameters)
     payload[field_name] = {"data_type": "met_zone_code", "value": met_zone_code}
-    return payload
-
-
-async def _observe(
-    operation: Callable[[], Awaitable[_ObservationT]], deadline: float
-) -> _ObservationT:
-    failures = 0
-    while True:
-        try:
-            return await operation()
-        except ToolCallError as exc:
-            details = exc.details if isinstance(exc.details, dict) else {}
-            remaining = deadline - time.monotonic()
-            if details.get("retryable") is not True or failures >= 5 or remaining <= 0:
-                raise
-            delay = min(30.0, 2.0**failures * random.SystemRandom().uniform(0.9, 1.1))
-            guidance = details.get("retry_after_seconds")
-            if (
-                isinstance(guidance, (int, float))
-                and math.isfinite(guidance)
-                and guidance >= 0
-            ):
-                delay = float(guidance)
-            failures += 1
-            await asyncio.sleep(min(delay, remaining))
-
-
-def _is_terminal_status(status: str) -> bool:
-    return status in {"succeeded", "failed", "cancelled"}
-
-
-def _running_payload(
-    job_id: str,
-    *,
-    reused: bool | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "status": "running",
-        "job_id": job_id,
-        "result_ref": _result_ref_for_job(job_id),
-        "poll_after_seconds": _DEFAULT_POLL_AFTER_SECONDS,
-        "next_tool": "lyra_get_job_result",
-    }
-    if reused is not None:
-        payload["reused"] = reused
     return payload
 
 
@@ -903,50 +759,6 @@ def _job_id_from_result_ref(result_ref: str) -> str:
             {"result_ref": result_ref},
         )
     return match.group(1)
-
-
-def _raise_result_expired(job_id: str) -> NoReturn:
-    _raise_tool_error(
-        "result_expired",
-        (
-            f"Result for job {job_id} expired or was not found. Rerun the metric "
-            "if the user still wants this data."
-        ),
-        {
-            "job_id": job_id,
-            "result_ref": _result_ref_for_job(job_id),
-            "rerun_required": True,
-        },
-    )
-
-
-def _tool_error_from_http(exc: HTTPException, *, context: str) -> ToolCallError:
-    if exc.status_code == 404:
-        code = "unknown_metric"
-    elif exc.status_code == 422:
-        code = "invalid_parameters"
-    elif exc.status_code == 409:
-        code = "idempotency_conflict"
-    elif exc.status_code == 429:
-        code = "rate_limited"
-    else:
-        code = "backend_error"
-    details = (
-        dict(exc.detail) if isinstance(exc.detail, dict) else {"message": exc.detail}
-    )
-    details["retryable"] = (
-        exc.status_code in {429, 500, 502, 503, 504}
-        and details.get("retryable") is not False
-    )
-    if exc.headers and "Retry-After" in exc.headers:
-        try:
-            guidance = float(exc.headers["Retry-After"])
-        except ValueError:
-            pass
-        else:
-            if math.isfinite(guidance) and guidance >= 0:
-                details["retry_after_seconds"] = guidance
-    return ToolCallError(code, f"Failed to {context}.", details)
 
 
 def _raise_tool_error(

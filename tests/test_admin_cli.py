@@ -200,7 +200,11 @@ class HTTPStub:
         if self.error is not None:
             raise self.error
         return FakeSyncResponse(
-            status_code=self.status, payload=self.payload, text="request failed"
+            status_code=self.status,
+            payload=self.payload,
+            text=json.dumps(self.payload)
+            if self.status in {200, 503}
+            else "request failed",
         )
 
 

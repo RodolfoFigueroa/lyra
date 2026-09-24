@@ -13,11 +13,20 @@ class LyraAPIError(Exception):
 
 
 class DownloadError(LyraAPIError):
-    """Exception raised for download/HTTP-related errors."""
+    """Transport, HTTP status, malformed JSON, or response validation failure.
+
+    Messages identify the operation; transport and parsing causes are chained.
+    Ordinary requests, including submissions, are not retried automatically.
+    """
 
 
 class JobEventStreamError(DownloadError):
-    """Raised when a job event stream cannot be resumed."""
+    """Raised when a job event stream exhausts consecutive reconnect attempts.
+
+    Connection/read failures and HTTP 5xx are retried, with five reconnection
+    attempts by default. Malformed events are DownloadError failures and are
+    never retried.
+    """
 
     def __init__(
         self,
@@ -43,7 +52,12 @@ class JobWaitTimeoutError(JobEventStreamError):
 
 
 class ServiceUnavailableError(LyraAPIError):
-    """Structured retryable service-unavailable response from Lyra."""
+    """Structured unexpected HTTP 503 from an ordinary request or download.
+
+    Retains the service code, retryable flag, and integer Retry-After guidance.
+    It does not initiate retries. Readiness accepts HTTP 503 as a normal response;
+    event streams use their own reconnection policy for all HTTP 5xx responses.
+    """
 
     def __init__(
         self,

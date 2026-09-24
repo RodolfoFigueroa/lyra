@@ -1,0 +1,338 @@
+"""Internal endpoint definitions and transport-independent response validation."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
+
+from lyra.api.client.base import service_unavailable_error
+from lyra.api.exceptions import DownloadError
+from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
+from lyra.sdk.models.data_types import DataTypesResponse
+from lyra.sdk.models.job import (
+    JobCancelResponse,
+    JobCreateResponse,
+    JobLifecycleStatus,
+    JobListResponse,
+    JobStatusInfo,
+    ResultDescriptor,
+    TerminalJobResult,
+)
+from lyra.sdk.models.lookups import MetZoneCodeResponse
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+from lyra.sdk.models.observability import (
+    AdminStatusResponse,
+    CatalogSummaryResponse,
+    ConfigSummaryResponse,
+    LivenessResponse,
+    QueuesResponse,
+    ReadinessResponse,
+    WorkerDetail,
+    WorkersResponse,
+)
+from pydantic import TypeAdapter, ValidationError
+
+_ResponseT = TypeVar("_ResponseT")
+
+
+@dataclass(frozen=True)
+class RequestSpec(Generic[_ResponseT]):
+    """A JSON operation, including its response contract."""
+
+    method: str
+    path: str
+    operation: str
+    adapter: TypeAdapter[_ResponseT]
+    authenticated: bool = True
+    accepted_statuses: tuple[int, ...] = (200,)
+    params: dict[str, Any] | None = None
+    json_body: dict[str, Any] | None = None
+    require_json: bool = False
+
+
+def check_status(
+    status: int,
+    text: str,
+    retry_after: str | None,
+    *,
+    operation: str,
+    accepted_statuses: tuple[int, ...] = (200,),
+) -> None:
+    """Validate HTTP status, raising ServiceUnavailableError for structured 503s.
+
+    Raises:
+        DownloadError: If the status or error body is unexpected.
+    """
+    if status in accepted_statuses:
+        return
+    err = f"Failed to {operation}. HTTP {status}: {text}"
+    if status == 503:
+        try:
+            payload = json.loads(text)
+        except ValueError as exc:
+            raise DownloadError(err) from exc
+        unavailable = service_unavailable_error(payload, retry_after)
+        if unavailable is not None:
+            raise unavailable
+    raise DownloadError(err)
+
+
+def decode_response(
+    spec: RequestSpec[_ResponseT],
+    text: str,
+) -> _ResponseT:
+    """Decode and validate a response body with operation context.
+
+    Returns:
+        The typed response.
+
+    Raises:
+        DownloadError: If JSON decoding or model validation fails.
+    """
+    try:
+        return spec.adapter.validate_json(text)
+    except ValidationError as exc:
+        err = f"Failed to {spec.operation}: invalid JSON response."
+        raise DownloadError(err) from exc
+
+
+def validate_response(
+    spec: RequestSpec[_ResponseT],
+    status: int,
+    text: str,
+    content_type: str,
+    retry_after: str | None,
+) -> _ResponseT:
+    """Apply the endpoint's status, content type, and response contract.
+
+    Returns:
+        The typed response.
+
+    Raises:
+        DownloadError: If a result response was not JSON.
+    """
+    check_status(
+        status,
+        text,
+        retry_after,
+        operation=spec.operation,
+        accepted_statuses=spec.accepted_statuses,
+    )
+    if spec.require_json and "application/json" not in content_type:
+        err = f"Failed to {spec.operation}: response was not JSON."
+        raise DownloadError(err)
+    return decode_response(spec, text)
+
+
+def get_liveness() -> RequestSpec[LivenessResponse]:
+    """Return the request specification to fetch liveness."""
+    return RequestSpec(
+        "GET",
+        "live",
+        "fetch liveness",
+        TypeAdapter(LivenessResponse),
+        authenticated=False,
+    )
+
+
+def get_readiness() -> RequestSpec[ReadinessResponse]:
+    """Return the request specification to fetch readiness."""
+    return RequestSpec(
+        "GET",
+        "ready",
+        "fetch readiness",
+        TypeAdapter(ReadinessResponse),
+        authenticated=False,
+        accepted_statuses=(200, 503),
+    )
+
+
+def get_met_zone_code(name: str) -> RequestSpec[MetZoneCodeResponse]:
+    """Return the request specification to fetch met-zone lookup."""
+    return RequestSpec(
+        "GET",
+        "lookups/met-zones",
+        "fetch met-zone lookup",
+        TypeAdapter(MetZoneCodeResponse),
+        authenticated=False,
+        params={"name": name},
+    )
+
+
+def create_job(
+    metric: str, payload: dict[str, Any], *, idempotency_key: str | None = None
+) -> RequestSpec[JobCreateResponse]:
+    """Return the request specification to create job."""
+    body: dict[str, Any] = {"metric": metric, "input": payload}
+    if idempotency_key is not None:
+        body["idempotency_key"] = idempotency_key
+    return RequestSpec(
+        "POST",
+        "jobs",
+        "create job",
+        TypeAdapter(JobCreateResponse),
+        accepted_statuses=(202,),
+        json_body=body,
+    )
+
+
+def get_job(job_id: str) -> RequestSpec[JobStatusInfo]:
+    """Return the request specification to fetch job."""
+    return RequestSpec("GET", f"jobs/{job_id}", "fetch job", TypeAdapter(JobStatusInfo))
+
+
+def list_admin_jobs(
+    *,
+    limit: int = 50,
+    status: JobLifecycleStatus | None = None,
+    metric: str | None = None,
+) -> RequestSpec[JobListResponse]:
+    """Return the request specification to list admin jobs."""
+    params: dict[str, Any] = {"limit": limit}
+    if status is not None:
+        params["status"] = status
+    if metric is not None:
+        params["metric"] = metric
+    return RequestSpec(
+        "GET",
+        "admin/jobs",
+        "list admin jobs",
+        TypeAdapter(JobListResponse),
+        params=params,
+    )
+
+
+def cancel_admin_job(job_id: str) -> RequestSpec[JobCancelResponse]:
+    """Return the request specification to cancel admin job."""
+    return RequestSpec(
+        "POST",
+        f"admin/jobs/{job_id}/cancel",
+        "cancel admin job",
+        TypeAdapter(JobCancelResponse),
+    )
+
+
+def list_plugin_repos() -> RequestSpec[PluginRepoListResponse]:
+    """Return the request specification to list plugin repos."""
+    return RequestSpec(
+        "GET",
+        "admin/plugin-repos",
+        "list plugin repos",
+        TypeAdapter(PluginRepoListResponse),
+    )
+
+
+def list_plugin_routing() -> RequestSpec[PluginRoutingResponse]:
+    """Return the request specification to list plugin routing."""
+    return RequestSpec(
+        "GET",
+        "admin/plugin-routing",
+        "list plugin routing",
+        TypeAdapter(PluginRoutingResponse),
+    )
+
+
+def get_admin_status() -> RequestSpec[AdminStatusResponse]:
+    """Return the request specification to fetch admin status."""
+    return RequestSpec(
+        "GET", "admin/status", "fetch admin status", TypeAdapter(AdminStatusResponse)
+    )
+
+
+def get_admin_config_summary() -> RequestSpec[ConfigSummaryResponse]:
+    """Return the request specification to fetch admin config summary."""
+    return RequestSpec(
+        "GET",
+        "admin/config-summary",
+        "fetch admin config summary",
+        TypeAdapter(ConfigSummaryResponse),
+    )
+
+
+def get_admin_catalog() -> RequestSpec[CatalogSummaryResponse]:
+    """Return the request specification to fetch admin catalog."""
+    return RequestSpec(
+        "GET",
+        "admin/catalog",
+        "fetch admin catalog",
+        TypeAdapter(CatalogSummaryResponse),
+    )
+
+
+def get_admin_workers() -> RequestSpec[WorkersResponse]:
+    """Return the request specification to fetch admin workers."""
+    return RequestSpec(
+        "GET", "admin/workers", "fetch admin workers", TypeAdapter(WorkersResponse)
+    )
+
+
+def get_admin_worker(worker_name: str) -> RequestSpec[WorkerDetail]:
+    """Return the request specification to fetch admin worker."""
+    return RequestSpec(
+        "GET",
+        f"admin/workers/{worker_name}",
+        "fetch admin worker",
+        TypeAdapter(WorkerDetail),
+    )
+
+
+def get_admin_queues() -> RequestSpec[QueuesResponse]:
+    """Return the request specification to fetch admin queues."""
+    return RequestSpec(
+        "GET", "admin/queues", "fetch admin queues", TypeAdapter(QueuesResponse)
+    )
+
+
+def get_job_result(job_id: str) -> RequestSpec[TerminalJobResult]:
+    """Return the request specification to fetch job result."""
+    return RequestSpec(
+        "GET",
+        f"jobs/{job_id}/result",
+        "fetch job result",
+        TypeAdapter(TerminalJobResult),
+        require_json=True,
+    )
+
+
+def get_result_descriptor(job_id: str) -> RequestSpec[ResultDescriptor]:
+    """Return the request specification to fetch result descriptor."""
+    return RequestSpec(
+        "GET",
+        f"jobs/{job_id}/result/descriptor",
+        "fetch result descriptor",
+        TypeAdapter(ResultDescriptor),
+    )
+
+
+def get_data_types() -> RequestSpec[DataTypesResponse]:
+    """Return the request specification to fetch data types."""
+    return RequestSpec(
+        "GET",
+        "data-types",
+        "fetch data types",
+        TypeAdapter(DataTypesResponse),
+        authenticated=False,
+    )
+
+
+def get_metrics() -> RequestSpec[MetricCatalogResponse]:
+    """Return the request specification to fetch metrics."""
+    return RequestSpec(
+        "GET",
+        "metrics",
+        "fetch metrics",
+        TypeAdapter(MetricCatalogResponse),
+        authenticated=False,
+    )
+
+
+def get_metric(metric_name: str) -> RequestSpec[MetricInfoV4]:
+    """Return the request specification to fetch metric."""
+    return RequestSpec(
+        "GET",
+        f"metrics/{metric_name}",
+        "fetch metric",
+        TypeAdapter(MetricInfoV4),
+        authenticated=False,
+    )

@@ -119,6 +119,44 @@ Await asynchronous catalog, submission, result, and download operations. An
 `AsyncJobHandle` provides `status()`, `result()`, and `wait()` as awaitable
 operations. Consume `handle.events()` with `async for`.
 
+## Errors and event reconnection
+
+Both clients raise `DownloadError` for transport failures, unexpected HTTP
+statuses, malformed JSON, and responses that do not match the expected model.
+The message identifies the operation; parsing, validation, and transport errors
+retain their original exception as the cause. Ordinary requests, including job
+submission, are never retried automatically.
+
+An unexpected HTTP 503 with structured service details raises
+`ServiceUnavailableError`. Its `code`, `retryable`, and `retry_after_seconds`
+attributes provide retry guidance; an absent or non-integer `Retry-After` header
+produces `None`. Unstructured or malformed 503 responses raise `DownloadError`.
+`health.readiness()` accepts both HTTP 200 and HTTP 503 and returns the validated
+readiness response.
+
+Job event streams reconnect after connection/read failures and HTTP 5xx responses.
+They allow five consecutive reconnection attempts by default, using exponential
+full jitter capped at eight seconds. Each newly accepted event resets the retry
+count. The `timeout` on `events()` or `wait()` bounds the total wait, including
+heartbeats and backoff delays. Exhausted retries raise `JobEventStreamError`;
+an expired deadline raises `JobWaitTimeoutError`.
+
+Use `handle.events(after_id=cursor, kinds={"progress"})` to resume and filter a
+stream. Cursors advance for filtered events too, replayed cursors are suppressed,
+and terminal events end the stream even when filtered out. HTTP 409 raises
+`JobEventCursorGapError`; other unsuccessful statuses and malformed events fail
+immediately without reconnection. Async cancellation propagates and closes the
+active response.
+
+`wait()` accepts `on_event`, `on_progress`, and `on_message` callbacks. Sync handles
+invoke synchronous callbacks; async handles also await callback results before
+processing the next event. Callback exceptions propagate unchanged.
+
+File downloads reject JSON terminal results before opening the destination.
+`results.download(ref, path, format="jsonl")` streams table data without pandas;
+`results.dataframe(ref)` requires pandas and removes its temporary JSONL file on
+success or failure.
+
 ## Validation and migration
 
 Metric-specific client generation has been removed. Metric-specific

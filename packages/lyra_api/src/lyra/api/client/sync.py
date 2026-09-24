@@ -2,42 +2,44 @@
 
 from __future__ import annotations
 
-import json
-import random
-import tempfile
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
     Generic,
-    NotRequired,
-    TypedDict,
     TypeVar,
-    Unpack,
     cast,
 )
 
 import requests
-from lyra.api.client.base import BaseTransport, load_pandas, service_unavailable_error
+from lyra.api.client import endpoints
+from lyra.api.client.base import BaseTransport, load_pandas
+from lyra.api.client.endpoints import RequestSpec, validate_response
+from lyra.api.client.events import (
+    RetryableEventError,
+    SSEBuffer,
+    StreamState,
+    terminal_event,
+)
+from lyra.api.client.results import (
+    dataframe_path,
+    download_needs_text,
+    invoke_callbacks,
+    require_file_result,
+    successful_result,
+    validate_download,
+    validate_jsonl_format,
+)
 from lyra.api.exceptions import (
     DownloadError,
-    JobEventCursorGapError,
     JobEventStreamError,
-    JobWaitTimeoutError,
-    MetricRunError,
 )
-from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
-from lyra.sdk.models.data_types import DataTypesResponse
 from lyra.sdk.models.job import (
-    CancelledJobResult,
-    FailedJobResult,
     FileJobResult,
     JobCancelResponse,
     JobCreateResponse,
     JobEventRecord,
-    JobLifecycleEvent,
     JobLifecycleStatus,
     JobListResponse,
     JobMessageEvent,
@@ -46,21 +48,7 @@ from lyra.sdk.models.job import (
     ResultDescriptor,
     TableJobResult,
     TerminalJobResult,
-    parse_job_result,
 )
-from lyra.sdk.models.lookups import MetZoneCodeResponse
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
-from lyra.sdk.models.observability import (
-    AdminStatusResponse,
-    CatalogSummaryResponse,
-    ConfigSummaryResponse,
-    LivenessResponse,
-    QueuesResponse,
-    ReadinessResponse,
-    WorkerDetail,
-    WorkersResponse,
-)
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     import os
@@ -68,155 +56,41 @@ if TYPE_CHECKING:
 
     import pandas as pd
     from lyra.api.options import RunOptions, SubmitOptions
+    from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
+    from lyra.sdk.models.data_types import DataTypesResponse
+    from lyra.sdk.models.lookups import MetZoneCodeResponse
+    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+    from lyra.sdk.models.observability import (
+        AdminStatusResponse,
+        CatalogSummaryResponse,
+        ConfigSummaryResponse,
+        LivenessResponse,
+        QueuesResponse,
+        ReadinessResponse,
+        WorkerDetail,
+        WorkersResponse,
+    )
     from lyra.sdk.types import JsonObject
 
-TERMINAL_EVENTS = {"succeeded", "failed", "cancelled"}
-_ModelT = TypeVar("_ModelT", bound=BaseModel)
+_ResponseT = TypeVar("_ResponseT")
 _SuccessResultT = TypeVar("_SuccessResultT", bound=TableJobResult | FileJobResult)
 SuccessfulJobResult = TableJobResult | FileJobResult
 
 
-@dataclass
-class _SSEEventBuffer:
-    data_lines: list[str] = field(default_factory=list)
-    event_id: str | None = None
-
-    def flush(self) -> JobEventRecord | None:
-        if not self.data_lines:
-            return None
-        if self.event_id is None:
-            err = "Job event did not include an SSE id."
-            raise DownloadError(err)
-        record = JobEventRecord(
-            id=self.event_id,
-            event=json.loads("\n".join(self.data_lines)),
-        )
-        self.data_lines.clear()
-        self.event_id = None
-        return record
-
-    def add(self, line: str) -> JobEventRecord | None:
-        if not line:
-            return self.flush()
-        if line.startswith(":"):
-            return None
-        field_name, separator, value = line.partition(":")
-        if not separator:
-            return None
-        value = value.removeprefix(" ")
-        if field_name == "data":
-            self.data_lines.append(value)
-        elif field_name == "id":
-            self.event_id = value
-        return None
-
-
 def _iter_sse_job_events(
     lines: Iterable[str | bytes],
-    *,
-    on_line: Callable[[], None] | None = None,
+    state: StreamState,
 ) -> Iterator[JobEventRecord]:
-    buffer = _SSEEventBuffer()
+    buffer = SSEBuffer()
     for line in lines:
-        if on_line is not None:
-            on_line()
-        decoded_line = line.decode() if isinstance(line, bytes) else line
-        record = buffer.add(decoded_line)
+        state.check_deadline()
+        record = buffer.add(line)
         if record is not None:
             yield record
+    state.check_deadline()
     record = buffer.flush()
     if record is not None:
         yield record
-
-
-def _terminal_event(record: JobEventRecord) -> bool:
-    event = record.event
-    return isinstance(event, JobLifecycleEvent) and event.status in TERMINAL_EVENTS
-
-
-def _validate_event_response(
-    response: requests.Response,
-    *,
-    job_id: str,
-    cursor: str | None,
-    attempts: int,
-) -> None:
-    if response.status_code == 409:
-        err = f"Event history for job {job_id} no longer contains {cursor}."
-        raise JobEventCursorGapError(
-            err,
-            job_id=job_id,
-            last_event_id=cursor,
-            attempts=attempts,
-        )
-    if response.status_code == 200:
-        return
-    if response.status_code >= 500:
-        response.raise_for_status()
-    err = f"Failed to stream job events. HTTP {response.status_code}: {response.text}"
-    raise DownloadError(err)
-
-
-def _event_wait_deadline(wait_seconds: float | None) -> float | None:
-    return None if wait_seconds is None else time.monotonic() + wait_seconds
-
-
-def _check_event_deadline(
-    deadline: float | None,
-    *,
-    job_id: str,
-    cursor: str | None,
-    attempts: int,
-) -> None:
-    if deadline is None or time.monotonic() < deadline:
-        return
-    err = f"Timed out waiting for events from job {job_id}."
-    raise JobWaitTimeoutError(
-        err,
-        job_id=job_id,
-        last_event_id=cursor,
-        attempts=attempts,
-    )
-
-
-@dataclass
-class _EventDeadlineGuard:
-    deadline: float | None
-    job_id: str
-    cursor: str | None
-    attempts: int
-
-    def __call__(self) -> None:
-        _check_event_deadline(
-            self.deadline,
-            job_id=self.job_id,
-            cursor=self.cursor,
-            attempts=self.attempts,
-        )
-
-
-def _event_retry_delay(
-    deadline: float | None,
-    attempts: int,
-    jitter: random.Random,
-) -> float:
-    cap = min(8.0, 0.5 * (2 ** (attempts - 1)))
-    delay = jitter.uniform(0, cap)
-    if deadline is None:
-        return delay
-    return min(delay, max(0.0, deadline - time.monotonic()))
-
-
-def _event_read_timeout(deadline: float | None, default: float) -> float:
-    if deadline is None:
-        return default
-    return max(0.001, min(default, deadline - time.monotonic()))
-
-
-def _validate_max_reconnect_attempts(max_reconnect_attempts: int) -> None:
-    if max_reconnect_attempts < 0:
-        err = "max_reconnect_attempts must be non-negative"
-        raise ValueError(err)
 
 
 class JobHandle(Generic[_SuccessResultT]):
@@ -297,14 +171,11 @@ class JobHandle(Generic[_SuccessResultT]):
         Returns:
             The table or file result associated with the job.
 
-        Raises:
-            MetricRunError: If the job failed or was cancelled.
+        Failed or cancelled jobs raise ``MetricRunError``.
 
         """
         result = self._client.get_job_result(self.job_id)
-        if isinstance(result, FailedJobResult | CancelledJobResult):
-            raise MetricRunError(result)
-        return cast("_SuccessResultT", result)
+        return cast("_SuccessResultT", successful_result(result))
 
     def wait(
         self,
@@ -331,13 +202,11 @@ class JobHandle(Generic[_SuccessResultT]):
 
         """
         for record in self.events(timeout=timeout):
-            if on_event is not None:
-                on_event(record)
-            if isinstance(record.event, JobProgressEvent) and on_progress is not None:
-                on_progress(record.event)
-            if isinstance(record.event, JobMessageEvent) and on_message is not None:
-                on_message(record.event)
-            if _terminal_event(record):
+            for _callback_result in invoke_callbacks(
+                record, on_event, on_progress, on_message
+            ):
+                pass
+            if terminal_event(record):
                 return self.result()
         err = f"Job {self.job_id} event stream ended before a terminal event."
         raise JobEventStreamError(
@@ -348,124 +217,38 @@ class JobHandle(Generic[_SuccessResultT]):
         )
 
 
-class _RequestModelOptions(TypedDict):
-    error_context: str
-    authenticated: NotRequired[bool]
-    expected_status: NotRequired[int]
-    params: NotRequired[dict[str, Any] | None]
-    json_body: NotRequired[dict[str, Any] | None]
-
-
-def _write_download_response(
-    response: requests.Response,
-    output_path: Path,
-    *,
-    failure_context: str,
-    job_id: str | None = None,
-) -> None:
-    if response.status_code != 200:
-        err = f"{failure_context}. HTTP {response.status_code}: {response.text}"
-        raise DownloadError(err)
-    if job_id is not None and "application/json" in response.headers.get(
-        "content-type", ""
-    ):
-        result = parse_job_result(response.json())
-        err = f"Job {job_id} returned {result.status} JSON result, not a file."
-        raise DownloadError(err)
-    with output_path.open("wb") as file:
-        file.writelines(response.iter_content(chunk_size=65536))
-
-
 class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -- API surface
     """Private synchronous HTTP implementation used by resource clients."""
 
-    def _request_model(
-        self,
-        method: str,
-        path: str,
-        response_model: type[_ModelT],
-        **options: Unpack[_RequestModelOptions],
-    ) -> _ModelT:
-        error_context = options["error_context"]
-        authenticated = options.get("authenticated", True)
-        expected_status = options.get("expected_status", 200)
-        params = options.get("params")
-        json_body = options.get("json_body")
+    def _request(self, spec: RequestSpec[_ResponseT]) -> _ResponseT:
         try:
-            response = requests.request(
-                method,
-                self._http_url(path),
-                params=params,
-                json=json_body,
+            with requests.request(
+                spec.method,
+                self._http_url(spec.path),
+                params=spec.params,
+                json=spec.json_body,
                 timeout=self.timeout,
-                headers=self._auth_headers if authenticated else self.headers,
-            )
-        except requests.RequestException as exc:
-            err = f"{error_context} request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != expected_status:
-            if response.status_code == 503:
-                unavailable = service_unavailable_error(
-                    response.json(),
+                headers=self._auth_headers if spec.authenticated else self.headers,
+            ) as response:
+                return validate_response(
+                    spec,
+                    response.status_code,
+                    response.text,
+                    response.headers.get("content-type", ""),
                     response.headers.get("Retry-After"),
                 )
-                if unavailable is not None:
-                    raise unavailable
-            err = (
-                f"Failed to {error_context}. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return response_model.model_validate(response.json())
+        except requests.RequestException as exc:
+            err = f"Failed to {spec.operation}: request error: {exc}"
+            raise DownloadError(err) from exc
 
     def get_liveness(self) -> LivenessResponse:
-        try:
-            response = requests.get(
-                self._http_url("live"),
-                timeout=self.timeout,
-                headers=self.headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Liveness request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                "Failed to fetch liveness. "
-                f"HTTP {response.status_code}: {response.text}"
-            )
-            raise DownloadError(err)
-        return LivenessResponse.model_validate(response.json())
+        return self._request(endpoints.get_liveness())
 
     def get_readiness(self) -> ReadinessResponse:
-        try:
-            response = requests.get(
-                self._http_url("ready"),
-                timeout=self.timeout,
-                headers=self.headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Readiness request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code not in {200, 503}:
-            err = (
-                "Failed to fetch readiness. "
-                f"HTTP {response.status_code}: {response.text}"
-            )
-            raise DownloadError(err)
-        return ReadinessResponse.model_validate(response.json())
+        return self._request(endpoints.get_readiness())
 
     def get_met_zone_code(self, name: str) -> MetZoneCodeResponse:
-        return self._request_model(
-            "GET",
-            "lookups/met-zones",
-            MetZoneCodeResponse,
-            error_context="fetch met-zone lookup",
-            authenticated=False,
-            params={"name": name},
-        )
+        return self._request(endpoints.get_met_zone_code(name))
 
     def create_job(
         self,
@@ -474,25 +257,9 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         *,
         idempotency_key: str | None = None,
     ) -> JobCreateResponse:
-        body: dict[str, Any] = {"metric": metric, "input": payload}
-        if idempotency_key is not None:
-            body["idempotency_key"] = idempotency_key
-
-        try:
-            response = requests.post(
-                self._http_url("jobs"),
-                json=body,
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Job creation error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 202:
-            err = f"Failed to create job. HTTP {response.status_code}: {response.text}"
-            raise DownloadError(err)
-        return JobCreateResponse.model_validate(response.json())
+        return self._request(
+            endpoints.create_job(metric, payload, idempotency_key=idempotency_key)
+        )
 
     def submit_job(
         self,
@@ -507,20 +274,7 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         )
 
     def get_job(self, job_id: str) -> JobStatusInfo:
-        try:
-            response = requests.get(
-                self._http_url(f"jobs/{job_id}"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Job status error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = f"Failed to fetch job. HTTP {response.status_code}: {response.text}"
-            raise DownloadError(err)
-        return JobStatusInfo.model_validate(response.json())
+        return self._request(endpoints.get_job(job_id))
 
     def list_admin_jobs(
         self,
@@ -529,178 +283,36 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         status: JobLifecycleStatus | None = None,
         metric: str | None = None,
     ) -> JobListResponse:
-        params: dict[str, int | str] = {"limit": limit}
-        if status is not None:
-            params["status"] = status
-        if metric is not None:
-            params["metric"] = metric
-        try:
-            response = requests.get(
-                self._http_url("admin/jobs"),
-                params=params,
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin job list error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to list admin jobs. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return JobListResponse.model_validate(response.json())
+        return self._request(
+            endpoints.list_admin_jobs(limit=limit, status=status, metric=metric)
+        )
 
     def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
-        try:
-            response = requests.post(
-                self._http_url(f"admin/jobs/{job_id}/cancel"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin job cancellation error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to cancel admin job. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return JobCancelResponse.model_validate(response.json())
+        return self._request(endpoints.cancel_admin_job(job_id))
 
     def list_plugin_repos(self) -> PluginRepoListResponse:
-        return self._request_model(
-            "GET",
-            "admin/plugin-repos",
-            PluginRepoListResponse,
-            error_context="list plugin repos",
-        )
+        return self._request(endpoints.list_plugin_repos())
 
     def list_plugin_routing(self) -> PluginRoutingResponse:
-        return self._request_model(
-            "GET",
-            "admin/plugin-routing",
-            PluginRoutingResponse,
-            error_context="list plugin routing",
-        )
+        return self._request(endpoints.list_plugin_routing())
 
     def get_admin_status(self) -> AdminStatusResponse:
-        try:
-            response = requests.get(
-                self._http_url("admin/status"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin status request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to fetch admin status. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return AdminStatusResponse.model_validate(response.json())
+        return self._request(endpoints.get_admin_status())
 
     def get_admin_config_summary(self) -> ConfigSummaryResponse:
-        try:
-            response = requests.get(
-                self._http_url("admin/config-summary"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin config summary request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                "Failed to fetch admin config summary. "
-                f"HTTP {response.status_code}: {response.text}"
-            )
-            raise DownloadError(err)
-        return ConfigSummaryResponse.model_validate(response.json())
+        return self._request(endpoints.get_admin_config_summary())
 
     def get_admin_catalog(self) -> CatalogSummaryResponse:
-        try:
-            response = requests.get(
-                self._http_url("admin/catalog"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin catalog request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to fetch admin catalog. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return CatalogSummaryResponse.model_validate(response.json())
+        return self._request(endpoints.get_admin_catalog())
 
     def get_admin_workers(self) -> WorkersResponse:
-        try:
-            response = requests.get(
-                self._http_url("admin/workers"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin workers request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to fetch admin workers. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return WorkersResponse.model_validate(response.json())
+        return self._request(endpoints.get_admin_workers())
 
     def get_admin_worker(self, worker_name: str) -> WorkerDetail:
-        try:
-            response = requests.get(
-                self._http_url(f"admin/workers/{worker_name}"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin worker request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to fetch admin worker. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return WorkerDetail.model_validate(response.json())
+        return self._request(endpoints.get_admin_worker(worker_name))
 
     def get_admin_queues(self) -> QueuesResponse:
-        try:
-            response = requests.get(
-                self._http_url("admin/queues"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Admin queues request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to fetch admin queues. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        return QueuesResponse.model_validate(response.json())
+        return self._request(endpoints.get_admin_queues())
 
     def iter_job_events(
         self,
@@ -711,123 +323,84 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         timeout: float | None = None,
         max_reconnect_attempts: int = 5,
     ) -> Iterator[JobEventRecord]:
-        _validate_max_reconnect_attempts(max_reconnect_attempts)
-        deadline = _event_wait_deadline(timeout)
-        cursor = last_event_id
-        attempts = 0
-        jitter = random.SystemRandom()
+        state = StreamState(
+            job_id, last_event_id, kinds, timeout, max_reconnect_attempts
+        )
         while True:
-            _check_event_deadline(
-                deadline,
-                job_id=job_id,
-                cursor=cursor,
-                attempts=attempts,
-            )
-            headers = dict(self._auth_headers)
-            if cursor is not None:
-                headers["Last-Event-ID"] = cursor
-            try:  # ruff: ignore[too-many-statements-in-try-clause] -- live stream
+            state.check_deadline()
+            try:
                 with requests.get(
                     self._http_url(f"jobs/{job_id}/events"),
-                    timeout=_event_read_timeout(deadline, self.timeout),
-                    headers=headers,
+                    timeout=state.read_timeout(self.timeout),
+                    headers=state.headers(self._auth_headers),
                     stream=True,
                 ) as response:
-                    _validate_event_response(
-                        response,
-                        job_id=job_id,
-                        cursor=cursor,
-                        attempts=attempts,
-                    )
-                    deadline_guard = _EventDeadlineGuard(
-                        deadline=deadline,
-                        job_id=job_id,
-                        cursor=cursor,
-                        attempts=attempts,
-                    )
+                    state.validate_status(response.status_code)
                     for record in _iter_sse_job_events(
                         response.iter_lines(decode_unicode=True),
-                        on_line=deadline_guard,
+                        state,
                     ):
-                        if record.id == cursor:
-                            continue
-                        cursor = record.id
-                        attempts = 0
-                        deadline_guard.cursor = cursor
-                        deadline_guard.attempts = attempts
-                        terminal = _terminal_event(record)
-                        if kinds is None or record.event.kind in kinds:
+                        if state.accept(record):
                             yield record
-                        if terminal:
+                        if state.terminal:
                             return
-            except JobEventCursorGapError:
-                raise
-            except requests.RequestException:
+            except (requests.RequestException, RetryableEventError):
                 pass
-
-            attempts += 1
-            if attempts > max_reconnect_attempts:
-                err = f"Could not resume the event stream for job {job_id}."
-                raise JobEventStreamError(
-                    err,
-                    job_id=job_id,
-                    last_event_id=cursor,
-                    attempts=attempts,
-                )
-            time.sleep(_event_retry_delay(deadline, attempts, jitter))
+            time.sleep(state.retry_delay())
 
     def get_job_result(self, job_id: str) -> TerminalJobResult:
+        return self._request(endpoints.get_job_result(job_id))
+
+    def _download(
+        self,
+        route: str,
+        path: str | os.PathLike[str],
+        *,
+        operation: str,
+        job_id: str | None = None,
+    ) -> None:
         try:
-            response = requests.get(
-                self._http_url(f"jobs/{job_id}/result"),
+            with requests.get(
+                self._http_url(route),
                 timeout=self.timeout,
                 headers=self._auth_headers,
-            )
+                stream=True,
+            ) as response:
+                if download_needs_text(
+                    response.status_code,
+                    response.headers.get("content-type", ""),
+                    job_id,
+                ):
+                    validate_download(
+                        response.status_code,
+                        response.text,
+                        response.headers.get("Retry-After"),
+                        operation=operation,
+                        job_id=job_id,
+                    )
+                with Path(path).open("wb") as file:
+                    file.writelines(response.iter_content(chunk_size=65536))
         except requests.RequestException as exc:
-            err = f"Job result error: {exc}"
+            err = f"Failed to {operation}: request error: {exc}"
             raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = (
-                f"Failed to fetch job result. HTTP {response.status_code}: "
-                f"{response.text}"
-            )
-            raise DownloadError(err)
-        if "application/json" not in response.headers.get("content-type", ""):
-            err = "Job result response was not JSON."
-            raise DownloadError(err)
-        return parse_job_result(response.json())
 
     def download_job_result_to_file(
         self,
         job_id: str,
         path: str | os.PathLike[str],
     ) -> None:
-        output_path = Path(path)
-        try:
-            with requests.get(
-                self._http_url(f"jobs/{job_id}/result/download"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-                stream=True,
-            ) as response:
-                _write_download_response(
-                    response,
-                    output_path,
-                    failure_context="Failed to download job result",
-                    job_id=job_id,
-                )
-        except requests.RequestException as exc:
-            err = f"Job result download error: {exc}"
-            raise DownloadError(err) from exc
+        self._download(
+            f"jobs/{job_id}/result/download",
+            path,
+            operation="download job result",
+            job_id=job_id,
+        )
 
     def get_result_descriptor(self, result_ref_or_job_id: str) -> ResultDescriptor:
-        job_id = self._job_id_from_result_ref(result_ref_or_job_id)
-        return self._request_model(
-            "GET",
-            f"jobs/{job_id}/result/descriptor",
-            ResultDescriptor,
-            error_context="fetch result descriptor",
+        return self._request(
+            endpoints.get_result_descriptor(
+                self._job_id_from_result_ref(result_ref_or_job_id)
+            )
         )
 
     def download_result(
@@ -837,99 +410,26 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         *,
         format: str = "jsonl",  # ruff:ignore[builtin-argument-shadowing]
     ) -> None:
-        if format != "jsonl":
-            err = "Only JSONL result downloads are supported. Use format='jsonl'."
-            raise DownloadError(err)
-
+        validate_jsonl_format(format)
         job_id = self._job_id_from_result_ref(result_ref_or_job_id)
-        output_path = Path(path)
-        try:
-            with requests.get(
-                self._http_url(f"jobs/{job_id}/result/table.jsonl"),
-                timeout=self.timeout,
-                headers=self._auth_headers,
-                stream=True,
-            ) as response:
-                _write_download_response(
-                    response,
-                    output_path,
-                    failure_context="Failed to download result",
-                )
-        except requests.RequestException as exc:
-            err = f"Result download error: {exc}"
-            raise DownloadError(err) from exc
+        self._download(
+            f"jobs/{job_id}/result/table.jsonl", path, operation="download result"
+        )
 
     def result_dataframe(self, result_ref_or_job_id: str) -> pd.DataFrame:
         pandas = load_pandas()
-        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as temp_file:
-            temp_path = Path(temp_file.name)
-
-        try:
+        with dataframe_path() as temp_path:
             self.download_result(result_ref_or_job_id, temp_path, format="jsonl")
             return pandas.read_json(temp_path, lines=True)
-        finally:
-            temp_path.unlink(missing_ok=True)
 
     def get_data_types(self) -> DataTypesResponse:
-        data_types_url = self._http_url("data-types")
-
-        try:
-            response = requests.get(
-                data_types_url,
-                timeout=self.timeout,
-                headers=self.headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Data types request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = f"Failed to fetch data types. HTTP {response.status_code}"
-            raise DownloadError(err)
-
-        try:
-            return DataTypesResponse.model_validate(response.json())
-        except ValueError as exc:
-            err = "Invalid data types response format"
-            raise DownloadError(err) from exc
+        return self._request(endpoints.get_data_types())
 
     def get_metrics(self) -> MetricCatalogResponse:
-        try:
-            response = requests.get(
-                self._http_url("metrics"),
-                timeout=self.timeout,
-                headers=self.headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Metrics request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = f"Failed to fetch metrics. HTTP {response.status_code}"
-            raise DownloadError(err)
-
-        return MetricCatalogResponse.model_validate(response.json())
+        return self._request(endpoints.get_metrics())
 
     def get_metric(self, metric_name: str) -> MetricInfoV4:
-        try:
-            response = requests.get(
-                self._http_url(f"metrics/{metric_name}"),
-                timeout=self.timeout,
-                headers=self.headers,
-            )
-        except requests.RequestException as exc:
-            err = f"Metric request error: {exc}"
-            raise DownloadError(err) from exc
-
-        if response.status_code != 200:
-            err = f"Failed to fetch metric. HTTP {response.status_code}"
-            raise DownloadError(err)
-
-        return MetricInfoV4.model_validate(response.json())
-
-
-class _SyncAdminTransport(_SyncTransport):
-    """Synchronous transport configured exclusively with an administrator key."""
+        return self._request(endpoints.get_metric(metric_name))
 
 
 class _HealthResource:
@@ -1069,9 +569,7 @@ class _RawMetricsResource:
             arguments,
             options=options,
         )
-        if not isinstance(result, FileJobResult):
-            err = f"Job {result.job_id} did not produce a file result."
-            raise DownloadError(err)
+        require_file_result(result)
         self._transport.download_job_result_to_file(result.job_id, path)
 
 
@@ -1241,7 +739,7 @@ class LyraAdminClient:
         secure: bool = True,
     ) -> None:
         """Initialize a synchronous administrator client and its resources."""
-        transport = _SyncAdminTransport(
+        transport = _SyncTransport(
             host,
             timeout,
             headers,

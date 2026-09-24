@@ -11,24 +11,11 @@ from lyra.api import parse_result_ref
 from lyra.api.client.async_ import AsyncLyraAdminClient, AsyncLyraClient
 from lyra.api.client.sync import LyraAdminClient, LyraClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
+from lyra.api.options import SubmitOptions
 from lyra.sdk.models.job import FileJobResult, JobProgressEvent, TableJobResult
 from lyra.sdk.types import JsonValue
 
 from lyra_app.config import DEFAULT_API_HOST
-
-
-class LyraAPIClient(LyraClient):
-    """Exercise the retained private sync transport through the historical tests."""
-
-    def __getattr__(self, name: str) -> Callable[..., Any]:
-        return cast("Callable[..., Any]", getattr(self._transport, name))
-
-
-class AsyncLyraAPIClient(AsyncLyraClient):
-    """Exercise the retained private async transport through historical tests."""
-
-    def __getattr__(self, name: str) -> Callable[..., Any]:
-        return cast("Callable[..., Any]", getattr(self._transport, name))
 
 
 def test_public_client_surfaces_and_credentials_are_separated() -> None:
@@ -79,7 +66,7 @@ class FakeSyncResponse:
     def __init__(self, **options: Unpack[_FakeSyncResponseOptions]) -> None:
         self.status_code = options.get("status_code", 200)
         self._payload = options.get("payload")
-        self.text = options.get("text", "")
+        self.text = options.get("text", json.dumps(self._payload))
         self.headers = options.get("headers") or {"content-type": "application/json"}
         self._lines = options.get("lines") or []
         self._chunks = options.get("chunks") or []
@@ -99,6 +86,26 @@ class FakeSyncResponse:
 
     def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:  # ruff:ignore[unused-method-argument]
         yield from self._chunks
+
+
+def _mock_sync_http(
+    monkeypatch: pytest.MonkeyPatch,
+    **handlers: Callable[..., FakeSyncResponse],
+) -> None:
+    for method, handler in handlers.items():
+        monkeypatch.setattr(requests, method, handler)
+
+    def request(
+        method: str, url: str, **kwargs: Unpack[_SyncRequestOptions]
+    ) -> FakeSyncResponse:
+        options = {key: value for key, value in kwargs.items() if value is not None}
+        assert method in {"GET", "POST"}
+        handler = cast(
+            "Callable[..., FakeSyncResponse]", getattr(requests, method.lower())
+        )
+        return handler(url, **options)
+
+    monkeypatch.setattr(requests, "request", request)
 
 
 def _job_response(*, reused: bool = False) -> dict[str, Any]:
@@ -565,19 +572,21 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
             return FakeSyncResponse(payload=_result_response())
         return FakeSyncResponse(payload=_status_response())
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    client = LyraAPIClient(
+    _mock_sync_http(monkeypatch, post=post)
+    _mock_sync_http(monkeypatch, get=get)
+    client = LyraClient(
         "example.test",
         secure=False,
         timeout=12.0,
         agent_api_key="agent-secret",
     )
 
-    job = client.create_job("heavy_metric", {"value": 3}, idempotency_key="key-1")
-    status = client.get_job(job.job_id)
-    events = list(client.iter_job_events(job.job_id))
-    result = client.get_job_result(job.job_id)
+    job = client.raw.create(
+        "heavy_metric", {"value": 3}, options=SubmitOptions(idempotency_key="key-1")
+    )
+    status = client.jobs.get(job.job_id)
+    events = list(client.jobs.events(job.job_id))
+    result = client.results.get(job.job_id)
     processed = client.raw.run("heavy_metric", {"value": 3})
 
     assert posted[0]["url"] == "http://example.test/jobs"
@@ -638,12 +647,12 @@ def test_sync_job_handle_resumes_after_disconnect_and_dispatches_callbacks(
         seen_headers.append(headers)
         return next(responses)
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, post=post)
+    _mock_sync_http(monkeypatch, get=get)
     monkeypatch.setattr("lyra.api.client.sync.time.sleep", lambda _: None)
-    client = LyraAPIClient("example.test", secure=False, agent_api_key="secret")
+    client = LyraClient("example.test", secure=False, agent_api_key="secret")
 
-    result = client.submit_job("heavy_metric", {"value": 3}).wait(
+    result = client.raw.submit("heavy_metric", {"value": 3}).wait(
         on_progress=progress_events.append
     )
 
@@ -681,8 +690,8 @@ def test_sync_client_uses_admin_job_operations(
         requests_seen.append({"url": url, "timeout": timeout, "headers": headers})
         return FakeSyncResponse(payload=_job_cancel_response())
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    monkeypatch.setattr("lyra.api.client.sync.requests.post", post)
+    _mock_sync_http(monkeypatch, get=get)
+    _mock_sync_http(monkeypatch, post=post)
     client = LyraAdminClient(
         "example.test",
         secure=False,
@@ -741,7 +750,7 @@ def test_sync_client_uses_observability_routes(
         seen_headers.append(headers)
         return FakeSyncResponse(payload=responses[url])
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
     client = LyraAdminClient(
         "example.test",
         secure=False,
@@ -786,7 +795,7 @@ def test_sync_client_exposes_structured_database_unavailability(
     )
 
     with pytest.raises(ServiceUnavailableError) as exc_info:
-        LyraAPIClient("example.test", secure=False).get_met_zone_code("Guadalajara")
+        LyraClient("example.test", secure=False).lookups.met_zone_code("Guadalajara")
 
     assert exc_info.value.code == "database_unavailable"
     assert exc_info.value.retryable is True
@@ -888,8 +897,8 @@ def test_sync_client_returns_grouped_data_type_schemas(
         assert url == "http://example.test/data-types"
         return FakeSyncResponse(payload=_data_types_response())
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    response = LyraAPIClient("example.test", secure=False).get_data_types()
+    _mock_sync_http(monkeypatch, get=get)
+    response = LyraClient("example.test", secure=False).catalog.data_types()
 
     assert response.location[0].data_type == "geojson"
     assert response.bounds[0].wrapper_schema == {"type": "object"}
@@ -907,8 +916,8 @@ def test_sync_client_returns_v4_metric_catalog(
         assert url == "http://example.test/metrics"
         return FakeSyncResponse(payload=_metric_catalog_response())
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    catalog = LyraAPIClient("example.test", secure=False).get_metrics()
+    _mock_sync_http(monkeypatch, get=get)
+    catalog = LyraClient("example.test", secure=False).catalog.metrics()
 
     assert catalog.catalog_fingerprint == "abc123"
     assert len(catalog.metrics) == 1
@@ -938,8 +947,8 @@ def test_sync_client_returns_one_v4_metric(
         assert url == "http://example.test/metrics/accessibility_by_destination"
         return FakeSyncResponse(payload=_metric_response())
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
-    metric = LyraAPIClient("example.test", secure=False).get_metric(
+    _mock_sync_http(monkeypatch, get=get)
+    metric = LyraClient("example.test", secure=False).catalog.metric(
         "accessibility_by_destination"
     )
 
@@ -957,10 +966,12 @@ def test_sync_client_rejects_invalid_data_type_response(
     ) -> FakeSyncResponse:
         return FakeSyncResponse(payload={"location": []})
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
 
-    with pytest.raises(DownloadError, match="Invalid data types response format"):
-        LyraAPIClient("example.test", secure=False).get_data_types()
+    with pytest.raises(
+        DownloadError, match="Failed to fetch data types: invalid JSON response"
+    ):
+        LyraClient("example.test", secure=False).catalog.data_types()
 
 
 def test_sync_client_downloads_file_result(
@@ -981,10 +992,10 @@ def test_sync_client_downloads_file_result(
             chunks=[b"abc", b"def"],
         )
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
     output = tmp_path / "result.tif"
 
-    LyraAPIClient("example.test", secure=False).download_job_result_to_file(
+    LyraClient("example.test", secure=False).results.download_file(
         "job-1",
         output,
     )
@@ -1004,9 +1015,9 @@ def test_sync_client_fetches_file_result_metadata(
         assert url == "http://example.test/jobs/job-1/result"
         return FakeSyncResponse(payload=_file_result_response())
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
 
-    result = LyraAPIClient("example.test", secure=False).get_job_result("job-1")
+    result = LyraClient("example.test", secure=False).results.get("job-1")
 
     assert isinstance(result, FileJobResult)
     assert result.file_path == "/lyra_data/cache/jobs/job-1/result.tif"
@@ -1040,11 +1051,11 @@ def test_sync_client_fetches_result_descriptor_from_ref(
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
 
-    descriptor = LyraAPIClient(
+    descriptor = LyraClient(
         "example.test",
         secure=False,
         agent_api_key="agent-secret",
-    ).get_result_descriptor("lyra://results/job-1")
+    ).results.descriptor("lyra://results/job-1")
 
     assert seen == ["GET http://example.test/jobs/job-1/result/descriptor"]
     assert descriptor.result_ref == "lyra://results/job-1"
@@ -1075,14 +1086,14 @@ def test_sync_client_downloads_jsonl_result_from_raw_job_id(
             chunks=[b'{"_result_index":"area-1",', b'"value":6}\n'],
         )
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
     output = tmp_path / "result.jsonl"
 
-    LyraAPIClient(
+    LyraClient(
         "example.test",
         secure=False,
         agent_api_key="agent-secret",
-    ).download_result("job-1", output)
+    ).results.download("job-1", output)
 
     assert output.read_text() == '{"_result_index":"area-1","value":6}\n'
 
@@ -1100,13 +1111,13 @@ def test_sync_client_reports_result_download_http_errors(
     ) -> FakeSyncResponse:
         return FakeSyncResponse(status_code=409, text="result is not a table")
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
 
     with pytest.raises(
         DownloadError,
         match=r"Failed to download result\. HTTP 409: result is not a table",
     ):
-        LyraAPIClient("example.test", secure=False).download_result(
+        LyraClient("example.test", secure=False).results.download(
             "job-1",
             tmp_path / "result.jsonl",
         )
@@ -1123,7 +1134,7 @@ def test_result_dataframe_requires_optional_pandas(
     monkeypatch.setattr("lyra.api.client.base.importlib.import_module", import_module)
 
     with pytest.raises(DownloadError, match="pandas is required"):
-        LyraAPIClient("example.test", secure=False).result_dataframe("job-1")
+        LyraClient("example.test", secure=False).results.dataframe("job-1")
 
 
 def test_sync_client_hydrates_result_dataframe(
@@ -1151,10 +1162,10 @@ def test_sync_client_hydrates_result_dataframe(
     ) -> FakeSyncResponse:
         return FakeSyncResponse(chunks=[b'{"_result_index":"area-1","value":6}\n'])
 
-    monkeypatch.setattr("lyra.api.client.sync.requests.get", get)
+    _mock_sync_http(monkeypatch, get=get)
     monkeypatch.setattr("lyra.api.client.base.importlib.import_module", import_module)
 
-    frame = LyraAPIClient("example.test", secure=False).result_dataframe(
+    frame = LyraClient("example.test", secure=False).results.dataframe(
         "lyra://results/job-1"
     )
 
@@ -1202,7 +1213,7 @@ class FakeAsyncResponse:
     def __init__(self, **options: Unpack[_FakeAsyncResponseOptions]) -> None:
         self.status = options.get("status", 200)
         self._payload = options.get("payload")
-        self._text = options.get("text", "")
+        self._text = options.get("text", json.dumps(self._payload))
         self.headers = options.get("headers") or {"content-type": "application/json"}
         self.content = FakeContent(
             lines=options.get("lines"),
@@ -1241,8 +1252,12 @@ class FakeSession:
     def get(self, *_: object, **__: object) -> FakeAsyncResponse:
         return self.responses.pop(0)
 
-    def request(self, *_: object, **__: object) -> FakeAsyncResponse:
-        return self.responses.pop(0)
+    def request(self, *args: object, **kwargs: object) -> FakeAsyncResponse:
+        options = {key: value for key, value in kwargs.items() if value is not None}
+        if args[0] == "GET":
+            return self.get(*args[1:], **options)
+        assert args[0] == "POST"
+        return self.post(*args[1:], **options)
 
 
 class FakeAsyncFile:
@@ -1272,7 +1287,7 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
     result = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).raw.run(
+        AsyncLyraClient("example.test", secure=False).raw.run(
             "heavy_metric",
             {"value": 3},
         )
@@ -1303,10 +1318,10 @@ def test_async_client_exposes_idempotent_replay_marker(
     )
 
     response = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).create_job(
+        AsyncLyraClient("example.test", secure=False).raw.create(
             "heavy_metric",
             {"value": 3},
-            idempotency_key="retry-key",
+            options=SubmitOptions(idempotency_key="retry-key"),
         )
     )
 
@@ -1464,7 +1479,7 @@ def test_async_client_exposes_structured_database_unavailability(
 
     with pytest.raises(ServiceUnavailableError) as exc_info:
         asyncio.run(
-            AsyncLyraAPIClient("example.test", secure=False).get_met_zone_code(
+            AsyncLyraClient("example.test", secure=False).lookups.met_zone_code(
                 "Guadalajara"
             )
         )
@@ -1569,7 +1584,7 @@ def test_async_client_returns_grouped_data_type_schemas(
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
     response = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).get_data_types()
+        AsyncLyraClient("example.test", secure=False).catalog.data_types()
     )
 
     assert response.location[0].data_type == "geojson"
@@ -1585,7 +1600,7 @@ def test_async_client_returns_v4_metric_catalog(
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
     catalog = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).get_metrics()
+        AsyncLyraClient("example.test", secure=False).catalog.metrics()
     )
 
     assert catalog.catalog_fingerprint == "abc123"
@@ -1613,7 +1628,7 @@ def test_async_client_returns_one_v4_metric(
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
     metric = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).get_metric(
+        AsyncLyraClient("example.test", secure=False).catalog.metric(
             "accessibility_by_destination"
         )
     )
@@ -1629,8 +1644,10 @@ def test_async_client_rejects_invalid_data_type_response(
     ]
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
-    with pytest.raises(DownloadError, match="Invalid data types response format"):
-        asyncio.run(AsyncLyraAPIClient("example.test", secure=False).get_data_types())
+    with pytest.raises(
+        DownloadError, match="Failed to fetch data types: invalid JSON response"
+    ):
+        asyncio.run(AsyncLyraClient("example.test", secure=False).catalog.data_types())
 
 
 def test_async_client_downloads_file_job_result(
@@ -1660,7 +1677,7 @@ def test_async_client_downloads_file_job_result(
     output = tmp_path / "result.tif"
 
     asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).download_job_result_to_file(
+        AsyncLyraClient("example.test", secure=False).results.download_file(
             "job-1",
             output,
         )
@@ -1681,7 +1698,7 @@ def test_async_client_fetches_file_result_metadata(
     monkeypatch.setattr("lyra.api.client.async_.aiohttp.ClientSession", FakeSession)
 
     result = asyncio.run(
-        AsyncLyraAPIClient("example.test", secure=False).get_job_result("job-1")
+        AsyncLyraClient("example.test", secure=False).results.get("job-1")
     )
 
     assert isinstance(result, FileJobResult)
@@ -1706,13 +1723,13 @@ def test_async_client_fetches_result_descriptor_from_raw_job_id(
         "lyra.api.client.async_.aiohttp.ClientSession",
         RecordingSession,
     )
-    client = AsyncLyraAPIClient(
+    client = AsyncLyraClient(
         "example.test",
         secure=False,
         agent_api_key="agent-secret",
     )
 
-    descriptor = asyncio.run(client.get_result_descriptor("job-1"))
+    descriptor = asyncio.run(client.results.descriptor("job-1"))
 
     assert RecordingSession.requests_seen == [
         {
@@ -1755,11 +1772,11 @@ def test_async_client_downloads_jsonl_result_from_ref(
     output = tmp_path / "result.jsonl"
 
     asyncio.run(
-        AsyncLyraAPIClient(
+        AsyncLyraClient(
             "example.test",
             secure=False,
             agent_api_key="agent-secret",
-        ).download_result(
+        ).results.download(
             "lyra://results/job-1",
             output,
         )
@@ -1793,7 +1810,7 @@ def test_async_client_reports_result_download_http_errors(
         match=r"Failed to download result\. HTTP 409: result is not a table",
     ):
         asyncio.run(
-            AsyncLyraAPIClient("example.test", secure=False).download_result(
+            AsyncLyraClient("example.test", secure=False).results.download(
                 "job-1",
                 tmp_path / "result.jsonl",
             )

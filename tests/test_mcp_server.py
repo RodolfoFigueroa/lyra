@@ -7,9 +7,11 @@ import threading
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, Unpack
+from unittest.mock import Mock
 
 import httpx
 import pytest
+from fastapi import Request
 from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
@@ -42,11 +44,13 @@ from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from lyra_app import main, registry
+from lyra_app import main, mcp, registry
+from lyra_app.db.dependencies import get_database_runtime
 from lyra_app.mcp import SERVER_INSTRUCTIONS
 from lyra_app.mcp import create_mcp_app as _create_mcp_app
 from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME
 from lyra_app.mcp.server import ToolCallError
+from lyra_app.mcp.tools import InProcessLyraBackend
 from tests.config_helpers import load_test_config
 
 _COMPLETED_AT = datetime(2026, 7, 9, 12, 5, tzinfo=UTC)
@@ -430,7 +434,10 @@ def _file_metric(name: str, description: str) -> MetricInfoV4:
 
 
 def test_mcp_package_initializes_with_bearer_auth() -> None:
-    app = create_mcp_app(agent_api_key="agent-secret")
+    app = create_mcp_app(
+        agent_api_key="agent-secret",
+        backend=FakeMCPBackend([]),
+    )
     client = _ManagedTestClient(app)
 
     missing = client.post("/", json=_initialize_payload())
@@ -602,7 +609,12 @@ def test_official_client_initializes_lists_calls_and_closes_cleanly() -> None:
 
 
 def test_streamable_http_transport_enforces_sdk_request_rules() -> None:
-    client = _ManagedTestClient(create_mcp_app(agent_api_key="agent-secret"))
+    client = _ManagedTestClient(
+        create_mcp_app(
+            agent_api_key="agent-secret",
+            backend=FakeMCPBackend([]),
+        )
+    )
 
     invalid_origin = client.post(
         "/",
@@ -644,6 +656,7 @@ def test_streamable_http_transport_allows_public_api_host() -> None:
         _create_mcp_app(
             agent_api_key="agent-secret",
             public_api_base_url="https://lyra.example.test/api",
+            backend=FakeMCPBackend([]),
         )
     )
 
@@ -1932,3 +1945,24 @@ def test_main_does_not_mount_mcp_when_disabled(
     )
 
     assert response.status_code == 404
+
+
+def test_main_shares_database_runtime_with_rest_and_mcp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_test_config(tmp_path)
+    config.mcp.enabled = True
+    monkeypatch.setattr(main, "bootstrap_runtime", lambda _: config)
+    monkeypatch.setattr(registry, "initialize_catalog", Mock())
+    factory = Mock(wraps=_create_mcp_app)
+    monkeypatch.setattr(mcp, "create_mcp_app", factory)
+
+    app = main.create_app(config)
+
+    factory.assert_called_once()
+    backend = factory.call_args.kwargs["backend"]
+    assert isinstance(backend, InProcessLyraBackend)
+    assert backend.database is app.state.database
+    request = Request({"type": "http", "app": app})
+    assert get_database_runtime(request) is backend.database

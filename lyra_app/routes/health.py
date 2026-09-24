@@ -73,13 +73,7 @@ async def readiness(
 
     Returns:
         Dependency statuses and an HTTP status reflecting aggregate readiness.
-
-    Raises:
-        RuntimeError: If application database state is unavailable.
     """
-    if database is None:
-        msg = "Application database runtime is unavailable."
-        raise RuntimeError(msg)
     timeout_seconds = database.config.database.readiness_timeout_seconds
     redis, postgres = await asyncio.gather(
         redis_health(timeout_seconds),

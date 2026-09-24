@@ -23,7 +23,6 @@ from lyra_app.mcp.models import (
     TOOL_CONTRACTS_BY_NAME,
 )
 from lyra_app.mcp.tools import (
-    InProcessLyraBackend,
     LyraMCPBackend,
     ToolCallError,
     execute_tool,
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
 
     from starlette.types import Receive, Scope, Send
 
-    from lyra_app.db.connection import ApplicationDatabaseRuntime
 
 SERVER_INSTRUCTIONS = (
     "Lyra MCP exposes stable tools for metric discovery, inspection, met-zone "
@@ -76,8 +74,7 @@ def create_mcp_app(
     agent_api_key: str,
     public_api_base_url: str,
     name: str = "lyra",
-    backend: LyraMCPBackend | None = None,
-    database: ApplicationDatabaseRuntime | None = None,
+    backend: LyraMCPBackend,
 ) -> Starlette:
     """Create the authenticated stateless Streamable HTTP MCP application.
 
@@ -85,7 +82,6 @@ def create_mcp_app(
         A Starlette app exposing the validated Lyra MCP tool server.
     """
     public_api_base_url = ApiConfig(public_base_url=public_api_base_url).public_base_url
-    tool_backend = backend or InProcessLyraBackend(database)
     server = Server(
         name=name,
         version="0.1.0",
@@ -135,7 +131,7 @@ def create_mcp_app(
             payload = await execute_tool(
                 tool_name,
                 validated_arguments,
-                tool_backend,
+                backend,
                 public_api_base_url=public_api_base_url,
             )
         except ToolCallError as exc:

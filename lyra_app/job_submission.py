@@ -24,6 +24,7 @@ from redis.exceptions import RedisError
 
 from lyra_app import job_store
 from lyra_app.config import get_config
+from lyra_app.converters import build_converter_map
 from lyra_app.db.redis import redis_client
 from lyra_app.registry import get_metric_entry, validate_metric_entry_payload
 from lyra_app.spatial_inputs import (
@@ -79,7 +80,6 @@ class SubmissionOptions(TypedDict):
     dispatcher: NotRequired[TaskDispatcher | None]
     agent_scope: NotRequired[str]
     job_id_factory: NotRequired[Callable[[], str] | None]
-    database: NotRequired[ApplicationDatabaseRuntime | None]
 
 
 class BuildSubmissionOptions(TypedDict):
@@ -204,22 +204,14 @@ async def _release_failed_submission(
 async def _resolve_spatial_input(
     validated_input: JsonObject,
     spatial_inputs: dict[str, SpatialInputKindV4],
-    database: ApplicationDatabaseRuntime | None,
+    database: ApplicationDatabaseRuntime,
 ) -> SpatialInputResolution:
-    if database is None:
-        return await asyncio.to_thread(
-            resolve_spatial_inputs_with_metadata,
-            validated_input,
-            spatial_inputs,
-        )
-
-    converters = importlib.import_module("lyra_app.converters")
-    converter_map = converters.build_converter_map(database.require_spatial_engine())
+    converter_map = build_converter_map(database.require_spatial_engine())
     return await database.run_spatial(
         resolve_spatial_inputs_with_metadata,
         validated_input,
         spatial_inputs,
-        converter_map,
+        converter_map=converter_map,
     )
 
 
@@ -327,6 +319,8 @@ def _submission_dispatcher(options: SubmissionOptions) -> TaskDispatcher:
 
 async def submit_job(
     request: JobCreateRequest,
+    *,
+    database: ApplicationDatabaseRuntime,
     **options: Unpack[SubmissionOptions],
 ) -> JobCreateResponse:
     """Validate, deduplicate, persist, and dispatch one public job request.
@@ -340,7 +334,6 @@ async def submit_job(
     client = options.get("client")
     job_id_factory = options.get("job_id_factory")
     agent_scope = options.get("agent_scope", job_store.DEFAULT_AGENT_SCOPE)
-    database = options.get("database")
     if client is None:
         client = cast("SubmissionRedisClient", redis_client)
     if job_id_factory is None:

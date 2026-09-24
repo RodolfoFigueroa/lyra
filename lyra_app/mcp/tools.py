@@ -141,8 +141,8 @@ _CATALOG_UNAVAILABLE_ERROR = "catalog_unavailable"
 class InProcessLyraBackend(LyraMCPBackend):
     """Implement MCP domain operations directly against this Lyra process."""
 
-    def __init__(self, database: ApplicationDatabaseRuntime | None = None) -> None:
-        """Initialize the backend with an optional application database runtime."""
+    def __init__(self, database: ApplicationDatabaseRuntime) -> None:
+        """Initialize the backend with the application database runtime."""
         self.database = database
 
     @override
@@ -158,9 +158,6 @@ class InProcessLyraBackend(LyraMCPBackend):
 
     @override
     async def lookup_met_zone(self, name: str) -> dict[str, str] | None:
-        if self.database is None:
-            msg = "Application database runtime is unavailable."
-            raise RuntimeError(msg)
         try:
             async with self.database.require_async_engine().connect() as connection:
                 result = await get_met_zone_code_from_name_async(
@@ -248,11 +245,7 @@ class InProcessLyraBackend(LyraMCPBackend):
                 exc,
                 DatabaseUnavailableError | SpatialInputResolutionUnavailableError,
             ):
-                retry_after = (
-                    self.database.config.database.retry_after_seconds
-                    if self.database is not None
-                    else 5
-                )
+                retry_after = self.database.config.database.retry_after_seconds
                 raise ToolCallError(
                     _DATABASE_UNAVAILABLE_ERROR,
                     "The spatial database is temporarily unavailable.",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -69,7 +68,8 @@ def _format_pydantic_errors(
 def resolve_spatial_inputs(
     payload: dict[str, Any],
     spatial_inputs: dict[str, SpatialInputKindV4],
-    converter_map: dict[str, dict[str, Any]] | None = None,
+    *,
+    converter_map: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """Validate and replace declared spatial wrappers with resolved GeoJSON.
 
@@ -80,9 +80,6 @@ def resolve_spatial_inputs(
         SpatialInputValidationError: If a wrapper or converted geometry is invalid.
         SpatialInputResolutionUnavailableError: If an external lookup fails.
     """
-    if converter_map is None:
-        converters = importlib.import_module("lyra_app.converters")
-        converter_map = vars(converters)["converter_map"]
     resolved = dict(payload)
     for field_name, kind in spatial_inputs.items():
         try:
@@ -118,14 +115,17 @@ def resolve_spatial_inputs(
 def resolve_spatial_inputs_with_metadata(
     payload: dict[str, Any],
     spatial_inputs: dict[str, SpatialInputKindV4],
-    converter_map: dict[str, dict[str, Any]] | None = None,
+    *,
+    converter_map: dict[str, dict[str, Any]],
 ) -> SpatialInputResolution:
     """Resolve spatial inputs while retaining no resolved geometry in metadata.
 
     Returns:
         The resolved worker input and non-geometric row identity metadata.
     """
-    resolved = resolve_spatial_inputs(payload, spatial_inputs, converter_map)
+    resolved = resolve_spatial_inputs(
+        payload, spatial_inputs, converter_map=converter_map
+    )
     row_identity: RowIdentityMetadata | None = None
     for field_name, kind in spatial_inputs.items():
         if kind != "location":

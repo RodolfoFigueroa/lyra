@@ -1,8 +1,7 @@
 """HTTP endpoints for submitting and inspecting metric jobs."""
 
-from __future__ import annotations
-
 import json
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Annotated, cast
 from uuid import uuid4
 
@@ -25,9 +24,8 @@ from redis.exceptions import RedisError
 from lyra_app import job_store
 from lyra_app.agent_auth import require_agent_key
 from lyra_app.celery_app import celery_app
-from lyra_app.config import get_config
-from lyra_app.db.connection import DatabaseUnavailableError
-from lyra_app.db.dependencies import get_database_runtime
+from lyra_app.db.connection import ApplicationDatabaseRuntime, DatabaseUnavailableError
+from lyra_app.db.dependencies import DatabaseRuntimeDependency
 from lyra_app.db.redis import redis_client
 from lyra_app.job_submission import (
     IdempotencyConflictError,
@@ -45,14 +43,7 @@ from lyra_app.spatial_inputs import (
 from lyra_app.worker_control import reconcile_celery_failure
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
-
-    from lyra_app.db.connection import ApplicationDatabaseRuntime
     from lyra_app.job_submission import SubmissionRedisClient
-
-DatabaseRuntimeDependency = Annotated[
-    "ApplicationDatabaseRuntime | None", Depends(get_database_runtime)
-]
 
 router = APIRouter(tags=["Jobs"], dependencies=[Depends(require_agent_key)])
 
@@ -180,7 +171,8 @@ async def _job_event_stream(
 
 async def create_job(
     request: JobCreateRequest,
-    database: ApplicationDatabaseRuntime | None = None,
+    *,
+    database: ApplicationDatabaseRuntime,
 ) -> JobCreateResponse:
     """Submit a validated job request and translate domain failures to HTTP errors.
 
@@ -209,8 +201,7 @@ async def create_job(
     except SpatialInputValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
     except (DatabaseUnavailableError, SpatialInputResolutionUnavailableError) as exc:
-        runtime_config = database.config if database is not None else get_config()
-        error = database_unavailable_http_exception(runtime_config)
+        error = database_unavailable_http_exception(database.config)
         raise error from exc
     except IdempotencyConflictError as exc:
         raise HTTPException(
@@ -248,7 +239,7 @@ async def create_job_route(
     Returns:
         Queued or idempotently reused job metadata.
     """
-    return await create_job(request, database)
+    return await create_job(request, database=database)
 
 
 @router.get("/jobs/{job_id}")

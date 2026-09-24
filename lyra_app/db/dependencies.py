@@ -2,24 +2,30 @@
 
 from typing import Annotated, cast
 
-from fastapi import Depends, Request
+from fastapi import Depends, FastAPI, Request
 
 from lyra_app.db.connection import ApplicationDatabaseRuntime
 
 
-def get_database_runtime(request: Request) -> ApplicationDatabaseRuntime | None:
-    """Read the optional application database runtime from FastAPI state.
+def require_database_runtime(app: FastAPI) -> ApplicationDatabaseRuntime:
+    """Return the configured application database runtime.
 
-    Returns:
-        The managed runtime, or ``None`` when the application has none.
+    Raises:
+        RuntimeError: If application construction did not supply a runtime.
     """
-    database = getattr(request.app.state, "database", None)
+    database = getattr(app.state, "database", None)
     if database is None:
-        return None
+        msg = "Application database runtime is unavailable."
+        raise RuntimeError(msg)
     return cast("ApplicationDatabaseRuntime", database)
 
 
+def get_database_runtime(request: Request) -> ApplicationDatabaseRuntime:
+    """Return the database runtime owned by the request's application."""
+    return require_database_runtime(request.app)
+
+
 DatabaseRuntimeDependency = Annotated[
-    ApplicationDatabaseRuntime | None,
+    ApplicationDatabaseRuntime,
     Depends(get_database_runtime),
 ]

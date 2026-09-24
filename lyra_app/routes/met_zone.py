@@ -25,14 +25,10 @@ async def get_met_zone_code(
         The canonical metropolitan-zone code and official name.
 
     Raises:
-        RuntimeError: If the application database runtime is unavailable.
         SQLAlchemyError: If a non-availability database error occurs.
         HTTPException: If the database is temporarily unavailable or no zone
             matches the name.
     """
-    if database is None:
-        msg = "Application database runtime is unavailable."
-        raise RuntimeError(msg)
     try:
         async with database.require_async_engine().connect() as connection:
             result = await get_met_zone_code_from_name_async(name, conn=connection)

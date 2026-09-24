@@ -46,3 +46,11 @@ state.
 API and worker processes deliberately have different trust boundaries. A valid
 catalog entry proves a manifest is readable; it does not prove a worker can
 install or execute the plugin.
+
+The API owns one database runtime, starts it during application lifespan, and
+closes it during shutdown or startup failure. REST dependencies and the in-process
+MCP backend receive that same runtime explicitly. Spatial resolution uses its
+bounded executor and an engine-bound converter map; there is no global converter
+fallback. Explicit GeoJSON inputs follow this execution path without opening a
+database connection. Tests that construct applications or submit jobs directly
+must supply the runtime; standalone MCP transport tests supply a backend.

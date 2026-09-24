@@ -19,6 +19,7 @@ from lyra_app.config import (
     initialize_runtime_config,
 )
 from lyra_app.db.connection import ApplicationDatabaseRuntime
+from lyra_app.db.dependencies import require_database_runtime
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 from lyra_app.version import APP_VERSION
@@ -37,10 +38,9 @@ async def lifespan(app: FastAPI) -> AsyncGeneratorType:
     Yields:
         Control to FastAPI while all configured application resources are active.
     """
-    database = getattr(app.state, "database", None)
-    if database is not None:
-        await database.start()
+    database = require_database_runtime(app)
     try:
+        await database.start()
         start_worker_inspect_collector()
         try:
             async with AsyncExitStack() as stack:
@@ -54,8 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGeneratorType:
             await stop_worker_inspect_collector()
             logger.info("Shutting down worker inspect collector.")
     finally:
-        if database is not None:
-            await database.close()
+        await database.close()
 
 
 def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:
@@ -104,10 +103,11 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     app.include_router(met_zone.router)
     if config.mcp.enabled:
         mcp_module = import_module("lyra_app.mcp")
+        mcp_tools = import_module("lyra_app.mcp.tools")
         mcp_app = mcp_module.create_mcp_app(
             agent_api_key=config.agent.read_api_key(),
             public_api_base_url=config.api.public_base_url,
-            database=app.state.database,
+            backend=mcp_tools.InProcessLyraBackend(app.state.database),
         )
         app.state.mcp_app = mcp_app
         app.mount(config.mcp.mount_path, mcp_app)

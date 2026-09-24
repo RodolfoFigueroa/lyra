@@ -23,6 +23,7 @@ from lyra_app.config import (
     get_config_path,
     initialize_runtime_config,
 )
+from lyra_app.db.connection import ApplicationDatabaseRuntime
 from lyra_app.main import catalog_unavailable_response
 from lyra_app.mcp.tools import InProcessLyraBackend, ToolCallError
 from lyra_app.plugin_runtime import read_snapshot, snapshot_path
@@ -203,7 +204,7 @@ def test_saved_edits_do_not_change_loaded_config_or_registry(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("operation", ["list", "detail", "submit"])
 def test_mcp_reports_unavailable_startup_catalog(operation: str) -> None:
-    backend = InProcessLyraBackend()
+    backend = InProcessLyraBackend(ApplicationDatabaseRuntime(get_config()))
     if operation == "list":
         request = backend.get_metrics()
     elif operation == "detail":
@@ -218,6 +219,7 @@ def test_mcp_reports_unavailable_startup_catalog(operation: str) -> None:
 
 def test_public_catalog_and_submissions_are_unavailable_without_startup() -> None:
     app = FastAPI()
+    app.state.database = ApplicationDatabaseRuntime(get_config())
     app.add_exception_handler(
         registry.CatalogUnavailableError, catalog_unavailable_response
     )

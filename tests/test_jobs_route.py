@@ -1,13 +1,14 @@
 import asyncio
 import importlib
 import json
-import sys
-from collections.abc import Callable, Iterator, MutableMapping
+from collections.abc import Iterator, MutableMapping
 from copy import deepcopy
 from pathlib import Path
+from threading import Event, current_thread
 from types import SimpleNamespace
-from typing import Any, ParamSpec, TypeVar, cast
+from typing import Any, cast
 
+import geopandas
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -22,19 +23,22 @@ from lyra.sdk.models.job import (
 )
 from lyra.sdk.models.metric import MetricCatalogResponse
 from lyra.sdk.types import JsonValue
+from lyra.utils.geometry import convert_geojson_to_gdf
 from redis.exceptions import RedisError
+from sqlalchemy import Connection, create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from lyra_app import job_store, job_submission, registry
 from lyra_app.config import clear_config_cache, get_config
-from lyra_app.mcp.tools import InProcessLyraBackend
+from lyra_app.converters import location
+from lyra_app.converters import map as converter_map
+from lyra_app.db import connection
+from lyra_app.db.connection import ApplicationDatabaseRuntime
+from lyra_app.mcp.tools import InProcessLyraBackend, ToolCallError
 from lyra_app.plugins import MANIFEST_FILENAME, PluginRepoEntry, SyncedPluginRepo
 from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
-
-Parameters = ParamSpec("Parameters")
-ReturnT = TypeVar("ReturnT")
 
 
 def _job_transition_error(current: str | None, guard: str) -> str | None:
@@ -164,31 +168,22 @@ def _spatial_payload(
     }
 
 
-def _patch_converter_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    def convert_cvegeos(cvegeos: list[str]) -> GeoJSON:
+def _patch_spatial_loaders(monkeypatch: pytest.MonkeyPatch) -> None:
+    def load_cvegeos(cvegeos: list[str], *, conn: Connection) -> geopandas.GeoDataFrame:
         assert cvegeos == ["090020001"]
-        return GeoJSON.model_validate(_feature_collection("cvegeo-area"))
+        assert not conn.closed
+        return convert_geojson_to_gdf(
+            GeoJSON.model_validate(_feature_collection("cvegeo-area"))
+        ).to_crs("EPSG:6372")
 
-    def convert_met_zone(code: str) -> GeoJSON:
-        return GeoJSON.model_validate(_feature_collection(f"met-{code}"))
+    def load_met_zone(code: str, *, conn: Connection) -> geopandas.GeoDataFrame:
+        assert not conn.closed
+        return convert_geojson_to_gdf(
+            GeoJSON.model_validate(_feature_collection(f"met-{code}"))
+        ).to_crs("EPSG:6372")
 
-    converter_map = {
-        "location": {
-            "geojson": lambda geojson: geojson,
-            "cvegeo_list": convert_cvegeos,
-            "met_zone_code": convert_met_zone,
-        },
-        "bounds": {
-            "geojson": lambda geojson: geojson,
-            "cvegeo_list": convert_cvegeos,
-            "met_zone_code": convert_met_zone,
-        },
-    }
-    monkeypatch.setitem(
-        sys.modules,
-        "lyra_app.converters",
-        SimpleNamespace(converter_map=converter_map),
-    )
+    monkeypatch.setattr(location, "load_geometries_from_cvegeos", load_cvegeos)
+    monkeypatch.setattr(location, "load_geometries_from_met_zone_code", load_met_zone)
 
 
 class FakeRedisAsync:
@@ -477,18 +472,8 @@ class FakeAsyncPath:
 
 @pytest.fixture(autouse=True)
 def reset_catalog(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> Iterator[None]:
-    async def run_inline(  # ruff: ignore[unused-async] -- to_thread test double
-        func: Callable[Parameters, ReturnT],
-        /,
-        *args: Parameters.args,
-        **kwargs: Parameters.kwargs,
-    ) -> ReturnT:
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(job_submission.asyncio, "to_thread", run_inline)
     registry.reset_catalog()
     load_test_config(
         tmp_path,
@@ -500,6 +485,25 @@ def reset_catalog(
     yield
     registry.reset_catalog()
     clear_config_cache()
+
+
+@pytest.fixture
+def database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[ApplicationDatabaseRuntime]:
+    monkeypatch.setattr(
+        connection,
+        "create_sync_database_engine",
+        lambda *_: create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}
+        ),
+    )
+    runtime = ApplicationDatabaseRuntime(get_config())
+    asyncio.run(runtime.start())
+    try:
+        yield runtime
+    finally:
+        asyncio.run(runtime.close())
 
 
 def _use_repo(
@@ -525,6 +529,7 @@ def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis: FakeRedisAsync) -> None
         return snapshot
 
     monkeypatch.setattr(jobs, "redis_client", redis)
+    monkeypatch.setattr(job_submission, "redis_client", redis)
     monkeypatch.setattr(jobs.job_store, "redis_client", redis)
     monkeypatch.setattr(jobs, "reconcile_celery_failure", keep_current_status)
 
@@ -601,10 +606,12 @@ def test_job_lifecycle_routes_accept_agent_bearer_token(
     method: str,
     path: str,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _patch_redis(monkeypatch, FakeRedisAsync())
     monkeypatch.setattr(job_submission, "get_metric_entry", lambda _metric: None)
     app = FastAPI()
+    app.state.database = database
     app.include_router(jobs.router)
 
     response = asyncio.run(
@@ -747,14 +754,29 @@ async def _file_response_body(response: FileResponse) -> bytes:
 def test_create_job_dispatches_generic_task_to_state_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
+
+    threads: list[str] = []
+
+    def convert_geojson(geojson: GeoJSON) -> GeoJSON:
+        threads.append(current_thread().name)
+        return location.load_from_geojson(geojson)
+
+    def unexpected_connection() -> None:
+        pytest.fail("GeoJSON submission must not open a database connection")
+
+    monkeypatch.setattr(converter_map, "load_location_from_geojson", convert_geojson)
+    monkeypatch.setattr(
+        database.require_spatial_engine(), "connect", unexpected_connection
+    )
 
     response = asyncio.run(
         jobs.create_job(
@@ -762,7 +784,8 @@ def test_create_job_dispatches_generic_task_to_state_queue(
                 metric="heavy_metric",
                 input=_spatial_payload(),
                 idempotency_key="key-1",
-            )
+            ),
+            database=database,
         )
     )
 
@@ -800,10 +823,14 @@ def test_create_job_dispatches_generic_task_to_state_queue(
     provenance = json.loads(redis.values[job_store.provenance_key("job-1")])
     assert provenance["row_identity"] == {"field": "id"}
 
+    assert len(threads) == 1
+    assert threads[0].startswith("lyra-spatial")
+
 
 def test_create_area_job_dispatches_server_calculated_location_areas(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     manifest = deepcopy(_manifest())
     column = manifest["metrics"][0]["output"]["columns"][0]
@@ -825,7 +852,7 @@ def test_create_area_job_dispatches_server_calculated_location_areas(
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-area"))
     monkeypatch.setattr(
@@ -836,7 +863,8 @@ def test_create_area_job_dispatches_server_calculated_location_areas(
 
     response = asyncio.run(
         jobs.create_job(
-            JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+            JobCreateRequest(metric="heavy_metric", input=_spatial_payload()),
+            database=database,
         )
     )
 
@@ -847,6 +875,7 @@ def test_create_area_job_dispatches_server_calculated_location_areas(
 def test_create_area_job_rejects_location_without_surface(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     def reject_location(_location: GeoJSON) -> dict[str, float]:
         error = "polygon required"
@@ -872,7 +901,7 @@ def test_create_area_job_rejects_location_without_surface(
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(
         job_submission,
@@ -883,7 +912,8 @@ def test_create_area_job_rejects_location_without_surface(
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             jobs.create_job(
-                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+                JobCreateRequest(metric="heavy_metric", input=_spatial_payload()),
+                database=database,
             )
         )
 
@@ -913,12 +943,13 @@ def test_canonical_request_fingerprint_ignores_nested_mapping_order() -> None:
 def test_create_job_reuses_equivalent_idempotent_submission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     job_ids = iter(["job-1", "job-2"])
     monkeypatch.setattr(
@@ -932,8 +963,18 @@ def test_create_job_reuses_equivalent_idempotent_submission(
         idempotency_key="retry-key",
     )
 
-    first = asyncio.run(jobs.create_job(request))
-    replay = asyncio.run(jobs.create_job(request))
+    first = asyncio.run(
+        jobs.create_job(
+            request,
+            database=database,
+        )
+    )
+    replay = asyncio.run(
+        jobs.create_job(
+            request,
+            database=database,
+        )
+    )
 
     assert first.job_id == replay.job_id == "job-1"
     assert first.reused is False
@@ -951,12 +992,13 @@ def test_create_job_reuses_equivalent_idempotent_submission(
 def test_concurrent_equivalent_submissions_dispatch_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = ConcurrentFakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     job_ids = iter(["job-1", "job-2"])
     monkeypatch.setattr(
@@ -972,8 +1014,14 @@ def test_concurrent_equivalent_submissions_dispatch_once(
 
     async def submit_both() -> tuple[Any, Any]:
         first, second = await asyncio.gather(
-            jobs.create_job(request),
-            jobs.create_job(request),
+            jobs.create_job(
+                request,
+                database=database,
+            ),
+            jobs.create_job(
+                request,
+                database=database,
+            ),
         )
         return first, second
 
@@ -987,12 +1035,13 @@ def test_concurrent_equivalent_submissions_dispatch_once(
 def test_create_job_rejects_conflicting_idempotency_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     job_ids = iter(["job-1", "job-2"])
     monkeypatch.setattr(
@@ -1006,7 +1055,8 @@ def test_create_job_rejects_conflicting_idempotency_key(
                 metric="heavy_metric",
                 input=_spatial_payload(),
                 idempotency_key="conflict-key",
-            )
+            ),
+            database=database,
         )
     )
 
@@ -1017,7 +1067,8 @@ def test_create_job_rejects_conflicting_idempotency_key(
                     metric="heavy_metric",
                     input={**_spatial_payload(), "value": 4},
                     idempotency_key="conflict-key",
-                )
+                ),
+                database=database,
             )
         )
 
@@ -1034,12 +1085,13 @@ def test_create_job_rejects_conflicting_idempotency_key(
 def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     get_config().agent_submission_limit.limit = 1
     get_config().agent_submission_limit.window_seconds = 23
@@ -1055,8 +1107,18 @@ def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
         idempotency_key="accepted-key",
     )
 
-    accepted = asyncio.run(jobs.create_job(request))
-    replay = asyncio.run(jobs.create_job(request))
+    accepted = asyncio.run(
+        jobs.create_job(
+            request,
+            database=database,
+        )
+    )
+    replay = asyncio.run(
+        jobs.create_job(
+            request,
+            database=database,
+        )
+    )
     with pytest.raises(HTTPException) as conflict_info:
         asyncio.run(
             jobs.create_job(
@@ -1064,7 +1126,8 @@ def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
                     metric="heavy_metric",
                     input={**_spatial_payload(), "value": 4},
                     idempotency_key="accepted-key",
-                )
+                ),
+                database=database,
             )
         )
     with pytest.raises(HTTPException) as limited_info:
@@ -1074,7 +1137,8 @@ def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
                     metric="heavy_metric",
                     input=_spatial_payload(),
                     idempotency_key="rejected-key",
-                )
+                ),
+                database=database,
             )
         )
 
@@ -1100,12 +1164,13 @@ def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
 def test_rest_and_mcp_submissions_share_one_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(job_submission, "redis_client", redis)
     celery_module = importlib.import_module("lyra_app.celery_app")
@@ -1122,11 +1187,14 @@ def test_rest_and_mcp_submissions_share_one_limit(
 
     rest_response = asyncio.run(
         jobs.create_job(
-            JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+            JobCreateRequest(metric="heavy_metric", input=_spatial_payload()),
+            database=database,
         )
     )
     mcp_response = asyncio.run(
-        InProcessLyraBackend().create_job(
+        InProcessLyraBackend(
+            database,
+        ).create_job(
             "heavy_metric",
             _spatial_payload(data_type="met_zone_code", value="09.01"),
         )
@@ -1134,7 +1202,8 @@ def test_rest_and_mcp_submissions_share_one_limit(
     with pytest.raises(HTTPException) as limited_info:
         asyncio.run(
             jobs.create_job(
-                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+                JobCreateRequest(metric="heavy_metric", input=_spatial_payload()),
+                database=database,
             )
         )
 
@@ -1152,12 +1221,13 @@ def test_rest_and_mcp_submissions_share_one_limit(
 def test_dispatch_failure_releases_idempotency_reservation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FailOnceCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     job_ids = iter(["job-1", "job-2"])
     monkeypatch.setattr(
@@ -1172,8 +1242,18 @@ def test_dispatch_failure_releases_idempotency_reservation(
     )
 
     with pytest.raises(RuntimeError, match="dispatch failed"):
-        asyncio.run(jobs.create_job(request))
-    recovered = asyncio.run(jobs.create_job(request))
+        asyncio.run(
+            jobs.create_job(
+                request,
+                database=database,
+            )
+        )
+    recovered = asyncio.run(
+        jobs.create_job(
+            request,
+            database=database,
+        )
+    )
 
     assert recovered.job_id == "job-2"
     assert recovered.reused is False
@@ -1183,13 +1263,17 @@ def test_dispatch_failure_releases_idempotency_reservation(
 
 def test_create_job_rejects_unknown_metric(
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _patch_redis(monkeypatch, FakeRedisAsync())
     configure_catalog_sources([])
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
-            jobs.create_job(JobCreateRequest(metric="missing", input={"value": 3}))
+            jobs.create_job(
+                JobCreateRequest(metric="missing", input={"value": 3}),
+                database=database,
+            )
         )
 
     assert exc_info.value.status_code == 404
@@ -1198,12 +1282,18 @@ def test_create_job_rejects_unknown_metric(
 def test_create_job_rejects_invalid_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync())
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(jobs.create_job(JobCreateRequest(metric="heavy_metric", input={})))
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input={}),
+                database=database,
+            )
+        )
 
     assert exc_info.value.status_code == 422
 
@@ -1211,6 +1301,7 @@ def test_create_job_rejects_invalid_input(
 def test_create_job_rejects_duplicate_batch_keys_before_queueing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch, manifest=_batched_manifest())
     redis = FakeRedisAsync()
@@ -1233,7 +1324,8 @@ def test_create_job_rejects_duplicate_batch_keys_before_queueing(
                             {"key": "retail", "value": "^47.*"},
                         ],
                     },
-                )
+                ),
+                database=database,
             )
         )
 
@@ -1253,6 +1345,7 @@ def test_create_job_rejects_duplicate_batch_keys_before_queueing(
 def test_create_job_rejects_raw_geojson_spatial_field(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync())
@@ -1263,7 +1356,8 @@ def test_create_job_rejects_raw_geojson_spatial_field(
                 JobCreateRequest(
                     metric="heavy_metric",
                     input={"location": _feature_collection(), "value": 3},
-                )
+                ),
+                database=database,
             )
         )
 
@@ -1273,12 +1367,13 @@ def test_create_job_rejects_raw_geojson_spatial_field(
 def test_create_job_resolves_cvegeo_list_spatial_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
 
@@ -1290,23 +1385,31 @@ def test_create_job_resolves_cvegeo_list_spatial_input(
                     data_type="cvegeo_list",
                     value=["090020001"],
                 ),
-            )
+            ),
+            database=database,
         )
     )
 
     dispatched_input = celery.sent[0]["args"][0]["input"]
-    assert dispatched_input["location"] == _feature_collection("cvegeo-area")
+    assert dispatched_input["location"] == json.loads(
+        convert_geojson_to_gdf(
+            GeoJSON.model_validate(_feature_collection("cvegeo-area"))
+        )
+        .to_crs("EPSG:6372")
+        .to_json()
+    )
 
 
 def test_create_job_resolves_met_zone_code_spatial_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", celery)
     monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
 
@@ -1318,12 +1421,17 @@ def test_create_job_resolves_met_zone_code_spatial_input(
                     data_type="met_zone_code",
                     value="09.01",
                 ),
-            )
+            ),
+            database=database,
         )
     )
 
     dispatched_input = celery.sent[0]["args"][0]["input"]
-    assert dispatched_input["location"] == _feature_collection("met-09.01")
+    assert dispatched_input["location"] == json.loads(
+        convert_geojson_to_gdf(GeoJSON.model_validate(_feature_collection("met-09.01")))
+        .to_crs("EPSG:6372")
+        .to_json()
+    )
     provenance = json.loads(redis.values[job_store.provenance_key("job-1")])
     entry = registry.get_metric_entry("heavy_metric")
     assert entry is not None
@@ -1346,11 +1454,12 @@ def test_create_job_resolves_met_zone_code_spatial_input(
 def test_stored_provenance_survives_catalog_refresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     redis = FakeRedisAsync()
     _patch_redis(monkeypatch, redis)
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
     monkeypatch.setattr(jobs, "celery_app", FakeCelery())
     monkeypatch.setattr(jobs, "uuid4", lambda: SimpleNamespace(hex="job-1"))
 
@@ -1362,7 +1471,8 @@ def test_stored_provenance_survives_catalog_refresh(
                     data_type="met_zone_code",
                     value="09.01",
                 ),
-            )
+            ),
+            database=database,
         )
     )
     stored = redis.values[job_store.provenance_key("job-1")]
@@ -1407,10 +1517,11 @@ def test_stored_provenance_survives_catalog_refresh(
 def test_create_job_rejects_invalid_cvegeo_list(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync())
-    _patch_converter_map(monkeypatch)
+    _patch_spatial_loaders(monkeypatch)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -1418,7 +1529,8 @@ def test_create_job_rejects_invalid_cvegeo_list(
                 JobCreateRequest(
                     metric="heavy_metric",
                     input=_spatial_payload(data_type="cvegeo_list", value=["1"]),
-                )
+                ),
+                database=database,
             )
         )
 
@@ -1428,51 +1540,61 @@ def test_create_job_rejects_invalid_cvegeo_list(
 def test_create_job_returns_503_when_spatial_resolution_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync())
+    database.config.database.retry_after_seconds = 17
 
-    def fail_resolution(geojson: GeoJSON) -> GeoJSON:  # ruff:ignore[unused-function-argument]
+    def fail_resolution(_code: str, *, conn: Connection) -> geopandas.GeoDataFrame:
+        assert not conn.closed
         raise SQLAlchemyError
 
-    converter_map = {
-        "location": {
-            "geojson": fail_resolution,
-            "cvegeo_list": fail_resolution,
-            "met_zone_code": fail_resolution,
-        },
-        "bounds": {
-            "geojson": fail_resolution,
-            "cvegeo_list": fail_resolution,
-            "met_zone_code": fail_resolution,
-        },
-    }
-    monkeypatch.setitem(
-        sys.modules,
-        "lyra_app.converters",
-        SimpleNamespace(converter_map=converter_map),
-    )
+    monkeypatch.setattr(location, "load_geometries_from_met_zone_code", fail_resolution)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             jobs.create_job(
-                JobCreateRequest(metric="heavy_metric", input=_spatial_payload())
+                JobCreateRequest(
+                    metric="heavy_metric",
+                    input=_spatial_payload(data_type="met_zone_code", value="09.01"),
+                ),
+                database=database,
             )
         )
 
     assert exc_info.value.status_code == 503
+    assert exc_info.value.headers == {"Retry-After": "17"}
+    assert exc_info.value.detail == {
+        "code": "database_unavailable",
+        "message": "The spatial database is temporarily unavailable.",
+        "retryable": True,
+    }
+    with pytest.raises(ToolCallError) as mcp_error:
+        asyncio.run(
+            InProcessLyraBackend(database).create_job(
+                "heavy_metric",
+                _spatial_payload(data_type="met_zone_code", value="09.01"),
+            )
+        )
+    assert mcp_error.value.code == "database_unavailable"
+    assert mcp_error.value.details == {"retryable": True, "retry_after_seconds": 17}
 
 
 def test_create_job_returns_503_when_redis_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FakeRedisAsync(available=False))
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
-            jobs.create_job(JobCreateRequest(metric="heavy_metric", input={"value": 3}))
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input={"value": 3}),
+                database=database,
+            )
         )
 
     assert exc_info.value.status_code == 503
@@ -1481,13 +1603,17 @@ def test_create_job_returns_503_when_redis_unavailable(
 def test_create_job_returns_503_when_redis_ping_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
 ) -> None:
     _use_repo(tmp_path, monkeypatch)
     _patch_redis(monkeypatch, FailingPingRedisAsync())
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
-            jobs.create_job(JobCreateRequest(metric="heavy_metric", input={"value": 3}))
+            jobs.create_job(
+                JobCreateRequest(metric="heavy_metric", input={"value": 3}),
+                database=database,
+            )
         )
 
     assert exc_info.value.status_code == 503
@@ -2022,3 +2148,81 @@ def test_job_result_download_returns_404_when_file_is_missing(
         asyncio.run(jobs.download_job_result("job-1"))
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize("transport", ["rest", "mcp"])
+def test_submission_rejects_saturated_spatial_executor(
+    transport: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
+) -> None:
+    _use_repo(tmp_path, monkeypatch)
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    database.config.database.spatial.pool_timeout_seconds = 0.01
+    database.config.database.retry_after_seconds = 17
+    release = Event()
+    entered = [Event() for _ in range(database.config.database.spatial.pool_size)]
+
+    def occupy_worker(started: Event) -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    async def exercise() -> None:
+        tasks = [
+            asyncio.create_task(database.run_spatial(occupy_worker, started))
+            for started in entered
+        ]
+        try:
+            for started in entered:
+                assert await asyncio.to_thread(started.wait, 2)
+            if transport == "rest":
+                with pytest.raises(HTTPException) as rest_error:
+                    await jobs.create_job(
+                        JobCreateRequest(
+                            metric="heavy_metric",
+                            input=_spatial_payload(),
+                            idempotency_key="capacity-key",
+                        ),
+                        database=database,
+                    )
+                assert rest_error.value.status_code == 503
+                assert rest_error.value.headers == {"Retry-After": "17"}
+                assert rest_error.value.detail == {
+                    "code": "database_unavailable",
+                    "message": "The spatial database is temporarily unavailable.",
+                    "retryable": True,
+                }
+            else:
+                with pytest.raises(ToolCallError) as mcp_error:
+                    await InProcessLyraBackend(database).create_job(
+                        "heavy_metric",
+                        _spatial_payload(),
+                        idempotency_key="capacity-key",
+                    )
+                assert mcp_error.value.code == "database_unavailable"
+                assert mcp_error.value.details == {
+                    "retryable": True,
+                    "retry_after_seconds": 17,
+                }
+        finally:
+            release.set()
+            await asyncio.gather(*tasks)
+
+    asyncio.run(exercise())
+    assert not celery.sent
+    assert not redis.values
+
+
+def test_authenticated_submission_requires_application_database() -> None:
+    app = FastAPI()
+    app.include_router(jobs.router)
+    with pytest.raises(
+        RuntimeError, match="Application database runtime is unavailable"
+    ):
+        asyncio.run(
+            _request_app(app, "POST", "/jobs", authorization="Bearer agent-secret")
+        )

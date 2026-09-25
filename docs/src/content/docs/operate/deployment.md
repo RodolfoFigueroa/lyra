@@ -41,7 +41,7 @@ importing plugin Python code; workers import factories for plugins serving their
 queues and check the live definition against its manifest.
 
 Each worker launcher receives a name from `[workers.<name>]`, which controls queues
-and concurrency. Before loading plugins or starting Celery, each worker probes
+and concurrency. Before loading plugins or starting RQ, each worker probes
 PostGIS with `SELECT 1`. A failed probe terminates startup. Metric execution engines
 are created inside worker processes; later database outages produce retryable
 `database_unavailable` job failures.
@@ -60,7 +60,7 @@ manifests live in the image's Python environment below
 
 ## Plugin configuration
 
-Configuration uses `schema_version = 3`:
+Configuration uses `schema_version = 4`:
 
 ```toml
 [[plugins.installed]]

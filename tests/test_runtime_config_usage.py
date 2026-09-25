@@ -4,16 +4,14 @@ from pathlib import Path
 from typing import TypedDict
 
 import pytest
-from lyra.sdk.models.job import JobEnvelope
 
-from lyra_app import auth, job_store
+from lyra_app import auth
 from lyra_app.config import LyraConfig, clear_config_cache, get_config
 from lyra_app.db.connection import database_url
 from lyra_app.db.redis import get_redis_url
 from lyra_app.logging_config import configure_logging
 from tests.config_helpers import load_test_config
 from tests.config_serialization import save_config
-from tests.redis_job_scripts import eval_job_script
 
 
 class _FakeCredentialsValue:
@@ -25,36 +23,6 @@ class _EarthEngineCalls(TypedDict, total=False):
     scopes: list[str]
     credentials: _FakeCredentialsValue
     project: str
-
-
-class FakeRedisSync:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.expirations: list[tuple[str, int]] = []
-        self.sorted_sets: dict[str, dict[str, float]] = {}
-
-    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
-        if nx and key in self.values:
-            return
-        self.values[key] = value
-        self.expirations.append((key, ex))
-
-    def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    def expire(self, key: str, ttl: int) -> None:
-        self.expirations.append((key, ttl))
-
-    def zadd(self, key: str, mapping: dict[str, float]) -> None:
-        self.sorted_sets.setdefault(key, {}).update(mapping)
-
-    def eval(
-        self,
-        script: str,
-        numkeys: int,
-        *keys_and_args: str | float,
-    ) -> int | str:
-        return eval_job_script(self, numkeys, keys_and_args, script)
 
 
 def _reload_test_config(config: LyraConfig, config_path: Path) -> None:
@@ -167,31 +135,3 @@ def test_configure_logging_uses_configured_level_and_file(tmp_path: Path) -> Non
         logger.handlers = original_handlers
         logger.setLevel(original_level)
         logger.propagate = original_propagate
-
-
-def test_job_store_uses_configured_ttl_seconds(tmp_path: Path) -> None:
-    config = load_test_config(tmp_path)
-    config_path = tmp_path / "config" / "lyra.toml"
-    ttl_seconds = 123
-    config = config.model_copy(
-        update={
-            "job_store": config.job_store.model_copy(
-                update={"result_retention_seconds": ttl_seconds}
-            )
-        }
-    )
-    _reload_test_config(config, config_path)
-    redis = FakeRedisSync()
-
-    try:
-        job_store.create_job(
-            JobEnvelope(job_id="job-ttl", metric="heavy_metric", input={"value": 1}),
-            client=redis,
-        )
-
-        assert not redis.expirations
-        job_store.cancel_job("job-ttl", client=redis)
-        assert redis.expirations
-        assert all(ttl == ttl_seconds for _key, ttl in redis.expirations)
-    finally:
-        clear_config_cache()

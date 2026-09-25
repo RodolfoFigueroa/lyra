@@ -65,15 +65,3 @@ class RunContext(Protocol):
 
         """
         ...
-
-    def check_cancelled(self) -> None:
-        """Raise when cancellation has been requested for the current job.
-
-        Plugins should call this method around expensive or repeated stages so
-        cancellation remains cooperative and responsive.
-
-        Raises:
-            RuntimeError: If the current job has been cancelled.
-
-        """
-        ...

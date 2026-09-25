@@ -10,13 +10,11 @@ from lyra_app.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
     DEFAULT_MCP_MOUNT_PATH,
-    AgentSubmissionLimitConfig,
     ApiConfig,
     DatabaseConfig,
     DatabasePoolConfig,
     EarthEngineConfig,
-    JobProgressConfig,
-    JobStoreConfig,
+    JobsConfig,
     LoggingConfig,
     LyraConfig,
     McpConfig,
@@ -133,31 +131,10 @@ def _append_mcp_section(lines: list[str], mcp: McpConfig) -> None:
     lines.append("")
 
 
-def _append_job_store_section(lines: list[str], job_store: JobStoreConfig) -> None:
-    lines.append("[job_store]")
-    _append_key(lines, "result_retention_seconds", job_store.result_retention_seconds)
-    lines.append("")
-
-
-def _append_job_progress_section(
-    lines: list[str], job_progress: JobProgressConfig
-) -> None:
-    lines.append("[job_progress]")
-    _append_key(
-        lines,
-        "min_interval_ms",
-        job_progress.min_interval_ms,
-    )
-    lines.append("")
-
-
-def _append_agent_submission_limit_section(
-    lines: list[str],
-    submission_limit: AgentSubmissionLimitConfig,
-) -> None:
-    lines.append("[agent_submission_limit]")
-    _append_key(lines, "limit", submission_limit.limit)
-    _append_key(lines, "window_seconds", submission_limit.window_seconds)
+def _append_jobs_section(lines: list[str], jobs: JobsConfig) -> None:
+    lines.append("[jobs]")
+    for key, value in jobs.model_dump().items():
+        _append_key(lines, key, value)
     lines.append("")
 
 
@@ -202,16 +179,14 @@ def render_config_toml(config: LyraConfig) -> str:
     Returns:
         A deterministic TOML document ending in a newline.
     """
-    lines: list[str] = ["schema_version = 3", ""]
+    lines: list[str] = ["schema_version = 4", ""]
     _append_api_section(lines, config.api)
     _append_redis_section(lines, config.redis)
     _append_database_section(lines, config.database)
     _append_earth_engine_section(lines, config.earth_engine)
     _append_mcp_section(lines, config.mcp)
     _append_logging_section(lines, config.logging)
-    _append_job_store_section(lines, config.job_store)
-    _append_job_progress_section(lines, config.job_progress)
-    _append_agent_submission_limit_section(lines, config.agent_submission_limit)
+    _append_jobs_section(lines, config.jobs)
     _append_plugins_section(lines, config.plugins)
     _append_workers_section(lines, config.workers)
     return "\n".join(lines).rstrip() + "\n"

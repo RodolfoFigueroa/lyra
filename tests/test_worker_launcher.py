@@ -1,163 +1,66 @@
-from __future__ import annotations
-
-import sys
-from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from rq.serializers import JSONSerializer
 
 from lyra_app import worker_launcher
-from lyra_app.config import LyraConfig, WorkerConfig, clear_config_cache
 from tests.config_helpers import load_test_config
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-    from pathlib import Path
 
-
-@pytest.fixture(autouse=True)
-def _clear_config_cache() -> Iterator[None]:
-    clear_config_cache()
-    yield
-    clear_config_cache()
-
-
-def _local_worker_dirs(config: LyraConfig, base: Path) -> LyraConfig:
-    workers: dict[str, WorkerConfig] = {}
-    for worker_name, worker in config.workers.items():
-        workers[worker_name] = worker.model_copy(
-            update={
-                "temp_dir": base / "cache" / "jobs" / worker_name,
-            },
-        )
-    return config.model_copy(update={"workers": workers})
-
-
-def test_build_celery_worker_args_uses_toml_worker_settings(tmp_path: Path) -> None:
-    config = _local_worker_dirs(load_test_config(tmp_path), tmp_path)
-    interactive = config.get_worker("interactive").model_copy(
-        update={"queues": ["interactive", "priority-lane"], "concurrency": 7},
-    )
-    config = config.model_copy(
-        update={"workers": {**config.workers, "interactive": interactive}},
-    )
-
-    assert worker_launcher.build_celery_worker_args(config, "interactive") == [
-        "worker",
-        "--hostname",
-        "interactive@%h",
-        "--loglevel",
-        "INFO",
-        "--concurrency",
-        "7",
-        "-Q",
-        "interactive,priority-lane",
-    ]
-
-
-def test_main_reports_unknown_worker_name(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+def test_launcher_initializes_and_runs_native_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    load_test_config(tmp_path)
-
-    with pytest.raises(SystemExit) as exc_info:
-        worker_launcher.main(["missing"])
-
-    assert exc_info.value.code == 2
-    assert "unknown worker config: missing" in capsys.readouterr().err
-
-
-def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _local_worker_dirs(load_test_config(tmp_path), tmp_path)
-    launched: list[list[str]] = []
-    refreshed: list[tuple[str, LyraConfig]] = []
-    earth_engine_configs: list[LyraConfig] = []
-    database_probes: list[LyraConfig] = []
-
-    class FakeCelery:
-        def __init__(self) -> None:
-            self.conf: dict[str, str] = {}
-
-        @staticmethod
-        def worker_main(args: list[str]) -> None:
-            launched.append(args)
-
-    fake_celery = FakeCelery()
-
-    def configure_celery(config: LyraConfig) -> None:
-        fake_celery.conf.update(
-            broker_url=config.redis.url,
-            result_backend=config.redis.url,
-        )
-
-    def refresh_runner_registry(
-        worker_name: str,
-        *,
-        config: LyraConfig,
-    ) -> None:
-        refreshed.append((worker_name, config))
-
-    monkeypatch.setitem(
-        sys.modules,
-        "lyra_app.celery_app",
-        SimpleNamespace(celery_app=fake_celery, configure_celery=configure_celery),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "lyra_app.worker",
-        SimpleNamespace(refresh_runner_registry=refresh_runner_registry),
-    )
-    monkeypatch.setattr(
-        worker_launcher,
-        "initialize_earth_engine",
-        earth_engine_configs.append,
-    )
-    monkeypatch.setattr(
-        worker_launcher,
+    config = load_test_config(tmp_path)
+    config.workers["interactive"].concurrency = 5
+    pool = Mock()
+    pool_factory = Mock(return_value=pool)
+    calls = []
+    for name in [
+        "ensure_runtime_directories",
+        "configure_logging",
+        "configure_redis",
         "probe_worker_database",
-        database_probes.append,
-    )
-
-    worker_launcher.launch_worker("interactive", config=config)
-
-    assert fake_celery.conf == {
-        "broker_url": "redis://redis:6379/0",
-        "result_backend": "redis://redis:6379/0",
-    }
-    assert earth_engine_configs == [config]
-    assert database_probes == [config]
-    assert refreshed == [("interactive", config)]
-    assert launched == [worker_launcher.build_celery_worker_args(config, "interactive")]
-    assert (tmp_path / "cache" / "jobs" / "interactive").is_dir()
-    assert not (tmp_path / "secrets" / "generated_secret").exists()
-
-
-def test_launch_worker_stops_before_initialization_when_database_probe_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _local_worker_dirs(load_test_config(tmp_path), tmp_path)
-    earth_engine_configs: list[LyraConfig] = []
-
-    def fail_probe(_: LyraConfig) -> None:
-        msg = "database unavailable"
-        raise RuntimeError(msg)
-
-    monkeypatch.setattr(worker_launcher, "probe_worker_database", fail_probe)
-    monkeypatch.setattr(
-        worker_launcher,
         "initialize_earth_engine",
-        earth_engine_configs.append,
-    )
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        worker_launcher.launch_worker(
-            "interactive",
-            config=config,
+    ]:
+        monkeypatch.setattr(
+            worker_launcher, name, lambda _config, name=name: calls.append(name)
         )
+    refresh = Mock()
+    monkeypatch.setattr(worker_launcher, "refresh_runner_registry", refresh)
+    monkeypatch.setattr(worker_launcher, "WorkerPool", pool_factory)
+    worker_launcher.launch_worker("interactive", config=config)
+    assert calls == [
+        "ensure_runtime_directories",
+        "configure_logging",
+        "configure_redis",
+        "probe_worker_database",
+        "initialize_earth_engine",
+    ]
+    refresh.assert_called_once_with("interactive", config=config)
+    assert pool_factory.call_args.kwargs["num_workers"] == 5
+    assert pool_factory.call_args.kwargs["serializer"] is JSONSerializer
+    assert pool_factory.call_args.kwargs["worker_class"] is worker_launcher.JsonWorker
+    pool.start.assert_called_once_with(burst=False, logging_level="INFO")
 
-    assert earth_engine_configs == []
+
+def test_unknown_pool_exits_before_initialization(tmp_path: Path) -> None:
+    load_test_config(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        worker_launcher.main(["missing"])
+    assert error.value.code == 2
+
+
+def test_probe_failure_stops_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_test_config(tmp_path)
+    for worker in config.workers.values():
+        worker.temp_dir = tmp_path / "scratch"
+    probe = Mock(side_effect=RuntimeError("database unavailable"))
+    initialize = Mock()
+    monkeypatch.setattr(worker_launcher, "probe_worker_database", probe)
+    monkeypatch.setattr(worker_launcher, "initialize_earth_engine", initialize)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        worker_launcher.launch_worker("interactive", config=config)
+    initialize.assert_not_called()

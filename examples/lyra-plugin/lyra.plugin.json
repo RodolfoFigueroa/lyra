@@ -2,358 +2,6 @@
   "factory": "smoke_plugin.plugin:create_plugin",
   "metrics": [
     {
-      "description": "Emit progress and observe cancellation before returning.",
-      "name": "smoke_cancel_metric",
-      "output": {
-        "columns": [
-          {
-            "description": "Submitted value.",
-            "name": "value",
-            "nullable": false,
-            "type": "integer",
-            "unit": "count"
-          }
-        ],
-        "kind": "table"
-      },
-      "request_schema": {
-        "$defs": {
-          "CRS": {
-            "additionalProperties": false,
-            "description": "GeoJSON coordinate reference system object.",
-            "properties": {
-              "properties": {
-                "$ref": "#/$defs/CRSProperties",
-                "description": "CRS properties."
-              },
-              "type": {
-                "const": "name",
-                "description": "CRS object type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "properties"
-            ],
-            "title": "CRS",
-            "type": "object"
-          },
-          "CRSProperties": {
-            "additionalProperties": false,
-            "description": "Coordinate reference system properties.",
-            "properties": {
-              "name": {
-                "description": "CRS identifier such as EPSG:4326.",
-                "minLength": 1,
-                "title": "Name",
-                "type": "string"
-              }
-            },
-            "required": [
-              "name"
-            ],
-            "title": "CRSProperties",
-            "type": "object"
-          },
-          "CVEGEOList": {
-            "additionalProperties": false,
-            "description": "A list of same-level INEGI CVEGEO identifiers.",
-            "properties": {
-              "data_type": {
-                "const": "cvegeo_list",
-                "default": "cvegeo_list",
-                "title": "Data Type",
-                "type": "string"
-              },
-              "value": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Value",
-                "type": "array"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "title": "CVEGEOList",
-            "type": "object"
-          },
-          "Feature": {
-            "additionalProperties": false,
-            "description": "GeoJSON feature that may contain point, polygon, or multi-polygon geometry.",
-            "properties": {
-              "geometry": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/PointGeometry"
-                  },
-                  {
-                    "$ref": "#/$defs/PolygonGeometry"
-                  },
-                  {
-                    "$ref": "#/$defs/MultiPolygonGeometry"
-                  }
-                ],
-                "description": "Feature geometry.",
-                "title": "Geometry"
-              },
-              "id": {
-                "description": "Stable feature identifier.",
-                "minLength": 1,
-                "title": "Id",
-                "type": "string"
-              },
-              "properties": {
-                "additionalProperties": true,
-                "description": "Feature properties.",
-                "title": "Properties",
-                "type": "object"
-              },
-              "type": {
-                "const": "Feature",
-                "description": "GeoJSON feature type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "type",
-              "geometry",
-              "properties"
-            ],
-            "title": "Feature",
-            "type": "object"
-          },
-          "GeoJSON": {
-            "additionalProperties": false,
-            "description": "GeoJSON FeatureCollection accepted by explicit location inputs.",
-            "properties": {
-              "crs": {
-                "$ref": "#/$defs/CRS",
-                "description": "Coordinate reference system for all features."
-              },
-              "features": {
-                "description": "One or more GeoJSON features.",
-                "items": {
-                  "$ref": "#/$defs/Feature"
-                },
-                "minItems": 1,
-                "title": "Features",
-                "type": "array"
-              },
-              "type": {
-                "const": "FeatureCollection",
-                "description": "GeoJSON collection type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "features",
-              "crs"
-            ],
-            "title": "GeoJSON",
-            "type": "object"
-          },
-          "GeoJSONLocation": {
-            "additionalProperties": false,
-            "description": "A GeoJSON feature collection accepted as a location.",
-            "properties": {
-              "data_type": {
-                "const": "geojson",
-                "default": "geojson",
-                "title": "Data Type",
-                "type": "string"
-              },
-              "value": {
-                "$ref": "#/$defs/GeoJSON"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "title": "GeoJSONLocation",
-            "type": "object"
-          },
-          "MetZoneCode": {
-            "additionalProperties": false,
-            "description": "A metropolitan-zone code reference.",
-            "properties": {
-              "data_type": {
-                "const": "met_zone_code",
-                "default": "met_zone_code",
-                "title": "Data Type",
-                "type": "string"
-              },
-              "value": {
-                "minLength": 1,
-                "title": "Value",
-                "type": "string"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "title": "MetZoneCode",
-            "type": "object"
-          },
-          "MultiPolygonGeometry": {
-            "additionalProperties": false,
-            "description": "GeoJSON multi-polygon geometry.",
-            "properties": {
-              "coordinates": {
-                "description": "Multi-polygon rings and coordinate pairs.",
-                "items": {
-                  "items": {
-                    "items": {
-                      "items": {
-                        "type": "number"
-                      },
-                      "type": "array"
-                    },
-                    "type": "array"
-                  },
-                  "type": "array"
-                },
-                "title": "Coordinates",
-                "type": "array"
-              },
-              "type": {
-                "const": "MultiPolygon",
-                "description": "GeoJSON geometry type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "coordinates"
-            ],
-            "title": "MultiPolygonGeometry",
-            "type": "object"
-          },
-          "Parameters": {
-            "additionalProperties": false,
-            "description": "Parameters shared by the table and cancellation examples.",
-            "properties": {
-              "value": {
-                "description": "Value copied into each output row.",
-                "title": "Value",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "title": "Parameters",
-            "type": "object"
-          },
-          "PointGeometry": {
-            "additionalProperties": false,
-            "description": "GeoJSON point geometry.",
-            "properties": {
-              "coordinates": {
-                "description": "Point coordinate pair.",
-                "items": {
-                  "type": "number"
-                },
-                "title": "Coordinates",
-                "type": "array"
-              },
-              "type": {
-                "const": "Point",
-                "description": "GeoJSON geometry type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "coordinates"
-            ],
-            "title": "PointGeometry",
-            "type": "object"
-          },
-          "PolygonGeometry": {
-            "additionalProperties": false,
-            "description": "GeoJSON polygon geometry.",
-            "properties": {
-              "coordinates": {
-                "description": "Polygon rings and coordinate pairs.",
-                "items": {
-                  "items": {
-                    "items": {
-                      "type": "number"
-                    },
-                    "type": "array"
-                  },
-                  "type": "array"
-                },
-                "title": "Coordinates",
-                "type": "array"
-              },
-              "type": {
-                "const": "Polygon",
-                "description": "GeoJSON geometry type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "coordinates"
-            ],
-            "title": "PolygonGeometry",
-            "type": "object"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-          "location": {
-            "description": "Lyra-resolved location reference.",
-            "discriminator": {
-              "mapping": {
-                "cvegeo_list": "#/$defs/CVEGEOList",
-                "geojson": "#/$defs/GeoJSONLocation",
-                "met_zone_code": "#/$defs/MetZoneCode"
-              },
-              "propertyName": "data_type"
-            },
-            "oneOf": [
-              {
-                "$ref": "#/$defs/CVEGEOList"
-              },
-              {
-                "$ref": "#/$defs/GeoJSONLocation"
-              },
-              {
-                "$ref": "#/$defs/MetZoneCode"
-              }
-            ],
-            "title": "Location"
-          },
-          "parameters": {
-            "$ref": "#/$defs/Parameters"
-          }
-        },
-        "required": [
-          "parameters",
-          "location"
-        ],
-        "title": "smoke_cancel_metric_request",
-        "type": "object"
-      },
-      "spatial_inputs": {
-        "location": "location"
-      }
-    },
-    {
       "description": "Write a small text artifact for the submitted features.",
       "name": "smoke_file_metric",
       "output": {
@@ -681,6 +329,358 @@
       }
     },
     {
+      "description": "Emit progress before returning.",
+      "name": "smoke_progress_metric",
+      "output": {
+        "columns": [
+          {
+            "description": "Submitted value.",
+            "name": "value",
+            "nullable": false,
+            "type": "integer",
+            "unit": "count"
+          }
+        ],
+        "kind": "table"
+      },
+      "request_schema": {
+        "$defs": {
+          "CRS": {
+            "additionalProperties": false,
+            "description": "GeoJSON coordinate reference system object.",
+            "properties": {
+              "properties": {
+                "$ref": "#/$defs/CRSProperties",
+                "description": "CRS properties."
+              },
+              "type": {
+                "const": "name",
+                "description": "CRS object type.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "properties"
+            ],
+            "title": "CRS",
+            "type": "object"
+          },
+          "CRSProperties": {
+            "additionalProperties": false,
+            "description": "Coordinate reference system properties.",
+            "properties": {
+              "name": {
+                "description": "CRS identifier such as EPSG:4326.",
+                "minLength": 1,
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "CRSProperties",
+            "type": "object"
+          },
+          "CVEGEOList": {
+            "additionalProperties": false,
+            "description": "A list of same-level INEGI CVEGEO identifiers.",
+            "properties": {
+              "data_type": {
+                "const": "cvegeo_list",
+                "default": "cvegeo_list",
+                "title": "Data Type",
+                "type": "string"
+              },
+              "value": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Value",
+                "type": "array"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "title": "CVEGEOList",
+            "type": "object"
+          },
+          "Feature": {
+            "additionalProperties": false,
+            "description": "GeoJSON feature that may contain point, polygon, or multi-polygon geometry.",
+            "properties": {
+              "geometry": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PointGeometry"
+                  },
+                  {
+                    "$ref": "#/$defs/PolygonGeometry"
+                  },
+                  {
+                    "$ref": "#/$defs/MultiPolygonGeometry"
+                  }
+                ],
+                "description": "Feature geometry.",
+                "title": "Geometry"
+              },
+              "id": {
+                "description": "Stable feature identifier.",
+                "minLength": 1,
+                "title": "Id",
+                "type": "string"
+              },
+              "properties": {
+                "additionalProperties": true,
+                "description": "Feature properties.",
+                "title": "Properties",
+                "type": "object"
+              },
+              "type": {
+                "const": "Feature",
+                "description": "GeoJSON feature type.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "geometry",
+              "properties"
+            ],
+            "title": "Feature",
+            "type": "object"
+          },
+          "GeoJSON": {
+            "additionalProperties": false,
+            "description": "GeoJSON FeatureCollection accepted by explicit location inputs.",
+            "properties": {
+              "crs": {
+                "$ref": "#/$defs/CRS",
+                "description": "Coordinate reference system for all features."
+              },
+              "features": {
+                "description": "One or more GeoJSON features.",
+                "items": {
+                  "$ref": "#/$defs/Feature"
+                },
+                "minItems": 1,
+                "title": "Features",
+                "type": "array"
+              },
+              "type": {
+                "const": "FeatureCollection",
+                "description": "GeoJSON collection type.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "features",
+              "crs"
+            ],
+            "title": "GeoJSON",
+            "type": "object"
+          },
+          "GeoJSONLocation": {
+            "additionalProperties": false,
+            "description": "A GeoJSON feature collection accepted as a location.",
+            "properties": {
+              "data_type": {
+                "const": "geojson",
+                "default": "geojson",
+                "title": "Data Type",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/GeoJSON"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "title": "GeoJSONLocation",
+            "type": "object"
+          },
+          "MetZoneCode": {
+            "additionalProperties": false,
+            "description": "A metropolitan-zone code reference.",
+            "properties": {
+              "data_type": {
+                "const": "met_zone_code",
+                "default": "met_zone_code",
+                "title": "Data Type",
+                "type": "string"
+              },
+              "value": {
+                "minLength": 1,
+                "title": "Value",
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "title": "MetZoneCode",
+            "type": "object"
+          },
+          "MultiPolygonGeometry": {
+            "additionalProperties": false,
+            "description": "GeoJSON multi-polygon geometry.",
+            "properties": {
+              "coordinates": {
+                "description": "Multi-polygon rings and coordinate pairs.",
+                "items": {
+                  "items": {
+                    "items": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "title": "Coordinates",
+                "type": "array"
+              },
+              "type": {
+                "const": "MultiPolygon",
+                "description": "GeoJSON geometry type.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "coordinates"
+            ],
+            "title": "MultiPolygonGeometry",
+            "type": "object"
+          },
+          "Parameters": {
+            "additionalProperties": false,
+            "description": "Parameters shared by the table and progress examples.",
+            "properties": {
+              "value": {
+                "description": "Value copied into each output row.",
+                "title": "Value",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "title": "Parameters",
+            "type": "object"
+          },
+          "PointGeometry": {
+            "additionalProperties": false,
+            "description": "GeoJSON point geometry.",
+            "properties": {
+              "coordinates": {
+                "description": "Point coordinate pair.",
+                "items": {
+                  "type": "number"
+                },
+                "title": "Coordinates",
+                "type": "array"
+              },
+              "type": {
+                "const": "Point",
+                "description": "GeoJSON geometry type.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "coordinates"
+            ],
+            "title": "PointGeometry",
+            "type": "object"
+          },
+          "PolygonGeometry": {
+            "additionalProperties": false,
+            "description": "GeoJSON polygon geometry.",
+            "properties": {
+              "coordinates": {
+                "description": "Polygon rings and coordinate pairs.",
+                "items": {
+                  "items": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "title": "Coordinates",
+                "type": "array"
+              },
+              "type": {
+                "const": "Polygon",
+                "description": "GeoJSON geometry type.",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "coordinates"
+            ],
+            "title": "PolygonGeometry",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "location": {
+            "description": "Lyra-resolved location reference.",
+            "discriminator": {
+              "mapping": {
+                "cvegeo_list": "#/$defs/CVEGEOList",
+                "geojson": "#/$defs/GeoJSONLocation",
+                "met_zone_code": "#/$defs/MetZoneCode"
+              },
+              "propertyName": "data_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CVEGEOList"
+              },
+              {
+                "$ref": "#/$defs/GeoJSONLocation"
+              },
+              {
+                "$ref": "#/$defs/MetZoneCode"
+              }
+            ],
+            "title": "Location"
+          },
+          "parameters": {
+            "$ref": "#/$defs/Parameters"
+          }
+        },
+        "required": [
+          "parameters",
+          "location"
+        ],
+        "title": "smoke_progress_metric_request",
+        "type": "object"
+      },
+      "spatial_inputs": {
+        "location": "location"
+      }
+    },
+    {
       "description": "Return the submitted value for each input feature.",
       "name": "smoke_table_metric",
       "output": {
@@ -918,7 +918,7 @@
           },
           "Parameters": {
             "additionalProperties": false,
-            "description": "Parameters shared by the table and cancellation examples.",
+            "description": "Parameters shared by the table and progress examples.",
             "properties": {
               "value": {
                 "description": "Value copied into each output row.",

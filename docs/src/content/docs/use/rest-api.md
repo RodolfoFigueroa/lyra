@@ -51,8 +51,7 @@ root. For the configured example plugin:
   "input": {
     "location": {"data_type": "met_zone_code", "value": "09.01"},
     "parameters": {"value": 7}
-  },
-  "idempotency_key": "example-1"
+  }
 }
 ```
 
@@ -63,24 +62,22 @@ subsequently fail an accepted job with `invalid_input`.
 
 ## Submit safely
 
-`POST /jobs` accepts a metric name, its public input object, and an optional
-idempotency key. Always provide a caller-owned key for work that may be retried.
-The same key and validated request returns the original job; a different request
-with the key returns `409`. Defaults are applied only during worker execution;
-omitting a defaulted value and explicitly supplying it are different requests.
-Provenance retains the submitted input without default injection.
+`POST /jobs` accepts a metric name and its public input object. Every submission
+creates an independent job. There is no deduplication, submission quota, automatic
+execution retry, or remote cancellation. A failed or timed-out submission may have
+been accepted; submitting again may duplicate the computation. Clients never
+resubmit automatically.
 
-New REST and MCP submissions share a fixed-window quota. A `429` response
-includes `Retry-After`; wait, then retry with the same key.
+Defaults are applied during worker execution. Provenance retains the unresolved
+submitted input without default injection.
 
 ## Follow lifecycle
 
-`GET /jobs/{job_id}` returns `queued`, `running`, `succeeded`, `failed`, or
-`cancelled`. The shared status includes `job_id`, `metric`, `created_at`, nullable
+`GET /jobs/{job_id}` returns `queued`, `running`, `succeeded`, or `failed`. The shared status includes `job_id`, `metric`, `created_at`, nullable
 `started_at` and `completed_at`, `updated_at`, optional `progress`, and optional
 `error`. Progress is a latest snapshot and may be absent for the entire run.
 Poll immediately, then approximately every five seconds. Fetch the terminal
-result when status becomes succeeded, failed, or cancelled.
+result when status becomes succeeded, failed.
 
 ## Retrieve results
 
@@ -104,7 +101,9 @@ index field.
 | --- | --- |
 | `401` / `403` | Missing, malformed, or invalid credential. |
 | `404` | Metric, job, or retained result does not exist. |
-| `409` | Idempotency conflict or wrong result-download kind. |
+| `409` | Wrong result-download kind. |
 | `422` | Input does not match the selected metric schema. |
-| `429` | Shared agent submission limit exceeded. |
 | `503` | Redis, PostGIS, or spatial resolution is unavailable. |
+
+Pending descriptors return `202`; terminal descriptors use schema version 2. Missing
+or expired jobs return `404`. Successes and failures share the configured retention.

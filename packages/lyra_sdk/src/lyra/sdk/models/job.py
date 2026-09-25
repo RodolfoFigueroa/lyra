@@ -29,14 +29,13 @@ JobLifecycleStatus = Literal[
     "running",
     "succeeded",
     "failed",
-    "cancelled",
 ]
 """State of a job in Lyra's lifecycle state machine."""
 
-TerminalJobStatus = Literal["succeeded", "failed", "cancelled"]
+TerminalJobStatus = Literal["succeeded", "failed"]
 """Lifecycle state that prevents any further job transitions."""
 
-ResultKind = Literal["table", "file", "failed", "cancelled"]
+ResultKind = Literal["table", "file", "failed"]
 """Discriminator identifying the shape of a terminal job result."""
 
 RawResultFormat = Literal["terminal_json", "jsonl"]
@@ -93,11 +92,6 @@ class JobEnvelope(StrictBaseModel):
     job_id: str = Field(min_length=1, description="Stable job identifier.")
     metric: str = Field(min_length=1, description="Metric name selected by the client.")
     input: dict[str, Any] = Field(description="Validated metric input payload.")
-    idempotency_key: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Optional caller-provided idempotency key.",
-    )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional job metadata passed through the runtime.",
@@ -240,26 +234,8 @@ class FailedJobResult(StrictBaseModel):
     error: dict[str, Any] = Field(description="Structured failure details.")
 
 
-class CancelledJobResult(StrictBaseModel):
-    """Terminal result for cancelled jobs."""
-
-    kind: Literal["cancelled"] = Field(
-        default="cancelled",
-        description="Result kind.",
-    )
-    job_id: str = Field(min_length=1, description="Job that produced the result.")
-    status: Literal["cancelled"] = Field(
-        default="cancelled",
-        description="Terminal job status.",
-    )
-    error: dict[str, Any] | None = Field(
-        default=None,
-        description="Optional cancellation details.",
-    )
-
-
 TerminalJobResult = Annotated[
-    TableJobResult | FileJobResult | FailedJobResult | CancelledJobResult,
+    TableJobResult | FileJobResult | FailedJobResult,
     Field(discriminator="kind"),
 ]
 """Typed terminal result of a job, discriminated by ``kind``."""
@@ -462,7 +438,7 @@ class ResultSummary(StrictBaseModel):
     )
     error: dict[str, Any] | None = Field(
         default=None,
-        description="Terminal error details for failed or cancelled results.",
+        description="Terminal error details for failed results.",
     )
 
 
@@ -476,7 +452,7 @@ class ResultFileMetadata(StrictBaseModel):
 class ResultDescriptor(StrictBaseModel):
     """Stable descriptor returned to agents instead of raw terminal payloads."""
 
-    schema_version: Literal[1] = Field(
+    schema_version: Literal[2] = Field(
         description="Result descriptor schema version.",
     )
     job_id: str = Field(min_length=1, description="Job that produced the result.")
@@ -507,7 +483,7 @@ class ResultDescriptor(StrictBaseModel):
     )
     error: dict[str, Any] | None = Field(
         default=None,
-        description="Terminal error details for failed or cancelled results.",
+        description="Terminal error details for failed results.",
     )
 
     @model_validator(mode="after")
@@ -700,7 +676,7 @@ def build_result_descriptor(
         )
         preview = build_table_preview(result, row_limit=preview_row_limit)
         return ResultDescriptor(
-            schema_version=1,
+            schema_version=2,
             job_id=result.job_id,
             status=result.status,
             result_kind=result.kind,
@@ -732,7 +708,7 @@ def build_result_descriptor(
             media_type=result.media_type,
         )
         return ResultDescriptor(
-            schema_version=1,
+            schema_version=2,
             job_id=result.job_id,
             status=result.status,
             result_kind=result.kind,
@@ -747,7 +723,7 @@ def build_result_descriptor(
 
     error = result.error
     return ResultDescriptor(
-        schema_version=1,
+        schema_version=2,
         job_id=result.job_id,
         status=result.status,
         result_kind=result.kind,
@@ -766,11 +742,6 @@ class JobCreateRequest(StrictBaseModel):
 
     metric: str = Field(min_length=1, description="Metric name to execute.")
     input: dict[str, Any] = Field(description="Client payload for the selected metric.")
-    idempotency_key: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Optional caller-provided idempotency key.",
-    )
 
 
 class JobLinks(StrictBaseModel):
@@ -786,12 +757,6 @@ class JobCreateResponse(StrictBaseModel):
     job_id: str = Field(min_length=1, description="Identifier assigned to the job.")
     metric: str = Field(min_length=1, description="Metric accepted for execution.")
     status: Literal["queued"] = Field(description="Initial lifecycle status.")
-    reused: bool = Field(
-        description=(
-            "Whether this response reused a job from an equivalent idempotent "
-            "submission."
-        ),
-    )
     links: JobLinks = Field(description="Related job API URLs.")
 
 
@@ -824,19 +789,17 @@ class JobStatusInfo(StrictBaseModel):
 
 
 class JobListResponse(StrictBaseModel):
-    """Admin response containing recent job status snapshots."""
+    """Admin response containing a native queue or registry page."""
 
-    jobs: list[JobStatusInfo] = Field(description="Recent jobs ordered newest-first.")
-
-
-class JobCancelResponse(StrictBaseModel):
-    """Admin response returned after a job cancellation request."""
-
-    job_id: str = Field(min_length=1, description="Job that was cancelled.")
-    status: Literal["cancelled"] = Field(description="Status after cancellation.")
-    cancellation_requested: bool = Field(
-        description="Whether Lyra accepted the cancellation request.",
+    jobs: list[JobStatusInfo] = Field(
+        description="Retained jobs in native queue or registry order."
     )
-    revoke_requested: bool = Field(
-        description="Whether Lyra attempted to revoke the Celery task.",
-    )
+
+
+class AdminJobDetail(StrictBaseModel):
+    """Native job diagnostics available only to administrators."""
+
+    snapshot: JobStatusInfo
+    queue: str
+    worker_id: str | None = None
+    failure_diagnostics: str | None = None

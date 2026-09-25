@@ -5,7 +5,7 @@ description: Run typed spatial metrics through a schema-driven job API.
 
 Lyra turns independently maintained Python metric plugins into a discoverable,
 authenticated job API. A plugin declares typed inputs and outputs; Lyra exposes
-the resulting schema, resolves spatial inputs, dispatches work to warm Celery
+the resulting schema, resolves spatial inputs, dispatches work to warm RQ
 workers, and retains status, events, provenance, and results for a configured
 time.
 
@@ -24,7 +24,7 @@ time.
 API processes read generated plugin manifests without importing plugin code.
 Images contain installed plugin packages. Workers import their `PluginDefinition` and
 execute typed functions through the single `lyra.run_metric` task. Redis carries
-Celery traffic and retained job state; PostGIS resolves database-backed spatial
+RQ traffic and retained job state; PostGIS resolves database-backed spatial
 wrappers.
 
 Public routes expose health, metric schemas, and lookups. Every `/jobs` route

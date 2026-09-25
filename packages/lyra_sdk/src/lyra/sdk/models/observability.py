@@ -1,7 +1,7 @@
 """Models for service health, readiness, and runtime observations."""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
@@ -83,58 +83,30 @@ class CatalogSummaryResponse(StrictBaseModel):
     metric_queues: dict[str, str]
 
 
-class WorkerTaskSummary(StrictBaseModel):
-    """Task observed by Celery worker inspection."""
-
-    id: str | None = None
-    name: str | None = None
-    worker: str | None = None
-    eta: str | None = None
-    time_start: float | None = None
-
-
 class WorkerSummary(StrictBaseModel):
-    """Configured and observed state of a worker."""
+    """Native RQ worker process and heartbeat observation."""
 
-    name: str = Field(min_length=1)
-    configured: bool
-    observed: bool
-    status: WorkerObservedStatus
+    name: str
+    hostname: str
     queues: list[str]
-    active_count: int | None = None
-    reserved_count: int | None = None
-    scheduled_count: int | None = None
-
-
-class WorkerInspectMetadata(StrictBaseModel):
-    """Freshness and availability metadata for worker inspection."""
-
-    observed_at: datetime | None = None
-    age_seconds: float | None = Field(default=None, ge=0)
-    stale: bool = True
-    last_error: str | None = None
+    last_heartbeat: datetime | None = None
+    heartbeat_age_seconds: float | None = None
+    stale: bool
+    current_job: str | None = None
+    state: str
 
 
 class WorkerDetail(WorkerSummary):
-    """Worker state with inspected tasks and runtime statistics."""
+    """Native worker process detail."""
 
-    active_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
-    reserved_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
-    scheduled_tasks: list[WorkerTaskSummary] = Field(default_factory=list)
-    stats: dict[str, Any] | None = None
-    inspect_metadata: WorkerInspectMetadata = Field(
-        default_factory=WorkerInspectMetadata
-    )
+    pid: int | None = None
 
 
 class WorkersResponse(StrictBaseModel):
-    """Worker summaries and inspection availability."""
+    """Configured pools separately from observed native worker processes."""
 
-    inspect_available: bool
-    inspect_metadata: WorkerInspectMetadata = Field(
-        default_factory=WorkerInspectMetadata
-    )
-    workers: list[WorkerSummary]
+    pools: list[WorkerConfigSummary]
+    workers: list[WorkerDetail]
 
 
 class QueueSummary(StrictBaseModel):
@@ -155,9 +127,6 @@ class QueuesResponse(StrictBaseModel):
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)
     catalog_available: bool
-    inspect_metadata: WorkerInspectMetadata = Field(
-        default_factory=WorkerInspectMetadata
-    )
     queues: list[QueueSummary]
 
 

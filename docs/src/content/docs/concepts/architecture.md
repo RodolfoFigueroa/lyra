@@ -25,16 +25,17 @@ files or runtime package installation are needed.
 
 ## Job path
 
-1. An authenticated caller submits a metric, input, and idempotency key.
+1. An authenticated caller submits a metric and input.
 2. The API validates the current metric schema and resolves spatial wrappers.
-3. It enforces shared rate limits, captures immutable provenance, stores queued
-   state, and dispatches `lyra.run_metric` to the assigned queue.
+3. It captures unresolved provenance and the metric contract in native RQ metadata,
+   then enqueues resolved JSON inputs on the assigned queue.
 4. A warm worker parses the envelope through the imported `PluginDefinition`,
    constructs the declared parameter model (applying defaults and semantic
    validators), supplies resolved geometry and optional `RunContext`, and calls
    the metric.
-5. The worker validates native DataFrame/Path returns through the shared SDK
-   normalizer and stores progress, status, and a terminal transport result.
+5. The worker verifies the submitted identity and contract, validates native
+   DataFrame/Path returns through the SDK, and returns the result to RQ.
+   RQ owns execution, heartbeats, failure detection, and result retention.
 6. Clients poll status, inspect descriptors, and download retained
    output.
 
@@ -45,8 +46,8 @@ files or runtime package installation are needed.
 | FastAPI application | Discovery, validation, resolution, submission, result access, and administration. |
 | `lyra-sdk` | Shared plugin, geometry, catalog, job, and runtime contracts. |
 | `lyra-api` | Sync and async HTTP clients. |
-| Celery workers | Trusted plugin import, execution, and result validation. |
-| Redis | Celery transport plus retained job status, events, provenance, and results. |
+| RQ workers | Trusted plugin import, execution, and result validation. |
+| Redis | Native RQ queues, registries, job metadata, and retained results. |
 | PostGIS | Readiness and database-backed spatial resolution. |
 | MCP adapter | Strict agent tools over the same submission and result services. |
 

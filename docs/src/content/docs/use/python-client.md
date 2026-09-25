@@ -47,7 +47,6 @@ The following examples assume the deployment has the example plugin configured. 
 a location and a required integer `value` inside `parameters`.
 
 ```python
-from lyra.api import SubmitOptions
 from lyra.sdk.models.job import FileJobResult, TableJobResult
 from lyra.sdk.types import JsonObject
 
@@ -58,7 +57,6 @@ arguments: JsonObject = {
 handle = client.raw.submit(
     "smoke_table_metric",
     arguments,
-    options=SubmitOptions(idempotency_key="example-2026-07"),
 )
 print(handle.job_id, handle.status().status)
 result = handle.wait(timeout=300)
@@ -77,7 +75,7 @@ semantic validators can fail an accepted job with `invalid_input`.
 `submit()` returns a `JobHandle`. Its `wait()` method polls status until
 completion and returns the successful
 table or file result. Once the job is complete, `handle.result()` fetches its
-result again. Failed or cancelled jobs raise `MetricRunError` through these
+result again. Failed jobs raise `MetricRunError` through these
 handle methods, with the job ID, status, structured error, and terminal result.
 A wait deadline raises `JobWaitTimeoutError`; the job can still be running.
 

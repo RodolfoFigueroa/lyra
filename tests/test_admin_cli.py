@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -8,7 +7,6 @@ from typing import TYPE_CHECKING
 import pytest
 import requests
 from lyra.api import admin_cli
-from typing_extensions import override
 
 from tests.test_api_client_jobs import FakeSyncResponse
 
@@ -34,21 +32,16 @@ REPO: dict[str, JsonValue] = {
     "version": "0.1.0",
     "enabled": True,
 }
-METADATA: dict[str, JsonValue] = {
-    "observed_at": None,
-    "age_seconds": None,
-    "stale": True,
-    "last_error": "inspection unavailable",
-}
 WORKER: dict[str, JsonValue] = {
     "name": "worker",
-    "configured": True,
-    "observed": False,
-    "status": "unknown",
+    "hostname": "host",
     "queues": ["batch"],
-    "active_count": None,
-    "reserved_count": None,
-    "scheduled_count": None,
+    "state": "idle",
+    "stale": True,
+    "current_job": None,
+    "last_heartbeat": None,
+    "heartbeat_age_seconds": None,
+    "pid": None,
 }
 READINESS: dict[str, JsonValue] = {
     "status": "ready",
@@ -104,34 +97,42 @@ CASES = (
         },
     ),
     Case(
-        "jobs list --limit 7 --status running --metric metric",
+        "jobs list --limit 7 --status running --queue batch",
         "GET",
         "admin/jobs",
         {"jobs": []},
-        params={"limit": 7, "status": "running", "metric": "metric"},
+        params={"limit": 7, "status": "running", "queue": "batch", "offset": 0},
     ),
     Case(
-        "jobs cancel job",
-        "POST",
-        "admin/jobs/job/cancel",
+        "jobs get job",
+        "GET",
+        "admin/jobs/job",
         {
-            "job_id": "job",
-            "status": "cancelled",
-            "cancellation_requested": True,
-            "revoke_requested": True,
+            "snapshot": {
+                "job_id": "job",
+                "status": "queued",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "started_at": None,
+                "completed_at": None,
+                "metric": None,
+                "error": None,
+                "progress": None,
+            },
+            "queue": "batch",
         },
     ),
     Case(
         "workers list",
         "GET",
         "admin/workers",
-        {"workers": [WORKER], "inspect_available": False, "inspect_metadata": METADATA},
+        {"workers": [WORKER], "pools": []},
     ),
     Case(
         "workers get worker",
         "GET",
         "admin/workers/worker",
-        {**WORKER, "inspect_metadata": METADATA},
+        WORKER,
     ),
     Case(
         "queues list",
@@ -141,7 +142,6 @@ CASES = (
             "catalog_available": True,
             "allowed_queues": ["batch"],
             "default_queue": "batch",
-            "inspect_metadata": METADATA,
             "queues": [
                 {
                     "name": "batch",
@@ -240,58 +240,6 @@ def test_commands_use_real_client_and_render_response(
     assert options["headers"] == (
         {} if case.path in {"live", "ready"} else {"Authorization": "Bearer test-admin"}
     )
-
-
-@pytest.mark.parametrize("case", MUTATIONS, ids=lambda case: case.command)
-@pytest.mark.parametrize("json_output", [False, True])
-def test_every_mutation_requires_confirmation(
-    case: Case,
-    *,
-    json_output: bool,
-    http: HTTPStub,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(admin_cli.sys, "stdin", io.StringIO("yes\n"))
-    args = ["--json"] if json_output else []
-    assert admin_cli.main([*args, *case.command.split()]) == 3
-    assert http.calls == []
-    output = capsys.readouterr()
-    assert not output.out
-    if json_output:
-        assert json.loads(output.err)["error"]["kind"] == "confirmation"
-    else:
-        assert "--yes" in output.err
-
-
-class Terminal(io.StringIO):
-    @override
-    def isatty(self) -> bool:
-        return True
-
-
-@pytest.mark.parametrize(
-    ("answer", "code"), [("yes\n", 0), ("Y\n", 0), ("no\n", 3), ("\n", 3), ("", 3)]
-)
-def test_interactive_confirmation(
-    answer: str,
-    code: int,
-    http: HTTPStub,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    http.payload = {
-        "job_id": "metric",
-        "status": "cancelled",
-        "cancellation_requested": True,
-        "revoke_requested": False,
-    }
-    prompt = Terminal()
-    monkeypatch.setattr(admin_cli.sys, "stdin", Terminal(answer))
-    monkeypatch.setattr(admin_cli.sys, "stderr", prompt)
-    assert admin_cli.main(["jobs", "cancel", "metric"]) == code
-    assert len(http.calls) == (1 if code == 0 else 0)
-    assert "metric" in prompt.getvalue()
-    assert "localhost:5219" in prompt.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -396,14 +344,14 @@ def test_http_failures_are_reported_once(
         (KeyboardInterrupt(), 130),
     ],
 )
-def test_request_exceptions_do_not_retry_mutations(
+def test_request_exceptions_do_not_retry(
     error: BaseException,
     code: int,
     http: HTTPStub,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     http.error = error
-    assert admin_cli.main(["--json", "jobs", "cancel", "metric", "--yes"]) == code
+    assert admin_cli.main(["--json", "jobs", "get", "metric"]) == code
     assert len(http.calls) == 1
     assert not capsys.readouterr().out
 
@@ -430,29 +378,6 @@ def test_unhealthy_readiness_preserves_response(
     assert json.loads(output.err)["error"]["kind"] == "operation"
 
 
-@pytest.mark.parametrize(
-    ("command", "payload"),
-    [
-        (
-            ["jobs", "cancel", "job"],
-            {
-                "job_id": "job",
-                "status": "cancelled",
-                "cancellation_requested": False,
-                "revoke_requested": False,
-            },
-        ),
-    ],
-)
-def test_unaccepted_operations_fail(
-    command: list[str],
-    payload: dict[str, JsonValue],
-    http: HTTPStub,
-) -> None:
-    http.payload = payload
-    assert admin_cli.main([*command, "--yes"]) == 1
-
-
 def test_human_output_preserves_jobs_and_order(
     http: HTTPStub,
     capsys: pytest.CaptureFixture[str],
@@ -476,11 +401,18 @@ def test_human_output_preserves_jobs_and_order(
             },
         ]
     }
-    assert admin_cli.main(["jobs", "list"]) == 0
+    assert (
+        admin_cli.main(["jobs", "list", "--queue", "batch", "--status", "running"]) == 0
+    )
     output = capsys.readouterr().out
     assert output.index(job_id) < output.index("older-job")
     assert "failed\\nwith details" in output
-    assert http.calls[0][2]["params"] == {"limit": 50}
+    assert http.calls[0][2]["params"] == {
+        "limit": 50,
+        "queue": "batch",
+        "status": "running",
+        "offset": 0,
+    }
 
 
 def test_human_output_shows_unknown_depth_and_stale_inspection(
@@ -491,8 +423,11 @@ def test_human_output_shows_unknown_depth_and_stale_inspection(
     assert admin_cli.main(["queues", "list"]) == 0
     output = capsys.readouterr().out
     assert "unknown" in output
-    assert "Stale: true" in output
-    assert "inspection unavailable" in output
+    http.payload = next(
+        case.payload for case in CASES if case.command == "workers list"
+    )
+    assert admin_cli.main(["workers", "list"]) == 0
+    assert "stale" in capsys.readouterr().out.lower()
     assert "PENDING DEPTH" in output
 
 

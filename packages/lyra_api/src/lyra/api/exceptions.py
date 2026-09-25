@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lyra.sdk.models.job import CancelledJobResult, FailedJobResult
+    from lyra.sdk.models.job import FailedJobResult
 
 
 class LyraAPIError(Exception):
@@ -75,10 +75,10 @@ class ServiceUnavailableError(LyraAPIError):
 
 
 class MetricRunError(LyraAPIError):
-    """A submitted metric reached a failed or cancelled terminal state."""
+    """A submitted metric reached a failed terminal state."""
 
-    def __init__(self, result: FailedJobResult | CancelledJobResult) -> None:
-        """Initialize the error from a failed or cancelled terminal result."""
+    def __init__(self, result: FailedJobResult) -> None:
+        """Initialize the error from a failed terminal result."""
         detail = result.error
         super().__init__(
             f"Metric job {result.job_id} finished with status {result.status}: {detail}"

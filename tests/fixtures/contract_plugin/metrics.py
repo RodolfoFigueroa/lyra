@@ -140,7 +140,6 @@ def bounded_features(location: LocationInput, bounds: BoundsInput) -> pd.DataFra
     output=FileOutput(media_type="text/plain", extensions=[".txt"]),
 )
 def feature_report(location: LocationInput, context: RunContext) -> Path:
-    context.check_cancelled()
     context.logger.info("Writing %d feature identifiers", len(location.features))
     destination = context.temp_dir / "features.txt"
     destination.write_text(

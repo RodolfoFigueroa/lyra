@@ -30,9 +30,11 @@ services:
       retries: 20
   interactive:
     <<: *app
+    stop_grace_period: 5h5m
     command: python -m lyra_app.worker_launcher interactive
   batch:
     <<: *app
+    stop_grace_period: 5h5m
     command: python -m lyra_app.worker_launcher batch
   redis:
     image: redis:alpine

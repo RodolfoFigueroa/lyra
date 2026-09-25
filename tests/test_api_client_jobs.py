@@ -11,7 +11,6 @@ from lyra.api import parse_result_ref
 from lyra.api.client.async_ import AsyncLyraAdminClient, AsyncLyraClient
 from lyra.api.client.sync import LyraAdminClient, LyraClient
 from lyra.api.exceptions import DownloadError, ServiceUnavailableError
-from lyra.api.options import SubmitOptions
 from lyra.sdk.models.job import FileJobResult, TableJobResult
 from lyra.sdk.types import JsonValue
 
@@ -108,12 +107,11 @@ def _mock_sync_http(
     monkeypatch.setattr(requests, "request", request)
 
 
-def _job_response(*, reused: bool = False) -> dict[str, Any]:
+def _job_response() -> dict[str, Any]:
     return {
         "job_id": "job-1",
         "metric": "heavy_metric",
         "status": "queued",
-        "reused": reused,
         "links": {
             "self": "/jobs/job-1",
             "result": "/jobs/job-1/result",
@@ -145,12 +143,12 @@ def _job_list_response() -> dict[str, Any]:
     }
 
 
-def _job_cancel_response() -> dict[str, Any]:
+def _job_detail_response() -> dict[str, Any]:
     return {
-        "job_id": "job-1",
-        "status": "cancelled",
-        "cancellation_requested": True,
-        "revoke_requested": True,
+        "snapshot": _status_response(),
+        "queue": "heavy",
+        "worker_id": "worker-1",
+        "failure_diagnostics": None,
     }
 
 
@@ -232,36 +230,23 @@ def _catalog_summary_response() -> dict[str, Any]:
 
 def _workers_response() -> dict[str, Any]:
     return {
-        "inspect_available": True,
-        "inspect_metadata": {
-            "observed_at": "2026-01-01T00:00:00Z",
-            "age_seconds": 0.25,
-            "stale": False,
-            "last_error": None,
-        },
+        "pools": [],
         "workers": [
             {
                 "name": "interactive",
-                "configured": True,
-                "observed": True,
-                "status": "online",
+                "hostname": "host",
                 "queues": ["interactive"],
-                "active_count": 1,
-                "reserved_count": 0,
-                "scheduled_count": 0,
+                "state": "busy",
+                "stale": False,
+                "current_job": "job-1",
+                "heartbeat_age_seconds": 0.25,
             }
         ],
     }
 
 
 def _worker_detail_response() -> dict[str, Any]:
-    return _workers_response()["workers"][0] | {
-        "active_tasks": [{"id": "job-1", "name": "lyra.run_metric"}],
-        "reserved_tasks": [],
-        "scheduled_tasks": [],
-        "stats": {"hostname": "interactive"},
-        "inspect_metadata": _workers_response()["inspect_metadata"],
-    }
+    return _workers_response()["workers"][0]
 
 
 def _queues_response() -> dict[str, Any]:
@@ -269,12 +254,6 @@ def _queues_response() -> dict[str, Any]:
         "catalog_available": True,
         "allowed_queues": ["interactive"],
         "default_queue": "interactive",
-        "inspect_metadata": {
-            "observed_at": "2026-01-01T00:00:00Z",
-            "age_seconds": 0.25,
-            "stale": False,
-            "last_error": None,
-        },
         "queues": [
             {
                 "name": "interactive",
@@ -329,7 +308,7 @@ def _result_response() -> dict[str, Any]:
 
 def _result_descriptor_response() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "job_id": "job-1",
         "status": "succeeded",
         "result_kind": "table",
@@ -487,7 +466,7 @@ def _metric_response() -> dict[str, Any]:
 
 def _metric_catalog_response() -> dict[str, Any]:
     return {
-        "client_schema_version": 1,
+        "client_schema_version": 2,
         "json_schema_dialect": "https://json-schema.org/draft/2020-12/schema",
         "catalog_fingerprint": "abc123",
         "metrics": [_metric_response()],
@@ -531,9 +510,7 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
         agent_api_key="agent-secret",
     )
 
-    job = client.raw.create(
-        "heavy_metric", {"value": 3}, options=SubmitOptions(idempotency_key="key-1")
-    )
+    job = client.raw.create("heavy_metric", {"value": 3})
     status = client.jobs.get(job.job_id)
     result = client.results.get(job.job_id)
     FakeSession.responses = [
@@ -547,11 +524,10 @@ def test_sync_client_uses_job_api_for_job_lifecycle(
     assert posted[0]["json"] == {
         "metric": "heavy_metric",
         "input": {"value": 3},
-        "idempotency_key": "key-1",
     }
     assert posted[0]["headers"] == {"Authorization": "Bearer agent-secret"}
     assert job.job_id == "job-1"
-    assert job.reused is False
+    assert "reused" not in job.model_dump()
     assert status.status == "succeeded"
     assert result.kind == "table"
     assert result.data == [[6]]
@@ -567,14 +543,18 @@ def test_sync_client_uses_admin_job_operations(
     def get(
         url: str,
         *,
-        params: dict[str, int | str],
+        params: dict[str, int | str] | None = None,
         timeout: float,
         headers: dict[str, str],
     ) -> FakeSyncResponse:
         requests_seen.append(
             {"url": url, "params": params, "timeout": timeout, "headers": headers}
         )
-        return FakeSyncResponse(payload=_job_list_response())
+        return FakeSyncResponse(
+            payload=_job_detail_response()
+            if url.endswith("job-1")
+            else _job_list_response()
+        )
 
     def post(
         url: str,
@@ -583,7 +563,7 @@ def test_sync_client_uses_admin_job_operations(
         headers: dict[str, str],
     ) -> FakeSyncResponse:
         requests_seen.append({"url": url, "timeout": timeout, "headers": headers})
-        return FakeSyncResponse(payload=_job_cancel_response())
+        return FakeSyncResponse(payload=_job_detail_response())
 
     _mock_sync_http(monkeypatch, get=get)
     _mock_sync_http(monkeypatch, post=post)
@@ -594,8 +574,8 @@ def test_sync_client_uses_admin_job_operations(
         admin_api_key="admin-secret",
     )
 
-    jobs = client.jobs.list(limit=10, status="running", metric="heavy_metric")
-    cancelled = client.jobs.cancel("job-1")
+    jobs = client.jobs.list(limit=10, status="running", queue="heavy", offset=3)
+    detail = client.jobs.get("job-1")
 
     assert requests_seen == [
         {
@@ -603,20 +583,22 @@ def test_sync_client_uses_admin_job_operations(
             "params": {
                 "limit": 10,
                 "status": "running",
-                "metric": "heavy_metric",
+                "queue": "heavy",
+                "offset": 3,
             },
             "timeout": 12.0,
             "headers": {"Authorization": "Bearer admin-secret"},
         },
         {
-            "url": "http://example.test/admin/jobs/job-1/cancel",
+            "url": "http://example.test/admin/jobs/job-1",
+            "params": None,
             "timeout": 12.0,
             "headers": {"Authorization": "Bearer admin-secret"},
         },
     ]
     assert [job.job_id for job in jobs.jobs] == ["job-1"]
-    assert cancelled.job_id == "job-1"
-    assert cancelled.status == "cancelled"
+    assert detail.snapshot.job_id == "job-1"
+    assert detail.queue == "heavy"
 
 
 def test_sync_client_uses_observability_routes(
@@ -670,10 +652,10 @@ def test_sync_client_uses_observability_routes(
     assert status.metric_count == 1
     assert config.workers[0].name == "interactive"
     assert catalog.installed_plugins[0].distribution == "lyra-smoke-plugin"
-    assert workers.workers[0].status == "online"
-    assert workers.inspect_metadata.stale is False
-    assert worker.active_tasks[0].id == "job-1"
-    assert worker.inspect_metadata.age_seconds == pytest.approx(0.25)
+    assert workers.workers[0].state == "busy"
+    assert workers.workers[0].stale is False
+    assert worker.current_job == "job-1"
+    assert worker.heartbeat_age_seconds == pytest.approx(0.25)
     assert queues.queues[0].pending_depth_unknown is True
 
 
@@ -1191,7 +1173,7 @@ def test_async_client_processes_json_job(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.data == [[6]]
 
 
-def test_async_client_exposes_idempotent_replay_marker(
+def test_async_client_submits_independently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingSession(FakeSession):
@@ -1204,7 +1186,7 @@ def test_async_client_exposes_idempotent_replay_marker(
             return super().post()
 
     RecordingSession.responses = [
-        FakeAsyncResponse(status=202, payload=_job_response(reused=True))
+        FakeAsyncResponse(status=202, payload=_job_response())
     ]
     monkeypatch.setattr(
         "lyra.api.client.async_.aiohttp.ClientSession",
@@ -1215,15 +1197,13 @@ def test_async_client_exposes_idempotent_replay_marker(
         AsyncLyraClient("example.test", secure=False).raw.create(
             "heavy_metric",
             {"value": 3},
-            options=SubmitOptions(idempotency_key="retry-key"),
         )
     )
 
-    assert response.reused is True
+    assert response.job_id == "job-1"
     assert RecordingSession.posted_json == {
         "metric": "heavy_metric",
         "input": {"value": 3},
-        "idempotency_key": "retry-key",
     }
 
 
@@ -1245,7 +1225,7 @@ def test_async_client_uses_admin_job_operations(
 
     RecordingSession.responses = [
         FakeAsyncResponse(payload=_job_list_response()),
-        FakeAsyncResponse(payload=_job_cancel_response()),
+        FakeAsyncResponse(payload=_job_detail_response()),
     ]
     monkeypatch.setattr(
         "lyra.api.client.async_.aiohttp.ClientSession",
@@ -1259,9 +1239,9 @@ def test_async_client_uses_admin_job_operations(
     )
 
     jobs = asyncio.run(
-        client.jobs.list(limit=10, status="running", metric="heavy_metric")
+        client.jobs.list(limit=10, status="running", queue="heavy", offset=3)
     )
-    cancelled = asyncio.run(client.jobs.cancel("job-1"))
+    detail = asyncio.run(client.jobs.get("job-1"))
 
     assert RecordingSession.requests_seen == [
         {
@@ -1271,20 +1251,21 @@ def test_async_client_uses_admin_job_operations(
                 "params": {
                     "limit": 10,
                     "status": "running",
-                    "metric": "heavy_metric",
+                    "queue": "heavy",
+                    "offset": 3,
                 },
                 "headers": {"Authorization": "Bearer admin-secret"},
             },
         },
         {
-            "method": "POST",
-            "args": ("http://example.test/admin/jobs/job-1/cancel",),
+            "method": "GET",
+            "args": ("http://example.test/admin/jobs/job-1",),
             "kwargs": {"headers": {"Authorization": "Bearer admin-secret"}},
         },
     ]
     assert [job.job_id for job in jobs.jobs] == ["job-1"]
-    assert cancelled.job_id == "job-1"
-    assert cancelled.status == "cancelled"
+    assert detail.snapshot.job_id == "job-1"
+    assert detail.queue == "heavy"
 
 
 def test_async_client_uses_observability_routes(
@@ -1352,10 +1333,10 @@ def test_async_client_uses_observability_routes(
     assert status.metric_count == 1
     assert config.workers[0].name == "interactive"
     assert catalog.installed_plugins[0].distribution == "lyra-smoke-plugin"
-    assert workers.workers[0].status == "online"
-    assert workers.inspect_metadata.stale is False
-    assert worker.active_tasks[0].id == "job-1"
-    assert worker.inspect_metadata.age_seconds == pytest.approx(0.25)
+    assert workers.workers[0].state == "busy"
+    assert workers.workers[0].stale is False
+    assert worker.current_job == "job-1"
+    assert worker.heartbeat_age_seconds == pytest.approx(0.25)
     assert queues.queues[0].pending_depth_unknown is True
 
 

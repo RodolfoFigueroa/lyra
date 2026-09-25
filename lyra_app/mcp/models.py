@@ -101,11 +101,6 @@ class RunMetricInput(MCPContractModel):
         default_factory=dict,
         description="Non-spatial metric input values.",
     )
-    idempotency_key: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Caller-provided key for safely retrying this metric submission.",
-    )
 
 
 class ResultRefInput(MCPContractModel):
@@ -191,7 +186,6 @@ class RunMetricOutput(MCPContractModel):
 
     job_id: str
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    reused: bool
     next_tool: Literal["lyra_get_job_result"] = "lyra_get_job_result"
 
 
@@ -258,8 +252,8 @@ class TerminalResultOutput(MCPContractModel):
 
     job_id: str
     result_ref: str = Field(pattern=RESULT_REF_PATTERN)
-    status: Literal["succeeded", "failed", "cancelled"]
-    result_kind: Literal["table", "file", "failed", "cancelled"]
+    status: Literal["succeeded", "failed"]
+    result_kind: Literal["table", "file", "failed"]
     completed_at: datetime | None = None
     lifetime: ResultLifetime
     descriptor: LyraAPIHandoffOutput
@@ -391,8 +385,8 @@ TOOL_CONTRACTS = (
         "lyra_run_metric",
         (
             "Submit once, then inspect result_ref with lyra_get_job_result. "
-            "reused means idempotent replay, not caching or completion. "
-            "On submission timeout reuse the original idempotency key."
+            "Each submission creates a new job. On timeout a job may already "
+            "have been accepted; another submission may duplicate it."
         ),
         RunMetricInput,
         RunMetricOutput,

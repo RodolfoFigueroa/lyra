@@ -19,8 +19,6 @@ DEFAULT_API_PORT = 5219
 DEFAULT_FORWARDED_ALLOW_IPS = ["127.0.0.1"]
 DEFAULT_RESULT_RETENTION_SECONDS = 86400
 DEFAULT_PROGRESS_MIN_INTERVAL_MS = 1000
-DEFAULT_AGENT_SUBMISSION_LIMIT = 10
-DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = 60
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_WORKER_CONCURRENCY = 1
 DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
@@ -163,7 +161,7 @@ class RedisConfig(StrictConfigModel):
 
     url: str = Field(
         min_length=1,
-        description="Redis URL used by Celery and the retained job store.",
+        description="Redis URL used by native RQ jobs and results.",
     )
 
     @field_validator("url")
@@ -426,44 +424,22 @@ class LoggingConfig(StrictConfigModel):
         return _validate_absolute_path(value)
 
 
-class JobStoreConfig(StrictConfigModel):
-    """Configure retention for persisted job data."""
+class JobsConfig(StrictConfigModel):
+    """Configure native job execution, retention, and optional progress."""
 
-    result_retention_seconds: int = Field(
-        default=DEFAULT_RESULT_RETENTION_SECONDS,
-        gt=0,
-        description=(
-            "Retention after termination for status, results, provenance, "
-            "and idempotency."
-        ),
+    execution_timeout_seconds: int = Field(
+        default=18000, gt=0, description="Native execution timeout in seconds."
     )
-
-
-class JobProgressConfig(StrictConfigModel):
-    """Configure optional progress snapshot writes."""
-
-    min_interval_ms: int = Field(
-        default=DEFAULT_PROGRESS_MIN_INTERVAL_MS,
+    result_retention_seconds: int = Field(
+        default=86400,
+        gt=0,
+        description="Retention for successful and failed jobs in seconds.",
+    )
+    progress_min_interval_ms: int = Field(
+        default=1000,
         ge=0,
         strict=True,
-        description="Minimum elapsed time between progress writes.",
-    )
-
-
-class AgentSubmissionLimitConfig(StrictConfigModel):
-    """Configure the shared fixed-window agent submission limit."""
-
-    limit: int = Field(
-        default=DEFAULT_AGENT_SUBMISSION_LIMIT,
-        gt=0,
-        strict=True,
-        description="New REST and MCP submissions allowed in one fixed window.",
-    )
-    window_seconds: int = Field(
-        default=DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
-        gt=0,
-        strict=True,
-        description="Length of the shared submission-limit window.",
+        description="Minimum interval between best-effort progress writes.",
     )
 
 
@@ -617,7 +593,7 @@ class WorkerConfig(StrictConfigModel):
     concurrency: int = Field(
         default=DEFAULT_WORKER_CONCURRENCY,
         gt=0,
-        description="Celery child processes in this worker pool.",
+        description="RQ worker processes in this worker pool.",
     )
     temp_dir: Path | None = Field(
         default=None,
@@ -648,7 +624,7 @@ class WorkerConfig(StrictConfigModel):
 class LyraConfig(StrictConfigModel):
     """Represent the complete validated runtime configuration for Lyra."""
 
-    schema_version: Literal[3] = Field(
+    schema_version: Literal[4] = Field(
         description="Server configuration schema version."
     )
     api: ApiConfig = Field(description="API bind and public URL settings.")
@@ -664,15 +640,7 @@ class LyraConfig(StrictConfigModel):
         description="MCP transport settings.",
     )
     logging: LoggingConfig = Field(description="Application logging settings.")
-    job_store: JobStoreConfig = Field(description="Retained job-store settings.")
-    job_progress: JobProgressConfig = Field(
-        default_factory=JobProgressConfig,
-        description="Progress snapshot coalescing settings.",
-    )
-    agent_submission_limit: AgentSubmissionLimitConfig = Field(
-        default_factory=AgentSubmissionLimitConfig,
-        description="Shared REST and MCP submission limit.",
-    )
+    jobs: JobsConfig = Field(default_factory=JobsConfig, description="Job settings.")
     plugins: PluginsConfig = Field(
         description="Installed plugin selection and routing defaults."
     )

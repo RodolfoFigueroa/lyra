@@ -60,7 +60,7 @@ def load_test_config(
         | assigned_queues
     )
     raw_config = {
-        "schema_version": 3,
+        "schema_version": 4,
         "api": {"public_base_url": "http://127.0.0.1:5219"},
         "redis": {"url": "redis://redis:6379/0"},
         "database": {"host": "postgres", "port": 5432, "name": "lyra", "user": "lyra"},
@@ -69,8 +69,7 @@ def load_test_config(
             "service_account_file": str(secrets["service_account"]),
         },
         "logging": {},
-        "job_store": {},
-        "agent_submission_limit": {},
+        "jobs": {},
         "plugins": {
             "default_queue": "interactive",
             "allowed_queues": allowed_queues,

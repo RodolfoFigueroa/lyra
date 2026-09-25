@@ -5,6 +5,8 @@ from typing import TypeAlias
 
 import redis
 import redis.asyncio as aioredis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from lyra_app.config import LyraConfig, get_config
 
@@ -46,11 +48,16 @@ def configure_redis(config: LyraConfig | None = None) -> str:
     redis_url = get_redis_url(config)
     _redis_client = aioredis.from_url(
         redis_url,
-        socket_timeout=None,
+        socket_timeout=5,
         socket_connect_timeout=5,
         health_check_interval=30,
     )
-    _redis_client_sync = redis.from_url(redis_url)
+    _redis_client_sync = redis.from_url(
+        redis_url,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+        retry=Retry(NoBackoff(), 0),
+    )
     return redis_url
 
 
@@ -63,7 +70,12 @@ def _async_client() -> aioredis.Redis:
     return _redis_client
 
 
-def _sync_client() -> redis.Redis:
+def get_sync_client() -> redis.Redis:
+    """Return the finite-timeout native Redis connection.
+
+    Raises:
+        RuntimeError: If connection initialization fails.
+    """
     if _redis_client_sync is None:
         configure_redis()
     if _redis_client_sync is None:  # pragma: no cover - configure_redis always assigns
@@ -88,7 +100,7 @@ class _RedisAsyncProxy:
 
 class _RedisSyncProxy:
     def __getattr__(self, name: str) -> SyncRedisMethod:
-        return getattr(_sync_client(), name)
+        return getattr(get_sync_client(), name)
 
 
 redis_client = _RedisAsyncProxy()

@@ -217,7 +217,7 @@ def test_version_selector_marks_each_tree_and_is_idempotent(tmp_path: Path) -> N
 def test_mcp_workflow_examples_match_serialization_schemas() -> None:
     page = (CONTENT_DIR / "use" / "mcp.md").read_text()
     examples = re.findall(r"```json\n(.*?)\n```", page, re.DOTALL)
-    assert len(examples) == 11
+    assert len(examples) == 10
     for example in examples:
         payload = json.loads(example)
         if "met_zone_code" in payload:
@@ -228,7 +228,7 @@ def test_mcp_workflow_examples_match_serialization_schemas() -> None:
             continue
         name = (
             "lyra_run_metric"
-            if "reused" in payload
+            if "status" not in payload and "next_tool" in payload
             else "lyra_download_result"
             if "format" in payload
             else "lyra_get_job_result"
@@ -280,4 +280,3 @@ def test_published_authoring_adapter_runs_without_services(
     assert isinstance(result, TableJobResult)
     assert result.data == [[7], [7]]
     assert result.index == ["a", "b"]
-    context.check_cancelled.assert_called_once_with()

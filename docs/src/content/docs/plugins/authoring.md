@@ -7,7 +7,7 @@ A metric is a synchronous Python function with a parameter model, spatial inputs
 and a declared output. Keep existing computation code in its own functions or
 library and add a small Lyra adapter. The runnable example is
 [`examples/lyra-plugin`](https://github.com/RodolfoFigueroa/lyra/tree/main/examples/lyra-plugin).
-It contains table, file, and cancellation metrics plus a generated manifest.
+It contains table, file, and progress metrics plus a generated manifest.
 
 ## Declare a metric
 
@@ -17,7 +17,7 @@ descriptions, constraints, defaults, and examples. The decorator infers the mode
 from the `parameters` argument; do not repeat it in a decorator mapping.
 
 This table adapter follows the runnable example, with an optional execution context
-used for progress and cancellation:
+used for progress:
 
 ```python
 import pandas as pd
@@ -58,7 +58,6 @@ def run_table(
     context: RunContext,
 ) -> pd.DataFrame:
     context.report_progress(stage="table", current=1, total=1)
-    context.check_cancelled()
     feature_ids = [feature.id for feature in location.features]
     return pd.DataFrame(
         {"value": [parameters.value for _ in feature_ids]},
@@ -141,7 +140,7 @@ runs. An invalid semantic default has the same outcome. A successful schema chec
 does not promise successful execution of every domain rule.
 
 Submitted input is retained in provenance. Omitting a defaulted field and explicitly
-supplying its default are different requests for idempotency purposes.
+supplying its default remain distinct captured provenance.
 
 A known Pydantic schema-generation limitation affects literal dictionary defaults
 containing a `$ref` key. Generation may fail with `PluginDefinitionError`; ordinary
@@ -207,11 +206,11 @@ Register functions explicitly in a synchronous, parameterless factory:
 
 ```python
 from lyra.sdk import PluginDefinition
-from .metrics import run_table, run_file, run_cancel
+from .metrics import run_table, run_file, run_progress
 
 
 def create_plugin() -> PluginDefinition:
-    return PluginDefinition(metrics=[run_table, run_file, run_cancel])
+    return PluginDefinition(metrics=[run_table, run_file, run_progress])
 ```
 
 Configure `[tool.lyra].factory = "smoke_plugin.plugin:create_plugin"` in
@@ -245,20 +244,18 @@ assert result.data == [[7] for _ in location.features]
 `prepare_parameters` raises `MetricInputError` for invalid input. `normalize_result`
 raises `MetricResultError` with metric and field/row/column context. For file outputs,
 supply `temp_dir`; for area derivations, supply `location_areas_m2`. Neither helper
-requires API, Redis, Celery, PostGIS, or Earth Engine connections.
+requires API, Redis, RQ, PostGIS, or Earth Engine connections.
 
 ## Runtime context
 
-`RunContext` supplies database access, a logger, a job temporary directory, progress,
-and cooperative cancellation. Call `context.check_cancelled()` around expensive
-stages. Use `context.logger` for ordinary diagnostics. Unexpected exceptions become
-failed jobs; invalid native results become `invalid_result` failures.
+`RunContext` supplies database access, a logger, a job temporary directory
+and best-effort progress reporting.
 
 `context.report_progress(stage=..., current=..., total=..., unit=..., message=...)`
 publishes optional snapshots. Current is finite and nonnegative; total, when supplied,
 is finite and positive with current no greater than total. Estimates may decrease and
 stages, totals, and units may change. Updates are coalesced using
-`job_progress.min_interval_ms`, and pending progress is flushed before termination.
+`jobs.progress_min_interval_ms` (default 1000 ms). Persistence failures do not fail computation.
 Plugins may remain silent for hours. Tests for database-using adapters should supply
 a strict fake database client.
 

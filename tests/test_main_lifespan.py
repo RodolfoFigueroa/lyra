@@ -12,52 +12,10 @@ from lyra_app.db.connection import ApplicationDatabaseRuntime
 from tests.config_helpers import load_test_config
 
 
-def test_lifespan_starts_and_stops_worker_inspect_collector(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    calls: list[str] = []
-
-    def start_worker_inspect_collector() -> None:
-        calls.append("start")
-
-    async def stop_worker_inspect_collector() -> None:  # ruff: ignore[unused-async]
-        calls.append("stop")
-
-    app = FastAPI()
-    app.state.database = ApplicationDatabaseRuntime(load_test_config(tmp_path))
-
-    async def run_lifespan() -> None:
-        async with main.lifespan(app):
-            assert calls == ["start"]
-
-    monkeypatch.setattr(
-        main,
-        "start_worker_inspect_collector",
-        start_worker_inspect_collector,
-    )
-    monkeypatch.setattr(
-        main,
-        "stop_worker_inspect_collector",
-        stop_worker_inspect_collector,
-    )
-
-    asyncio.run(run_lifespan())
-
-    assert calls == ["start", "stop"]
-
-
 def test_lifespan_owns_mounted_mcp_session_manager(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     calls: list[str] = []
-
-    def start_worker_inspect_collector() -> None:
-        calls.append("worker-start")
-
-    async def stop_worker_inspect_collector() -> None:  # ruff: ignore[unused-async]
-        calls.append("worker-stop")
 
     @asynccontextmanager
     async def mcp_lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -70,27 +28,17 @@ def test_lifespan_owns_mounted_mcp_session_manager(
     app = FastAPI()
     app.state.database = ApplicationDatabaseRuntime(load_test_config(tmp_path))
     app.state.mcp_app = FastAPI(lifespan=mcp_lifespan)
-    monkeypatch.setattr(
-        main,
-        "start_worker_inspect_collector",
-        start_worker_inspect_collector,
-    )
-    monkeypatch.setattr(
-        main,
-        "stop_worker_inspect_collector",
-        stop_worker_inspect_collector,
-    )
 
     async def run_lifespan() -> None:
         async with main.lifespan(app):
-            assert calls == ["worker-start", "mcp-start"]
+            assert calls == ["mcp-start"]
 
     asyncio.run(run_lifespan())
 
-    assert calls == ["worker-start", "mcp-start", "mcp-stop", "worker-stop"]
+    assert calls == ["mcp-start", "mcp-stop"]
 
 
-def test_lifespan_owns_database_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lifespan_owns_database_runtime() -> None:
     calls: list[str] = []
 
     class FakeDatabaseRuntime:
@@ -102,35 +50,17 @@ def test_lifespan_owns_database_runtime(monkeypatch: pytest.MonkeyPatch) -> None
         async def close() -> None:
             calls.append("database-close")
 
-    def start_worker_inspect_collector() -> None:
-        calls.append("worker-start")
-
-    async def stop_worker_inspect_collector() -> None:  # ruff: ignore[unused-async]
-        calls.append("worker-stop")
-
     app = FastAPI()
     app.state.database = FakeDatabaseRuntime()
-    monkeypatch.setattr(
-        main,
-        "start_worker_inspect_collector",
-        start_worker_inspect_collector,
-    )
-    monkeypatch.setattr(
-        main,
-        "stop_worker_inspect_collector",
-        stop_worker_inspect_collector,
-    )
 
     async def run_lifespan() -> None:
         async with main.lifespan(app):
-            assert calls == ["database-start", "worker-start"]
+            assert calls == ["database-start"]
 
     asyncio.run(run_lifespan())
 
     assert calls == [
         "database-start",
-        "worker-start",
-        "worker-stop",
         "database-close",
     ]
 
@@ -170,7 +100,7 @@ def test_run_server_configures_trusted_proxy_sources(
     }
 
 
-@pytest.mark.parametrize("failure_stage", ["database", "collector", "mcp", "body"])
+@pytest.mark.parametrize("failure_stage", ["database", "mcp", "body"])
 def test_lifespan_closes_database_on_failure(
     failure_stage: str,
     tmp_path: Path,
@@ -182,16 +112,10 @@ def test_lifespan_closes_database_on_failure(
     start = runtime.start
     close = AsyncMock(wraps=runtime.close)
     monkeypatch.setattr(runtime, "close", close)
-    stop_collector = AsyncMock()
-    monkeypatch.setattr(main, "stop_worker_inspect_collector", stop_collector)
 
     async def start_database() -> None:
         await start()
         if failure_stage == "database":
-            raise RuntimeError(failure_stage)
-
-    def start_collector() -> None:
-        if failure_stage == "collector":
             raise RuntimeError(failure_stage)
 
     @asynccontextmanager
@@ -201,7 +125,6 @@ def test_lifespan_closes_database_on_failure(
         yield
 
     monkeypatch.setattr(runtime, "start", start_database)
-    monkeypatch.setattr(main, "start_worker_inspect_collector", start_collector)
     app.state.mcp_app = FastAPI(lifespan=mcp_lifespan)
 
     async def exercise() -> None:
@@ -214,8 +137,6 @@ def test_lifespan_closes_database_on_failure(
     close.assert_awaited_once()
     assert runtime.async_engine is None
     assert runtime.spatial_engine is None
-    if failure_stage in {"mcp", "body"}:
-        stop_collector.assert_awaited_once()
 
 
 def test_lifespan_rejects_missing_database_runtime() -> None:

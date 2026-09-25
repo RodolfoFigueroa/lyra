@@ -32,8 +32,8 @@ from lyra.api.exceptions import (
     ServiceUnavailableError,
 )
 from lyra.sdk.models.job import (
+    AdminJobDetail,
     FileJobResult,
-    JobCancelResponse,
     JobCreateResponse,
     JobLifecycleStatus,
     JobListResponse,
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import pandas as pd
-    from lyra.api.options import RunOptions, SubmitOptions
+    from lyra.api.options import RunOptions
     from lyra.sdk.models.admin import InstalledPluginListResponse, PluginRoutingResponse
     from lyra.sdk.models.data_types import DataTypesResponse
     from lyra.sdk.models.lookups import MetZoneCodeResponse
@@ -116,7 +116,7 @@ class JobHandle(Generic[_SuccessResultT]):
         Returns:
             The table or file result associated with the job.
 
-        Failed or cancelled jobs raise ``MetricRunError``.
+        Failed jobs raise ``MetricRunError``.
 
         """
         result = self._client.get_job_result(self.job_id)
@@ -139,7 +139,7 @@ class JobHandle(Generic[_SuccessResultT]):
         None permits unlimited overall waiting with bounded individual requests.
 
         Returns:
-            The successful result; failed or cancelled results raise MetricRunError.
+            The successful result; failed results raise MetricRunError.
         """
         state = PollingState(self.job_id, timeout, poll_interval)
         state.remaining()
@@ -170,7 +170,7 @@ class JobHandle(Generic[_SuccessResultT]):
                 snapshot = cast("JobStatusInfo", response)
                 if state.changed(snapshot.progress) and on_progress is not None:
                     on_progress(cast("JobProgress", snapshot.progress))
-                terminal = snapshot.status in {"succeeded", "failed", "cancelled"}
+                terminal = snapshot.status in {"succeeded", "failed"}
                 if not terminal:
                     time.sleep(state.delay())
 
@@ -199,6 +199,11 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
                 )
         except requests.RequestException as exc:
             err = f"Failed to {spec.operation}: request error: {exc}"
+            if spec.method == "POST" and spec.path == "jobs":
+                err += (
+                    " The job may have been accepted; "
+                    "another submission may duplicate it."
+                )
             raise DownloadError(
                 err,
                 retryable=isinstance(exc, (requests.ConnectionError, requests.Timeout))
@@ -229,23 +234,17 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         self,
         metric: str,
         payload: dict[str, Any],
-        *,
-        idempotency_key: str | None = None,
     ) -> JobCreateResponse:
-        return self._request(
-            endpoints.create_job(metric, payload, idempotency_key=idempotency_key)
-        )
+        return self._request(endpoints.create_job(metric, payload))
 
     def submit_job(
         self,
         metric: str,
         payload: dict[str, Any],
-        *,
-        idempotency_key: str | None = None,
     ) -> JobHandle[SuccessfulJobResult]:
         return JobHandle(
             self,
-            self.create_job(metric, payload, idempotency_key=idempotency_key),
+            self.create_job(metric, payload),
         )
 
     def get_job(self, job_id: str) -> JobStatusInfo:
@@ -255,15 +254,18 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
         self,
         *,
         limit: int = 50,
-        status: JobLifecycleStatus | None = None,
-        metric: str | None = None,
+        status: JobLifecycleStatus,
+        queue: str,
+        offset: int = 0,
     ) -> JobListResponse:
         return self._request(
-            endpoints.list_admin_jobs(limit=limit, status=status, metric=metric)
+            endpoints.list_admin_jobs(
+                limit=limit, status=status, queue=queue, offset=offset
+            )
         )
 
-    def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
-        return self._request(endpoints.cancel_admin_job(job_id))
+    def get_admin_job(self, job_id: str) -> AdminJobDetail:
+        return self._request(endpoints.get_admin_job(job_id))
 
     def list_plugins(self) -> InstalledPluginListResponse:
         return self._request(endpoints.list_plugins())
@@ -448,21 +450,15 @@ class _RawMetricsResource:
         self,
         metric: str,
         arguments: JsonObject,
-        *,
-        options: SubmitOptions | None = None,
     ) -> JobCreateResponse:
-        key = options.idempotency_key if options is not None else None
-        return self._transport.create_job(metric, arguments, idempotency_key=key)
+        return self._transport.create_job(metric, arguments)
 
     def submit(
         self,
         metric: str,
         arguments: JsonObject,
-        *,
-        options: SubmitOptions | None = None,
     ) -> JobHandle[SuccessfulJobResult]:
-        key = options.idempotency_key if options is not None else None
-        return self._transport.submit_job(metric, arguments, idempotency_key=key)
+        return self._transport.submit_job(metric, arguments)
 
     def run(
         self,
@@ -471,12 +467,10 @@ class _RawMetricsResource:
         *,
         options: RunOptions | None = None,
     ) -> SuccessfulJobResult:
-        key = options.idempotency_key if options is not None else None
         wait_seconds = options.timeout if options is not None else None
         handle = self._transport.submit_job(
             metric,
             arguments,
-            idempotency_key=key,
         )
         return handle.wait(
             timeout=wait_seconds,
@@ -508,17 +502,19 @@ class _AdminJobsResource:
         self,
         *,
         limit: int = 50,
-        status: JobLifecycleStatus | None = None,
-        metric: str | None = None,
+        status: JobLifecycleStatus,
+        queue: str,
+        offset: int = 0,
     ) -> JobListResponse:
         return self._transport.list_admin_jobs(
             limit=limit,
             status=status,
-            metric=metric,
+            queue=queue,
+            offset=offset,
         )
 
-    def cancel(self, job_id: str) -> JobCancelResponse:
-        return self._transport.cancel_admin_job(job_id)
+    def get(self, job_id: str) -> AdminJobDetail:
+        return self._transport.get_admin_job(job_id)
 
 
 class _AdminPluginsResource:
@@ -643,7 +639,7 @@ class LyraAdminClient:
 
     Attributes:
         health: Liveness and readiness endpoints.
-        jobs: Administrative job listing and cancellation endpoints.
+        jobs: Administrative job listing and diagnostics endpoints.
         plugins: Installed plugin inspection endpoints.
         catalog: Administrative catalog summary endpoints.
         workers: Worker inspection endpoints.
@@ -677,7 +673,7 @@ class LyraAdminClient:
         self.health = _HealthResource(transport)
         """Liveness and readiness endpoints."""
         self.jobs = _AdminJobsResource(transport)
-        """Administrative job listing and cancellation endpoints."""
+        """Administrative job listing and diagnostics endpoints."""
         self.plugins = _AdminPluginsResource(transport)
         """Installed plugin inspection endpoints."""
         self.catalog = _AdminCatalogResource(transport)

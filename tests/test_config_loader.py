@@ -49,7 +49,7 @@ def _valid_toml(
     secrets = _write_secret_files(base)
     return (
         f"""
-schema_version = 3
+schema_version = 4
 
 [api]
 host = "0.0.0.0"
@@ -72,12 +72,8 @@ service_account_file = {_q(secrets["service_account"])}
 level = "INFO"
 file = {_q(base / "logs" / "lyra.log")}
 
-[job_store]
+[jobs]
 result_retention_seconds = 86400
-
-[agent_submission_limit]
-limit = 10
-window_seconds = 60
 
 [plugins]
 default_queue = "interactive"
@@ -119,8 +115,6 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.database.read_password() == "postgres-secret"
     assert config.admin.read_api_key() == "admin-secret"
     assert config.agent.read_api_key() == "agent-secret"
-    assert config.agent_submission_limit.limit == 10
-    assert config.agent_submission_limit.window_seconds == 60
     assert config.earth_engine.service_account_file.exists()
     assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.plugins.installed == []

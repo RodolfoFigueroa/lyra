@@ -178,8 +178,8 @@ def test_catalog_refresh_loads_smoke_directory_fixture(tmp_path: Path) -> None:
     file_info = registry.get_metric_info("smoke_file_metric")
 
     assert metric_names == [
-        "smoke_cancel_metric",
         "smoke_file_metric",
+        "smoke_progress_metric",
         "smoke_table_metric",
     ]
     assert table_entry is not None

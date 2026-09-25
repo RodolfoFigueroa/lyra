@@ -18,7 +18,7 @@ exits. It does not start the API, databases, or workers.
 uv run lyra-admin --host localhost:5219 --no-secure health
 # Set LYRA_ADMIN_API_KEY in your environment before protected commands.
 uv run lyra-admin --host lyra.example.com --secure status
-uv run lyra-admin --json jobs list --status running --limit 20
+uv run lyra-admin --json jobs list --queue interactive --status running --limit 20
 ```
 
 Put global options before the command. `--host` accepts
@@ -27,7 +27,7 @@ HTTP, and a 30-second HTTP request timeout. Select HTTPS with `--secure`, and
 set the request timeout with `--timeout SECONDS`.
 
 `--admin-api-key TOKEN` overrides `LYRA_ADMIN_API_KEY`. Health checks are public;
-remote inspection and cancellation commands require the admin key. Offline
+remote inspection commands require the admin key. Offline
 `config validate PATH` requires no credentials. Agent credentials and consumer job
 continuous observation is outside this CLI's interface.
 
@@ -39,23 +39,22 @@ continuous observation is outside this CLI's interface.
 | `health --live` | API process liveness. |
 | `status` | Administrative service summary. |
 | `config-summary` | Effective configuration with secrets omitted. |
-| `jobs list` | Up to 50 recent retained jobs, newest first. |
+| `jobs list --queue NAME --status STATE` | Native queue/status page, default limit 50. |
+| `jobs get ID` | Status, queue, worker ID, and administrator-only diagnostics. |
 | `workers list` | Worker state and observation metadata. |
-| `workers get NAME` | One worker's tasks, statistics, and observation metadata. |
+| `workers get NAME` | One native worker process and heartbeat. |
 | `queues list` | Routing coverage, worker coverage, and queue depth. |
 | `plugins list` | Configured distributions, installed versions, and enabled states. |
 | `catalog show` | Catalog fingerprint, metric names, installed plugins, and routing. |
 | `routing list` | Effective routes, per-plugin overrides, disabled plugins, and queues. |
 
-Filter jobs with `--status queued|running|succeeded|failed|cancelled`,
-`--metric NAME`, and `--limit N` (1–100). Retained jobs expire according to the
-server's configured TTL.
+Job listing requires `--queue NAME` and `--status queued|running|succeeded|failed`.
+Use `--offset N` and `--limit N` (1–200) for pagination. Queued pages use FIFO;
+completed/failed pages use descending registry order. Transitions and expired
+records can shorten pages.
 
-Readable output preserves complete identifiers and shows unavailable values as
-`unknown`. Worker and queue results include inspection age, staleness, and errors.
-A successfully retrieved inspection response exits zero even if workers are
-unavailable. Use `health` for the dependency health gate; it does not assert that
-every queue has a worker.
+Worker results show heartbeat freshness and keep configured pools separate from
+native processes. Redis unavailability is an explicit error.
 
 ## Offline configuration validation
 
@@ -67,26 +66,11 @@ uv run lyra-admin --json config validate ./lyra.toml
 This command only reads the specified TOML and validates its schema and internal
 relationships. It requires no server, secrets, network, or writable directories.
 It does not verify plugin manifests or service availability. Successful JSON is
-`{"valid": true, "schema_version": 3}`. Invalid TOML/schema exits `2`; file I/O
+`{"valid": true, "schema_version": 4}`. Invalid TOML/schema exits `2`; file I/O
 failures exit `1`.
 
 Edit the file directly and restart the API and all workers to apply settings.
 See [Deployment](../deployment/) for startup, draining, and replication.
-
-## Job cancellation
-
-`jobs cancel ID` is the only mutable administration operation. It asks for
-confirmation when stdin and stderr are terminals. Only `y` or `yes` confirms;
-an empty answer, refusal, or EOF leaves the server untouched. JSON and
-noninteractive commands require `--yes`:
-
-```bash
-uv run lyra-admin --json jobs cancel JOB_ID --yes
-```
-
-A timeout or interruption does not prove the server rejected cancellation.
-Inspect the job before retrying; the CLI does not automatically retry mutations.
-Restart processes using your deployment tooling.
 
 ## JSON and exit codes
 
@@ -98,7 +82,7 @@ There is no CLI envelope. Errors go to stderr as a JSON object:
 {"error": {"kind": "usage", "message": "Set LYRA_ADMIN_API_KEY or supply --admin-api-key."}}
 ```
 
-An unhealthy readiness response or unsuccessful cancellation can produce
+An unhealthy readiness response can produce
 both a response on stdout and an error on stderr. Check the exit code before
 assuming success. Help remains plain text, including when `--json` is present.
 
@@ -107,10 +91,9 @@ assuming success. Help remains plain text, including when `--json` is present.
 | `0` | Successful command or help. |
 | `1` | Request/response failure, unsuccessful health check, or operation failure. |
 | `2` | Invalid arguments, configuration, or missing credentials. |
-| `3` | Confirmation declined or `--yes` required. |
-| `130` | Interrupted; an in-flight mutation may have completed. |
+| `130` | Interrupted. |
 
-Error kinds are `usage`, `confirmation`, `request`, `operation`, and `interrupted`.
+Error kinds are `usage`, `request`, `operation`, and `interrupted`.
 Response JSON follows the installed API client's models. Scripts should use field
 names rather than parse human-readable tables. The CLI does not export or apply
 configuration files.
@@ -118,8 +101,7 @@ configuration files.
 ## Command coverage
 
 The CLI provides health, status, loaded configuration, jobs, workers, queues,
-plugins, catalog, and routing inspection. It also supports job cancellation
-and offline configuration validation. Configuration writes, catalog refresh,
+plugins, catalog, and routing inspection. It also supports offline configuration validation. Configuration writes, catalog refresh,
 and worker restart commands and HTTP APIs are removed.
 
 See the generated [CLI reference](../../reference/generated/cli/) for root,

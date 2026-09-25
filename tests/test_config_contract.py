@@ -7,8 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from lyra_app.config import (
-    DEFAULT_AGENT_SUBMISSION_LIMIT,
-    DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS,
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
@@ -42,7 +40,7 @@ def _write_secrets(base: Path) -> dict[str, Path]:
 def _valid_config(base: Path) -> dict[str, Any]:
     secret_paths = _write_secrets(base)
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "database": {"host": "postgres", "port": 5432, "name": "lyra", "user": "lyra"},
         "api": {
             "host": DEFAULT_API_HOST,
@@ -60,12 +58,8 @@ def _valid_config(base: Path) -> dict[str, Any]:
             "level": "INFO",
             "file": str(base / "logs" / "lyra.log"),
         },
-        "job_store": {
+        "jobs": {
             "result_retention_seconds": 600,
-        },
-        "agent_submission_limit": {
-            "limit": 10,
-            "window_seconds": 60,
         },
         "plugins": {
             "default_queue": "interactive",
@@ -106,7 +100,7 @@ def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     config = LyraConfig.model_validate(_valid_config(tmp_path))
 
-    assert config.schema_version == 3
+    assert config.schema_version == 4
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == 5219
     assert config.api.public_base_url == "https://lyra.example.test"
@@ -126,9 +120,7 @@ def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == "INFO"
     assert config.logging.file == tmp_path / "logs" / "lyra.log"
-    assert config.job_store.result_retention_seconds == 600
-    assert config.agent_submission_limit.limit == 10
-    assert config.agent_submission_limit.window_seconds == 60
+    assert config.jobs.result_retention_seconds == 600
     assert config.plugins.allowed_queues == ["interactive", "batch"]
     assert config.get_worker("interactive").concurrency == 32
 
@@ -138,8 +130,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     raw["api"] = {"public_base_url": "http://localhost:5219"}
     del raw["earth_engine"]["service_account_file"]
     raw["logging"] = {}
-    raw["job_store"] = {}
-    raw["agent_submission_limit"] = {}
+    raw["jobs"] = {}
     raw["workers"]["interactive"] = {"queues": ["interactive"]}
 
     config = LyraConfig.model_validate(raw)
@@ -162,12 +153,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     assert config.mcp.mount_path == DEFAULT_MCP_MOUNT_PATH
     assert config.logging.level == DEFAULT_LOG_LEVEL
     assert config.logging.file is None
-    assert config.job_store.result_retention_seconds == DEFAULT_RESULT_RETENTION_SECONDS
-    assert config.agent_submission_limit.limit == DEFAULT_AGENT_SUBMISSION_LIMIT
-    assert (
-        config.agent_submission_limit.window_seconds
-        == DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS
-    )
+    assert config.jobs.result_retention_seconds == DEFAULT_RESULT_RETENTION_SECONDS
     assert config.get_worker("interactive").concurrency == 1
     assert config.worker_temp_dir("interactive") == (
         LYRA_DATA_DIR / "cache" / "jobs" / "interactive"
@@ -246,7 +232,7 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
     raw["schema_version"] = 1
 
-    _assert_invalid(raw, "Input should be 3")
+    _assert_invalid(raw, "Input should be 4")
 
 
 @pytest.mark.parametrize(
@@ -255,13 +241,9 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
         ("api", "port", 0, "greater than or equal to 1"),
         ("redis", "url", "postgres://db:5432/lyra", "redis.url"),
         ("logging", "level", "NOPE", "logging.level"),
-        ("job_store", "result_retention_seconds", 0, "greater than 0"),
-        ("agent_submission_limit", "limit", 0, "greater than 0"),
-        ("agent_submission_limit", "limit", -1, "greater than 0"),
-        ("agent_submission_limit", "window_seconds", 0, "greater than 0"),
-        ("agent_submission_limit", "window_seconds", -1, "greater than 0"),
-        ("agent_submission_limit", "limit", True, "valid integer"),
-        ("agent_submission_limit", "window_seconds", False, "valid integer"),
+        ("jobs", "result_retention_seconds", 0, "greater than 0"),
+        ("jobs", "execution_timeout_seconds", 0, "greater than 0"),
+        ("jobs", "progress_min_interval_ms", -1, "greater than or equal to 0"),
     ],
 )
 def test_config_contract_rejects_invalid_values(

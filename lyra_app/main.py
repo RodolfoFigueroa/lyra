@@ -8,10 +8,10 @@ from types import AsyncGeneratorType
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
 
 from lyra_app import registry
 from lyra_app.auth import initialize_earth_engine
-from lyra_app.celery_app import configure_celery
 from lyra_app.config import (
     LyraConfig,
     ensure_runtime_directories,
@@ -23,17 +23,13 @@ from lyra_app.db.dependencies import require_database_runtime
 from lyra_app.db.redis import configure_redis
 from lyra_app.logging_config import configure_logging
 from lyra_app.version import APP_VERSION
-from lyra_app.worker_control import (
-    start_worker_inspect_collector,
-    stop_worker_inspect_collector,
-)
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGeneratorType:
-    """Manage database, worker-inspection, and optional MCP application lifecycles.
+    """Manage database and optional MCP application lifecycles.
 
     Yields:
         Control to FastAPI while all configured application resources are active.
@@ -41,18 +37,13 @@ async def lifespan(app: FastAPI) -> AsyncGeneratorType:
     database = require_database_runtime(app)
     try:
         await database.start()
-        start_worker_inspect_collector()
-        try:
-            async with AsyncExitStack() as stack:
-                mcp_app = getattr(app.state, "mcp_app", None)
-                if mcp_app is not None:
-                    await stack.enter_async_context(
-                        mcp_app.router.lifespan_context(mcp_app)
-                    )
-                yield
-        finally:
-            await stop_worker_inspect_collector()
-            logger.info("Shutting down worker inspect collector.")
+        async with AsyncExitStack() as stack:
+            mcp_app = getattr(app.state, "mcp_app", None)
+            if mcp_app is not None:
+                await stack.enter_async_context(
+                    mcp_app.router.lifespan_context(mcp_app)
+                )
+            yield
     finally:
         await database.close()
 
@@ -68,7 +59,6 @@ def bootstrap_runtime(config: LyraConfig | None = None) -> LyraConfig:
     ensure_runtime_directories(config)
     configure_logging(config)
     configure_redis(config)
-    configure_celery(config)
     initialize_earth_engine(config)
     return config
 
@@ -94,6 +84,7 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
     app.add_exception_handler(
         registry.CatalogUnavailableError, catalog_unavailable_response
     )
+    app.add_exception_handler(RedisError, redis_unavailable_response)
     app.state.database = ApplicationDatabaseRuntime(config)
     app.include_router(admin.router)
     app.include_router(health.router)
@@ -112,6 +103,11 @@ def create_app(config: LyraConfig | None = None) -> FastAPI:
         app.state.mcp_app = mcp_app
         app.mount(config.mcp.mount_path, mcp_app)
     return app
+
+
+def redis_unavailable_response(_request: Request, _exc: Exception) -> JSONResponse:
+    """Return explicit unavailability when a native Redis operation fails."""
+    return JSONResponse(status_code=503, content={"detail": "Redis is unavailable."})
 
 
 def catalog_unavailable_response(_request: Request, _exc: Exception) -> JSONResponse:

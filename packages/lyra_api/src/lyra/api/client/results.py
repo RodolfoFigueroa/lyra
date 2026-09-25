@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 from lyra.api.client.endpoints import check_status, decode_response, get_job_result
 from lyra.api.exceptions import DownloadError, MetricRunError
 from lyra.sdk.models.job import (
-    CancelledJobResult,
     FailedJobResult,
     FileJobResult,
 )
@@ -28,9 +27,9 @@ def successful_result(result: TerminalJobResult) -> TableJobResult | FileJobResu
         The successful table or file result.
 
     Raises:
-        MetricRunError: If the job failed or was cancelled.
+        MetricRunError: If the job failed.
     """
-    if isinstance(result, FailedJobResult | CancelledJobResult):
+    if isinstance(result, FailedJobResult):
         raise MetricRunError(result)
     return result
 

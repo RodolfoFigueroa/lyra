@@ -5,6 +5,8 @@ import pytest
 
 from tests.plugin_helpers import VERSIONS
 
+pytest_plugins = ["tests.rq_helpers"]
+
 
 @pytest.fixture(autouse=True)
 def installed_plugin_metadata(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:

@@ -13,12 +13,8 @@ from lyra.sdk.config import StrictConfigModel
 from lyra.sdk.config import load_config as load_document
 from pydantic import Field, field_validator
 
-AgentSubmissionLimitConfig = _sdk_config.AgentSubmissionLimitConfig
+JobsConfig = _sdk_config.JobsConfig
 ApiConfig = _sdk_config.ApiConfig
-DEFAULT_AGENT_SUBMISSION_LIMIT = _sdk_config.DEFAULT_AGENT_SUBMISSION_LIMIT
-DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS = (
-    _sdk_config.DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS
-)
 DEFAULT_API_HOST = _sdk_config.DEFAULT_API_HOST
 DEFAULT_API_PORT = _sdk_config.DEFAULT_API_PORT
 DEFAULT_CONFIG_PATH = _sdk_config.DEFAULT_CONFIG_PATH
@@ -31,8 +27,6 @@ DEFAULT_LOG_LEVEL = _sdk_config.DEFAULT_LOG_LEVEL
 DEFAULT_MCP_MOUNT_PATH = _sdk_config.DEFAULT_MCP_MOUNT_PATH
 DatabasePoolConfig = _sdk_config.DatabasePoolConfig
 EarthEngineConfig = _sdk_config.EarthEngineConfig
-JobProgressConfig = _sdk_config.JobProgressConfig
-JobStoreConfig = _sdk_config.JobStoreConfig
 LYRA_DATA_DIR = _sdk_config.LYRA_DATA_DIR
 LoggingConfig = _sdk_config.LoggingConfig
 McpConfig = _sdk_config.McpConfig

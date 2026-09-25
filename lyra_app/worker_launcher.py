@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import importlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Required, TypedDict, Unpack
+
+from rq import Queue, Worker
+from rq.job import Job
+from rq.serializers import JSONSerializer
+from rq.worker_pool import WorkerPool
 
 from lyra_app.auth import initialize_earth_engine
 from lyra_app.config import (
@@ -14,31 +18,55 @@ from lyra_app.config import (
     initialize_runtime_config,
 )
 from lyra_app.db.connection import probe_worker_database
-from lyra_app.db.redis import configure_redis
+from lyra_app.db.redis import configure_redis, get_sync_client
 from lyra_app.logging_config import configure_logging
+from lyra_app.worker import refresh_runner_registry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from redis import Redis
 
-def build_celery_worker_args(config: LyraConfig, worker_name: str) -> list[str]:
-    """Build Celery worker arguments from one named worker configuration.
 
-    Returns:
-        Arguments selecting hostname, logging, concurrency, and consumed queues.
-    """
-    worker = config.get_worker(worker_name)
-    return [
-        "worker",
-        "--hostname",
-        f"{worker_name}@%h",
-        "--loglevel",
-        config.logging.level,
-        "--concurrency",
-        str(worker.concurrency),
-        "-Q",
-        ",".join(worker.queues),
-    ]
+class WorkerInitialization(TypedDict, total=False):
+    """Native WorkerPool initialization options."""
+
+    connection: Required[Redis]
+    name: str | None
+    serializer: object
+    job_class: type[Job]
+    queue_class: type[Queue]
+    exception_handlers: object
+
+
+class JsonWorker(Worker):
+    """Initialize native workers with JSON queues and bounded maintenance intervals."""
+
+    def __init__(
+        self, queues: Sequence[str | Queue], **options: Unpack[WorkerInitialization]
+    ) -> None:
+        """Set initialization options while leaving all lifecycle handling to RQ."""
+        connection = options["connection"]
+        json_queues = [
+            Queue(
+                q.name if isinstance(q, Queue) else q,
+                connection=connection,
+                serializer=JSONSerializer,
+            )
+            for q in queues
+        ]
+        super().__init__(
+            json_queues,
+            connection=connection,
+            name=options.get("name"),
+            serializer=JSONSerializer,
+            job_class=options.get("job_class", Job),
+            queue_class=options.get("queue_class", Queue),
+            exception_handlers=options.get("exception_handlers"),
+            worker_ttl=30,
+            job_monitoring_interval=5,
+            maintenance_interval=15,
+        )
 
 
 def launch_worker(
@@ -46,7 +74,7 @@ def launch_worker(
     *,
     config: LyraConfig | None = None,
 ) -> None:
-    """Initialize dependencies, load plugins, and enter the Celery worker process."""
+    """Initialize dependencies, load plugins, and enter the RQ worker process."""
     config = get_config() if config is None else config
     config.get_worker(worker_name)
     initialize_runtime_config(config)
@@ -56,14 +84,16 @@ def launch_worker(
     probe_worker_database(config)
     initialize_earth_engine(config)
 
-    celery_module = importlib.import_module("lyra_app.celery_app")
-    worker_module = importlib.import_module("lyra_app.worker")
-    celery_module.configure_celery(config)
-    worker_module.refresh_runner_registry(
-        worker_name,
-        config=config,
+    refresh_runner_registry(worker_name, config=config)
+    worker = config.get_worker(worker_name)
+    pool = WorkerPool(
+        worker.queues,
+        connection=get_sync_client(),
+        num_workers=worker.concurrency,
+        worker_class=JsonWorker,
+        serializer=JSONSerializer,
     )
-    celery_module.celery_app.worker_main(build_celery_worker_args(config, worker_name))
+    pool.start(burst=False, logging_level=config.logging.level)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="python -m lyra_app.worker_launcher",
-        description="Launch a Lyra Celery worker from /lyra_data/config/lyra.toml.",
+        description="Launch a Lyra RQ worker from /lyra_data/config/lyra.toml.",
     )
     parser.add_argument("worker_name", help="Name from the [workers.<name>] table.")
     return parser

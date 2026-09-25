@@ -14,4 +14,3 @@ from lyra.api.exceptions import LyraAPIError as LyraAPIError
 from lyra.api.exceptions import MetricRunError as MetricRunError
 from lyra.api.exceptions import ServiceUnavailableError as ServiceUnavailableError
 from lyra.api.options import RunOptions as RunOptions
-from lyra.api.options import SubmitOptions as SubmitOptions

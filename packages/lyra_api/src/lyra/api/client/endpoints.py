@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 from lyra.api.client.base import parse_retry_after, service_unavailable_error
-from lyra.api.exceptions import DownloadError
+from lyra.api.exceptions import DownloadError, ServiceUnavailableError
 from lyra.sdk.models.admin import InstalledPluginListResponse, PluginRoutingResponse
 from lyra.sdk.models.data_types import DataTypesResponse
 from lyra.sdk.models.job import (
-    JobCancelResponse,
+    AdminJobDetail,
     JobCreateResponse,
     JobLifecycleStatus,
     JobListResponse,
@@ -107,7 +107,7 @@ def decode_response(
         raise DownloadError(err) from exc
 
 
-def validate_response(
+def _validate_response(
     spec: RequestSpec[_ResponseT],
     status: int,
     text: str,
@@ -133,6 +133,39 @@ def validate_response(
         err = f"Failed to {spec.operation}: response was not JSON."
         raise DownloadError(err)
     return decode_response(spec, text)
+
+
+def validate_response(
+    spec: RequestSpec[_ResponseT],
+    status: int,
+    text: str,
+    content_type: str,
+    retry_after: str | None,
+) -> _ResponseT:
+    """Validate a response and explain potentially accepted submissions.
+
+    Returns:
+        The typed response.
+
+    Raises:
+        DownloadError: If the transport response is unsuccessful or invalid.
+        ServiceUnavailableError: If the server reports structured unavailability.
+    """
+    try:
+        return _validate_response(spec, status, text, content_type, retry_after)
+    except (DownloadError, ServiceUnavailableError) as exc:
+        if (
+            spec.method == "POST"
+            and spec.path == "jobs"
+            and (status >= 500 or status in {202, 408})
+        ):
+            exc.args = (
+                (
+                    f"{exc} The job may have been accepted; "
+                    "another submission may duplicate it."
+                ),
+            )
+        raise
 
 
 def get_liveness() -> RequestSpec[LivenessResponse]:
@@ -170,13 +203,9 @@ def get_met_zone_code(name: str) -> RequestSpec[MetZoneCodeResponse]:
     )
 
 
-def create_job(
-    metric: str, payload: dict[str, Any], *, idempotency_key: str | None = None
-) -> RequestSpec[JobCreateResponse]:
+def create_job(metric: str, payload: dict[str, Any]) -> RequestSpec[JobCreateResponse]:
     """Return the request specification to create job."""
     body: dict[str, Any] = {"metric": metric, "input": payload}
-    if idempotency_key is not None:
-        body["idempotency_key"] = idempotency_key
     return RequestSpec(
         "POST",
         "jobs",
@@ -195,15 +224,13 @@ def get_job(job_id: str) -> RequestSpec[JobStatusInfo]:
 def list_admin_jobs(
     *,
     limit: int = 50,
-    status: JobLifecycleStatus | None = None,
-    metric: str | None = None,
+    status: JobLifecycleStatus,
+    queue: str,
+    offset: int = 0,
 ) -> RequestSpec[JobListResponse]:
     """Return the request specification to list admin jobs."""
     params: dict[str, Any] = {"limit": limit}
-    if status is not None:
-        params["status"] = status
-    if metric is not None:
-        params["metric"] = metric
+    params.update(status=status, queue=queue, offset=offset)
     return RequestSpec(
         "GET",
         "admin/jobs",
@@ -213,13 +240,13 @@ def list_admin_jobs(
     )
 
 
-def cancel_admin_job(job_id: str) -> RequestSpec[JobCancelResponse]:
-    """Return the request specification to cancel admin job."""
+def get_admin_job(job_id: str) -> RequestSpec[AdminJobDetail]:
+    """Return the request specification to fetch admin job."""
     return RequestSpec(
-        "POST",
-        f"admin/jobs/{job_id}/cancel",
-        "cancel admin job",
-        TypeAdapter(JobCancelResponse),
+        "GET",
+        f"admin/jobs/{job_id}",
+        "fetch admin job",
+        TypeAdapter(AdminJobDetail),
     )
 
 

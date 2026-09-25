@@ -3,7 +3,7 @@
 # are supplied through environment variables, not this TOML file.
 # LYRA_AGENT_API_KEY authenticates MCP and every /jobs lifecycle route.
 
-schema_version = 3
+schema_version = 4
 
 [api]
 host = "0.0.0.0"
@@ -65,17 +65,11 @@ level = "INFO"
 # Lyra writes one JSON object per line. Set file to write there instead of stdout.
 # file = "/lyra_data/logs/lyra.log"
 
-[job_store]
+[jobs]
+execution_timeout_seconds = 18000
+progress_min_interval_ms = 1000
 result_retention_seconds = 86400
 
-[job_progress]
-min_interval_ms = 1000
-
-[agent_submission_limit]
-# New REST and MCP jobs share this fixed-window quota. Idempotent replays do not
-# consume capacity.
-limit = 10
-window_seconds = 60
 
 [mcp]
 enabled = true

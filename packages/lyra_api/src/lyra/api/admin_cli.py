@@ -39,7 +39,6 @@ class _Command:
     name: str
     description: str
     run: Callable[[LyraAdminClient, argparse.Namespace], BaseModel]
-    mutates: bool = False
 
 
 _COMMANDS = (
@@ -59,22 +58,23 @@ _COMMANDS = (
     _Command(
         "jobs list",
         "List retained jobs.",
-        lambda c, a: c.jobs.list(limit=a.limit, status=a.status, metric=a.metric),
+        lambda c, a: c.jobs.list(
+            limit=a.limit, status=a.status, queue=a.queue, offset=a.offset
+        ),
     ),
     _Command(
-        "jobs cancel",
-        "Request cancellation of a retained job.",
-        lambda c, a: c.jobs.cancel(a.id),
-        mutates=True,
+        "jobs get",
+        "Inspect native job diagnostics.",
+        lambda c, a: c.jobs.get(a.id),
     ),
     _Command(
         "workers list",
-        "List workers and inspection freshness.",
+        "List native workers and heartbeat freshness.",
         lambda c, _: c.workers.list(),
     ),
     _Command(
         "workers get",
-        "Inspect one worker and its tasks.",
+        "Inspect one native worker and its current job.",
         lambda c, a: c.workers.get(a.name),
     ),
     _Command(
@@ -151,19 +151,13 @@ def _limit(value: str) -> int:
     except ValueError as exc:
         message = "must be an integer"
         raise argparse.ArgumentTypeError(message) from exc
-    if not 1 <= number <= 100:
-        message = "must be between 1 and 100"
+    if not 1 <= number <= 200:
+        message = "must be between 1 and 200"
         raise argparse.ArgumentTypeError(message)
     return number
 
 
 def _command_arguments(parser: argparse.ArgumentParser, command: _Command) -> None:
-    if command.mutates:
-        parser.add_argument(
-            "--yes",
-            action="store_true",
-            help="Confirm this mutation without prompting.",
-        )
     if command.name == "health":
         parser.add_argument(
             "--live",
@@ -174,10 +168,12 @@ def _command_arguments(parser: argparse.ArgumentParser, command: _Command) -> No
         parser.add_argument("--limit", type=_limit, default=50)
         parser.add_argument(
             "--status",
-            choices=("queued", "running", "succeeded", "failed", "cancelled"),
+            required=True,
+            choices=("queued", "running", "succeeded", "failed"),
         )
-        parser.add_argument("--metric", type=_nonempty)
-    elif command.name == "jobs cancel":
+        parser.add_argument("--queue", type=_nonempty, required=True)
+        parser.add_argument("--offset", type=int, default=0)
+    elif command.name == "jobs get":
         parser.add_argument("id", type=_nonempty)
     elif command.name == "workers get":
         parser.add_argument("name", type=_nonempty)
@@ -226,7 +222,7 @@ def build_parsers() -> list[argparse.ArgumentParser]:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print results as JSON; job cancellation requires --yes.",
+        help="Print results as JSON.",
     )
     roots = parser.add_subparsers(required=True)
     parsers: list[argparse.ArgumentParser] = [parser]
@@ -339,28 +335,9 @@ def _diagnostic(kind: str, message: str, *, json_output: bool) -> None:
     sys.stderr.write(f"{output}\n")
 
 
-def _confirmed(args: argparse.Namespace) -> bool:
-    if args.yes:
-        return True
-    if args.json or not sys.stdin.isatty() or not sys.stderr.isatty():
-        return False
-    target = " ".join(
-        f"{field}={value}"
-        for field in ("id", "metric")
-        if (value := getattr(args, field, None)) is not None
-    )
-    sys.stderr.write(
-        f"{args.command.description} Target: {args.host} {target}. Continue? [y/N] "
-    )
-    sys.stderr.flush()
-    return sys.stdin.readline().strip().lower() in {"y", "yes"}
-
-
 def _operation_error(command: _Command, data: dict[str, JsonValue]) -> str | None:
     if command.name == "health" and data.get("status") not in {"ok", "ready"}:
         return "Service is not ready."
-    if command.name == "jobs cancel" and data.get("cancellation_requested") is False:
-        return "Job cancellation was not requested."
     return None
 
 
@@ -396,13 +373,7 @@ def _execute(arguments: Sequence[str], *, json_output: bool) -> int:
     if args.command.name != "health" and (key is None or not key.strip()):
         message = "Set LYRA_ADMIN_API_KEY or supply --admin-api-key."
         raise UsageError(message)
-    if args.command.mutates and not _confirmed(args):
-        _diagnostic(
-            "confirmation",
-            "No change requested. Confirm interactively or supply --yes.",
-            json_output=json_output,
-        )
-        return 3
+
     client = LyraAdminClient(
         args.host, timeout=args.timeout, admin_api_key=key, secure=args.secure
     )
@@ -425,8 +396,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Execute one administrative command.
 
     Returns:
-        Zero on success, 1 on operational failure, 2 on usage errors, 3 on
-        missing confirmation, or 130 when interrupted.
+        Zero on success, 1 on operational failure, 2 on usage errors,
+        or 130 when interrupted.
     """
     arguments = list(sys.argv[1:] if argv is None else argv)
     json_output = "--json" in arguments

@@ -13,23 +13,17 @@ contains the strict input and serialization schemas.
    Read the selected contract with `lyra_get_metric`. Resolve a place name with
    `lyra_lookup_met_zone` when you need its raw metropolitan-zone code.
 2. Call `lyra_run_metric` with `metric`, `met_zone_code`, optional `parameters`,
-   and a caller-owned `idempotency_key`. Submission never waits or reads completion.
+   only. Submission never waits or reads completion.
 3. Call `lyra_get_job_result` with only `result_ref`. For `queued` or `running`,
-   wait two seconds before the next inspection. Failed and cancelled jobs are
+   wait two seconds before the next inspection. Failed jobs are
    successful observations (`isError: false`) with terminal status.
 4. Call `lyra_download_result` with only `result_ref` to obtain an authenticated
    HTTP handoff. Tables use `/jobs/{job_id}/result/table.jsonl`; files use
    `/jobs/{job_id}/result/download`. Send the agent Bearer credential yourself.
 
-`reused` means an equivalent idempotent submission reused the original job ID.
-It says nothing about caching or completion. The same key with different inputs
-returns `idempotency_conflict`. Submission quotas return `rate_limited` with retry
-information. Job operations have a fixed 30-second backend deadline and perform
-no internal polling, retry, or automatic resubmission. A submission timeout may
-occur after acceptance: retry with the **original idempotency key**.
-
-The result tools do not accept `wait_seconds`. The separate metadata and preview
-tools have been removed. REST and Python-client waiting remain available.
+Every submission creates an independent job. A timeout or transport failure may
+occur after acceptance; another submission may duplicate the computation. There
+is no automatic resubmission or remote cancellation. Observation retries are bounded.
 
 ## Metric input boundaries
 
@@ -37,7 +31,7 @@ tools have been removed. REST and Python-client waiting remain available.
 resolves `met_zone_code` for the metric's single spatial field. For example:
 
 ```json
-{"metric":"smoke_table_metric","met_zone_code":"09.01","parameters":{"value":7},"idempotency_key":"example-1"}
+{"metric":"smoke_table_metric","met_zone_code":"09.01","parameters":{"value":7}}
 ```
 
 The helper supplies `{}` for a declared parameter model when no parameters are
@@ -75,7 +69,7 @@ and output declarations. File metadata exposes media type and access instruction
 never a local artifact path.
 
 Unknown timestamps or provenance are null. Retained terminal payloads take
-precedence over stale or missing status. Failed/cancelled status without a payload
+precedence over stale or missing status. Failed status without a payload
 still reports that known outcome without inventing result metadata.
 
 ## Representative payloads
@@ -87,7 +81,7 @@ environment variable and never contain its secret value.
 Submission:
 
 ```json
-{"job_id":"job-1","result_ref":"lyra://results/job-1","reused":false,"next_tool":"lyra_get_job_result"}
+{"job_id":"job-1","result_ref":"lyra://results/job-1","next_tool":"lyra_get_job_result"}
 ```
 
 Queued:
@@ -114,15 +108,12 @@ File success:
 {"job_id":"file-1","result_ref":"lyra://results/file-1","status":"succeeded","result_kind":"file","lifetime":{},"descriptor":{"method":"GET","url":"https://lyra.example/api/jobs/file-1/result/descriptor","authentication":{"scheme":"Bearer","credential_env_var":"LYRA_AGENT_API_KEY"}},"file":{"media_type":"image/tiff","download":{"method":"GET","url":"https://lyra.example/api/jobs/file-1/result/download","authentication":{"scheme":"Bearer","credential_env_var":"LYRA_AGENT_API_KEY"}}},"summary":{"kind":"file","columns":[]},"truncation":{"omitted_rows":0,"omitted_columns":0,"shortened_strings":0,"omitted_sections":[]}}
 ```
 
-Failure and cancellation (`isError: false`):
+Failure (`isError: false`):
 
 ```json
 {"job_id":"failed-1","result_ref":"lyra://results/failed-1","status":"failed","result_kind":"failed","lifetime":{},"descriptor":{"method":"GET","url":"https://lyra.example/api/jobs/failed-1/result/descriptor","authentication":{"scheme":"Bearer","credential_env_var":"LYRA_AGENT_API_KEY"}},"error":{"message":"Execution failed"},"truncation":{"omitted_rows":0,"omitted_columns":0,"shortened_strings":0,"omitted_sections":[]}}
 ```
 
-```json
-{"job_id":"cancelled-1","result_ref":"lyra://results/cancelled-1","status":"cancelled","result_kind":"cancelled","lifetime":{},"descriptor":{"method":"GET","url":"https://lyra.example/api/jobs/cancelled-1/result/descriptor","authentication":{"scheme":"Bearer","credential_env_var":"LYRA_AGENT_API_KEY"}},"error":{"message":"Cancelled by administrator"},"truncation":{"omitted_rows":0,"omitted_columns":0,"shortened_strings":0,"omitted_sections":[]}}
-```
 
 Unknown or expired reference (`isError: true`):
 
@@ -148,7 +139,7 @@ there are no tombstones to distinguish the two. A succeeded status whose payload
 is missing, or a missing file artifact, returns `result_unavailable`.
 
 Downloading an active job returns `result_not_ready` with two-second polling
-guidance. Failed/cancelled downloads return `result_not_downloadable`.
+guidance. Failed downloads return `result_not_downloadable`.
 Infrastructure and deadline errors are retryable tool errors. These errors never
 cause an automatic submission. If retained data is gone, decide whether the user
 still needs a new execution before submitting one.

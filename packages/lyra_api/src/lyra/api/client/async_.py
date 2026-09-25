@@ -32,8 +32,8 @@ from lyra.api.exceptions import (
     ServiceUnavailableError,
 )
 from lyra.sdk.models.job import (
+    AdminJobDetail,
     FileJobResult,
-    JobCancelResponse,
     JobCreateResponse,
     JobLifecycleStatus,
     JobListResponse,
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
     from lyra.api.client.endpoints import RequestSpec
-    from lyra.api.options import RunOptions, SubmitOptions
+    from lyra.api.options import RunOptions
     from lyra.sdk.models.admin import InstalledPluginListResponse, PluginRoutingResponse
     from lyra.sdk.models.data_types import DataTypesResponse
     from lyra.sdk.models.lookups import MetZoneCodeResponse
@@ -129,7 +129,7 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         Returns:
             The table or file result associated with the job.
 
-        Failed or cancelled jobs raise ``MetricRunError``.
+        Failed jobs raise ``MetricRunError``.
 
         """
         result = await self._client.get_job_result(self.job_id)
@@ -152,7 +152,7 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
         None permits unlimited overall waiting with bounded individual requests.
 
         Returns:
-            The successful result; failed or cancelled results raise MetricRunError.
+            The successful result; failed results raise MetricRunError.
         """
         return self._wait(
             wait_seconds=timeout, poll_interval=poll_interval, on_progress=on_progress
@@ -192,7 +192,7 @@ class AsyncJobHandle(Generic[_SuccessResultT]):
                 callback_result = on_progress(cast("JobProgress", snapshot.progress))
                 if inspect.isawaitable(callback_result):
                     await callback_result
-            terminal = snapshot.status in {"succeeded", "failed", "cancelled"}
+            terminal = snapshot.status in {"succeeded", "failed"}
             if not terminal:
                 await asyncio.sleep(state.delay())
 
@@ -229,23 +229,17 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
         self,
         metric: str,
         payload: dict[str, Any],
-        *,
-        idempotency_key: str | None = None,
     ) -> JobCreateResponse:
-        return await self._request(
-            endpoints.create_job(metric, payload, idempotency_key=idempotency_key)
-        )
+        return await self._request(endpoints.create_job(metric, payload))
 
     async def submit_job(
         self,
         metric: str,
         payload: dict[str, Any],
-        *,
-        idempotency_key: str | None = None,
     ) -> AsyncJobHandle[SuccessfulJobResult]:
         return AsyncJobHandle(
             self,
-            await self.create_job(metric, payload, idempotency_key=idempotency_key),
+            await self.create_job(metric, payload),
         )
 
     async def get_job(self, job_id: str) -> JobStatusInfo:
@@ -255,15 +249,18 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
         self,
         *,
         limit: int = 50,
-        status: JobLifecycleStatus | None = None,
-        metric: str | None = None,
+        status: JobLifecycleStatus,
+        queue: str,
+        offset: int = 0,
     ) -> JobListResponse:
         return await self._request(
-            endpoints.list_admin_jobs(limit=limit, status=status, metric=metric)
+            endpoints.list_admin_jobs(
+                limit=limit, status=status, queue=queue, offset=offset
+            )
         )
 
-    async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
-        return await self._request(endpoints.cancel_admin_job(job_id))
+    async def get_admin_job(self, job_id: str) -> AdminJobDetail:
+        return await self._request(endpoints.get_admin_job(job_id))
 
     async def list_plugins(self) -> InstalledPluginListResponse:
         return await self._request(endpoints.list_plugins())
@@ -474,28 +471,20 @@ class _RawMetricsResource:
         self,
         metric: str,
         arguments: JsonObject,
-        *,
-        options: SubmitOptions | None = None,
     ) -> JobCreateResponse:
-        key = options.idempotency_key if options is not None else None
         return await self._transport.create_job(
             metric,
             arguments,
-            idempotency_key=key,
         )
 
     async def submit(
         self,
         metric: str,
         arguments: JsonObject,
-        *,
-        options: SubmitOptions | None = None,
     ) -> AsyncJobHandle[SuccessfulJobResult]:
-        key = options.idempotency_key if options is not None else None
         return await self._transport.submit_job(
             metric,
             arguments,
-            idempotency_key=key,
         )
 
     async def run(
@@ -505,12 +494,10 @@ class _RawMetricsResource:
         *,
         options: RunOptions | None = None,
     ) -> SuccessfulJobResult:
-        key = options.idempotency_key if options is not None else None
         wait_seconds = options.timeout if options is not None else None
         handle = await self._transport.submit_job(
             metric,
             arguments,
-            idempotency_key=key,
         )
         return await handle.wait(
             timeout=wait_seconds,
@@ -542,17 +529,19 @@ class _AdminJobsResource:
         self,
         *,
         limit: int = 50,
-        status: JobLifecycleStatus | None = None,
-        metric: str | None = None,
+        status: JobLifecycleStatus,
+        queue: str,
+        offset: int = 0,
     ) -> JobListResponse:
         return await self._transport.list_admin_jobs(
             limit=limit,
             status=status,
-            metric=metric,
+            queue=queue,
+            offset=offset,
         )
 
-    async def cancel(self, job_id: str) -> JobCancelResponse:
-        return await self._transport.cancel_admin_job(job_id)
+    async def get(self, job_id: str) -> AdminJobDetail:
+        return await self._transport.get_admin_job(job_id)
 
 
 class _AdminPluginsResource:
@@ -678,7 +667,7 @@ class AsyncLyraAdminClient:
 
     Attributes:
         health: Asynchronous liveness and readiness endpoints.
-        jobs: Asynchronous administrative job listing and cancellation endpoints.
+        jobs: Asynchronous administrative job listing and diagnostics endpoints.
         plugins: Asynchronous installed plugin inspection endpoints.
         catalog: Asynchronous administrative catalog summary endpoints.
         workers: Asynchronous worker inspection endpoints.
@@ -714,7 +703,7 @@ class AsyncLyraAdminClient:
         self.health = _HealthResource(transport)
         """Asynchronous liveness and readiness endpoints."""
         self.jobs = _AdminJobsResource(transport)
-        """Asynchronous administrative job listing and cancellation endpoints."""
+        """Asynchronous administrative job listing and diagnostics endpoints."""
         self.plugins = _AdminPluginsResource(transport)
         """Asynchronous installed plugin inspection endpoints."""
         self.catalog = _AdminCatalogResource(transport)

@@ -131,7 +131,7 @@ def build_metric_search_text(metric: MetricInfo) -> str:
 class MetricCatalogResponse(StrictBaseModel):
     """Public metric catalog with a contract-only fingerprint."""
 
-    client_schema_version: Literal[1] = Field(
+    client_schema_version: Literal[2] = Field(
         description="Version of the public metric catalog contract.",
     )
     json_schema_dialect: Literal["https://json-schema.org/draft/2020-12/schema"] = (

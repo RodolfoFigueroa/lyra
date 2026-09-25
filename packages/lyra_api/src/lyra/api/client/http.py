@@ -53,6 +53,10 @@ async def request_json(
             )
     except (aiohttp.ClientError, TimeoutError, UnicodeError) as exc:
         err = f"Failed to {spec.operation}: request error: {exc}"
+        if spec.method == "POST" and spec.path == "jobs":
+            err += (
+                " The job may have been accepted; another submission may duplicate it."
+            )
         raise DownloadError(
             err,
             retryable=isinstance(exc, (aiohttp.ClientConnectionError, TimeoutError))

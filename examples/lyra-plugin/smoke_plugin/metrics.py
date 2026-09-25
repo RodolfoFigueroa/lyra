@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class Parameters(MetricParameters):
-    """Parameters shared by the table and cancellation examples."""
+    """Parameters shared by the table and progress examples."""
 
     value: int = Field(description="Value copied into each output row.")
 
@@ -59,7 +59,6 @@ def run_table(
         A table result indexed by the input feature identifiers.
     """
     context.report_progress(stage="table", current=1, total=1)
-    context.check_cancelled()
     feature_ids = _feature_ids(location)
     return pd.DataFrame(
         {"value": [parameters.value for _feature_id in feature_ids]},
@@ -90,7 +89,6 @@ def run_file(
         A file result referring to the generated text artifact.
     """
     context.report_progress(stage="file", current=1, total=1)
-    context.check_cancelled()
     feature_ids = _feature_ids(location)
     output_path = context.temp_dir / "smoke-result.txt"
     output_path.write_text(
@@ -101,23 +99,22 @@ def run_file(
 
 
 @metric(
-    name="smoke_cancel_metric",
-    description="Emit progress and observe cancellation before returning.",
+    name="smoke_progress_metric",
+    description="Emit progress before returning.",
     output=_value_output(),
 )
-def run_cancel(
+def run_progress(
     location: LocationInput,
     parameters: Parameters,
     *,
     context: RunContext,
 ) -> pd.DataFrame:
-    """Exercise cancellation reporting before producing a table result.
+    """Exercise progress reporting before producing a table result.
 
     Returns:
-        A table result when the context has not been cancelled.
+        A table result after reporting progress.
     """
-    context.report_progress(stage="cancel-check", current=1, total=1)
-    context.check_cancelled()
+    context.report_progress(stage="complete", current=1, total=1)
     feature_ids = _feature_ids(location)
     return pd.DataFrame(
         {"value": [parameters.value for _feature_id in feature_ids]},

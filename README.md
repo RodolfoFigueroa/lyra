@@ -2,7 +2,7 @@
 
 Lyra is a REST API for computing accessibility and land-use metrics for spatial
 units in Mexico. It discovers metrics from typed Python plugins, validates jobs
-against generated schemas, and executes them in queue-specific Celery workers.
+against generated schemas, and executes them in queue-specific RQ workers.
 
 ## Start locally
 

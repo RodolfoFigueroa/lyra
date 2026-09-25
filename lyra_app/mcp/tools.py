@@ -34,8 +34,6 @@ from lyra_app.db.connection import (
 )
 from lyra_app.job_observation import JobObservation, observe_job
 from lyra_app.job_submission import (
-    IdempotencyConflictError,
-    SubmissionRateLimitedError,
     SubmissionUnavailableError,
     UnknownMetricError,
     submit_job,
@@ -76,8 +74,6 @@ OPERATION_TIMEOUT_SECONDS = 30.0
 _RESULT_REF_PATTERN = re.compile(r"^lyra://results/([^/?#\s]+)$")
 _UNKNOWN_METRIC_ERROR = "unknown_metric"
 _INVALID_PARAMETERS_ERROR = "invalid_parameters"
-_IDEMPOTENCY_CONFLICT_ERROR = "idempotency_conflict"
-_RATE_LIMITED_ERROR = "rate_limited"
 _BACKEND_ERROR = "backend_error"
 _DATABASE_UNAVAILABLE_ERROR = "database_unavailable"
 _METRIC_CURSOR_VERSION = 1
@@ -103,14 +99,12 @@ class LyraMCPBackend(Protocol):
         self,
         metric: str,
         payload: JsonObject,
-        *,
-        idempotency_key: str | None = None,
     ) -> JobCreateResponse:
         """Validate and submit a metric job through the Lyra domain service."""
         ...
 
     async def observe_job(self, job_id: str) -> JobObservation:
-        """Read retained state and reconcile an unexpected worker failure once."""
+        """Read native lifecycle state and best-effort retained metadata."""
         ...
 
 
@@ -197,15 +191,12 @@ class InProcessLyraBackend(LyraMCPBackend):
         self,
         metric: str,
         payload: JsonObject,
-        *,
-        idempotency_key: str | None = None,
     ) -> JobCreateResponse:
         try:
             return await submit_job(
                 JobCreateRequest(
                     metric=metric,
                     input=payload,
-                    idempotency_key=idempotency_key,
                 ),
                 database=self.database,
             )
@@ -222,18 +213,6 @@ class InProcessLyraBackend(LyraMCPBackend):
                 _INVALID_PARAMETERS_ERROR,
                 "Invalid metric parameters.",
                 validate_json_value(exc.errors),
-            ) from exc
-        except IdempotencyConflictError as exc:
-            raise ToolCallError(
-                _IDEMPOTENCY_CONFLICT_ERROR,
-                str(exc),
-                validate_json_value(exc.details),
-            ) from exc
-        except SubmissionRateLimitedError as exc:
-            raise ToolCallError(
-                _RATE_LIMITED_ERROR,
-                str(exc),
-                validate_json_value(exc.details),
             ) from exc
         except (
             DatabaseUnavailableError,
@@ -253,8 +232,9 @@ class InProcessLyraBackend(LyraMCPBackend):
             raise ToolCallError(
                 _BACKEND_ERROR,
                 (
-                    "Failed to create job. Reuse the original idempotency key "
-                    "when retrying."
+                    "Submission could not be confirmed. "
+                    "The job may have been accepted; "
+                    "another submission may duplicate it."
                 ),
                 {"retryable": True},
             ) from exc
@@ -300,10 +280,7 @@ async def execute_tool(
         action = (
             "Retry observation."
             if name != "lyra_run_metric"
-            else (
-                "Submission may have succeeded. Reuse your original idempotency "
-                "key when retrying; never submit with a new key."
-            )
+            else ("Submission may have succeeded; another submission may duplicate it.")
         )
         code = "operation_timeout"
         message = "The backend operation exceeded 30 seconds."
@@ -314,7 +291,11 @@ async def execute_tool(
         ) from exc
     except (RedisError, OSError) as exc:
         code = "backend_error"
-        message = "The result backend is temporarily unavailable."
+        message = (
+            "Submission may have been accepted; another submission may duplicate it."
+            if name == "lyra_run_metric"
+            else "The result backend is temporarily unavailable."
+        )
         raise ToolCallError(
             code,
             message,
@@ -464,10 +445,9 @@ async def _run_metric(
     job = await backend.create_job(
         arguments.metric,
         payload,
-        idempotency_key=arguments.idempotency_key,
     )
     return RunMetricOutput(
-        job_id=job.job_id, result_ref=_result_ref_for_job(job.job_id), reused=job.reused
+        job_id=job.job_id, result_ref=_result_ref_for_job(job.job_id)
     )
 
 
@@ -522,7 +502,7 @@ async def _download_result(
     if not isinstance(result, TableJobResult | FileJobResult):
         _raise_tool_error(
             "result_not_downloadable",
-            "Failed and cancelled jobs have no downloadable result.",
+            "Failed jobs have no downloadable result.",
             details,
         )
     if isinstance(result, FileJobResult) and not await Path(result.file_path).is_file():

@@ -23,7 +23,6 @@ from lyra.api import (
     LyraClient,
     MetricRunError,
     ServiceUnavailableError,
-    SubmitOptions,
 )
 from lyra.api.client.results import dataframe_path
 
@@ -274,18 +273,13 @@ def test_readiness_503_and_submission_contract(scenario: Scenario) -> None:
         Reply(status=202, payload=_job_response()),
     ]
     assert resolve(scenario.client.health.readiness()).status == "not_ready"
-    resolve(
-        scenario.client.raw.create(
-            "metric", {"value": 3}, options=SubmitOptions(idempotency_key="key")
-        )
-    )
+    resolve(scenario.client.raw.create("metric", {"value": 3}))
     assert scenario.calls[0][2]["headers"] == {}
     assert scenario.calls[1][:2] == ("POST", "https://example.test/jobs")
     assert scenario.calls[1][2]["headers"] == {"Authorization": "Bearer consumer"}
     assert scenario.calls[1][2]["json"] == {
         "metric": "metric",
         "input": {"value": 3},
-        "idempotency_key": "key",
     }
 
 
@@ -298,7 +292,7 @@ def test_transport_timeout_is_chained_without_retry(scenario: Scenario) -> None:
     assert len(scenario.calls) == 1
 
 
-@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("status", ["failed"])
 def test_failed_handle_and_raw_results(scenario: Scenario, status: str) -> None:
     payload: dict[str, Any] = {
         "job_id": "job-1",
@@ -556,7 +550,7 @@ def test_wait_explicit_nonretryable_service_response(scenario: Scenario) -> None
     assert scenario.sleeps == []
 
 
-@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("status", ["failed"])
 def test_wait_raises_terminal_failure(scenario: Scenario, status: str) -> None:
     scenario.replies = [
         status_reply(status),
@@ -694,3 +688,19 @@ def test_malformed_polling_payload_is_permanent(scenario: Scenario) -> None:
     with pytest.raises(DownloadError):
         resolve(submit_handle(scenario).wait())
     assert not scenario.sleeps
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        Reply(status=502, text="gateway failed"),
+        Reply(status=202, text="broken response"),
+    ],
+)
+def test_ambiguous_submission_explains_duplicate_risk_without_retry(
+    scenario: Scenario, reply: Reply
+) -> None:
+    scenario.replies = [reply]
+    with pytest.raises(DownloadError, match=r"may have been accepted.*duplicate"):
+        resolve(scenario.client.raw.create("metric", {}))
+    assert len(scenario.calls) == 1

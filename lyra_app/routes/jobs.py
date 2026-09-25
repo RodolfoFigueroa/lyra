@@ -2,8 +2,6 @@
 
 import json
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, cast
-from uuid import uuid4
 
 from anyio import Path
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,17 +16,12 @@ from lyra.sdk.models.job import (
     parse_job_result,
     result_ref_for_job,
 )
-from redis.exceptions import RedisError
 
 from lyra_app import job_store
 from lyra_app.agent_auth import require_agent_key
-from lyra_app.celery_app import celery_app
 from lyra_app.db.connection import ApplicationDatabaseRuntime, DatabaseUnavailableError
 from lyra_app.db.dependencies import DatabaseRuntimeDependency
-from lyra_app.db.redis import redis_client
 from lyra_app.job_submission import (
-    IdempotencyConflictError,
-    SubmissionRateLimitedError,
     SubmissionUnavailableError,
     UnknownMetricError,
     submit_job,
@@ -39,36 +32,21 @@ from lyra_app.spatial_inputs import (
     SpatialInputResolutionUnavailableError,
     SpatialInputValidationError,
 )
-from lyra_app.worker_control import reconcile_celery_failure
-
-if TYPE_CHECKING:
-    from lyra_app.job_submission import SubmissionRedisClient
 
 router = APIRouter(tags=["Jobs"], dependencies=[Depends(require_agent_key)])
 
 
-async def _ensure_redis_available() -> None:
-    try:
-        pong = await redis_client.ping()
-    except RedisError as exc:
-        err = "Cannot connect to Redis. Please try again later."
-        raise HTTPException(status_code=503, detail=err) from exc
-    if not pong:
-        err = "Cannot connect to Redis. Please try again later."
-        raise HTTPException(status_code=503, detail=err)
-
-
-async def _get_reconciled_job_status(
+async def _get_observed_job_status(
     job_id: str,
-) -> job_store.JobStatusSnapshot | None:
+) -> JobStatusInfo | None:
     snapshot = await job_store.get_job_status_async(job_id)
     if snapshot is None:
         return None
-    return await reconcile_celery_failure(snapshot)
+    return snapshot
 
 
 def _result_status_payload(
-    snapshot: job_store.JobStatusSnapshot,
+    snapshot: JobStatusInfo,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "job_id": snapshot.job_id,
@@ -106,7 +84,7 @@ async def create_job(
     """Submit a validated job request and translate domain failures to HTTP errors.
 
     Returns:
-        Queued or idempotently reused job metadata.
+        Independently queued job metadata.
 
     Raises:
         HTTPException: If the request, metric, capacity, or backing service prevents
@@ -115,9 +93,6 @@ async def create_job(
     try:
         return await submit_job(
             request,
-            client=cast("SubmissionRedisClient", redis_client),
-            dispatcher=celery_app,
-            job_id_factory=lambda: uuid4().hex,
             database=database,
         )
     except UnknownMetricError as exc:
@@ -132,25 +107,6 @@ async def create_job(
     except (DatabaseUnavailableError, SpatialInputResolutionUnavailableError) as exc:
         error = database_unavailable_http_exception(database.config)
         raise error from exc
-    except IdempotencyConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "idempotency_conflict",
-                "message": str(exc),
-                **exc.details,
-            },
-        ) from exc
-    except SubmissionRateLimitedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "code": "rate_limited",
-                "message": str(exc),
-                **exc.details,
-            },
-            headers={"Retry-After": str(exc.retry_after_seconds)},
-        ) from exc
     except SubmissionUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -166,14 +122,14 @@ async def create_job_route(
     """Handle authenticated HTTP job submission.
 
     Returns:
-        Queued or idempotently reused job metadata.
+        Independently queued job metadata.
     """
     return await create_job(request, database=database)
 
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str) -> JobStatusInfo:
-    """Return the latest reconciled status for a retained job.
+    """Return the latest observed status for a retained job.
 
     Returns:
         The current lifecycle, progress, and error metadata.
@@ -181,8 +137,7 @@ async def get_job(job_id: str) -> JobStatusInfo:
     Raises:
         HTTPException: If Redis is unavailable or the job is no longer retained.
     """
-    await _ensure_redis_available()
-    snapshot = await _get_reconciled_job_status(job_id)
+    snapshot = await _get_observed_job_status(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job expired or not found")
     return JobStatusInfo.model_validate(snapshot.model_dump(mode="json"))
@@ -198,10 +153,9 @@ async def get_job_result(job_id: str) -> JSONResponse:
     Raises:
         HTTPException: If Redis is unavailable or the result is not retained.
     """
-    await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:
-        await _get_reconciled_job_status(job_id)
+        await _get_observed_job_status(job_id)
         payload = await job_store.get_job_result_async(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="Result expired or not found")
@@ -220,14 +174,13 @@ async def get_job_result_descriptor(job_id: str) -> JSONResponse:
     Raises:
         HTTPException: If Redis is unavailable or a successful result has expired.
     """
-    await _ensure_redis_available()
     descriptor = await job_store.get_job_result_descriptor_async(job_id)
     if descriptor is not None:
         return JSONResponse(
             content=descriptor.model_dump(mode="json", exclude_none=True),
         )
 
-    snapshot = await _get_reconciled_job_status(job_id)
+    snapshot = await _get_observed_job_status(job_id)
     if snapshot is not None and job_store.is_terminal_status(snapshot.status):
         descriptor = await job_store.get_job_result_descriptor_async(job_id)
         if descriptor is not None:
@@ -258,7 +211,6 @@ async def export_job_result_jsonl(job_id: str) -> StreamingResponse:
     Raises:
         HTTPException: If the result is absent or is not a table.
     """
-    await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="Result expired or not found")
@@ -286,7 +238,6 @@ async def download_job_result(job_id: str) -> FileResponse:
     Raises:
         HTTPException: If the result or artifact is absent or is not a file result.
     """
-    await _ensure_redis_available()
     payload = await job_store.get_job_result_async(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="Result expired or not found")

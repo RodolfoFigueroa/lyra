@@ -1,9 +1,7 @@
 """Celery task implementations for executing metric jobs."""
 
 import logging
-import math
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,30 +10,17 @@ from celery import Task
 from celery.signals import task_failure
 from filelock import FileLock
 from lyra.sdk.db import LyraDB
+from lyra.sdk.errors import MetricInputError, MetricResultError
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.job import (
     CancelledJobResult,
     FailedJobResult,
-    FileJobResult,
     JobEnvelope,
     JobProgress,
-    TableJobResult,
     TerminalJobResult,
-    parse_job_result,
 )
-from lyra.sdk.models.plugin_v4 import (
-    CompiledMetricManifestV4,
-    CompiledPluginManifestV4,
-    FileOutputV4,
-    OutputColumnTypeV4,
-    OutputSpecV4,
-    TableOutputColumnV4,
-    TableOutputV4,
-    expand_runner_table_output_columns,
-    expand_table_output_columns,
-)
-from lyra.sdk.models.strict import StrictBaseModel
-from lyra.sdk.plugin import PluginDefinition, PluginResult
+from lyra.sdk.models.plugin import MetricManifest, PluginManifest
+from lyra.sdk.plugin import PluginDefinition
 from lyra.sdk.plugin_loader import load_plugin_definition
 from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import ValidationError as PydanticValidationError
@@ -62,9 +47,6 @@ from lyra_app.registry import load_plugin_manifest
 logger = logging.getLogger(__name__)
 
 GENERIC_TASK_NAME = "lyra.run_metric"
-FRACTION_RANGE_TOLERANCE = 1e-9
-
-MetricRunCallable = Callable[[JobEnvelope, "WorkerRunContext"], PluginResult]
 
 
 @dataclass(frozen=True)
@@ -73,8 +55,7 @@ class RunnerMetricEntry:
 
     metric_name: str
     queue: str
-    output: OutputSpecV4
-    run: MetricRunCallable
+    definition: PluginDefinition
 
 
 @dataclass
@@ -137,7 +118,7 @@ def set_runner_temp_base(path: Path | None) -> None:
 
 
 def _entry_from_metric(
-    metric: CompiledMetricManifestV4,
+    metric: MetricManifest,
     *,
     queue: str,
     definition: PluginDefinition,
@@ -145,16 +126,15 @@ def _entry_from_metric(
     return RunnerMetricEntry(
         metric_name=metric.name,
         queue=queue,
-        output=metric.output,
-        run=definition,
+        definition=definition,
     )
 
 
 def _validated_plugin_definition(
-    manifest: CompiledPluginManifestV4,
+    manifest: PluginManifest,
 ) -> PluginDefinition:
     definition = load_plugin_definition(manifest.factory)
-    live_manifest = definition.compiled_manifest(
+    live_manifest = definition.manifest(
         plugin=manifest.plugin,
         factory=manifest.factory,
     )
@@ -196,7 +176,7 @@ def _runner_queues(worker_name: str, config: LyraConfig) -> set[str]:
 
 
 def _resolve_metric_queue(
-    metric: CompiledMetricManifestV4,
+    metric: MetricManifest,
     metric_queues: dict[str, str],
 ) -> str:
     try:
@@ -232,7 +212,7 @@ def load_runner_metric_entries(
 
     for repo in repos:
         manifest = load_plugin_manifest(repo.path)
-        selected_metrics: list[tuple[CompiledMetricManifestV4, str]] = []
+        selected_metrics: list[tuple[MetricManifest, str]] = []
         for metric in manifest.metrics:
             queue = _resolve_metric_queue(metric, metric_queues)
             if queues and queue not in queues:
@@ -274,7 +254,7 @@ def refresh_runner_registry(
     RUNNER_REGISTRY.update(registry)
     _RUNNER_TEMP_BASE = config.worker_temp_dir(worker_name)
     logger.info(
-        "Loaded %d v3 runner metric(s) for generic task %s.",
+        "Loaded %d runner metric(s) for generic task %s.",
         len(RUNNER_REGISTRY),
         GENERIC_TASK_NAME,
     )
@@ -359,340 +339,6 @@ def _persist_result(
     return job_store.save_job_result(result)
 
 
-def _cell_error(
-    value: JsonValue,
-    column_type: OutputColumnTypeV4,
-    *,
-    nullable: bool,
-) -> str | None:
-    if value is None:
-        return None if nullable else "null is not allowed"
-
-    error: str | None
-    if column_type == "boolean":
-        error = None if type(value) is bool else "expected boolean"
-    elif column_type == "integer":
-        error = None if type(value) is int else "expected integer"
-    elif column_type == "number":
-        if not isinstance(value, int | float) or isinstance(value, bool):
-            error = "expected number"
-        else:
-            error = None if math.isfinite(float(value)) else "number must be finite"
-    elif column_type == "string":
-        error = None if type(value) is str else "expected string"
-    else:
-        error = f"unsupported column type: {column_type}"
-    return error
-
-
-def _expected_table_index(
-    job: JobEnvelope,
-) -> list[str] | FailedJobResult:
-    try:
-        location = GeoJSON.model_validate(job.input["location"])
-    except PydanticValidationError as exc:
-        return _failed_result(job.job_id, "invalid_result", str(exc))
-
-    expected_index = [str(feature.id) for feature in location.features]
-    if len(expected_index) != len(set(expected_index)):
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Resolved location feature IDs must be unique after string conversion.",
-        )
-
-    return expected_index
-
-
-def _validate_table_values(
-    result: TableJobResult,
-    columns: list[TableOutputColumnV4],
-) -> str | None:
-    for row_position, row in enumerate(result.data):
-        for column_position, column in enumerate(columns):
-            error = _cell_error(
-                row[column_position],
-                column.type,
-                nullable=column.nullable,
-            )
-            if error is not None:
-                return (
-                    "Invalid table value at row "
-                    f"{row_position}, column {column.name!r}: {error}."
-                )
-    return None
-
-
-def _fractional_area_value(
-    source_value: JsonValue,
-    area: float,
-    feature_id: str,
-    column_name: str,
-    job_id: str,
-) -> float | FailedJobResult | None:
-    if source_value is None:
-        return None
-    if not math.isfinite(area) or area <= 0:
-        return _failed_result(
-            job_id,
-            "invalid_result",
-            f"Location area for feature {feature_id!r} must be positive.",
-        )
-    if not isinstance(source_value, int | float | str):
-        return _failed_result(
-            job_id,
-            "invalid_result",
-            f"Source column {column_name!r} must contain numeric values.",
-        )
-    fraction = float(source_value) / area
-    if fraction < -FRACTION_RANGE_TOLERANCE or fraction > 1 + FRACTION_RANGE_TOLERANCE:
-        return _failed_result(
-            job_id,
-            "invalid_result",
-            (
-                f"Derived fraction for feature {feature_id!r}, source "
-                f"column {column_name!r} is outside [0, 1]: {fraction}."
-            ),
-        )
-    return min(1.0, max(0.0, fraction))
-
-
-def _derive_fractional_area_columns(
-    result: TableJobResult,
-    job: JobEnvelope,
-    runner_columns: list[TableOutputColumnV4],
-) -> TableJobResult | FailedJobResult:
-    areas = job.location_areas_m2
-    if areas is None:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Job envelope is missing server-calculated location areas.",
-        )
-    if list(areas) != result.index:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Location area feature IDs must match the table result index.",
-        )
-
-    derived_columns: list[str] = []
-    derived_data: list[list[JsonValue]] = [[] for _ in result.data]
-    for column_position, column in enumerate(runner_columns):
-        derived_columns.append(column.name)
-        for row_position, row in enumerate(result.data):
-            derived_data[row_position].append(row[column_position])
-
-        for derivation in column.derivations:
-            derived_columns.append(derivation.name)
-            for row_position, (feature_id, row) in enumerate(
-                zip(result.index, result.data, strict=True)
-            ):
-                value = _fractional_area_value(
-                    row[column_position],
-                    areas[feature_id],
-                    feature_id,
-                    column.name,
-                    job.job_id,
-                )
-                if isinstance(value, FailedJobResult):
-                    return value
-                derived_data[row_position].append(value)
-
-    return TableJobResult(
-        job_id=result.job_id,
-        index=result.index,
-        columns=derived_columns,
-        data=derived_data,
-    )
-
-
-def _validate_result_against_columns(
-    result: TableJobResult,
-    job: JobEnvelope,
-    columns: list[TableOutputColumnV4],
-    *,
-    mismatch_message: str,
-) -> FailedJobResult | None:
-    expected_columns = [column.name for column in columns]
-    if result.columns != expected_columns:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            mismatch_message,
-        )
-    error = _validate_table_values(result, columns)
-    if error is not None:
-        return _failed_result(job.job_id, "invalid_result", error)
-    return None
-
-
-def _validate_result_index(
-    result: TableJobResult,
-    job: JobEnvelope,
-) -> FailedJobResult | None:
-    expected_index = _expected_table_index(job)
-    if isinstance(expected_index, FailedJobResult):
-        return expected_index
-    if result.index != expected_index:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Table result index must match the resolved location feature IDs.",
-        )
-    return None
-
-
-def _validate_table_result(
-    result: TableJobResult,
-    job: JobEnvelope,
-    output: TableOutputV4,
-) -> TableJobResult | FailedJobResult:
-    index_error = _validate_result_index(result, job)
-    if index_error is not None:
-        return index_error
-
-    try:
-        runner_columns = expand_runner_table_output_columns(output, job.input)
-        expanded_columns = (
-            expand_table_output_columns(runner_columns)
-            if any(column.derivations for column in runner_columns)
-            else None
-        )
-    except (TypeError, ValueError) as exc:
-        return _failed_result(job.job_id, "invalid_result", str(exc))
-
-    validation_error = _validate_result_against_columns(
-        result,
-        job,
-        runner_columns,
-        mismatch_message=(
-            "Table result columns must match the runner output declaration."
-        ),
-    )
-    if validation_error is not None:
-        return validation_error
-
-    if expanded_columns is None:
-        return result
-
-    derived_result = _derive_fractional_area_columns(result, job, runner_columns)
-    if isinstance(derived_result, FailedJobResult):
-        return derived_result
-
-    validation_error = _validate_result_against_columns(
-        derived_result,
-        job,
-        expanded_columns,
-        mismatch_message=(
-            "Derived table columns must match the effective output declaration."
-        ),
-    )
-    return validation_error if validation_error is not None else derived_result
-
-
-def _validate_file_result(
-    result: FileJobResult,
-    job: JobEnvelope,
-    output: FileOutputV4,
-    context: WorkerRunContext,
-) -> FileJobResult | FailedJobResult:
-    if result.media_type != output.media_type:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "File result media_type must match the metric output declaration.",
-        )
-
-    file_path = Path(result.file_path)
-    if not file_path.is_absolute():
-        file_path = context.temp_dir / file_path
-
-    resolved_path = file_path.resolve()
-    temp_dir = context.temp_dir.resolve()
-    if not resolved_path.is_relative_to(temp_dir):
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "File result path must be inside the job temp directory.",
-        )
-
-    if not resolved_path.is_file():
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "File result path does not exist or is not a file.",
-        )
-
-    allowed_extensions = {extension.lower() for extension in output.extensions}
-    if resolved_path.suffix.lower() not in allowed_extensions:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "File result extension must match the metric output declaration.",
-        )
-
-    return result.model_copy(update={"file_path": str(resolved_path)})
-
-
-def _validate_success_result(
-    result: TerminalJobResult,
-    job: JobEnvelope,
-    output: OutputSpecV4,
-    context: WorkerRunContext,
-) -> TerminalJobResult:
-    if isinstance(result, FailedJobResult | CancelledJobResult):
-        return result
-
-    if isinstance(output, TableOutputV4):
-        if not isinstance(result, TableJobResult):
-            return _failed_result(
-                job.job_id,
-                "invalid_result",
-                "Metric declared table output but returned a non-table result.",
-            )
-        return _validate_table_result(result, job, output)
-
-    if not isinstance(result, FileJobResult):
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            "Metric declared file output but returned a non-file result.",
-        )
-    return _validate_file_result(result, job, output, context)
-
-
-def _normalise_plugin_result(
-    raw_result: PluginResult,
-    job: JobEnvelope,
-    entry: RunnerMetricEntry,
-    context: WorkerRunContext,
-) -> TerminalJobResult:
-    try:
-        result = (
-            raw_result
-            if isinstance(
-                raw_result,
-                TableJobResult | FileJobResult | FailedJobResult | CancelledJobResult,
-            )
-            else parse_job_result(
-                raw_result.model_dump(mode="json")
-                if isinstance(raw_result, StrictBaseModel)
-                else raw_result
-            )
-        )
-    except PydanticValidationError as exc:
-        return _failed_result(job.job_id, "invalid_result", str(exc))
-
-    if result.job_id != job.job_id:
-        return _failed_result(
-            job.job_id,
-            "invalid_result",
-            f"Plugin returned job_id {result.job_id!r} for job {job.job_id!r}.",
-        )
-    return _validate_success_result(result, job, entry.output, context)
-
-
 def _flush_failed_job_progress(
     context: WorkerRunContext | None,
     job: JobEnvelope,
@@ -718,14 +364,37 @@ def _execute_known_job(job: JobEnvelope, entry: RunnerMetricEntry) -> JsonObject
     context: WorkerRunContext | None = None
     try:
         context = build_run_context(job)
-        raw_result = entry.run(job, context)
+        raw_result = entry.definition(job, context)
         context.flush_progress()
+        result = entry.definition.normalize_result(
+            job.metric,
+            raw_result,
+            job_id=job.job_id,
+            location=(
+                GeoJSON.model_validate(job.input["location"])
+                if "location" in job.input
+                else None
+            ),
+            temp_dir=context.temp_dir,
+            location_areas_m2=job.location_areas_m2,
+        )
     except job_store.JobCancelledError:
         return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
     except Exception as exc:
         if _flush_failed_job_progress(context, job):
             return _persist_result(_cancelled_result(job.job_id), metric=job.metric)
-        if is_database_unavailable_error(exc):
+        if isinstance(exc, MetricInputError | MetricResultError):
+            failure = FailedJobResult(
+                job_id=job.job_id,
+                error={
+                    "type": "invalid_input"
+                    if isinstance(exc, MetricInputError)
+                    else "invalid_result",
+                    "message": exc.message,
+                    "path": exc.path,
+                },
+            )
+        elif is_database_unavailable_error(exc):
             logger.warning(
                 "Database unavailable while executing metric %s for job %s.",
                 job.metric,
@@ -745,7 +414,6 @@ def _execute_known_job(job: JobEnvelope, entry: RunnerMetricEntry) -> JsonObject
             )
         return _persist_result(failure, metric=job.metric)
 
-    result = _normalise_plugin_result(raw_result, job, entry, context)
     return _persist_result(result, metric=job.metric)
 
 

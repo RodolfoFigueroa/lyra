@@ -82,17 +82,19 @@ curl http://localhost:5219/metrics
 curl http://localhost:5219/metrics/METRIC_NAME
 ```
 
-Replace the placeholders with one returned metric and its required spatial
-field. Keep the idempotency key when retrying an uncertain request:
+For the configured example plugin, submit `smoke_table_metric` with nested
+parameters. For another metric, use its advertised schema. A declared parameter
+model requires `parameters` even when its value is `{}`; omit that property for
+parameterless metrics. Keep the idempotency key when retrying an uncertain request:
 
 ```bash
 curl -X POST http://localhost:5219/jobs \
   -H "Authorization: Bearer ${LYRA_AGENT_API_KEY}" \
   -H 'Content-Type: application/json' \
-  -d '{"metric":"METRIC_NAME","input":{"SPATIAL_FIELD":{"data_type":"met_zone_code","value":"09.01"}},"idempotency_key":"quickstart-1"}'
+  -d '{"metric":"smoke_table_metric","input":{"location":{"data_type":"met_zone_code","value":"09.01"},"parameters":{"value":7}},"idempotency_key":"quickstart-1"}'
 ```
 
-Use the returned `job_id` to stream events and read the terminal descriptor:
+Use the returned `job_id` to poll status and read the terminal descriptor:
 
 ```bash
 curl http://localhost:5219/jobs/JOB_ID \

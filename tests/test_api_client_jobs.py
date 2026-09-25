@@ -346,7 +346,7 @@ def _result_descriptor_response() -> dict[str, Any]:
             "plugin": {"name": "fake-plugin", "version": "1.0.0"},
             "input": {
                 "location": {"data_type": "met_zone_code", "value": "09.01"},
-                "value": 3,
+                "parameters": {"value": 3},
             },
             "output": {
                 "kind": "table",
@@ -359,7 +359,6 @@ def _result_descriptor_response() -> dict[str, Any]:
                         "nullable": False,
                     }
                 ],
-                "batched_columns": [],
             },
             "created_at": "2026-07-09T12:00:00Z",
             "row_identity": {
@@ -460,39 +459,31 @@ def _metric_response() -> dict[str, Any]:
     return {
         "name": "accessibility_by_destination",
         "description": "Compute accessibility by destination.",
+        "spatial_inputs": {"location": "location"},
         "request_schema": {
             "type": "object",
-            "required": ["location", "sector_filters"],
+            "required": ["location", "parameters"],
             "properties": {
                 "location": {"type": "object"},
-                "sector_filters": {
-                    "type": "array",
-                    "minItems": 1,
-                    "uniqueItems": True,
-                    "items": {
-                        "type": "object",
-                        "required": ["key", "value"],
-                        "properties": {
-                            "key": {"type": "string"},
-                            "value": {"type": "string"},
-                            "label": {"type": "string"},
-                        },
-                        "additionalProperties": False,
+                "parameters": {
+                    "type": "object",
+                    "required": ["sector_filters"],
+                    "properties": {
+                        "sector_filters": {"type": "array", "items": {"type": "string"}}
                     },
+                    "additionalProperties": False,
                 },
             },
             "additionalProperties": False,
         },
         "output": {
             "kind": "table",
-            "columns": [],
-            "batched_columns": [
+            "columns": [
                 {
-                    "source": "sector_filters",
-                    "name": "job_accessibility_{key}",
+                    "name": "job_accessibility",
                     "type": "number",
                     "unit": "jobs",
-                    "description": "Job accessibility for {label}.",
+                    "description": "Job accessibility.",
                     "nullable": False,
                 }
             ],
@@ -814,7 +805,7 @@ def test_sync_client_returns_grouped_data_type_schemas(
     assert response.bounds[0].wrapper_schema == {"type": "object"}
 
 
-def test_sync_client_returns_v4_metric_catalog(
+def test_sync_client_returns_v5_metric_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
@@ -833,19 +824,18 @@ def test_sync_client_returns_v4_metric_catalog(
     assert len(catalog.metrics) == 1
     assert catalog.metrics[0].name == "accessibility_by_destination"
     output = catalog.metrics[0].output.model_dump(mode="json")
-    batched_column = output["batched_columns"][0]
-    assert set(batched_column) == {
-        "source",
+    column = output["columns"][0]
+    assert set(column) == {
         "name",
         "type",
         "unit",
         "description",
         "nullable",
     }
-    assert batched_column["name"] == "job_accessibility_{key}"
+    assert column["name"] == "job_accessibility"
 
 
-def test_sync_client_returns_one_v4_metric(
+def test_sync_client_returns_one_v5_metric(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def get(
@@ -1501,7 +1491,7 @@ def test_async_client_returns_grouped_data_type_schemas(
     assert response.bounds[0].wrapper_schema == {"type": "object"}
 
 
-def test_async_client_returns_v4_metric_catalog(
+def test_async_client_returns_v5_metric_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeSession.responses = [
@@ -1517,19 +1507,18 @@ def test_async_client_returns_v4_metric_catalog(
     assert len(catalog.metrics) == 1
     assert catalog.metrics[0].name == "accessibility_by_destination"
     output = catalog.metrics[0].output.model_dump(mode="json")
-    batched_column = output["batched_columns"][0]
-    assert set(batched_column) == {
-        "source",
+    column = output["columns"][0]
+    assert set(column) == {
         "name",
         "type",
         "unit",
         "description",
         "nullable",
     }
-    assert batched_column["description"] == "Job accessibility for {label}."
+    assert column["description"] == "Job accessibility."
 
 
-def test_async_client_returns_one_v4_metric(
+def test_async_client_returns_one_v5_metric(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeSession.responses = [

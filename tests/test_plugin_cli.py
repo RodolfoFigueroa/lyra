@@ -18,8 +18,6 @@ from lyra.sdk.plugin_cli import (
 from pre_commit.clientlib import load_config
 from ruamel.yaml import YAML
 
-from tests.smoke_plugin_helpers import SMOKE_PLUGIN_DIR
-
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -41,17 +39,19 @@ factory = "example_plugin:create_plugin"
     )
     (project / "example_plugin.py").write_text(
         """
-from lyra.sdk import Input, LocationInput, PluginDefinition, metric
-from lyra.sdk.models.job import TableJobResult
-from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4
+from pydantic import Field
+from lyra.sdk import MetricParameters, LocationInput, PluginDefinition, metric
+from lyra.sdk.models.plugin import TableColumn, TableOutput
+
+class Parameters(MetricParameters):
+    value: int = Field(default=2, description="Example input value.")
 
 @metric(
     name="example",
     description="Example metric.",
-    inputs={"value": Input(description="Example input value.")},
-    output=TableOutputV4(
+    output=TableOutput(
         kind="table",
-        columns=[TableOutputColumnV4(
+        columns=[TableColumn(
             name="value",
             type="integer",
             unit="count",
@@ -59,7 +59,7 @@ from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4
         )],
     ),
 )
-def calculate(location: LocationInput, value: int = 2) -> TableJobResult:
+def calculate(location: LocationInput, parameters: Parameters):
     raise AssertionError
 
 def create_plugin() -> PluginDefinition:
@@ -257,35 +257,27 @@ def test_add_pre_commit_hook_cli_reports_added_and_existing(
     assert "already exists in" in capsys.readouterr().out
 
 
-def test_smoke_plugin_manifest_is_current() -> None:
-    sys.modules.pop("smoke_plugin.metrics", None)
-    sys.modules.pop("smoke_plugin.plugin", None)
-    sys.modules.pop("smoke_plugin", None)
-
-    assert check_manifest(SMOKE_PLUGIN_DIR) == (True, "")
-
-
 def test_describe_plugin_renders_human_and_json_output(tmp_path: Path) -> None:
     _write_project(tmp_path)
     sys.modules.pop("example_plugin", None)
 
     descriptions = describe_plugin(tmp_path)
     assert [description.name for description in descriptions] == ["example"]
-    assert getattr(descriptions[0].inputs["value"], "description", None) == (
-        "Example input value."
-    )
+    assert descriptions[0].request_schema["$defs"]["Parameters"]["properties"]["value"][
+        "description"
+    ] == ("Example input value.")
 
     human = render_description(tmp_path, "example")
     assert "Metric: example" in human
-    assert "Signature: calculate(location: LocationInput, value: int = 2)" in human
+    assert "Signature: calculate(location:" in human
     assert "Example input value." in human
-    assert "Output: table (1 static column(s), 0 batched column group(s))" in human
+    assert "Output: table (1 source column(s))" in human
 
     payload = json.loads(render_description(tmp_path, json_output=True))
     assert payload["metrics"][0]["name"] == "example"
-    assert payload["metrics"][0]["inputs"]["value"]["description"] == (
-        "Example input value."
-    )
+    assert payload["metrics"][0]["request_schema"]["$defs"]["Parameters"]["properties"][
+        "value"
+    ]["description"] == ("Example input value.")
 
 
 def test_describe_cli_reports_unknown_metrics(

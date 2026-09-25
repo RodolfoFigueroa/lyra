@@ -31,6 +31,24 @@ occur after acceptance: retry with the **original idempotency key**.
 The result tools do not accept `wait_seconds`. The separate metadata and preview
 tools have been removed. REST and Python-client waiting remain available.
 
+## Metric input boundaries
+
+`lyra_run_metric` nests its `parameters` argument under `input.parameters` and
+resolves `met_zone_code` for the metric's single spatial field. For example:
+
+```json
+{"metric":"smoke_table_metric","met_zone_code":"09.01","parameters":{"value":7},"idempotency_key":"example-1"}
+```
+
+The helper supplies `{}` for a declared parameter model when no parameters are
+provided; required fields still need values. For a parameterless metric it omits
+the property, and rejects nonempty parameters instead of discarding them.
+
+Metrics with both `location` and `bounds` are discoverable but execution through
+this helper returns `unsupported_spatial_shape`. Use REST or the Python client
+for those metrics. A schema-valid submission can later fail with `invalid_input`
+when the worker runs Python semantic validators.
+
 ## Inspection limits and complete metadata
 
 Inspection returns at most 10 preview rows and 20 data columns, plus the row

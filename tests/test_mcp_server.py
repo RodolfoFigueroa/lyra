@@ -26,12 +26,12 @@ from lyra.sdk.models.job import (
     ResultLifetime,
     TableJobResult,
 )
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
-from lyra.sdk.models.plugin_v4 import (
-    FileOutputV4,
-    SpatialInputKindV4,
-    TableOutputColumnV4,
-    TableOutputV4,
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfo
+from lyra.sdk.models.plugin import (
+    FileOutput,
+    SpatialInputKind,
+    TableColumn,
+    TableOutput,
 )
 from lyra.sdk.types import (
     JsonObject,
@@ -222,7 +222,7 @@ def _app_with_mcp(
 
 
 class FakeMCPBackend:
-    def __init__(self, metrics: list[MetricInfoV4]) -> None:
+    def __init__(self, metrics: list[MetricInfo]) -> None:
         self.catalog = MetricCatalogResponse(
             client_schema_version=1,
             json_schema_dialect="https://json-schema.org/draft/2020-12/schema",
@@ -257,7 +257,7 @@ class FakeMCPBackend:
         self.met_zone_queries.append(name)
         return self.met_zone_matches.get(name)
 
-    async def get_metric(self, metric: str) -> MetricInfoV4 | None:
+    async def get_metric(self, metric: str) -> MetricInfo | None:
         return next(
             (
                 candidate
@@ -274,10 +274,16 @@ class FakeMCPBackend:
         *,
         idempotency_key: str | None = None,
     ) -> JobCreateResponse:
-        if payload.get("value") == "invalid":
+        if payload.get("parameters", {}).get("value") == "invalid":
             code = "invalid_parameters"
             message = "Invalid metric parameters."
-            details = [{"loc": ["value"], "msg": "Expected integer.", "type": "type"}]
+            details = [
+                {
+                    "loc": ["parameters", "value"],
+                    "msg": "Expected integer.",
+                    "type": "type",
+                }
+            ]
             raise self._tool_error(
                 code,
                 message,
@@ -351,9 +357,9 @@ def _table_metric(
     name: str,
     description: str,
     *,
-    spatial_inputs: dict[str, SpatialInputKindV4] | None = None,
+    spatial_inputs: dict[str, SpatialInputKind] | None = None,
     value_type: str = "integer",
-) -> MetricInfoV4:
+) -> MetricInfo:
     spatial = spatial_inputs or {"location": "location"}
     properties: dict[str, Any] = {
         field: {
@@ -370,24 +376,31 @@ def _table_metric(
         }
         for field in spatial
     }
-    properties["value"] = {
-        "type": value_type,
-        "description": "Value copied into each output row.",
+    properties["parameters"] = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": value_type,
+                "description": "Value copied into each output row.",
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": False,
     }
-    return MetricInfoV4(
+    return MetricInfo(
         name=name,
         description=description,
         request_schema={
             "type": "object",
             "properties": properties,
-            "required": [*spatial, "value"],
+            "required": [*spatial, "parameters"],
             "additionalProperties": False,
         },
         spatial_inputs=spatial,
-        output=TableOutputV4(
+        output=TableOutput(
             kind="table",
             columns=[
-                TableOutputColumnV4(
+                TableColumn(
                     name="value",
                     type="integer",
                     unit="count",
@@ -398,8 +411,8 @@ def _table_metric(
     )
 
 
-def _file_metric(name: str, description: str) -> MetricInfoV4:
-    return MetricInfoV4(
+def _file_metric(name: str, description: str) -> MetricInfo:
+    return MetricInfo(
         name=name,
         description=description,
         request_schema={
@@ -409,7 +422,7 @@ def _file_metric(name: str, description: str) -> MetricInfoV4:
             "additionalProperties": False,
         },
         spatial_inputs={"location": "location"},
-        output=FileOutputV4(kind="file", media_type="text/plain", extensions=[".txt"]),
+        output=FileOutput(kind="file", media_type="text/plain", extensions=[".txt"]),
     )
 
 
@@ -1062,7 +1075,7 @@ def test_mcp_run_metric_translates_location_met_zone_and_returns_submission() ->
 
     payload = _tool_payload(response)
     assert backend.payloads[0] == {
-        "value": 7,
+        "parameters": {"value": 7},
         "location": {"data_type": "met_zone_code", "value": "09.01"},
     }
     assert payload["job_id"] == "job-1"
@@ -1102,7 +1115,7 @@ def test_mcp_run_metric_translates_bounds_met_zone() -> None:
     payload = _tool_payload(response)
     assert "status" not in payload
     assert backend.payloads[0] == {
-        "value": 3,
+        "parameters": {"value": 3},
         "bounds": {"data_type": "met_zone_code", "value": "13.02"},
     }
 
@@ -1170,7 +1183,7 @@ def test_mcp_run_metric_reuses_idempotent_submission() -> None:
     assert replay["reused"] is True
     assert [payload for payload in backend.payloads if "_poll" not in payload] == [
         {
-            "value": 7,
+            "parameters": {"value": 7},
             "location": {"data_type": "met_zone_code", "value": "09.01"},
         }
     ]
@@ -1303,7 +1316,7 @@ def test_mcp_run_metric_surfaces_invalid_parameters_as_tool_error() -> None:
     assert result["isError"] is True
     error = result["structuredContent"]["error"]
     assert error["code"] == "invalid_parameters"
-    assert error["details"][0]["loc"] == ["value"]
+    assert error["details"][0]["loc"] == ["parameters", "value"]
 
 
 def test_mcp_run_metric_rejects_unsupported_spatial_shapes() -> None:
@@ -1732,7 +1745,7 @@ def test_retryable_observation_error_is_not_retried(
 def test_compact_provenance_contracts_and_progress_are_schema_valid() -> None:
     backend = FakeMCPBackend([])
     columns = [
-        TableOutputColumnV4(
+        TableColumn(
             name=f"v{i}",
             type="number",
             unit="count",
@@ -1747,7 +1760,7 @@ def test_compact_provenance_contracts_and_progress_are_schema_valid() -> None:
             "catalog_fingerprint": "catalog",
             "plugin": {"name": "plugin", "version": "1"},
             "created_at": _COMPLETED_AT,
-            "output": TableOutputV4(kind="table", columns=columns, batched_columns=[]),
+            "output": TableOutput(kind="table", columns=columns),
             "row_identity": {"field": "cvegeo", "namespace": "inegi"},
             "input": {
                 "year": 2026,
@@ -1872,7 +1885,7 @@ def test_large_numeric_values_remain_exact(value: float) -> None:
 def test_budget_trims_column_bundles_in_order() -> None:
     backend = FakeMCPBackend([])
     columns = [
-        TableOutputColumnV4(
+        TableColumn(
             name=f"value_{i}_" + "界" * 450,
             type="number",
             unit="count",
@@ -1887,7 +1900,7 @@ def test_budget_trims_column_bundles_in_order() -> None:
             "catalog_fingerprint": "catalog",
             "plugin": {"name": "plugin", "version": "1"},
             "created_at": _COMPLETED_AT,
-            "output": TableOutputV4(kind="table", columns=columns, batched_columns=[]),
+            "output": TableOutput(kind="table", columns=columns),
             "input": {"detail": "x" * 400},
         }
     )
@@ -1955,7 +1968,7 @@ def test_result_reference_validation(tool: str, reference: str) -> None:
 
 def test_discovery_preserves_derived_output_declarations() -> None:
     metric = _table_metric("area", "Area measurement")
-    metric.output = TableOutputV4.model_validate(
+    metric.output = TableOutput.model_validate(
         {
             "kind": "table",
             "columns": [
@@ -2018,3 +2031,71 @@ def test_discovery_preserves_derived_output_declarations() -> None:
     assert payload["table"]["columns"] == ["area", "fraction"]
     assert "derivations" not in payload["table"]["column_contracts"][0]
     assert provenance.output == metric.output
+
+
+@pytest.mark.parametrize("parameters", [{}, {"unexpected": 1}])
+def test_mcp_parameterless_metric_omits_empty_parameters(
+    parameters: dict[str, Any],
+) -> None:
+    backend = FakeMCPBackend([_file_metric("report", "Write a report.")])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    response = client.post(
+        "/",
+        json=_tool_call_payload(
+            "lyra_run_metric",
+            {"metric": "report", "met_zone_code": "09.01", "parameters": parameters},
+        ),
+        headers=_mcp_headers(),
+    )
+    result = response.json()["result"]
+    if parameters:
+        assert result["isError"] is True
+        assert result["structuredContent"]["error"]["code"] == "invalid_parameters"
+        assert backend.payloads == []
+    else:
+        assert result.get("isError", False) is False
+        assert backend.payloads == [
+            {"location": {"data_type": "met_zone_code", "value": "09.01"}}
+        ]
+
+
+@pytest.mark.parametrize("parameters", [{}, {"location": "an ordinary parameter"}])
+def test_mcp_keeps_declared_parameters_nested(parameters: dict[str, Any]) -> None:
+    metric = _table_metric("nested_metric", "Return a table.")
+    metric.request_schema = {
+        "type": "object",
+        "properties": {
+            "location": {"type": "object"},
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
+        },
+        "required": ["location", "parameters"],
+        "additionalProperties": False,
+    }
+    backend = FakeMCPBackend([metric])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    response = client.post(
+        "/",
+        json=_tool_call_payload(
+            "lyra_run_metric",
+            {
+                "metric": "nested_metric",
+                "met_zone_code": "09.01",
+                "parameters": parameters,
+            },
+        ),
+        headers=_mcp_headers(),
+    )
+    assert response.json()["result"].get("isError", False) is False
+    assert backend.payloads == [
+        {
+            "location": {"data_type": "met_zone_code", "value": "09.01"},
+            "parameters": parameters,
+        }
+    ]

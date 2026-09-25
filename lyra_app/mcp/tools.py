@@ -18,7 +18,7 @@ from lyra.sdk.models.job import (
 )
 from lyra.sdk.models.metric import (
     MetricCatalogResponse,
-    MetricInfoV4,
+    MetricInfo,
     normalize_metric_search_tokens,
 )
 from lyra.sdk.types import JsonObject, JsonValue, validate_json_value
@@ -95,7 +95,7 @@ class LyraMCPBackend(Protocol):
         """Resolve a metropolitan-zone name to its canonical code and name."""
         ...
 
-    async def get_metric(self, metric: str) -> MetricInfoV4 | None:
+    async def get_metric(self, metric: str) -> MetricInfo | None:
         """Return public metadata for a metric when it exists."""
         ...
 
@@ -182,7 +182,7 @@ class InProcessLyraBackend(LyraMCPBackend):
         return {"cve_met": cve_met, "nom_met": nom_met}
 
     @override
-    async def get_metric(self, metric: str) -> MetricInfoV4 | None:
+    async def get_metric(self, metric: str) -> MetricInfo | None:
         try:
             return await asyncio.to_thread(get_metric_info, metric)
         except CatalogUnavailableError as exc:
@@ -544,7 +544,7 @@ async def _download_result(
 
 def _run_payload_for_metric(
     *,
-    metric: MetricInfoV4,
+    metric: MetricInfo,
     met_zone_code: str,
     parameters: dict[str, Any],
 ) -> dict[str, Any]:
@@ -567,28 +567,21 @@ def _run_payload_for_metric(
             "unsupported_spatial_shape",
             f"Unsupported spatial input kind: {spatial_kind}",
         )
-    if field_name in parameters:
+    payload: dict[str, Any] = {
+        field_name: {"data_type": "met_zone_code", "value": met_zone_code}
+    }
+    properties = metric.request_schema["properties"]
+    if isinstance(properties, dict) and "parameters" in properties:
+        payload["parameters"] = parameters
+    elif parameters:
         _raise_tool_error(
             "invalid_parameters",
-            (
-                f"parameters must not include spatial field {field_name!r}; "
-                "use met_zone_code."
-            ),
-            [
-                {
-                    "loc": ["parameters", field_name],
-                    "msg": "Spatial input is owned by MCP.",
-                    "type": "value_error",
-                }
-            ],
+            "This metric does not accept parameters.",
         )
-
-    payload = dict(parameters)
-    payload[field_name] = {"data_type": "met_zone_code", "value": met_zone_code}
     return payload
 
 
-def _search_candidate(metric: MetricInfoV4, query: str) -> dict[str, Any]:
+def _search_candidate(metric: MetricInfo, query: str) -> dict[str, Any]:
     query_tokens = _tokens(query)
     search_text = str(metric.search_text()) if hasattr(metric, "search_text") else ""
     haystack = _tokens(search_text)
@@ -632,7 +625,7 @@ def _search_reason(
     return f"{metric_name}: public catalog entry."
 
 
-def _required_spatial_fields(metric: MetricInfoV4) -> list[dict[str, str]]:
+def _required_spatial_fields(metric: MetricInfo) -> list[dict[str, str]]:
     spatial_inputs = getattr(metric, "spatial_inputs", {})
     if not isinstance(spatial_inputs, dict):
         return []
@@ -643,14 +636,13 @@ def _required_spatial_fields(metric: MetricInfoV4) -> list[dict[str, str]]:
 
 
 def _relevant_columns(
-    metric: MetricInfoV4,
+    metric: MetricInfo,
     query_tokens: list[str],
 ) -> list[JsonObject]:
     output = getattr(metric, "output", None)
     columns = list(getattr(output, "columns", []))
-    batched_columns = list(getattr(output, "batched_columns", []))
     relevant: list[JsonObject] = []
-    for column in [*columns, *batched_columns]:
+    for column in columns:
         column_payload = _model_dump(column)
         text = " ".join(str(value) for value in column_payload.values())
         if not query_tokens or any(token in _tokens(text) for token in query_tokens):

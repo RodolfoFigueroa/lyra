@@ -13,24 +13,13 @@ from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from lyra.sdk.models.plugin_v4 import (
-    BatchInputV4,
-    FileOutputV4,
-    InputSpecV4,
-    OutputSpecV4,
-    PluginInfoV4,
-    PluginOwnedInputMetadataV4,
-    TableOutputV4,
-    compile_plugin_manifest,
-)
+from lyra.sdk.models.plugin import OutputSpec, PluginInfo, TableOutput
 from lyra.sdk.plugin_loader import PluginLoadError, load_plugin_definition
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.error import YAMLError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from lyra.sdk.plugin import MetricDescription, PluginDefinition
 
 MANIFEST_FILENAME = "lyra.plugin.json"
@@ -95,14 +84,14 @@ def render_manifest(project_root: Path) -> str:
     name, version, factory = _project_configuration(project_root)
     definition = _load_definition(project_root, factory)
     manifest = definition.manifest(
-        plugin=PluginInfoV4(name=name, version=version),
+        plugin=PluginInfo(name=name, version=version),
         factory=factory,
     )
-    compile_plugin_manifest(manifest)
     return (
         json.dumps(
-            manifest.model_dump(mode="json", exclude_unset=True),
+            manifest.model_dump(mode="json"),
             indent=2,
+            sort_keys=True,
         )
         + "\n"
     )
@@ -318,129 +307,25 @@ def render_description(
 
 
 def _render_metric(description: MetricDescription) -> str:
-    rows = [
-        (
-            name,
-            str(input_spec.kind),
-            _input_requirement(input_spec),
-            _input_details(input_spec),
-            _input_description(input_spec),
-        )
-        for name, input_spec in description.inputs.items()
-    ]
-    lines = [
-        f"Metric: {description.name}",
-        f"Description: {description.description}",
-        f"Handler: {description.handler}",
-        f"Signature: {description.signature}",
-        "Inputs:",
-        *_render_table(
-            ("Name", "Kind", "Requirement", "Details", "Description"),
-            rows,
-        ),
-        f"Output: {_output_summary(description.output)}",
-    ]
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            f"Metric: {description.name}",
+            f"Description: {description.description}",
+            f"Handler: {description.handler}",
+            f"Signature: {description.signature}",
+            "Spatial inputs: " + ", ".join(description.spatial_inputs),
+            "Request schema:",
+            json.dumps(description.request_schema, indent=2, sort_keys=True),
+            f"Output: {_output_summary(description.output)}",
+        ]
+    )
 
 
-def _render_table(
-    headers: tuple[str, ...],
-    rows: Sequence[tuple[str, ...]],
-) -> list[str]:
-    widths = [
-        max(len(headers[index]), *(len(row[index]) for row in rows))
-        for index in range(len(headers))
-    ]
-
-    def render_row(row: tuple[str, ...]) -> str:
-        return (
-            "  "
-            + "  ".join(
-                value.ljust(widths[index]) for index, value in enumerate(row)
-            ).rstrip()
-        )
-
-    return [
-        render_row(headers),
-        render_row(tuple("-" * width for width in widths)),
-        *(render_row(row) for row in rows),
-    ]
-
-
-def _input_requirement(input_spec: InputSpecV4) -> str:
-    if not isinstance(input_spec, PluginOwnedInputMetadataV4):
-        return "required"
-    if input_spec.required:
-        return "required"
-    if "default" in input_spec.model_fields_set:
-        return f"default={input_spec.default!r}"
-    return "optional"
-
-
-def _input_description(input_spec: InputSpecV4) -> str:
-    if isinstance(input_spec, BatchInputV4):
-        return input_spec.value.description or ""
-    description = getattr(input_spec, "description", None)
-    if isinstance(description, str):
-        return description
-    if input_spec.kind == "location":
-        return "Lyra-resolved locations."
-    return "Lyra-resolved bounds."
-
-
-def _input_details(input_spec: InputSpecV4) -> str:
-    if isinstance(input_spec, BatchInputV4):
-        labels = "allowed" if input_spec.label else "disabled"
-        return (
-            f"items={input_spec.value.kind}, max_items={input_spec.max_items}, "
-            f"labels={labels}"
-        )
-    details: list[str] = []
-    if getattr(input_spec, "nullable", False):
-        details.append("nullable")
-    values = getattr(input_spec, "values", None)
-    if isinstance(values, list):
-        details.append(f"values={values!r}")
-    for field in (
-        "minimum",
-        "maximum",
-        "min_length",
-        "max_length",
-        "pattern",
-    ):
-        value = getattr(input_spec, field, None)
-        if value is not None:
-            details.append(f"{field}={value!r}")
-    schema = getattr(input_spec, "schema", None)
-    if isinstance(schema, dict):
-        schema_fields = (
-            "exclusiveMinimum",
-            "minimum",
-            "exclusiveMaximum",
-            "maximum",
-            "multipleOf",
-            "minLength",
-            "maxLength",
-            "pattern",
-            "minItems",
-            "maxItems",
-        )
-        details.extend(
-            f"{field}={schema[field]!r}" for field in schema_fields if field in schema
-        )
-    return ", ".join(details) or "—"
-
-
-def _output_summary(output: OutputSpecV4) -> str:
-    if isinstance(output, TableOutputV4):
-        return (
-            f"table ({len(output.columns)} static column(s), "
-            f"{len(output.batched_columns)} batched column group(s))"
-        )
-    if isinstance(output, FileOutputV4):
-        extensions = ", ".join(output.extensions)
-        return f"file ({output.media_type}; {extensions})"
-    return str(output.kind)
+def _output_summary(output: OutputSpec) -> str:
+    if isinstance(output, TableOutput):
+        return f"table ({len(output.columns)} source column(s))"
+    extensions = ", ".join(output.extensions)
+    return f"file ({output.media_type}; {extensions})"
 
 
 def build_parser() -> argparse.ArgumentParser:

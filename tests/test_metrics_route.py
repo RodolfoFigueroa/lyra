@@ -13,63 +13,19 @@ from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from lyra_app.routes import metrics
 from tests.catalog_helpers import configure_catalog_sources
 from tests.config_helpers import load_test_config
+from tests.contract_helpers import FilterParameters, metric_manifest, plugin_manifest
 
 
 def _manifest() -> dict[str, Any]:
-    return {
-        "schema_version": 4,
-        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "factory": "fake_plugin.plugin:create_plugin",
-        "metrics": [
-            {
-                "name": "light_metric",
-                "description": "A lightweight metric.",
-                "inputs": {
-                    "location": {"kind": "location"},
-                    "value": {"kind": "integer"},
-                },
-                "output": {
-                    "kind": "table",
-                    "columns": [
-                        {
-                            "name": "value",
-                            "type": "integer",
-                            "unit": "count",
-                            "description": "Example output value.",
-                        }
-                    ],
-                },
-            }
-        ],
-    }
+    return plugin_manifest(
+        metric_manifest(name="light_metric", description="A lightweight metric.")
+    )
 
 
-def _batched_manifest() -> dict[str, Any]:
-    manifest = _manifest()
-    metric = manifest["metrics"][0]
-    metric["inputs"] = {
-        "location": {"kind": "location"},
-        "sector_filters": {
-            "kind": "batch",
-            "max_items": 20,
-            "value": {"kind": "string", "min_length": 1, "max_length": 128},
-            "label": True,
-        },
-    }
-    metric["output"] = {
-        "kind": "table",
-        "columns": [],
-        "batched_columns": [
-            {
-                "source": "sector_filters",
-                "name": "job_accessibility_{key}",
-                "type": "number",
-                "unit": "jobs",
-                "description": "Job accessibility for {label}.",
-            }
-        ],
-    }
-    return manifest
+def _list_manifest() -> dict[str, Any]:
+    return plugin_manifest(
+        metric_manifest(name="light_metric", parameters=FilterParameters)
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -117,10 +73,13 @@ def test_metrics_route_returns_schema_metadata_only(
     assert metric_payload["name"] == "light_metric"
     assert metric_payload["description"] == "A lightweight metric."
     assert metric_payload["spatial_inputs"] == {"location": "location"}
-    assert metric_payload["request_schema"]["required"] == ["location", "value"]
-    assert metric_payload["request_schema"]["properties"]["value"] == {
-        "type": "integer",
-    }
+    assert metric_payload["request_schema"]["required"] == ["parameters", "location"]
+    assert (
+        metric_payload["request_schema"]["$defs"]["ValueParameters"]["properties"][
+            "value"
+        ]["type"]
+        == "integer"
+    )
     assert "oneOf" in metric_payload["request_schema"]["properties"]["location"]
     assert metric_payload["output"]["kind"] == "table"
     assert metric_payload["output"]["columns"][0]["name"] == "value"
@@ -141,21 +100,26 @@ def test_metric_route_returns_schema_metadata_only(
     assert payload["name"] == "light_metric"
     assert payload["description"] == "A lightweight metric."
     assert payload["spatial_inputs"] == {"location": "location"}
-    assert payload["request_schema"]["required"] == ["location", "value"]
-    assert payload["request_schema"]["properties"]["value"] == {"type": "integer"}
+    assert payload["request_schema"]["required"] == ["parameters", "location"]
+    assert (
+        payload["request_schema"]["$defs"]["ValueParameters"]["properties"]["value"][
+            "type"
+        ]
+        == "integer"
+    )
     assert "oneOf" in payload["request_schema"]["properties"]["location"]
     assert payload["output"]["kind"] == "table"
     assert payload["output"]["columns"][0]["name"] == "value"
 
 
-def test_metrics_route_returns_batched_column_metadata(
+def test_metrics_route_returns_list_schema_and_static_columns(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / MANIFEST_FILENAME).write_text(
-        json.dumps(_batched_manifest()),
+        json.dumps(_list_manifest()),
         encoding="utf-8",
     )
 
@@ -164,20 +128,13 @@ def test_metrics_route_returns_batched_column_metadata(
 
     payload = response.model_dump()
     assert payload["output"]["kind"] == "table"
-    assert payload["output"]["columns"] == []
-    batched_column = payload["output"]["batched_columns"][0]
-    assert set(batched_column) == {
-        "source",
-        "name",
-        "type",
-        "unit",
-        "description",
-        "nullable",
-    }
-    assert batched_column["source"] == "sector_filters"
-    assert batched_column["name"] == "job_accessibility_{key}"
-    assert "oneOf" in payload["request_schema"]["properties"]["location"]
-    assert payload["request_schema"]["properties"]["sector_filters"]["maxItems"] == 20
+    assert payload["output"]["columns"][0]["name"] == "value"
+    assert "batched_columns" not in payload["output"]
+    filters = payload["request_schema"]["$defs"]["FilterParameters"]["properties"][
+        "sector_filters"
+    ]
+    assert filters["maxItems"] == 5
+    assert filters["items"] == {"type": "string"}
 
 
 def test_metric_route_returns_404_for_unknown_metric(

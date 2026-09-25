@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import geopandas
 import pytest
-from lyra.sdk.models.plugin_v4 import SpatialInputKindV4
+from lyra.sdk.models.plugin import SpatialInputKind
 from shapely.geometry import Point
 from sqlalchemy import Connection, create_engine
 
@@ -20,7 +20,7 @@ from tests.config_helpers import load_test_config
 @pytest.mark.parametrize("kind", ["location", "bounds"])
 @pytest.mark.parametrize("source", ["geojson", "cvegeo_list", "met_zone_code"])
 def test_spatial_resolution_uses_bound_converters_and_executor(
-    kind: SpatialInputKindV4,
+    kind: SpatialInputKind,
     source: Literal["geojson", "cvegeo_list", "met_zone_code"],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

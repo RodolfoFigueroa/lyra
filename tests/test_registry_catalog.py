@@ -16,6 +16,14 @@ from lyra_app.plugins import (
 )
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
+from tests.contract_helpers import (
+    FilterParameters,
+    PositiveParameters,
+    YearParameters,
+)
+from tests.contract_helpers import (
+    metric_manifest as _metric,
+)
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
     directory_uri,
@@ -28,43 +36,13 @@ def _json_object(value: JsonValue) -> dict[str, JsonValue]:
     return value
 
 
-def _metric(
-    *,
-    name: str = "light_metric",
-    description: str = "A metric.",
-    inputs: dict[str, Any] | None = None,
-    output: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "name": name,
-        "description": description,
-        "inputs": inputs
-        or {
-            "location": {"kind": "location"},
-            "value": {"kind": "integer"},
-        },
-        "output": output
-        or {
-            "kind": "table",
-            "columns": [
-                {
-                    "name": "value",
-                    "type": "integer",
-                    "unit": "count",
-                    "description": "Example output value.",
-                }
-            ],
-        },
-    }
-
-
 def _manifest(
     *,
     plugin_name: str = "fake-plugin",
     metric: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "plugin": {"name": plugin_name, "version": "1.0.0"},
         "factory": "fake_plugin.plugin:create_plugin",
         "metrics": [metric or _metric()],
@@ -91,7 +69,7 @@ def reset_catalog(tmp_path: Path) -> Iterator[None]:
     clear_config_cache()
 
 
-def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
+def test_catalog_refresh_reads_v5_manifests_without_importing_plugin_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -116,8 +94,13 @@ def test_catalog_refresh_reads_v4_manifests_without_importing_plugin_code(
     assert info_payload["spatial_inputs"] == {"location": "location"}
     assert info_payload["output"]["kind"] == "table"
     assert info_payload["output"]["columns"][0]["name"] == "value"
-    assert info_payload["request_schema"]["required"] == ["location", "value"]
-    assert info_payload["request_schema"]["properties"]["value"] == {"type": "integer"}
+    assert info_payload["request_schema"]["required"] == ["parameters", "location"]
+    assert (
+        info_payload["request_schema"]["$defs"]["ValueParameters"]["properties"][
+            "value"
+        ]["type"]
+        == "integer"
+    )
     assert "oneOf" in info_payload["request_schema"]["properties"]["location"]
     assert "GeoJSONLocation" in info_payload["request_schema"]["$defs"]
     assert entry is not None
@@ -130,13 +113,6 @@ def test_metric_search_text_is_derived_from_public_catalog_fields(
 ) -> None:
     repo = tmp_path / "repo"
     metric = _metric(
-        inputs={
-            "location": {"kind": "location"},
-            "value": {
-                "kind": "integer",
-                "description": "Value supplied by the caller.",
-            },
-        },
         output={
             "kind": "table",
             "columns": [
@@ -160,7 +136,7 @@ def test_metric_search_text_is_derived_from_public_catalog_fields(
     assert "A metric." in search_text
     assert "location" in search_text
     assert "value" in search_text
-    assert "Value supplied by the caller." in search_text
+    assert "Example input value." in search_text
     assert "table" in search_text
     assert "Example output value." in search_text
     assert "count" in search_text
@@ -256,17 +232,15 @@ def test_catalog_refresh_rejects_duplicate_metric_names_across_manifests(
     assert "Plugin catalog initialization failed" in caplog.text
 
 
-def test_catalog_refresh_reads_v4_file_metric(
+def test_catalog_refresh_reads_v5_file_metric(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
     metric = _metric(
         name="raster_metric",
         description="A raster metric.",
-        inputs={
-            "bounds": {"kind": "bounds"},
-            "year": {"kind": "integer", "minimum": 2020, "maximum": 2026},
-        },
+        parameters=YearParameters,
+        spatial={"bounds"},
         output={
             "kind": "file",
             "media_type": "image/tiff",
@@ -286,7 +260,7 @@ def test_catalog_refresh_reads_v4_file_metric(
         "media_type": "image/tiff",
         "extensions": [".tif", ".tiff"],
     }
-    assert info.request_schema["required"] == ["bounds", "year"]
+    assert info.request_schema["required"] == ["parameters", "bounds"]
     assert "GeoJSONBounds" in _json_object(info.request_schema["$defs"])
     assert entry is not None
     assert entry.queue == "heavy"
@@ -297,15 +271,10 @@ def test_catalog_refresh_rejects_invalid_request_json_schema(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     repo = tmp_path / "repo"
-    metric = _metric(
-        inputs={
-            "location": {"kind": "location"},
-            "bad": {
-                "kind": "json_schema",
-                "schema": {"type": "not-a-json-schema-type"},
-            },
-        }
-    )
+    metric = _metric()
+    metric["request_schema"]["properties"]["parameters"] = {
+        "type": "not-a-json-schema-type"
+    }
     _write_manifest(repo, _manifest(metric=metric))
     configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
 
@@ -464,7 +433,7 @@ def test_validate_metric_payload_uses_manifest_json_schema(
     payload = validate_json_object(
         {
             "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-            "value": 1,
+            "parameters": {"value": 1},
         }
     )
     assert registry.validate_metric_payload("light_metric", payload) == payload
@@ -474,29 +443,18 @@ def test_validate_metric_payload_uses_manifest_json_schema(
             "light_metric",
             {
                 "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-                "value": "wrong",
+                "parameters": {"value": "wrong"},
             },
         )
 
     assert exc_info.value.errors[0]["type"] == "type"
 
 
-def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
+def test_validate_metric_payload_uses_parameter_constraints(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
-    metric = _metric(
-        inputs={
-            "location": {"kind": "location"},
-            "value": {
-                "kind": "json_schema",
-                "schema": {
-                    "type": "number",
-                    "minimum": 0,
-                },
-            },
-        }
-    )
+    metric = _metric(parameters=PositiveParameters)
     _write_manifest(repo, _manifest(metric=metric))
     configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
@@ -504,7 +462,7 @@ def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
     valid_payload = validate_json_object(
         {
             "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-            "value": 1,
+            "parameters": {"value": 1},
         }
     )
     assert (
@@ -516,139 +474,39 @@ def test_validate_metric_payload_uses_compiled_json_schema_escape_hatch(
             "light_metric",
             {
                 "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-                "value": -1,
+                "parameters": {"value": -1},
             },
         )
 
     assert exc_info.value.errors[0]["type"] == "minimum"
 
 
-def test_validate_metric_payload_rejects_duplicate_batch_keys(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("filters", "valid"),
+    [(["retail", "retail"], True), ([1], False), (["x"] * 6, False)],
+)
+def test_validate_metric_payload_validates_ordinary_lists(
+    tmp_path: Path, filters: list[Any], *, valid: bool
 ) -> None:
     repo = tmp_path / "repo"
-    metric = _metric(
-        name="batched_metric",
-        inputs={
-            "location": {"kind": "location"},
-            "sector_filters": {
-                "kind": "batch",
-                "max_items": 5,
-                "value": {"kind": "string"},
-            },
-        },
-        output={
-            "kind": "table",
-            "batched_columns": [
-                {
-                    "source": "sector_filters",
-                    "name": "accessibility_{key}",
-                    "type": "number",
-                    "unit": "jobs",
-                    "description": "Accessibility for {label}.",
-                }
-            ],
-        },
-    )
-    _write_manifest(repo, _manifest(metric=metric))
+    _write_manifest(repo, _manifest(metric=_metric(parameters=FilterParameters)))
     configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
     restart_catalog()
-
-    with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
-        registry.validate_metric_payload(
-            "batched_metric",
-            {
-                "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-                "sector_filters": [
-                    {"key": "retail", "value": "^46.*"},
-                    {"key": "retail", "value": "^47.*"},
-                ],
-            },
-        )
-
-    assert exc_info.value.errors == [
-        {
-            "loc": ["sector_filters"],
-            "msg": "Batch input keys must be unique: retail.",
-            "type": "unique_batch_keys",
-        }
-    ]
+    payload: dict[str, Any] = {
+        "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
+        "parameters": {"sector_filters": filters},
+    }
+    if valid:
+        assert registry.validate_metric_payload("light_metric", payload) == payload
+    else:
+        with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
+            registry.validate_metric_payload("light_metric", payload)
+        assert exc_info.value.errors[0]["loc"][:2] == ["parameters", "sector_filters"]
 
 
-def test_validate_metric_payload_reports_duplicate_keys_per_batch_field(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "repo"
-    metric = _metric(
-        name="multi_batched_metric",
-        inputs={
-            "location": {"kind": "location"},
-            "sector_filters": {
-                "kind": "batch",
-                "max_items": 5,
-                "value": {"kind": "string"},
-            },
-            "destination_categories": {
-                "kind": "batch",
-                "max_items": 5,
-                "value": {"kind": "string"},
-            },
-        },
-        output={
-            "kind": "table",
-            "batched_columns": [
-                {
-                    "source": "sector_filters",
-                    "name": "sector_{key}",
-                    "type": "number",
-                    "unit": "jobs",
-                    "description": "Sector {label}.",
-                },
-                {
-                    "source": "destination_categories",
-                    "name": "destination_{key}",
-                    "type": "number",
-                    "unit": "destinations",
-                    "description": "Destination {label}.",
-                },
-            ],
-        },
-    )
-    _write_manifest(repo, _manifest(metric=metric))
-    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
-    restart_catalog()
-
-    with pytest.raises(registry.MetricPayloadValidationError) as exc_info:
-        registry.validate_metric_payload(
-            "multi_batched_metric",
-            {
-                "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
-                "sector_filters": [
-                    {"key": "retail", "value": "^46.*"},
-                    {"key": "retail", "value": "^47.*"},
-                ],
-                "destination_categories": [
-                    {"key": "schools", "value": "^61.*"},
-                    {"key": "schools", "value": "^62.*"},
-                ],
-            },
-        )
-
-    assert exc_info.value.errors == [
-        {
-            "loc": ["sector_filters"],
-            "msg": "Batch input keys must be unique: retail.",
-            "type": "unique_batch_keys",
-        },
-        {
-            "loc": ["destination_categories"],
-            "msg": "Batch input keys must be unique: schools.",
-            "type": "unique_batch_keys",
-        },
-    ]
-
-
-def test_catalog_refresh_rejects_legacy_v2_manifest(
+@pytest.mark.parametrize("version", [2, 4])
+def test_catalog_refresh_rejects_legacy_manifest(
+    version: int,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -679,7 +537,7 @@ def test_catalog_refresh_rejects_legacy_v2_manifest(
     _write_manifest(
         repo,
         {
-            "schema_version": 2,
+            "schema_version": version,
             "plugin": {"name": "legacy-plugin", "version": "1.0.0"},
             "metrics": [legacy_metric],
         },
@@ -696,11 +554,7 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
 ) -> None:
     repo = tmp_path / "repo"
     metric = _metric(
-        inputs={
-            "location": {"kind": "location"},
-            "bounds": {"kind": "bounds"},
-            "value": {"kind": "integer"},
-        },
+        spatial={"location", "bounds"},
     )
     _write_manifest(repo, _manifest(metric=metric))
     configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
@@ -710,7 +564,7 @@ def test_catalog_builds_spatial_schema_for_location_and_bounds(
         {
             "location": {"data_type": "cvegeo_list", "value": ["090020001"]},
             "bounds": {"data_type": "cvegeo_list", "value": ["090020001"]},
-            "value": 1,
+            "parameters": {"value": 1},
         }
     )
 

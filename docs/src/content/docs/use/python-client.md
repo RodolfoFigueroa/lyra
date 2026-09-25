@@ -32,7 +32,7 @@ for metric in catalog.metrics:
     print(metric.name, metric.description)
 
 # Use a metric name advertised by your deployment.
-metric = client.catalog.metric("population")
+metric = client.catalog.metric("smoke_table_metric")
 print(metric.request_schema)
 print(metric.output)
 ```
@@ -43,8 +43,8 @@ fingerprint. Choose argument names and values from the deployed metric's schema.
 
 ## Submit, wait, and retrieve results
 
-The following examples assume the deployment provides a `population` metric
-with a `location` field accepting metropolitan-zone codes.
+The following examples assume the deployment has the example plugin configured. Its `smoke_table_metric` accepts
+a location and a required integer `value` inside `parameters`.
 
 ```python
 from lyra.api import SubmitOptions
@@ -53,11 +53,12 @@ from lyra.sdk.types import JsonObject
 
 arguments: JsonObject = {
     "location": {"data_type": "met_zone_code", "value": "09.01"},
+    "parameters": {"value": 7},
 }
 handle = client.raw.submit(
-    "population",
+    "smoke_table_metric",
     arguments,
-    options=SubmitOptions(idempotency_key="population-2026-07"),
+    options=SubmitOptions(idempotency_key="example-2026-07"),
 )
 print(handle.job_id, handle.status().status)
 result = handle.wait(timeout=300)
@@ -67,6 +68,11 @@ if isinstance(result, TableJobResult):
 elif isinstance(result, FileJobResult):
     client.results.download_file(handle.job_id, "result.bin")
 ```
+
+A declared parameter model requires the `parameters` object, even if all fields
+have defaults and the object is empty. For parameterless metrics such as
+`smoke_file_metric`, omit `parameters`. Defaults are applied in the worker; Python
+semantic validators can fail an accepted job with `invalid_input`.
 
 `submit()` returns a `JobHandle`. Its `wait()` method polls status until
 completion and returns the successful
@@ -86,7 +92,7 @@ To submit and wait in one call:
 from lyra.api import RunOptions
 
 result = client.raw.run(
-    "population",
+    "smoke_table_metric",
     arguments,
     options=RunOptions(timeout=300),
 )
@@ -109,8 +115,11 @@ client = AsyncLyraClient(
 )
 catalog = await client.catalog.metrics()
 handle = await client.raw.submit(
-    "population",
-    {"location": {"data_type": "met_zone_code", "value": "09.01"}},
+    "smoke_table_metric",
+    {
+        "location": {"data_type": "met_zone_code", "value": "09.01"},
+        "parameters": {"value": 7},
+    },
 )
 result = await handle.wait(timeout=300)
 ```

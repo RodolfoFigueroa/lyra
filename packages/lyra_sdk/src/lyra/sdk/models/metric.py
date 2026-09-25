@@ -3,13 +3,14 @@
 import unicodedata
 from typing import Literal
 
-from lyra.sdk.models.plugin_v4 import (
-    FileOutputV4,
-    OutputSpecV4,
-    SpatialInputKindV4,
-    TableOutputV4,
+from lyra.sdk.models.plugin import (
+    FileOutput,
+    OutputSpec,
+    SpatialInputKind,
+    TableOutput,
 )
 from lyra.sdk.models.strict import StrictBaseModel
+from lyra.sdk.schema import schema_nodes
 from lyra.sdk.types import JsonObject, JsonValue
 from pydantic import Field
 
@@ -73,22 +74,22 @@ def normalize_metric_search_tokens(value: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(tokens))
 
 
-class MetricInfoV4(StrictBaseModel):
-    """Catalog metadata for one schema v4 metric exposed by the API."""
+class MetricInfo(StrictBaseModel):
+    """Catalog metadata for one format-5 metric exposed by the API."""
 
     name: str = Field(description="Public metric name.")
     description: str = Field(description="Human-readable metric description.")
     request_schema: JsonObject = Field(
         description="Effective JSON Schema for the client request payload.",
     )
-    spatial_inputs: dict[str, SpatialInputKindV4] = Field(
+    spatial_inputs: dict[str, SpatialInputKind] = Field(
         default_factory=dict,
         description=(
             "Request field names mapped to Lyra-owned spatial input kinds resolved "
             "before worker execution."
         ),
     )
-    output: OutputSpecV4 = Field(
+    output: OutputSpec = Field(
         description="Successful metric output declaration.",
     )
 
@@ -97,33 +98,28 @@ class MetricInfoV4(StrictBaseModel):
         return build_metric_search_text(self)
 
 
-def build_metric_search_text(metric: MetricInfoV4) -> str:
+def build_metric_search_text(metric: MetricInfo) -> str:
     """Build deterministic lexical text from public metric catalog fields.
 
     Returns:
         De-duplicated searchable terms in their original field order.
     """
     parts: list[str] = [metric.name, metric.description]
-    properties = metric.request_schema.get("properties")
-    if isinstance(properties, dict):
-        for field_name, property_schema in properties.items():
-            _append_search_part(parts, field_name)
-            if isinstance(property_schema, dict):
-                _append_search_part(parts, property_schema.get("description"))
+    for _, schema in schema_nodes(metric.request_schema):
+        _append_search_part(parts, schema.get("description"))
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for field_name in properties:
+                _append_search_part(parts, field_name)
 
     output = metric.output
     _append_search_part(parts, output.kind)
-    if isinstance(output, TableOutputV4):
+    if isinstance(output, TableOutput):
         for column in output.columns:
             _append_search_part(parts, column.name)
             _append_search_part(parts, column.description)
             _append_search_part(parts, column.unit)
-        for column in output.batched_columns:
-            _append_search_part(parts, column.source)
-            _append_search_part(parts, column.name)
-            _append_search_part(parts, column.description)
-            _append_search_part(parts, column.unit)
-    elif isinstance(output, FileOutputV4):
+    elif isinstance(output, FileOutput):
         _append_search_part(parts, output.media_type)
         for extension in output.extensions:
             _append_search_part(parts, extension)
@@ -148,6 +144,6 @@ class MetricCatalogResponse(StrictBaseModel):
         min_length=1,
         description="SHA-256 fingerprint of the public metric catalog contract.",
     )
-    metrics: list[MetricInfoV4] = Field(
+    metrics: list[MetricInfo] = Field(
         description="Client-facing metric metadata sorted by metric name.",
     )

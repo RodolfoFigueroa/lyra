@@ -22,6 +22,7 @@ from lyra.sdk.models.job import (
     TableJobResult,
 )
 from lyra.sdk.models.metric import MetricCatalogResponse
+from lyra.sdk.models.plugin import PluginInfo
 from lyra.sdk.types import JsonValue
 from lyra.utils.geometry import convert_geojson_to_gdf
 from redis.exceptions import RedisError
@@ -39,70 +40,22 @@ from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from lyra_app.routes import admin, data_types, health, jobs, metrics
 from tests.catalog_helpers import configure_catalog_sources, restart_catalog
 from tests.config_helpers import load_test_config
+from tests.contract_helpers import FilterParameters, metric_manifest, plugin_manifest
+from tests.fixtures.contract_plugin.plugin import create_plugin
 from tests.redis_job_scripts import eval_job_script, seed_status_async
+from tests.test_runner import FakeRedisSync
 
 
 def _manifest() -> dict[str, Any]:
-    return {
-        "schema_version": 4,
-        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "factory": "fake_plugin.plugin:create_plugin",
-        "metrics": [
-            {
-                "name": "heavy_metric",
-                "description": "A heavy metric.",
-                "inputs": {
-                    "location": {"kind": "location"},
-                    "value": {"kind": "integer"},
-                },
-                "output": {
-                    "kind": "table",
-                    "columns": [
-                        {
-                            "name": "value",
-                            "type": "integer",
-                            "unit": "count",
-                            "description": "Example output value.",
-                        }
-                    ],
-                },
-            }
-        ],
-    }
+    return plugin_manifest(
+        metric_manifest(name="heavy_metric", description="A heavy metric.")
+    )
 
 
-def _batched_manifest() -> dict[str, Any]:
-    return {
-        "schema_version": 4,
-        "plugin": {"name": "fake-plugin", "version": "1.0.0"},
-        "factory": "fake_plugin.plugin:create_plugin",
-        "metrics": [
-            {
-                "name": "batched_metric",
-                "description": "A batched metric.",
-                "inputs": {
-                    "location": {"kind": "location"},
-                    "sector_filters": {
-                        "kind": "batch",
-                        "max_items": 5,
-                        "value": {"kind": "string"},
-                    },
-                },
-                "output": {
-                    "kind": "table",
-                    "batched_columns": [
-                        {
-                            "source": "sector_filters",
-                            "name": "accessibility_{key}",
-                            "type": "number",
-                            "unit": "jobs",
-                            "description": "Accessibility for {label}.",
-                        }
-                    ],
-                },
-            }
-        ],
-    }
+def _list_manifest() -> dict[str, Any]:
+    return plugin_manifest(
+        metric_manifest(name="list_metric", parameters=FilterParameters)
+    )
 
 
 def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
@@ -141,7 +94,7 @@ def _spatial_payload(
             "data_type": data_type,
             "value": _feature_collection() if value is None else value,
         },
-        "value": 3,
+        "parameters": {"value": 3},
     }
 
 
@@ -340,7 +293,7 @@ def reset_catalog(
     load_test_config(
         tmp_path,
         metric_queues={
-            "batched_metric": "priority-lane",
+            "list_metric": "priority-lane",
             "heavy_metric": "priority-lane",
         },
     )
@@ -666,7 +619,10 @@ def test_create_job_dispatches_generic_task_to_state_queue(
                 {
                     "job_id": "job-1",
                     "metric": "heavy_metric",
-                    "input": {"location": _feature_collection(), "value": 3},
+                    "input": {
+                        "location": _feature_collection(),
+                        "parameters": {"value": 3},
+                    },
                     "idempotency_key": "key-1",
                     "metadata": {},
                 }
@@ -916,7 +872,7 @@ def test_create_job_rejects_conflicting_idempotency_key(
             jobs.create_job(
                 JobCreateRequest(
                     metric="heavy_metric",
-                    input={**_spatial_payload(), "value": 4},
+                    input={**_spatial_payload(), "parameters": {"value": 4}},
                     idempotency_key="conflict-key",
                 ),
                 database=database,
@@ -975,7 +931,7 @@ def test_submission_limit_exempts_replays_conflicts_and_rejection_side_effects(
             jobs.create_job(
                 JobCreateRequest(
                     metric="heavy_metric",
-                    input={**_spatial_payload(), "value": 4},
+                    input={**_spatial_payload(), "parameters": {"value": 4}},
                     idempotency_key="accepted-key",
                 ),
                 database=database,
@@ -1149,12 +1105,12 @@ def test_create_job_rejects_invalid_input(
     assert exc_info.value.status_code == 422
 
 
-def test_create_job_rejects_duplicate_batch_keys_before_queueing(
+def test_create_job_rejects_invalid_list_items_before_queueing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     database: ApplicationDatabaseRuntime,
 ) -> None:
-    _use_repo(tmp_path, monkeypatch, manifest=_batched_manifest())
+    _use_repo(tmp_path, monkeypatch, manifest=_list_manifest())
     redis = FakeRedisAsync()
     celery = FakeCelery()
     _patch_redis(monkeypatch, redis)
@@ -1164,16 +1120,13 @@ def test_create_job_rejects_duplicate_batch_keys_before_queueing(
         asyncio.run(
             jobs.create_job(
                 JobCreateRequest(
-                    metric="batched_metric",
+                    metric="list_metric",
                     input={
                         "location": {
                             "data_type": "geojson",
                             "value": _feature_collection(),
                         },
-                        "sector_filters": [
-                            {"key": "retail", "value": "^46.*"},
-                            {"key": "retail", "value": "^47.*"},
-                        ],
+                        "parameters": {"sector_filters": [1]},
                     },
                 ),
                 database=database,
@@ -1183,9 +1136,9 @@ def test_create_job_rejects_duplicate_batch_keys_before_queueing(
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail == [
         {
-            "loc": ["sector_filters"],
-            "msg": "Batch input keys must be unique: retail.",
-            "type": "unique_batch_keys",
+            "loc": ["parameters", "sector_filters", 0],
+            "msg": "1 is not of type 'string'",
+            "type": "type",
         }
     ]
     assert celery.sent == []
@@ -1205,7 +1158,10 @@ def test_create_job_rejects_raw_geojson_spatial_field(
             jobs.create_job(
                 JobCreateRequest(
                     metric="heavy_metric",
-                    input={"location": _feature_collection(), "value": 3},
+                    input={
+                        "location": _feature_collection(),
+                        "parameters": {"value": 3},
+                    },
                 ),
                 database=database,
             )
@@ -1966,3 +1922,169 @@ def test_authenticated_submission_requires_application_database() -> None:
         asyncio.run(
             _request_app(app, "POST", "/jobs", authorization="Bearer agent-secret")
         )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("capacity", {}, [[10]]),
+        ("reused_capacity", {}, [[4]]),
+        (
+            "selection_size",
+            {"selection": {"activity_codes": ["46", "46"]}, "threshold": None},
+            [[2]],
+        ),
+        ("bounded_features", None, [["Polygon"]]),
+        ("feature_report", None, None),
+        ("interval_width", {"lower": 2, "upper": 5}, [[3]]),
+        ("interval_width", {"lower": 5, "upper": 2}, "invalid_input"),
+    ],
+)
+def test_contract_examples_submit_execute_and_retain_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
+    case: tuple[str, dict[str, Any] | None, list[list[int | str]] | str | None],
+) -> None:
+    metric_name, parameters, expected = case
+    definition = create_plugin()
+    manifest = definition.manifest(
+        plugin=PluginInfo(name="contract-plugin", version="1.0.0"),
+        factory="tests.fixtures.contract_plugin.plugin:create_plugin",
+    )
+    _use_repo(tmp_path, monkeypatch, manifest=manifest.model_dump(mode="json"))
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    payload: dict[str, Any] = {
+        "location": {"data_type": "geojson", "value": _feature_collection()}
+    }
+    if parameters is not None:
+        payload["parameters"] = parameters
+    if metric_name == "bounded_features":
+        payload["bounds"] = deepcopy(payload["location"])
+    original = deepcopy(payload)
+    response = asyncio.run(
+        jobs.create_job(
+            JobCreateRequest(metric=metric_name, input=payload), database=database
+        )
+    )
+    assert payload == original
+    envelope = celery.sent[0]["args"][0]
+    if parameters is not None:
+        assert envelope["input"]["parameters"] == parameters
+    worker = importlib.import_module("lyra_app.worker")
+    sync_redis = FakeRedisSync()
+    sync_redis.values = redis.values
+    monkeypatch.setattr(job_store, "redis_client_sync", sync_redis)
+    monkeypatch.setattr(
+        worker,
+        "RUNNER_REGISTRY",
+        {
+            metric_name: worker.RunnerMetricEntry(
+                metric_name=metric_name, queue="interactive", definition=definition
+            )
+        },
+    )
+    worker.set_runner_temp_base(tmp_path / "worker")
+    try:
+        result = worker.execute_job(envelope, task_id=response.job_id)
+    finally:
+        worker.set_runner_temp_base(None)
+    _assert_contract_result(result, expected)
+    if expected != "invalid_input":
+        descriptor = job_store.get_job_result_descriptor(
+            response.job_id, client=sync_redis
+        )
+        assert descriptor is not None
+        assert descriptor.provenance is not None
+        assert descriptor.provenance.input == original
+    assert (
+        json.loads(redis.values[job_store.provenance_key(response.job_id)])["input"]
+        == original
+    )
+    assert json.loads(redis.values[job_store.result_key(response.job_id)]) == result
+
+
+def _assert_contract_result(
+    result: dict[str, JsonValue], expected: list[list[int | str]] | str | None
+) -> None:
+    if expected == "invalid_input":
+        assert result["status"] == "failed"
+        error = result["error"]
+        assert isinstance(error, dict)
+        assert error["type"] == "invalid_input"
+        assert isinstance(error["path"], str)
+        assert error["path"].startswith("parameters")
+        assert isinstance(error["message"], str)
+        assert "lower must not exceed upper" in error["message"]
+    else:
+        assert result["status"] == "succeeded"
+        if expected is None:
+            file_path = result["file_path"]
+            assert isinstance(file_path, str)
+            assert Path(file_path).read_text(encoding="utf-8") == "area-1\n"
+        else:
+            assert result["data"] == expected
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("capacity", {}, []),
+        ("capacity", {"parameters": None}, ["parameters"]),
+        ("capacity", {"parameters": {"units": "10"}}, ["parameters", "units"]),
+        ("capacity", {"parameters": {"unknown": 1}}, ["parameters"]),
+        ("capacity", {"units": 10, "parameters": {}}, []),
+        (
+            "selection_size",
+            {"parameters": {"selection": {"activity_codes": ["46"]}}},
+            ["parameters"],
+        ),
+        (
+            "selection_size",
+            {"parameters": {"selection": {"activity_codes": []}, "threshold": None}},
+            ["parameters", "selection", "activity_codes"],
+        ),
+        ("feature_report", {"parameters": {}}, []),
+    ],
+)
+def test_contract_schema_rejects_bad_requests_before_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    database: ApplicationDatabaseRuntime,
+    case: tuple[str, dict[str, Any], list[str]],
+) -> None:
+    metric_name, request_fields, error_path = case
+    manifest = create_plugin().manifest(
+        plugin=PluginInfo(name="contract-plugin", version="1.0.0"),
+        factory="tests.fixtures.contract_plugin.plugin:create_plugin",
+    )
+    _use_repo(tmp_path, monkeypatch, manifest=manifest.model_dump(mode="json"))
+    redis = FakeRedisAsync()
+    celery = FakeCelery()
+    _patch_redis(monkeypatch, redis)
+    monkeypatch.setattr(jobs, "celery_app", celery)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            jobs.create_job(
+                JobCreateRequest(
+                    metric=metric_name,
+                    input={
+                        "location": {
+                            "data_type": "geojson",
+                            "value": _feature_collection(),
+                        },
+                        **request_fields,
+                    },
+                ),
+                database=database,
+            )
+        )
+    assert exc_info.value.status_code == 422
+    details = exc_info.value.detail
+    assert isinstance(details, list)
+    assert details[0]["loc"] == error_path
+    assert celery.sent == []
+    assert redis.values == {}

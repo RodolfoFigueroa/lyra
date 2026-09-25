@@ -17,10 +17,9 @@ from lyra.sdk.models.job import (
     build_table_summary,
     result_ref_for_job,
 )
-from lyra.sdk.models.plugin_v4 import (
-    TableOutputV4,
-    expand_runner_table_output_columns,
-    expand_table_output_columns,
+from lyra.sdk.models.plugin import (
+    TableOutput,
+    effective_table_columns,
 )
 
 from lyra_app.mcp.models import (
@@ -271,10 +270,8 @@ def _project_table(
     )
     contracts = []
     provenance = observation.provenance
-    if provenance and isinstance(provenance.output, TableOutputV4):
-        expanded = expand_table_output_columns(
-            expand_runner_table_output_columns(provenance.output, provenance.input)
-        )
+    if provenance and isinstance(provenance.output, TableOutput):
+        expanded = effective_table_columns(provenance.output)
         by_name = {column.name: column for column in expanded}
         for name in columns:
             column = by_name[name].model_copy(deep=True)

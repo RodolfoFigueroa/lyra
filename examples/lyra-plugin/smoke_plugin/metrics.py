@@ -2,24 +2,36 @@
 
 from __future__ import annotations
 
-from lyra.sdk import Input, LocationInput, RunContext, metric
-from lyra.sdk.models.job import FileJobResult, TableJobResult
-from lyra.sdk.models.plugin_v4 import (
-    FileOutputV4,
-    TableOutputColumnV4,
-    TableOutputV4,
+from typing import TYPE_CHECKING
+
+import pandas as pd
+from lyra.sdk import LocationInput, MetricParameters, RunContext, metric
+from lyra.sdk.models.plugin import (
+    FileOutput,
+    TableColumn,
+    TableOutput,
 )
+from pydantic import Field
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+class Parameters(MetricParameters):
+    """Parameters shared by the table and cancellation examples."""
+
+    value: int = Field(description="Value copied into each output row.")
 
 
 def _feature_ids(location: LocationInput) -> list[str]:
     return [feature.id for feature in location.features]
 
 
-def _value_output() -> TableOutputV4:
-    return TableOutputV4(
+def _value_output() -> TableOutput:
+    return TableOutput(
         kind="table",
         columns=[
-            TableOutputColumnV4(
+            TableColumn(
                 name="value",
                 type="integer",
                 unit="count",
@@ -33,17 +45,14 @@ def _value_output() -> TableOutputV4:
 @metric(
     name="smoke_table_metric",
     description="Return the submitted value for each input feature.",
-    inputs={
-        "value": Input(description="Value copied into each output row."),
-    },
     output=_value_output(),
 )
 def run_table(
     location: LocationInput,
-    value: int,
+    parameters: Parameters,
     *,
     context: RunContext,
-) -> TableJobResult:
+) -> pd.DataFrame:
     """Copy the submitted integer into a row for every input feature.
 
     Returns:
@@ -52,11 +61,9 @@ def run_table(
     context.report_progress(stage="table", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
-    return TableJobResult.from_mapping(
-        job_id=context.job_id,
-        input_index=feature_ids,
-        columns=["value"],
-        values={"value": [value for _feature_id in feature_ids]},
+    return pd.DataFrame(
+        {"value": [parameters.value for _feature_id in feature_ids]},
+        index=feature_ids,
     )
 
 
@@ -66,7 +73,7 @@ def run_table(
 @metric(
     name="smoke_file_metric",
     description="Write a small text artifact for the submitted features.",
-    output=FileOutputV4(
+    output=FileOutput(
         kind="file",
         media_type="text/plain",
         extensions=[".txt"],
@@ -76,7 +83,7 @@ def run_file(
     location: LocationInput,
     *,
     context: RunContext,
-) -> FileJobResult:
+) -> Path:
     """Write the input feature identifiers to a small text artifact.
 
     Returns:
@@ -90,27 +97,20 @@ def run_file(
         "\n".join(["smoke file result", *feature_ids]) + "\n",
         encoding="utf-8",
     )
-    return FileJobResult(
-        job_id=context.job_id,
-        file_path=output_path.name,
-        media_type="text/plain",
-    )
+    return output_path
 
 
 @metric(
     name="smoke_cancel_metric",
     description="Emit progress and observe cancellation before returning.",
-    inputs={
-        "value": Input(description="Value copied into each output row."),
-    },
     output=_value_output(),
 )
 def run_cancel(
     location: LocationInput,
-    value: int,
+    parameters: Parameters,
     *,
     context: RunContext,
-) -> TableJobResult:
+) -> pd.DataFrame:
     """Exercise cancellation reporting before producing a table result.
 
     Returns:
@@ -119,9 +119,7 @@ def run_cancel(
     context.report_progress(stage="cancel-check", current=1, total=1)
     context.check_cancelled()
     feature_ids = _feature_ids(location)
-    return TableJobResult.from_mapping(
-        job_id=context.job_id,
-        input_index=feature_ids,
-        columns=["value"],
-        values={"value": [value for _feature_id in feature_ids]},
+    return pd.DataFrame(
+        {"value": [parameters.value for _feature_id in feature_ids]},
+        index=feature_ids,
     )

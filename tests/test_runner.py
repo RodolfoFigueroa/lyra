@@ -7,15 +7,23 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
 import pytest
+from lyra.sdk import (
+    LocationInput,
+    PluginDefinition,
+    RunContext,
+)
+from lyra.sdk import (
+    metric as declare_metric,
+)
 from lyra.sdk.config import PluginRepoConfig
 from lyra.sdk.models.job import (
-    FileJobResult,
     JobEnvelope,
     TableJobResult,
     TerminalJobResult,
 )
-from lyra.sdk.models.plugin_v4 import FileOutputV4, TableOutputV4
+from lyra.sdk.models.plugin import FileOutput, TableOutput
 from sqlalchemy.exc import OperationalError
 
 from lyra_app import registry, worker_control
@@ -25,6 +33,7 @@ from lyra_app.plugin_runtime import read_snapshot
 from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
 from tests.catalog_helpers import configure_catalog_sources
 from tests.config_helpers import load_test_config
+from tests.contract_helpers import ValueParameters, metric_manifest
 from tests.redis_job_scripts import eval_job_script, seed_status
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
@@ -34,51 +43,50 @@ from tests.smoke_plugin_helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from types import ModuleType
 
     from lyra.sdk.types import JsonObject
 
-    from lyra_app.worker import WorkerRunContext
+    from lyra_app.worker import RunnerMetricEntry
 
 
 def _metric(
-    *,
-    name: str,
-    factory: str,
-    output: dict[str, Any] | None = None,
+    *, name: str, factory: str, output: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     return {
-        "name": name,
-        "description": f"{name} metric.",
-        "inputs": {
-            "location": {"kind": "location"},
-            "value": {
-                "kind": "integer",
-                "description": "Example input value.",
-            },
-        },
-        "output": output
-        or {
-            "kind": "table",
-            "columns": [
-                {
-                    "name": "value",
-                    "type": "integer",
-                    "unit": "count",
-                    "description": "Example output value.",
-                }
-            ],
-        },
+        **metric_manifest(name=name, description=f"{name} metric.", output=output),
         "_factory": factory,
     }
+
+
+def _runner_entry(
+    worker: ModuleType,
+    *,
+    metric_name: str,
+    queue: str,
+    output: TableOutput | FileOutput,
+    run: Callable[[RunContext], object],
+) -> RunnerMetricEntry:
+    @declare_metric(name=metric_name, description="Worker fixture.", output=output)
+    def handler(
+        location: LocationInput, parameters: ValueParameters, context: RunContext
+    ) -> object:
+        del location, parameters
+        return run(context)
+
+    return worker.RunnerMetricEntry(
+        metric_name=metric_name,
+        queue=queue,
+        definition=PluginDefinition(metrics=[handler]),
+    )
 
 
 def _manifest(metrics: list[dict[str, Any]]) -> dict[str, Any]:
     factories = {metric["_factory"] for metric in metrics}
     assert len(factories) == 1
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "plugin": {"name": "fake-plugin", "version": "1.0.0"},
         "factory": next(iter(factories)),
         "metrics": [
@@ -114,8 +122,8 @@ def _feature_collection(feature_id: str = "area-1") -> dict[str, Any]:
     }
 
 
-def _table_output() -> TableOutputV4:
-    return TableOutputV4.model_validate(
+def _table_output() -> TableOutput:
+    return TableOutput.model_validate(
         {
             "kind": "table",
             "columns": [
@@ -130,8 +138,8 @@ def _table_output() -> TableOutputV4:
     )
 
 
-def _area_output(*, nullable: bool = False) -> TableOutputV4:
-    return TableOutputV4.model_validate(
+def _area_output(*, nullable: bool = False) -> TableOutput:
+    return TableOutput.model_validate(
         {
             "kind": "table",
             "columns": [
@@ -154,8 +162,8 @@ def _area_output(*, nullable: bool = False) -> TableOutputV4:
     )
 
 
-def _file_output() -> FileOutputV4:
-    return FileOutputV4(
+def _file_output() -> FileOutput:
+    return FileOutput(
         kind="file",
         media_type="image/tiff",
         extensions=[".tif", ".tiff"],
@@ -227,22 +235,23 @@ def _write_plugin_definition(
         path,
         module_name,
         "from lyra.sdk import (\n"
-        "    Input, LocationInput, PluginDefinition, RunContext,\n"
+        "    LocationInput, PluginDefinition, RunContext,\n"
         "    metric as declare_metric,\n"
         ")\n"
-        "from lyra.sdk.models.plugin_v4 import OutputSpecV4\n"
+        "from lyra.sdk.models.plugin import OutputSpec\n"
         "from pydantic import TypeAdapter\n"
+        "from tests.contract_helpers import ValueParameters\n"
         f"declarations = {declarations!r}\n"
         "handlers = []\n"
         "for metric_name, description, raw_output in declarations:\n"
         "    @declare_metric(\n"
         "        name=metric_name,\n"
         "        description=description,\n"
-        "        inputs={'value': Input(description='Example input value.')},\n"
-        "        output=TypeAdapter(OutputSpecV4).validate_python(raw_output),\n"
+        "        output=TypeAdapter(OutputSpec).validate_python(raw_output),\n"
         "    )\n"
         "    def metric(\n"
-        "        location: LocationInput, value: int, *, context: RunContext\n"
+        "        location: LocationInput, parameters: ValueParameters, *,\n"
+        "        context: RunContext\n"
         "    ):\n"
         "        raise AssertionError('metric should only be imported')\n"
         "    handlers.append(metric)\n"
@@ -296,13 +305,17 @@ def _decode_stored_result(
     redis: FakeRedisSync,
     job_id: str,
 ) -> dict[str, Any]:
-    return json.loads(redis.values[worker.job_store.result_key(job_id)])
+    stored = redis.get(worker.job_store.result_key(job_id))
+    assert stored is not None
+    return json.loads(stored)
 
 
 def _decode_status(
     worker: ModuleType, redis: FakeRedisSync, job_id: str
 ) -> dict[str, Any]:
-    return json.loads(redis.values[worker.job_store.status_key(job_id)])
+    stored = redis.get(worker.job_store.status_key(job_id))
+    assert stored is not None
+    return json.loads(stored)
 
 
 def test_worker_registers_only_generic_task(worker_module: ModuleType) -> None:
@@ -528,31 +541,31 @@ def test_generic_task_executes_factory_and_persists_result(
         tmp_path,
         "success_plugin",
         "from lyra.sdk import (\n"
-        "    Input, LocationInput, PluginDefinition, RunContext, metric,\n"
+        "    LocationInput, PluginDefinition, RunContext, metric,\n"
         ")\n"
-        "from lyra.sdk.models.job import TableJobResult\n"
-        "from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4\n"
+        "import pandas as pd\n"
+        "from tests.contract_helpers import ValueParameters\n"
+        "from lyra.sdk.models.plugin import TableColumn, TableOutput\n"
         "@metric(\n"
         "    name='heavy_metric',\n"
         "    description='heavy_metric metric.',\n"
-        "    inputs={'value': Input(description='Example input value.')},\n"
-        "    output=TableOutputV4(\n"
+        "    output=TableOutput(\n"
         "        kind='table',\n"
-        "        columns=[TableOutputColumnV4(\n"
+        "        columns=[TableColumn(\n"
         "            name='value', type='integer', unit='count',\n"
         "            description='Example output value.',\n"
         "        )],\n"
         "    ),\n"
         ")\n"
-        "def run(location: LocationInput, value: int, *, context: RunContext):\n"
+        "def run(location: LocationInput, parameters: ValueParameters, *,\n"
+        "        context: RunContext):\n"
         "    assert context.metric == 'heavy_metric'\n"
         "    assert hasattr(context, 'db')\n"
         "    context.report_progress(stage='compute', current=50, total=100)\n"
-        "    return TableJobResult(\n"
-        "        job_id=context.job_id,\n"
+        "    return pd.DataFrame(\n"
         "        index=['area-1'],\n"
         "        columns=['value'],\n"
-        "        data=[[value * 2]],\n"
+        "        data=[[parameters.value * 2]],\n"
         "    )\n"
         "def create_plugin():\n"
         "    return PluginDefinition(metrics=[run])\n",
@@ -571,7 +584,7 @@ def test_generic_task_executes_factory_and_persists_result(
         {
             "job_id": "job-1",
             "metric": "heavy_metric",
-            "input": {"location": _feature_collection(), "value": 3},
+            "input": {"location": _feature_collection(), "parameters": {"value": 3}},
         },
         task_id="task-id",
     )
@@ -614,7 +627,7 @@ def test_smoke_table_metric_executes_from_directory_fixture(
             "metric": "smoke_table_metric",
             "input": {
                 "location": feature_collection(("area-1", "area-2")),
-                "value": 7,
+                "parameters": {"value": 7},
             },
         },
         task_id="task-id",
@@ -643,7 +656,11 @@ def test_unknown_metric_persists_failed_result(
     if worker_module.job_store.get_job_status("job-unknown") is None:
         seed_status("job-unknown", "queued", metric="missing")
     result = worker_module.execute_job(
-        {"job_id": "job-unknown", "metric": "missing", "input": {}},
+        {
+            "job_id": "job-unknown",
+            "metric": "missing",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -677,11 +694,12 @@ def test_plugin_exception_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
+    def fail(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
         msg = "boom"
         raise RuntimeError(msg)
 
-    worker_module.RUNNER_REGISTRY["bad_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["bad_metric"] = _runner_entry(
+        worker_module,
         metric_name="bad_metric",
         queue="heavy",
         output=_table_output(),
@@ -693,7 +711,11 @@ def test_plugin_exception_persists_failed_result(
     if worker_module.job_store.get_job_status("job-bad") is None:
         seed_status("job-bad", "queued", metric="bad_metric")
     result = worker_module.execute_job(
-        {"job_id": "job-bad", "metric": "bad_metric", "input": {}},
+        {
+            "job_id": "job-bad",
+            "metric": "bad_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -709,12 +731,13 @@ def test_database_exception_persists_retryable_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def fail(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
+    def fail(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
         statement = "SELECT 1"
         message = "unavailable"
         raise OperationalError(statement, {}, Exception(message))
 
-    worker_module.RUNNER_REGISTRY["database_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["database_metric"] = _runner_entry(
+        worker_module,
         metric_name="database_metric",
         queue="heavy",
         output=_table_output(),
@@ -726,7 +749,11 @@ def test_database_exception_persists_retryable_failed_result(
     if worker_module.job_store.get_job_status("job-database") is None:
         seed_status("job-database", "queued", metric="database_metric")
     result = worker_module.execute_job(
-        {"job_id": "job-database", "metric": "database_metric", "input": {}},
+        {
+            "job_id": "job-database",
+            "metric": "database_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -757,12 +784,12 @@ def test_invalid_plugin_result_persists_failed_result(
     plugin_result: TerminalJobResult | JsonObject,
 ) -> None:
     def run(
-        _job: JobEnvelope,
-        _context: WorkerRunContext,
+        _context: RunContext,
     ) -> TerminalJobResult | JsonObject:
         return plugin_result
 
-    worker_module.RUNNER_REGISTRY["invalid_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["invalid_metric"] = _runner_entry(
+        worker_module,
         metric_name="invalid_metric",
         queue="heavy",
         output=_table_output(),
@@ -774,7 +801,11 @@ def test_invalid_plugin_result_persists_failed_result(
     if worker_module.job_store.get_job_status("job-invalid") is None:
         seed_status("job-invalid", "queued", metric="invalid_metric")
     result = worker_module.execute_job(
-        {"job_id": "job-invalid", "metric": "invalid_metric", "input": {}},
+        {
+            "job_id": "job-invalid",
+            "metric": "invalid_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -787,47 +818,26 @@ def test_invalid_plugin_result_persists_failed_result(
 @pytest.mark.parametrize(
     "plugin_result",
     [
-        TableJobResult(
-            job_id="job-invalid-table",
-            index=["other-area"],
-            columns=["value"],
-            data=[[1]],
-        ),
-        TableJobResult(
-            job_id="job-invalid-table",
-            index=["area-1"],
-            columns=["other_value"],
-            data=[[1]],
-        ),
-        TableJobResult(
-            job_id="job-invalid-table",
-            index=["area-1"],
-            columns=["value"],
-            data=[["wrong"]],
-        ),
-        TableJobResult(
-            job_id="job-invalid-table",
-            index=["area-1"],
-            columns=["value"],
-            data=[[None]],
-        ),
+        pd.DataFrame(index=["other-area"], columns=["value"], data=[[1]]),
+        pd.DataFrame(index=["area-1"], columns=["other_value"], data=[[1]]),
+        pd.DataFrame(index=["area-1"], columns=["value"], data=[["wrong"]]),
+        pd.DataFrame(index=["area-1"], columns=["value"], data=[[None]]),
     ],
 )
 def test_invalid_table_result_persists_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
-    plugin_result: TableJobResult,
+    plugin_result: pd.DataFrame,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
+    def run(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
         return plugin_result
 
-    worker_module.RUNNER_REGISTRY["invalid_table_metric"] = (
-        worker_module.RunnerMetricEntry(
-            metric_name="invalid_table_metric",
-            queue="heavy",
-            output=_table_output(),
-            run=run,
-        )
+    worker_module.RUNNER_REGISTRY["invalid_table_metric"] = _runner_entry(
+        worker_module,
+        metric_name="invalid_table_metric",
+        queue="heavy",
+        output=_table_output(),
+        run=run,
     )
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
@@ -838,7 +848,7 @@ def test_invalid_table_result_persists_failed_result(
         {
             "job_id": "job-invalid-table",
             "metric": "invalid_table_metric",
-            "input": {"location": _feature_collection(), "value": 1},
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
         },
         task_id="task-id",
     )
@@ -854,15 +864,13 @@ def test_worker_appends_fractional_area_column(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
-        return TableJobResult(
-            job_id=job.job_id,
-            index=["area-1"],
-            columns=["covered_area_m2"],
-            data=[[25.0]],
+    def run(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
+        return pd.DataFrame(
+            index=["area-1"], columns=["covered_area_m2"], data=[[25.0]]
         )
 
-    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["area_metric"] = _runner_entry(
+        worker_module,
         metric_name="area_metric",
         queue="heavy",
         output=_area_output(),
@@ -877,7 +885,7 @@ def test_worker_appends_fractional_area_column(
         {
             "job_id": "job-area",
             "metric": "area_metric",
-            "input": {"location": _feature_collection()},
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
             "location_areas_m2": {"area-1": 100.0},
         },
         task_id="task-id",
@@ -892,15 +900,13 @@ def test_worker_normalizes_fraction_within_range_tolerance(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
-        return TableJobResult(
-            job_id=job.job_id,
-            index=["area-1"],
-            columns=["covered_area_m2"],
-            data=[[100.00000005]],
+    def run(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
+        return pd.DataFrame(
+            index=["area-1"], columns=["covered_area_m2"], data=[[100.00000005]]
         )
 
-    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["area_metric"] = _runner_entry(
+        worker_module,
         metric_name="area_metric",
         queue="heavy",
         output=_area_output(),
@@ -915,7 +921,7 @@ def test_worker_normalizes_fraction_within_range_tolerance(
         {
             "job_id": "job-area-tolerance",
             "metric": "area_metric",
-            "input": {"location": _feature_collection()},
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
             "location_areas_m2": {"area-1": 100.0},
         },
         task_id="task-id",
@@ -931,15 +937,13 @@ def test_worker_rejects_fraction_outside_unit_interval(
     worker_module: ModuleType,
     source_value: float,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
-        return TableJobResult(
-            job_id=job.job_id,
-            index=["area-1"],
-            columns=["covered_area_m2"],
-            data=[[source_value]],
+    def run(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
+        return pd.DataFrame(
+            index=["area-1"], columns=["covered_area_m2"], data=[[source_value]]
         )
 
-    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["area_metric"] = _runner_entry(
+        worker_module,
         metric_name="area_metric",
         queue="heavy",
         output=_area_output(),
@@ -954,7 +958,7 @@ def test_worker_rejects_fraction_outside_unit_interval(
         {
             "job_id": "job-area-range",
             "metric": "area_metric",
-            "input": {"location": _feature_collection()},
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
             "location_areas_m2": {"area-1": 100.0},
         },
         task_id="task-id",
@@ -968,8 +972,8 @@ def test_worker_rejects_fraction_outside_unit_interval(
 @pytest.mark.parametrize(
     ("invalid_areas", "message"),
     [
-        (None, "missing server-calculated"),
-        ({"other-area": 100.0}, "feature IDs must match"),
+        (None, "areas must match location feature IDs"),
+        ({"other-area": 100.0}, "areas must match location feature IDs"),
     ],
 )
 def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
@@ -978,15 +982,13 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
     invalid_areas: dict[str, float] | None,
     message: str,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
-        return TableJobResult(
-            job_id=job.job_id,
-            index=["area-1"],
-            columns=["covered_area_m2"],
-            data=[[None]],
+    def run(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
+        return pd.DataFrame(
+            index=["area-1"], columns=["covered_area_m2"], data=[[None]]
         )
 
-    worker_module.RUNNER_REGISTRY["area_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["area_metric"] = _runner_entry(
+        worker_module,
         metric_name="area_metric",
         queue="heavy",
         output=_area_output(nullable=True),
@@ -1001,7 +1003,7 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
         {
             "job_id": "job-area-missing",
             "metric": "area_metric",
-            "input": {"location": _feature_collection()},
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
             "location_areas_m2": invalid_areas,
         },
         task_id="task-id",
@@ -1012,7 +1014,7 @@ def test_worker_propagates_nullable_fraction_and_requires_area_metadata(
         {
             "job_id": "job-area-null",
             "metric": "area_metric",
-            "input": {"location": _feature_collection()},
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
             "location_areas_m2": {"area-1": 100.0},
         },
         task_id="task-id",
@@ -1027,24 +1029,18 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:  # ruff:ignore[unused-function-argument]
-        return TableJobResult(
-            job_id=job.job_id,
-            index=["area-1"],
-            columns=["value"],
-            data=[[1]],
-        )
+    def run(context: RunContext) -> pd.DataFrame:  # ruff:ignore[unused-function-argument]
+        return pd.DataFrame(index=["area-1"], columns=["value"], data=[[1]])
 
     location = _feature_collection()
     location["features"].append(location["features"][0].copy())
 
-    worker_module.RUNNER_REGISTRY["duplicate_location_metric"] = (
-        worker_module.RunnerMetricEntry(
-            metric_name="duplicate_location_metric",
-            queue="heavy",
-            output=_table_output(),
-            run=run,
-        )
+    worker_module.RUNNER_REGISTRY["duplicate_location_metric"] = _runner_entry(
+        worker_module,
+        metric_name="duplicate_location_metric",
+        queue="heavy",
+        output=_table_output(),
+        run=run,
     )
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
@@ -1057,7 +1053,7 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
         {
             "job_id": "job-duplicate-location",
             "metric": "duplicate_location_metric",
-            "input": {"location": location, "value": 1},
+            "input": {"location": location, "parameters": {"value": 1}},
         },
         task_id="task-id",
     )
@@ -1065,8 +1061,9 @@ def test_duplicate_resolved_location_ids_persist_failed_result(
     assert result["status"] == "failed"
     assert result["error"] == {
         "type": "invalid_result",
+        "path": "index",
         "message": (
-            "Resolved location feature IDs must be unique after string conversion."
+            "unique string index must exactly match location feature IDs in order"
         ),
     }
     assert (
@@ -1084,17 +1081,14 @@ def test_file_result_persists_through_generic_result_path(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> FileJobResult:
+    def run(context: RunContext) -> Path:
         output_path = context.temp_dir / "result.tif"
         output_path.write_bytes(b"data")
-        return FileJobResult(
-            job_id=job.job_id,
-            file_path=str(output_path),
-            media_type="image/tiff",
-        )
+        return output_path
 
     worker_module.set_runner_temp_base(tmp_path / "tmp")
-    worker_module.RUNNER_REGISTRY["file_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["file_metric"] = _runner_entry(
+        worker_module,
         metric_name="file_metric",
         queue="heavy",
         output=_file_output(),
@@ -1106,7 +1100,11 @@ def test_file_result_persists_through_generic_result_path(
     if worker_module.job_store.get_job_status("job-file") is None:
         seed_status("job-file", "queued", metric="file_metric")
     result = worker_module.execute_job(
-        {"job_id": "job-file", "metric": "file_metric", "input": {}},
+        {
+            "job_id": "job-file",
+            "metric": "file_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -1159,7 +1157,7 @@ def test_smoke_file_metric_executes_from_directory_fixture(
     ("filename", "media_type"),
     [
         ("result.txt", "image/tiff"),
-        ("result.tif", "text/plain"),
+        ("missing.tif", "image/tiff"),
     ],
 )
 def test_invalid_file_result_persists_failed_result(
@@ -1169,23 +1167,21 @@ def test_invalid_file_result_persists_failed_result(
     filename: str,
     media_type: str,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> FileJobResult:
+    assert media_type == "image/tiff"
+
+    def run(context: RunContext) -> Path:
         output_path = context.temp_dir / filename
-        output_path.write_bytes(b"data")
-        return FileJobResult(
-            job_id=job.job_id,
-            file_path=str(output_path),
-            media_type=media_type,
-        )
+        if filename != "missing.tif":
+            output_path.write_bytes(b"data")
+        return output_path
 
     worker_module.set_runner_temp_base(tmp_path / "tmp")
-    worker_module.RUNNER_REGISTRY["invalid_file_metric"] = (
-        worker_module.RunnerMetricEntry(
-            metric_name="invalid_file_metric",
-            queue="heavy",
-            output=_file_output(),
-            run=run,
-        )
+    worker_module.RUNNER_REGISTRY["invalid_file_metric"] = _runner_entry(
+        worker_module,
+        metric_name="invalid_file_metric",
+        queue="heavy",
+        output=_file_output(),
+        run=run,
     )
     fake_redis = FakeRedisSync()
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", fake_redis)
@@ -1193,7 +1189,11 @@ def test_invalid_file_result_persists_failed_result(
     if worker_module.job_store.get_job_status("job-invalid-file") is None:
         seed_status("job-invalid-file", "queued", metric="invalid_file_metric")
     result = worker_module.execute_job(
-        {"job_id": "job-invalid-file", "metric": "invalid_file_metric", "input": {}},
+        {
+            "job_id": "job-invalid-file",
+            "metric": "invalid_file_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -1208,17 +1208,13 @@ def test_check_cancelled_persists_cancelled_result(
     monkeypatch: pytest.MonkeyPatch,
     worker_module: ModuleType,
 ) -> None:
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:
-        seed_status(job.job_id, "cancelled")
+    def run(context: RunContext) -> pd.DataFrame:
+        seed_status(context.job_id, "cancelled")
         context.check_cancelled()
-        return TableJobResult(
-            job_id=job.job_id,
-            index=["area-1"],
-            columns=["value"],
-            data=[[1]],
-        )
+        return pd.DataFrame(index=["area-1"], columns=["value"], data=[[1]])
 
-    worker_module.RUNNER_REGISTRY["cancel_metric"] = worker_module.RunnerMetricEntry(
+    worker_module.RUNNER_REGISTRY["cancel_metric"] = _runner_entry(
+        worker_module,
         metric_name="cancel_metric",
         queue="heavy",
         output=_table_output(),
@@ -1230,7 +1226,11 @@ def test_check_cancelled_persists_cancelled_result(
     if worker_module.job_store.get_job_status("job-cancel") is None:
         seed_status("job-cancel", "queued", metric="cancel_metric")
     result = worker_module.execute_job(
-        {"job_id": "job-cancel", "metric": "cancel_metric", "input": {}},
+        {
+            "job_id": "job-cancel",
+            "metric": "cancel_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
         task_id="task-id",
     )
 
@@ -1270,7 +1270,7 @@ def test_smoke_cancel_metric_respects_pre_cancelled_job(
         {
             "job_id": "job-smoke-cancel",
             "metric": "smoke_cancel_metric",
-            "input": {"location": feature_collection(), "value": 1},
+            "input": {"location": feature_collection(), "parameters": {"value": 1}},
         },
         task_id="task-id",
     )
@@ -1405,22 +1405,28 @@ def test_late_or_duplicate_delivery_never_invokes_plugin(
     monkeypatch.setattr(worker_module.job_store, "redis_client_sync", redis)
     called: list[str] = []
 
-    def run(job: JobEnvelope, context: WorkerRunContext) -> TableJobResult:
-        del context
-        called.append(job.job_id)
-        return TableJobResult(
-            job_id=job.job_id, index=["a"], columns=["value"], data=[[1]]
-        )
+    def run(context: RunContext) -> pd.DataFrame:
+        called.append(context.job_id)
+        return pd.DataFrame(index=["a"], columns=["value"], data=[[1]])
 
-    worker_module.RUNNER_REGISTRY["heavy_metric"] = worker_module.RunnerMetricEntry(
-        metric_name="heavy_metric", queue="heavy", output=_table_output(), run=run
+    worker_module.RUNNER_REGISTRY["heavy_metric"] = _runner_entry(
+        worker_module,
+        metric_name="heavy_metric",
+        queue="heavy",
+        output=_table_output(),
+        run=run,
     )
     if state != "missing":
         seed_status("job-1", "queued", client=redis)
         seed_status("job-1", state, client=redis)
     before = dict(redis.values)
     worker_module.execute_job(
-        {"job_id": "job-1", "metric": "heavy_metric", "input": {}}, task_id="job-1"
+        {
+            "job_id": "job-1",
+            "metric": "heavy_metric",
+            "input": {"location": _feature_collection(), "parameters": {"value": 1}},
+        },
+        task_id="job-1",
     )
     assert called == []
-    assert redis.values == before
+    assert dict(redis.values) == before

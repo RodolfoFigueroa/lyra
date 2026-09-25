@@ -1,7 +1,7 @@
 """HTTP endpoints for metric discovery and metadata."""
 
 from fastapi import APIRouter, HTTPException, Response
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfo
 
 from lyra_app.registry import get_metric_catalog, get_metric_info
 
@@ -21,7 +21,7 @@ async def list_metrics(response: Response) -> MetricCatalogResponse:
 
 
 @router.get("/metrics/{metric_name}")
-async def get_metric(metric_name: str) -> MetricInfoV4:
+async def get_metric(metric_name: str) -> MetricInfo:
     """Return public metadata for one registered metric.
 
     Returns:

@@ -1,224 +1,286 @@
 ---
 title: Plugin Authoring
-description: Design typed inputs, outputs, runtime behavior, and generated manifests.
+description: Wrap existing Python calculations with typed parameters and native results.
 ---
 
-Every metric is a synchronous decorated function with at least one spatial
-input and a declared terminal output. Use public contracts from `lyra-sdk`; do
-not import application internals.
+A metric is a synchronous Python function with a parameter model, spatial inputs,
+and a declared output. Keep existing computation code in its own functions or
+library and add a small Lyra adapter. The runnable example is
+[`examples/lyra-plugin`](https://github.com/RodolfoFigueroa/lyra/tree/main/examples/lyra-plugin).
+It contains table, file, and cancellation metrics plus a generated manifest.
 
-Public metric names and root input names must match
-`^[a-z][a-z0-9_]*$`. The `lyra_` prefix is reserved for Lyra-owned
-names. Decorator and manifest construction reject invalid names immediately.
-Manifest compilation also rejects duplicate metric names and invalid input or
-output contracts.
+## Declare a metric
 
-Declare metrics with the standalone `@metric` decorator, then assemble them in
-one explicit, synchronous factory:
+Ordinary inputs belong to one Pydantic model. `MetricParameters` sets
+`extra="forbid"` and `validate_default=True`. Use native `Field` declarations for
+descriptions, constraints, defaults, and examples. The decorator infers the model
+from the `parameters` argument; do not repeat it in a decorator mapping.
 
-```python
-from lyra.sdk import PluginDefinition
-
-from .metrics import job_accessibility
-
-
-def create_plugin() -> PluginDefinition:
-    return PluginDefinition(metrics=[job_accessibility])
-```
-
-Configure that parameterless factory under `[tool.lyra].factory`. Lyra imports
-only the configured module and never scans the package for metric modules.
-
-The `lyra.sdk` package provides convenient imports for `RunContext`, `LyraDB`,
-`Bounds`, `metric`, `PluginDefinition`, `PluginDefinitionError`,
-`MetricDescription`, `Input`, `LocationInput`, `BoundsInput`, `BatchInput`, and
-`BatchItem`. Import models from their owning modules, for example
-`from lyra.sdk.models.job import TableJobResult`. Utility helpers likewise live
-in `lyra.utils.date`, `lyra.utils.ee`, and `lyra.utils.geometry`. The
-[Python reference](../../api/lyra/) documents definitions at those owning modules.
-
-## Inputs
-
-Declare `LocationInput` when output rows correspond to selected features and
-`BoundsInput` when the computation needs one enclosing geometry. Lyra owns their
-descriptions and wrapper schemas, so do not add `Field` metadata to spatial
-parameters.
-
-Ordinary parameters may use:
-
-- `str`, `float`, `int`, and `bool`;
-- `Literal[...]` enums;
-- nested Pydantic models and typed JSON containers;
-- `list[BatchItem[T]]` for bounded repeated values.
-
-Declare every plugin-owned parameter in the metric decorator's `inputs`
-mapping. `Input` owns its description, examples, validation constraints, and
-optional JSON Schema extensions. `BatchInput` adds the item limit and optional
-labels while its nested `items=Input(...)` describes each item value:
+This table adapter follows the runnable example, with an optional execution context
+used for progress and cancellation:
 
 ```python
-@metric(
-    name="job_accessibility",
-    description="Calculate accessibility to matching jobs.",
-    inputs={
-        "limit": Input(
-            description="Maximum number of results.",
-            ge=1,
-        ),
-        "patterns": BatchInput(
-            max_items=20,
-            allow_labels=True,
-            items=Input(
-                description="Regex matched against the SCIAN/NAICS code.",
-                examples=[r"^31\d{4}$", r"^311\d{3}$"],
-            ),
-        ),
-    },
-    output=...,
+import pandas as pd
+from pydantic import Field
+
+from lyra.sdk import (
+    LocationInput,
+    MetricParameters,
+    RunContext,
+    TableColumn,
+    TableOutput,
+    metric,
 )
-def run(
-    location: LocationInput,
-    patterns: list[BatchItem[str]],
-    limit: int = 100,
-) -> TableJobResult: ...
-```
-
-Function annotations remain authoritative for Python types and nullability;
-function defaults remain authoritative for omission and defaults. Do not put
-root input metadata in `Annotated[..., Field(...)]`. Other `Annotated`
-metadata, such as custom Pydantic validators, remains supported. Fields inside
-nested Pydantic models may continue using `Field` normally. Spatial inputs are
-omitted from `inputs` because Lyra owns their metadata. Batch containers remain
-required protocol fields and cannot define defaults.
-
-### Defaults, omission, and null
-
-The function signature is authoritative for input defaults. A Python default
-makes an ordinary input omittable and is recorded as its manifest default. Put
-the default after the annotation; `Input` deliberately has no default field:
-
-```python
-inputs = {
-    "limit": Input(description="Maximum number of results.", ge=1),
-}
 
 
-def run(location: LocationInput, limit: int = 100) -> TableJobResult: ...
-```
+class Parameters(MetricParameters):
+    value: int = Field(description="Value copied into each output row.")
 
-Omission and nullability are independent. A union with `None` (written as
-`T | None` or `Optional[T]`) permits an explicit JSON `null`, but does not by
-itself make the input omittable. To permit both omission and `null`, annotate
-the value as nullable and give it a default:
 
-```python
-inputs = {
-    "threshold": Input(
-        description="Threshold, or null to disable filtering.",
+@metric(
+    name="smoke_table_metric",
+    description="Return the submitted value for each input feature.",
+    output=TableOutput(
+        columns=[
+            TableColumn(
+                name="value",
+                type="integer",
+                unit="count",
+                description="Submitted value.",
+            ),
+        ]
     ),
-}
-
-
-def run(location: LocationInput, threshold: float | None = None) -> TableJobResult: ...
+)
+def run_table(
+    location: LocationInput,
+    parameters: Parameters,
+    *,
+    context: RunContext,
+) -> pd.DataFrame:
+    context.report_progress(stage="table", current=1, total=1)
+    context.check_cancelled()
+    feature_ids = [feature.id for feature in location.features]
+    return pd.DataFrame(
+        {"value": [parameters.value for _ in feature_ids]},
+        index=feature_ids,
+    )
 ```
 
-The resulting contracts are:
+An adapter can instead pass `parameters.value` to an existing calculation. Use
+`lyra.utils.geometry.convert_geojson_to_gdf(location)` if that calculation expects
+a GeoDataFrame. The underlying library does not need to accept Lyra objects.
 
-| Function parameter | May be omitted | Accepts `null` | Default |
+## Handler conventions
+
+Supported argument names are `parameters`, `location`, `bounds`, and `context`.
+Their order does not matter: the worker calls them by keyword. Positional-or-keyword
+and keyword-only arguments are accepted; positional-only arguments, variadics,
+argument defaults, async handlers, and generators are rejected.
+
+- `parameters` is a concrete Pydantic model. Omit this argument for a metric with
+  no ordinary inputs. Put defaults on model fields, never on handler arguments.
+- `location: LocationInput` receives a resolved `GeoJSON` feature collection.
+- `bounds: BoundsInput` receives a resolved `SingleGeoJSON` geometry.
+- `context: RunContext` is optional. Declare it only when using platform services.
+
+Every metric needs at least one spatial argument. Table metrics require `location`;
+a metric may also declare `bounds`. Spatial arguments cannot be nullable or have
+defaults. Lyra owns their schemas and descriptions. Return annotations are optional;
+the explicit output declaration governs runtime validation.
+
+Metric names must match `^[a-z][a-z0-9_]*$` and cannot start with `lyra_`.
+Parameter fields use normal Pydantic names without aliases.
+
+## Reuse existing models
+
+An existing `BaseModel` subclass is accepted when the root and every nested model
+set `extra="forbid"` and `validate_default=True`. Inherited settings count. Adapt
+an incompatible model with a small subclass and, where necessary, compatible
+nested field types. Lyra never mutates or clones a model to change its behavior.
+
+Root parameter fields require descriptions. Nested descriptions and examples are
+optional. Supported values are strings, booleans, integers, finite floats, null,
+homogeneous scalar `Literal` enums, lists, string-keyed dictionaries, unions, and
+nested models. Typed dictionaries are intentionally open mappings.
+
+Use ordinary lists with fixed output columns. There is no keyed batch protocol
+or request-dependent column template. Independent parameter sweeps can be separate
+jobs; a plugin may process a list internally and return its declared fixed columns.
+
+The initial contract excludes `Any`, arbitrary classes, root/recursive/unresolved
+generic models, sets, tuples, bytes, datetimes, decimals, non-string dictionary
+keys, aliases, default factories, custom serializers, computed fields, and custom
+JSON Schema hooks or structural overrides. Registration errors identify the metric
+and field path. These limits keep discovery and execution contracts predictable.
+
+## Defaults and validation
+
+Omission and nullability are independent:
+
+| Model field | May be omitted | Accepts null | Default |
 | --- | --- | --- | --- |
 | `value: int` | No | No | — |
 | `value: int = 1` | Yes | No | `1` |
 | `value: int \| None` | No | Yes | — |
-| `value: int \| None = None` | Yes | Yes | `null` |
+| `value: int \| None = None` | Yes | Yes | null |
 | `value: int \| None = 1` | Yes | Yes | `1` |
 
-An em dash means that no default exists; `null` is an actual default value.
-Defaults and examples must satisfy the annotated type and constraints or
-manifest generation fails.
+Defaults must be deterministic JSON values. Mutable literal defaults follow
+Pydantic's per-instance copying behavior. Manifest generation validates defaults
+and examples against their schemas; dynamic default factories are unsupported.
 
-## Inspect a definition
+The API checks the submitted JSON Schema without coercion or default injection.
+The worker constructs the parameter model, applies defaults, and runs Python
+validators. A numeric string is not an integer; a JSON number such as `1.0` may
+satisfy an integer schema and is parsed using normal Pydantic JSON semantics.
 
-Use `plugin.describe("metric_name")` for structured inspection in Python. The
-CLI renders the same information as a table for one metric or the whole plugin:
+Python-only validators can reject schema-valid requests. Prefer model-level after
+validators for cross-field checks and preserve declared value types. Such a request
+can be accepted, then fail in the worker with `invalid_input` before the handler
+runs. An invalid semantic default has the same outcome. A successful schema check
+does not promise successful execution of every domain rule.
 
-```bash
-uv run lyra-plugin describe
-uv run lyra-plugin describe job_accessibility
-uv run lyra-plugin describe job_accessibility --json
+Submitted input is retained in provenance. Omitting a defaulted field and explicitly
+supplying its default are different requests for idempotency purposes.
+
+A known Pydantic schema-generation limitation affects literal dictionary defaults
+containing a `$ref` key. Generation may fail with `PluginDefinitionError`; ordinary
+dictionary parameters remain supported. Lyra does not rewrite these defaults.
+
+## Submit spatial references and nested parameters
+
+For the example table metric:
+
+```json
+{
+  "metric": "smoke_table_metric",
+  "input": {
+    "location": {"data_type": "met_zone_code", "value": "09.01"},
+    "parameters": {"value": 7}
+  }
+}
 ```
 
-Inspection includes the clean handler signature, required/default state,
-constraints, descriptions, and the output summary. Registration errors include
-the handler signature and identify missing, unknown, or Lyra-owned input
-declarations.
+A declared parameter model always requires the `parameters` object, including `{}`
+when all fields have defaults. For a parameterless metric, omit the property:
 
-Clients submit spatial wrapper objects such as `geojson`, `cvegeo_list`, and
-`met_zone_code`. The API validates the compiled request schema and resolves
-those wrappers before the metric function receives SDK geometry models.
+```json
+{
+  "metric": "smoke_file_metric",
+  "input": {
+    "location": {"data_type": "met_zone_code", "value": "09.01"}
+  }
+}
+```
 
-## Outputs
+The API resolves spatial wrappers before execution. REST and Python clients support
+both spatial arguments together. MCP discovers dual-spatial metrics but its run
+helper supports exactly one spatial input; see the [MCP workflow](../../use/mcp/).
 
-Use `TableOutputV4` for one scalar row per resolved `location` feature. Static
-columns are preferred when every job returns the same concepts. Each column has
-a name, type, unit, description, and nullability.
+## Native outputs
 
-Use batched columns only when bounded variants share expensive preprocessing.
-Each request item has a stable `key`, plugin-owned `value`, and optional label;
-Lyra expands `{key}` and `{label}` in the declared column contracts. The runner
-must return the resulting columns in source-array order.
+Return a DataFrame for `TableOutput`. Its unique string index must exactly match
+location feature IDs in order. Columns must match the declared source columns in
+name and order. Lyra does not align rows, stringify identifiers, or guess columns.
+Each column declares a scalar type, unit, description, and nullability. Integer
+columns reject floats and booleans. Nullable cells accept `None` and floating NaN
+as JSON null; infinity, pandas NA/NaT, and nested objects are rejected.
 
-Use `FileOutputV4` for rasters, images, reports, archives, and other artifacts
-that should be downloaded rather than represented as per-feature scalars.
-Independent parameter sweeps should normally be separate jobs; outputs with
-different meaning, units, audiences, or runtime behavior should be separate
-metrics.
+Static `FractionOfLocationArea` derivations remain supported. Return source columns;
+Lyra appends derived ratios using API-calculated areas. Local normalization requires
+explicit area metadata and does not query a database.
 
-Return tables with the constructor matching the computation:
+Return a `pathlib.Path` for `FileOutput`. Declare its media type and allowed file
+extensions, write beneath `context.temp_dir`, and return the path. Relative paths
+are resolved against that directory. Missing files, paths outside it, escaping
+symlinks, and unsupported suffixes fail normalization. The example's
+`smoke_file_metric` demonstrates this workflow.
 
-- `TableJobResult.from_mapping()` for mappings or aligned sequences;
-- `from_dataframe()` for Pandas or GeoPandas tables;
-- `from_series()` for one indexed series.
+Lyra attaches job IDs and constructs terminal transport models. A Series,
+dictionary, or job-bearing terminal model is not an accepted plugin return.
+API clients still receive `TableJobResult` or `FileJobResult`; those describe
+transported results, not what an adapter returns.
 
-The result job ID must match `context.job_id`. Table indices must equal resolved
-location feature IDs after string conversion, and columns must exactly match
-the expanded output declaration. Write file artifacts below `context.temp_dir`
-and return `FileJobResult`.
+## Register and test locally
+
+Register functions explicitly in a synchronous, parameterless factory:
+
+```python
+from lyra.sdk import PluginDefinition
+from .metrics import run_table, run_file, run_cancel
+
+
+def create_plugin() -> PluginDefinition:
+    return PluginDefinition(metrics=[run_table, run_file, run_cancel])
+```
+
+Configure `[tool.lyra].factory = "smoke_plugin.plugin:create_plugin"` in
+`pyproject.toml`. Declare directly imported dependencies there, including pandas
+when returning DataFrames. The SDK itself does not import pandas.
+
+Decorated functions remain ordinary Python callables. In a local test, construct
+parameters and resolved geometry and pass a fake context only if the handler needs
+one. Direct calls neither resolve spatial references nor inject context or normalize
+results. Test your existing calculation independently as usual.
+
+The same preparation and normalization used by workers are available locally:
+
+```python
+# In the example plugin environment, with resolved location and a fake context:
+from smoke_plugin.metrics import run_table
+from smoke_plugin.plugin import create_plugin
+
+plugin = create_plugin()
+parameters = plugin.prepare_parameters("smoke_table_metric", {"value": 7})
+frame = run_table(parameters=parameters, location=location, context=context)
+result = plugin.normalize_result(
+    "smoke_table_metric",
+    frame,
+    job_id="local-test",
+    location=location,
+)
+assert result.data == [[7] for _ in location.features]
+```
+
+`prepare_parameters` raises `MetricInputError` for invalid input. `normalize_result`
+raises `MetricResultError` with metric and field/row/column context. For file outputs,
+supply `temp_dir`; for area derivations, supply `location_areas_m2`. Neither helper
+requires API, Redis, Celery, PostGIS, or Earth Engine connections.
 
 ## Runtime context
 
-`RunContext` provides the job and metric names, logger, temporary directory,
-database helper, optional progress snapshots, and cooperative cancellation. Every
-worker validates database connectivity before accepting jobs, so plugins may use
-`context.db` directly without a `None` check. A later database outage becomes a
-retryable `database_unavailable` job failure.
+`RunContext` supplies database access, a logger, a job temporary directory, progress,
+and cooperative cancellation. Call `context.check_cancelled()` around expensive
+stages. Use `context.logger` for ordinary diagnostics. Unexpected exceptions become
+failed jobs; invalid native results become `invalid_result` failures.
 
-Call `context.check_cancelled()` around expensive stages. Expected domain
-failures may return `FailedJobResult`; unexpected exceptions and invalid results
-are normalized by the worker. Unit-test contexts must provide a fake or mocked
-`LyraDB`; a strict fake that rejects unexpected calls is preferred for metrics
-that do not use the database.
+`context.report_progress(stage=..., current=..., total=..., unit=..., message=...)`
+publishes optional snapshots. Current is finite and nonnegative; total, when supplied,
+is finite and positive with current no greater than total. Estimates may decrease and
+stages, totals, and units may change. Updates are coalesced using
+`job_progress.min_interval_ms`, and pending progress is flushed before termination.
+Plugins may remain silent for hours. Tests for database-using adapters should supply
+a strict fake database client.
 
-Use `context.report_progress(stage=..., current=..., total=..., unit=..., message=...)`
-for optional quantitative snapshots. Current must be finite and nonnegative;
-optional total must be finite and positive, with current no greater than total.
-Estimates may decrease and stages, totals, and units may change between updates.
-The first update is written immediately. Later updates are coalesced to the
-latest value at `job_progress.min_interval_ms` (default 1000), and pending
-progress is flushed before termination. Plugins may remain silent for hours.
+## Generate and inspect the manifest
 
-Use `context.logger.info("Processed %s rows", count)` for ordinary diagnostic
-logging. Job and metric fields are attached automatically.
+Run in the plugin project:
 
-## Generated manifest
+```sh
+uv run pytest
+uv run lyra-plugin describe smoke_table_metric
+uv run lyra-plugin describe smoke_table_metric --json
+uv run lyra-plugin build-manifest
+uv run lyra-plugin check-manifest
+```
 
-Manifest schema v4 contains plugin identity, metric identity, compact semantic
-inputs, output declarations, and the plugin factory. Generation reads
-`[project]` and `[tool.lyra].factory` from `pyproject.toml` plus the live
-definition returned by the factory.
+Commit the generated `lyra.plugin.json`; never edit it manually. Format 5 contains
+plugin identity, the factory, metric identity, a complete Draft 2020-12 request
+schema, spatial metadata, and static output declarations. Generation reads project
+metadata and the live factory. There is one manifest representation and no semantic
+input compilation in the API.
 
-The compiler rejects extra fields, invalid or reserved public names, invalid
-defaults/examples, duplicate metric names, missing spatial inputs, invalid table
-contracts, and stale artifacts. Every compiled request schema declares Draft
-2020-12 so consumers can interpret it without guessing a dialect.
-Use the generated [Python reference](../../api/lyra/) for
-exact SDK model fields.
+`describe` reads the canonical contract. `check-manifest` rejects a stale artifact.
+The API reads manifests without importing plugin code; worker startup checks that
+the live definition matches. See [Publish and debug](../publish-and-debug/) for
+source capture and deployment.

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import create_autospec
 
 from jsonschema import validate
+from lyra.sdk import PluginDefinition, RunContext
+from lyra.sdk.models.geometry import GeoJSON
+from lyra.sdk.models.job import TableJobResult
+from lyra.sdk.plugin_cli import render_manifest
 
 from docs.scripts import generate_docs
 from docs.scripts.check_site import api_reference_failures
@@ -27,6 +34,8 @@ from lyra_app.mcp.models import TOOL_CONTRACTS_BY_NAME
 
 if TYPE_CHECKING:
     import pytest
+
+from tests.smoke_plugin_helpers import SMOKE_PLUGIN_DIR, feature_collection
 
 ROOT = Path(__file__).parents[1]
 
@@ -208,9 +217,12 @@ def test_version_selector_marks_each_tree_and_is_idempotent(tmp_path: Path) -> N
 def test_mcp_workflow_examples_match_serialization_schemas() -> None:
     page = (CONTENT_DIR / "use" / "mcp.md").read_text()
     examples = re.findall(r"```json\n(.*?)\n```", page, re.DOTALL)
-    assert len(examples) == 10
+    assert len(examples) == 11
     for example in examples:
         payload = json.loads(example)
+        if "met_zone_code" in payload:
+            validate(payload, TOOL_CONTRACTS_BY_NAME["lyra_run_metric"].input_schema)
+            continue
         if "status" not in payload and "error" in payload:
             assert payload["error"]["code"] == "result_not_found"
             continue
@@ -222,3 +234,50 @@ def test_mcp_workflow_examples_match_serialization_schemas() -> None:
             else "lyra_get_job_result"
         )
         validate(payload, TOOL_CONTRACTS_BY_NAME[name].output_schema)
+
+
+def test_published_requests_validate_against_example_manifest() -> None:
+    manifest = json.loads(render_manifest(SMOKE_PLUGIN_DIR))
+    schemas = {
+        metric["name"]: metric["request_schema"] for metric in manifest["metrics"]
+    }
+    requests = []
+    for relative in ("plugins/authoring.md", "use/rest-api.md"):
+        content = (CONTENT_DIR / relative).read_text()
+        for block in re.findall(r"```json\n(.*?)\n```", content, re.DOTALL):
+            payload = json.loads(block)
+            if "metric" in payload and "input" in payload:
+                validate(payload["input"], schemas[payload["metric"]])
+                requests.append(payload)
+    assert {request["metric"] for request in requests} == {
+        "smoke_table_metric",
+        "smoke_file_metric",
+    }
+
+
+def test_published_authoring_adapter_runs_without_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = (CONTENT_DIR / "plugins/authoring.md").read_text()
+    source = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)[0]
+    path = tmp_path / "documented_plugin.py"
+    path.write_text(source)
+    spec = importlib.util.spec_from_file_location("documented_plugin", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "documented_plugin", module)
+    spec.loader.exec_module(module)
+
+    plugin = PluginDefinition(metrics=[module.run_table])
+    location = GeoJSON.model_validate(feature_collection(("a", "b")))
+    context = create_autospec(RunContext, instance=True)
+    parameters = plugin.prepare_parameters("smoke_table_metric", {"value": 7})
+    frame = module.run_table(parameters=parameters, location=location, context=context)
+    result = plugin.normalize_result(
+        "smoke_table_metric", frame, job_id="local-test", location=location
+    )
+    assert isinstance(result, TableJobResult)
+    assert result.data == [[7], [7]]
+    assert result.index == ["a", "b"]
+    context.check_cancelled.assert_called_once_with()

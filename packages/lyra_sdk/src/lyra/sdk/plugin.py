@@ -1,873 +1,337 @@
-"""Plugin definition, metric declaration, and registration interfaces."""
+"""Typed parameter-model authoring and explicit plugin execution interfaces."""
 
 from __future__ import annotations
 
 import inspect
 import json
-import re
-import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Any,
-    Generic,
-    Literal,
-    NotRequired,
-    TypeAlias,
-    TypedDict,
-    TypeVar,
-    Union,
-    cast,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Any, TypeVar, Unpack, get_type_hints
 
+from jsonschema.exceptions import ValidationError as SchemaValidationError
 from lyra.sdk.context import RunContext
+from lyra.sdk.errors import MetricInputError, PluginDefinitionError
 from lyra.sdk.models.geometry import GeoJSON, SingleGeoJSON
-from lyra.sdk.models.plugin_v4 import (
-    BatchInputV4,
-    BooleanInputV4,
-    BoundsInputV4,
-    CompiledPluginManifestV4,
-    EnumInputV4,
-    InputSpecV4,
-    IntegerInputV4,
-    JsonSchemaInputV4,
-    LocationInputV4,
-    MetricManifestV4,
-    NumberInputV4,
-    OutputSpecV4,
-    PluginInfoV4,
-    PluginManifestV4,
-    PluginOwnedInputSpecV4,
-    StringInputV4,
-    compile_plugin_manifest,
+from lyra.sdk.models.plugin import (
+    MetricManifest,
+    OutputSpec,
+    PluginInfo,
+    PluginManifest,
+    SpatialInputKind,
+    validate_metric_name,
 )
 from lyra.sdk.models.strict import StrictBaseModel
-from lyra.sdk.types import JsonObject, JsonValue
-from pydantic import Field, TypeAdapter, ValidationError
-from pydantic.fields import FieldInfo
-from typing_extensions import TypeForm
+from lyra.sdk.parameters import build_request_schema
+from lyra.sdk.results import normalize_native_result
+from lyra.sdk.schema import check_json_value, subschema_validator
+from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from lyra.sdk.models.job import JobEnvelope
+    from lyra.sdk.models.job import FileJobResult, JobEnvelope, TableJobResult
+    from lyra.sdk.results import ResultOptions
 
-InputT = TypeVar("InputT")
-ResultT = TypeVar("ResultT")
-PythonAnnotation: TypeAlias = TypeForm[Any] | str
-PluginResult: TypeAlias = JsonValue | StrictBaseModel
-ConstraintValue: TypeAlias = int | float
-_PUBLIC_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
-
-
-class _CommonInputMetadata(TypedDict):
-    description: NotRequired[str]
-    examples: NotRequired[list[JsonValue]]
-    required: NotRequired[bool]
-    default: NotRequired[JsonValue]
-    nullable: NotRequired[bool]
-
-
-_BATCH_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
-_MISSING = inspect.Parameter.empty
-
-
-@dataclass(frozen=True)
-class _SpatialInputMarker:
-    kind: Literal["location", "bounds"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class Input:
-    """Describe and constrain one plugin-owned metric input."""
-
-    description: str
-    examples: list[JsonValue] | None = None
-    gt: ConstraintValue | None = None
-    ge: ConstraintValue | None = None
-    lt: ConstraintValue | None = None
-    le: ConstraintValue | None = None
-    multiple_of: ConstraintValue | None = None
-    min_length: int | None = None
-    max_length: int | None = None
-    pattern: str | None = None
-    strict: bool | None = None
-    json_schema_extra: JsonObject | None = None
-
-    def __post_init__(self) -> None:
-        """Validate the human-readable input declaration.
-
-        Raises:
-            ValueError: If the description or supplied examples are empty.
-        """
-        if not self.description.strip():
-            msg = "Input.description must be a non-empty string"
-            raise ValueError(msg)
-        if self.examples is not None and not self.examples:
-            msg = "Input.examples must contain at least one example when provided"
-            raise ValueError(msg)
-
-
-@dataclass(frozen=True, kw_only=True)
-class BatchInput:
-    """Describe a bounded ``list[BatchItem[T]]`` metric input."""
-
-    max_items: int
-    items: Input
-    allow_labels: bool = False
-
-    def __post_init__(self) -> None:
-        """Validate the batch size constraint.
-
-        Raises:
-            ValueError: If ``max_items`` is less than one.
-        """
-        if self.max_items < 1:
-            msg = "BatchInput.max_items must be at least 1"
-            raise ValueError(msg)
-
-
-class BatchItem(StrictBaseModel, Generic[InputT]):
-    """One parsed item supplied to a batch metric argument."""
-
-    key: str = Field(min_length=1, max_length=64, pattern=_BATCH_KEY_PATTERN)
-    value: InputT
-    label: str | None = Field(default=None, min_length=1, max_length=120)
-
-
-LocationInput = Annotated[GeoJSON, _SpatialInputMarker("location")]
-BoundsInput = Annotated[SingleGeoJSON, _SpatialInputMarker("bounds")]
-
-
-class PluginDefinitionError(ValueError):
-    """Raised when a typed plugin definition cannot produce a valid contract."""
-
-
-def _validate_public_name(value: str, *, kind: str) -> None:
-    if not _PUBLIC_NAME_PATTERN.fullmatch(value):
-        msg = f"{kind} must match ^[a-z][a-z0-9_]*$"
-        raise PluginDefinitionError(msg)
-    if value.startswith("lyra_"):
-        msg = f"{kind} must not begin with reserved prefix 'lyra_'"
-        raise PluginDefinitionError(msg)
+LocationInput = GeoJSON
+BoundsInput = SingleGeoJSON
+_HandlerT = TypeVar("_HandlerT", bound=Callable[..., object])
+_DEFINITION_ATTRIBUTE = "__lyra_metric_definition__"
 
 
 class MetricDescription(StrictBaseModel):
-    """Structured author-facing description of one registered metric."""
+    """Author-facing inspection of a handler and its canonical request contract."""
 
     name: str
     description: str
     handler: str
     signature: str
-    inputs: dict[str, InputSpecV4]
-    output: OutputSpecV4
+    request_schema: dict[str, Any]
+    spatial_inputs: dict[str, SpatialInputKind]
+    output: OutputSpec
 
 
 @dataclass(frozen=True)
-class _MetricParameter:
-    name: str
-    adapter: TypeAdapter[Any]
-    default: Any
-    batch: BatchInput | None
-
-
-@dataclass(frozen=True)
-class _MetricDefinition(Generic[ResultT]):
-    """One registered metric and its resolved-input runtime adapter."""
-
-    name: str
-    description: str
-    output: OutputSpecV4
-    function: Callable[..., ResultT]
-    inputs: dict[str, InputSpecV4]
-    parameters: tuple[_MetricParameter, ...]
+class _MetricDefinition:
+    function: Callable[..., object]
+    parameters: type[BaseModel] | None
     accepts_context: bool
+    manifest: MetricManifest
 
-    def describe(self) -> MetricDescription:
-        module = getattr(self.function, "__module__", type(self.function).__module__)
-        qualname = getattr(
-            self.function,
-            "__qualname__",
-            type(self.function).__qualname__,
+
+def _definition_message(name: str, detail: str) -> str:
+    return f"Metric {name!r}: {detail}"
+
+
+def _handler_arguments(
+    name: str,
+    function: Callable[..., object],
+) -> tuple[type[BaseModel] | None, dict[str, SpatialInputKind], bool]:
+    if (
+        not inspect.isfunction(function)
+        or inspect.iscoroutinefunction(function)
+        or inspect.isgeneratorfunction(function)
+        or inspect.isasyncgenfunction(function)
+    ):
+        raise PluginDefinitionError(
+            _definition_message(
+                name, "handler must be a synchronous, nongenerator function"
+            )
         )
-        return MetricDescription(
-            name=self.name,
-            description=self.description,
-            handler=f"{module}.{qualname}",
-            signature=_format_function_signature(self.function),
-            inputs=self.inputs,
-            output=self.output,
-        )
-
-    def manifest_metric(self) -> MetricManifestV4:
-        return MetricManifestV4(
-            name=self.name,
-            description=self.description,
-            inputs=self.inputs,
-            output=self.output,
-        )
-
-    def invoke(self, job: JobEnvelope, context: RunContext) -> ResultT:
-        expected = {parameter.name for parameter in self.parameters}
-        unexpected = sorted(set(job.input) - expected)
-        if unexpected:
-            names = ", ".join(unexpected)
-            msg = f"Metric {self.name!r} received unexpected input field(s): {names}"
-            raise PluginDefinitionError(msg)
-
-        kwargs: dict[str, Any] = {}
-        for parameter in self.parameters:
-            if parameter.name not in job.input:
-                if parameter.default is _MISSING:
-                    msg = (
-                        f"Metric {self.name!r} is missing required input "
-                        f"{parameter.name!r}"
-                    )
-                    raise PluginDefinitionError(msg)
-                continue
-
-            raw_value = job.input[parameter.name]
-            if parameter.batch is not None:
-                _validate_batch_runtime_value(
-                    self.name,
-                    parameter.name,
-                    raw_value,
-                    parameter.batch,
+    hints = _handler_hints(name, function)
+    parameters: type[BaseModel] | None = None
+    spatial: dict[str, SpatialInputKind] = {}
+    accepts_context = False
+    for argument in inspect.signature(function).parameters.values():
+        _validate_argument_kind(name, argument)
+        key = argument.name
+        annotation = hints.get(key)
+        if (
+            key == "parameters"
+            and isinstance(annotation, type)
+            and issubclass(annotation, BaseModel)
+        ):
+            parameters = annotation
+        elif key == "location" and annotation is LocationInput:
+            spatial[key] = "location"
+        elif key == "bounds" and annotation is BoundsInput:
+            spatial[key] = "bounds"
+        elif key == "context" and annotation is RunContext:
+            accepts_context = True
+        else:
+            raise PluginDefinitionError(
+                _definition_message(
+                    name, f"{key}: unsupported name or missing/incompatible annotation"
                 )
-            try:
-                kwargs[parameter.name] = parameter.adapter.validate_python(raw_value)
-            except ValidationError as exc:
-                msg = (
-                    f"Metric {self.name!r} input {parameter.name!r} did not match "
-                    f"its Python annotation: {exc}"
-                )
-                raise PluginDefinitionError(msg) from exc
-
-        if self.accepts_context:
-            kwargs["context"] = context
-        return self.function(**kwargs)
+            )
+    if not spatial:
+        raise PluginDefinitionError(
+            _definition_message(
+                name, "at least one location or bounds input is required"
+            )
+        )
+    return parameters, spatial, accepts_context
 
 
-_METRIC_DEFINITION_ATTRIBUTE = "__lyra_metric_definition__"
+def _handler_hints(name: str, function: Callable[..., object]) -> dict[str, Any]:
+    try:
+        # Return annotations are documentation only; do not require resolving them.
+        annotations = {
+            key: value
+            for key, value in function.__annotations__.items()
+            if key != "return"
+        }
+        annotation_holder = type(
+            "HandlerAnnotations", (), {"__annotations__": annotations}
+        )
+        hints = get_type_hints(
+            annotation_holder,
+            globalns=getattr(function, "__globals__", {}),
+            include_extras=True,
+        )
+    except (NameError, TypeError) as exc:
+        raise PluginDefinitionError(
+            _definition_message(name, f"unresolved handler annotation: {exc}")
+        ) from exc
+    return hints
+
+
+def _validate_argument_kind(name: str, argument: inspect.Parameter) -> None:
+    if argument.kind not in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }:
+        raise PluginDefinitionError(
+            _definition_message(name, f"{argument.name}: unsupported argument kind")
+        )
+    if argument.default is not inspect.Parameter.empty:
+        raise PluginDefinitionError(
+            _definition_message(
+                name,
+                f"{argument.name}: handler defaults are unsupported; use model fields",
+            )
+        )
 
 
 def metric(
-    *,
-    name: str,
-    description: str,
-    output: OutputSpecV4,
-    inputs: Mapping[str, Input | BatchInput] | None = None,
-) -> Callable[[Callable[..., ResultT]], Callable[..., ResultT]]:
-    """Declare a typed metric while returning its function unchanged.
+    *, name: str, description: str, output: OutputSpec
+) -> Callable[[_HandlerT], _HandlerT]:
+    """Register one contract while preserving the directly callable function.
 
     Returns:
-        A decorator that validates and attaches the metric definition.
+        A decorator that validates and records the metric's definition.
     """
 
-    def decorator(function: Callable[..., ResultT]) -> Callable[..., ResultT]:
-        if hasattr(function, _METRIC_DEFINITION_ATTRIBUTE):
-            signature = _format_function_signature(function)
-            msg = f"Metric handler {signature} is already decorated"
-            raise PluginDefinitionError(msg)
-        definition = _build_metric_definition(
-            name=name,
-            description=description,
-            output=output,
-            function=function,
-            input_declarations=dict(inputs or {}),
+    def decorate(function: _HandlerT) -> _HandlerT:
+        if hasattr(function, _DEFINITION_ATTRIBUTE):
+            raise PluginDefinitionError(
+                _definition_message(name, "handler is already decorated")
+            )
+        try:
+            validate_metric_name(name)
+            parameters, spatial, context = _handler_arguments(name, function)
+            schema = build_request_schema(name, parameters, set(spatial))
+            manifest = MetricManifest(
+                name=name,
+                description=description,
+                request_schema=schema,
+                spatial_inputs=spatial,
+                output=output.model_copy(deep=True),
+            )
+        except (TypeError, ValueError) as exc:
+            raise PluginDefinitionError(_definition_message(name, str(exc))) from exc
+        setattr(
+            function,
+            _DEFINITION_ATTRIBUTE,
+            _MetricDefinition(function, parameters, context, manifest),
         )
-        definition.manifest_metric()
-        setattr(function, _METRIC_DEFINITION_ATTRIBUTE, definition)
         return function
 
-    return decorator
+    return decorate
 
 
 class PluginDefinition:
-    """Immutable collection of typed metric functions and runtime dispatcher."""
+    """Explicitly registered handlers with local preparation and result checks."""
 
-    def __init__(self, *, metrics: Sequence[Callable[..., Any]]) -> None:
-        """Initialize a plugin from explicitly registered metric handlers.
+    def __init__(self, *, metrics: Sequence[Callable[..., object]]) -> None:
+        """Collect decorated functions without module scanning or service access.
 
         Raises:
-            PluginDefinitionError: If handlers are absent, invalid, or duplicated.
+            PluginDefinitionError: If handlers are absent, undecorated, or duplicate.
         """
+        definitions: dict[str, _MetricDefinition] = {}
         if not metrics:
-            msg = (
-                "PluginDefinition requires at least one decorated metric. "
-                "Lyra does not scan sibling modules; import and pass each decorated "
-                "handler explicitly."
-            )
+            msg = "PluginDefinition requires at least one decorated metric."
             raise PluginDefinitionError(msg)
-
-        definitions: dict[str, _MetricDefinition[Any]] = {}
         for function in metrics:
-            definition = getattr(function, _METRIC_DEFINITION_ATTRIBUTE, None)
+            definition = getattr(function, _DEFINITION_ATTRIBUTE, None)
             if not isinstance(definition, _MetricDefinition):
-                handler = getattr(function, "__qualname__", repr(function))
-                msg = f"PluginDefinition metric handler {handler!r} is not decorated"
+                msg = "PluginDefinition accepts only explicitly decorated handlers."
                 raise PluginDefinitionError(msg)
-            if definition.name in definitions:
-                msg = f"Duplicate metric name in PluginDefinition: {definition.name!r}"
-                raise PluginDefinitionError(msg)
-            definitions[definition.name] = definition
+            name = definition.manifest.name
+            if name in definitions:
+                raise PluginDefinitionError(
+                    _definition_message(name, "duplicate metric name")
+                )
+            definitions[name] = definition
         self._metrics = MappingProxyType(definitions)
+
+    def _get(self, name: str) -> _MetricDefinition:
+        try:
+            return self._metrics[name]
+        except KeyError as exc:
+            available = ", ".join(self.metric_names)
+            raise PluginDefinitionError(
+                _definition_message(
+                    name,
+                    f"unknown metric; available metrics: {available}",
+                )
+            ) from exc
 
     @property
     def metric_names(self) -> tuple[str, ...]:
-        """The registered public metric names in declaration order."""
-        return tuple(self._metrics)
+        """Registered metric names in deterministic order."""
+        return tuple(sorted(self._metrics))
 
     def describe(self, name: str) -> MetricDescription:
-        """Return structured authoring information for one registered metric.
+        """Return inspection metadata without adding it to the persisted manifest."""
+        definition = self._get(name)
+        function = definition.function
+        qualified_name = getattr(function, "__qualname__", type(function).__qualname__)
+        name = getattr(function, "__name__", type(function).__name__)
+        return MetricDescription(
+            **definition.manifest.model_dump(),
+            handler=f"{function.__module__}.{qualified_name}",
+            signature=f"{name}{inspect.signature(function)}",
+        )
 
-        Returns:
-            The metric's function signature, inputs, and output declaration.
-
-        Raises:
-            PluginDefinitionError: If the metric name is not registered.
-        """
-        try:
-            metric = self._metrics[name]
-        except KeyError as exc:
-            available = ", ".join(self.metric_names) or "none"
-            msg = f"Unknown metric {name!r}; available metrics: {available}"
-            raise PluginDefinitionError(msg) from exc
-        return metric.describe()
-
-    def manifest(
-        self,
-        *,
-        plugin: PluginInfoV4,
-        factory: str,
-    ) -> PluginManifestV4:
-        """Build the authoring manifest for this plugin.
-
-        Returns:
-            A schema v4 manifest containing every registered metric.
-        """
-        return PluginManifestV4(
-            schema_version=4,
-            plugin=plugin,
+    def manifest(self, *, plugin: PluginInfo, factory: str) -> PluginManifest:
+        """Return the sole persisted format-5 contract, without runtime state."""
+        return PluginManifest(
+            plugin=plugin.model_copy(deep=True),
             factory=factory,
             metrics=[
-                definition.manifest_metric() for definition in self._metrics.values()
+                self._metrics[name].manifest.model_copy(deep=True)
+                for name in self.metric_names
             ],
         )
 
-    def compiled_manifest(
-        self,
-        *,
-        plugin: PluginInfoV4,
-        factory: str,
-    ) -> CompiledPluginManifestV4:
-        """Build the compiled runtime manifest for this plugin.
+    def prepare_parameters(self, name: str, value: object) -> BaseModel:
+        """Validate parameter JSON before parsing it through the author's model.
 
         Returns:
-            The compiled schema v4 plugin manifest.
-        """
-        return compile_plugin_manifest(self.manifest(plugin=plugin, factory=factory))
-
-    def __call__(self, job: JobEnvelope, context: RunContext) -> PluginResult:
-        """Dispatch a job to its registered metric handler.
-
-        Returns:
-            The metric handler's table or file result.
+            The typed model, including validated defaults and semantic checks.
 
         Raises:
-            PluginDefinitionError: If the requested metric is not registered.
+            PluginDefinitionError: If the metric declares no parameter model.
+            MetricInputError: If the input is not valid JSON or fails validation.
         """
-        try:
-            metric = self._metrics[job.metric]
-        except KeyError as exc:
-            msg = f"PluginDefinition does not register metric {job.metric!r}"
-            raise PluginDefinitionError(msg) from exc
-        return metric.invoke(job, context)
-
-
-def _unwrap_annotated(
-    annotation: PythonAnnotation,
-) -> tuple[PythonAnnotation, list[Any]]:
-    metadata: list[Any] = []
-    value = annotation
-    while get_origin(value) is Annotated:
-        args = get_args(value)
-        value = args[0]
-        metadata.extend(args[1:])
-    return value, metadata
-
-
-def _with_annotation_metadata(
-    annotation: PythonAnnotation,
-    *metadata: FieldInfo | _SpatialInputMarker | JsonValue,
-) -> TypeForm[Any]:
-    if isinstance(annotation, str):
-        msg = "Deferred string annotations cannot be decorated at runtime"
-        raise PluginDefinitionError(msg)
-    return Annotated[annotation, *metadata]
-
-
-def _split_nullable(annotation: PythonAnnotation) -> tuple[PythonAnnotation, bool]:
-    base, metadata = _unwrap_annotated(annotation)
-    origin = get_origin(base)
-    if origin not in {Union, types.UnionType}:
-        return annotation, False
-    args = get_args(base)
-    non_none = tuple(value for value in args if value is not type(None))
-    if len(non_none) == len(args):
-        return annotation, False
-    if len(non_none) != 1:
-        return annotation, False
-    value: PythonAnnotation = non_none[0]
-    if metadata:
-        value = _with_annotation_metadata(value, *metadata)
-    return value, True
-
-
-def _schema_metadata(
-    annotation: PythonAnnotation,
-    schema: JsonObject,
-) -> _CommonInputMetadata:
-    _base, annotation_metadata = _unwrap_annotated(annotation)
-    if not any(isinstance(value, FieldInfo) for value in annotation_metadata):
-        return {}
-    metadata: _CommonInputMetadata = {}
-    description = schema.get("description")
-    if isinstance(description, str):
-        metadata["description"] = description
-    examples = schema.get("examples")
-    if isinstance(examples, list):
-        metadata["examples"] = examples
-    return metadata
-
-
-def _normal_input_spec(
-    annotation: PythonAnnotation,
-    *,
-    default: JsonValue | type,
-) -> PluginOwnedInputSpecV4:
-    annotation, nullable = _split_nullable(annotation)
-    schema = TypeAdapter(annotation).json_schema()
-    if not schema:
-        msg = "metric input annotations must describe a JSON-compatible type, not Any"
-        raise PluginDefinitionError(msg)
-
-    common = _schema_metadata(annotation, schema)
-    if default is not _MISSING:
-        if isinstance(default, type):
-            msg = "metric input defaults must be JSON-compatible values"
-            raise PluginDefinitionError(msg)
-        common["required"] = False
-        common["default"] = default
-    if nullable:
-        common["nullable"] = True
-
-    schema_without_metadata = {
-        key: value
-        for key, value in schema.items()
-        if key not in {"description", "examples", "title", "default"}
-    }
-    schema_type = schema_without_metadata.get("type")
-    keys = set(schema_without_metadata)
-
-    if schema_type == "string" and keys <= {
-        "type",
-        "minLength",
-        "maxLength",
-        "pattern",
-    }:
-        constraints = {
-            field: schema_without_metadata[key]
-            for field, key in (
-                ("min_length", "minLength"),
-                ("max_length", "maxLength"),
-                ("pattern", "pattern"),
+        definition = self._get(name)
+        model = definition.parameters
+        if model is None:
+            raise PluginDefinitionError(
+                _definition_message(name, "metric has no parameters")
             )
-            if key in schema_without_metadata
-        }
-        return StringInputV4.model_validate({"kind": "string", **constraints, **common})
-    if schema_type == "number" and keys <= {"type", "minimum", "maximum"}:
-        constraints = {
-            key: schema_without_metadata[key]
-            for key in ("minimum", "maximum")
-            if key in schema_without_metadata
-        }
-        return NumberInputV4.model_validate({"kind": "number", **constraints, **common})
-    if schema_type == "integer" and keys <= {"type", "minimum", "maximum"}:
-        constraints = {
-            key: schema_without_metadata[key]
-            for key in ("minimum", "maximum")
-            if key in schema_without_metadata
-        }
-        return IntegerInputV4.model_validate(
-            {"kind": "integer", **constraints, **common}
-        )
-    if schema_type == "boolean" and keys == {"type"}:
-        return BooleanInputV4(kind="boolean", **common)
-    if isinstance(schema_without_metadata.get("enum"), list) and keys <= {
-        "enum",
-        "type",
-    }:
-        return EnumInputV4(
-            kind="enum",
-            values=schema_without_metadata["enum"],
-            **common,
-        )
-    return JsonSchemaInputV4(
-        kind="json_schema",
-        schema=schema_without_metadata,
-        **common,
-    )
-
-
-def _spatial_marker(annotation: PythonAnnotation) -> _SpatialInputMarker | None:
-    _base, metadata = _unwrap_annotated(annotation)
-    markers = [value for value in metadata if isinstance(value, _SpatialInputMarker)]
-    if len(markers) > 1:
-        msg = "metric inputs may contain only one spatial marker"
-        raise PluginDefinitionError(msg)
-    return markers[0] if markers else None
-
-
-def _batch_value_annotation(annotation: PythonAnnotation) -> PythonAnnotation:
-    base, _metadata = _unwrap_annotated(annotation)
-    if get_origin(base) is not list:
-        msg = "Batch inputs must annotate list[BatchItem[T]]"
-        raise PluginDefinitionError(msg)
-    item_type = get_args(base)[0]
-    generic_metadata = getattr(item_type, "__pydantic_generic_metadata__", None)
-    if not isinstance(generic_metadata, dict):
-        msg = "Batch inputs must annotate list[BatchItem[T]]"
-        raise PluginDefinitionError(msg)
-    origin = generic_metadata.get("origin")
-    args = generic_metadata.get("args")
-    if origin is not BatchItem or not isinstance(args, tuple) or len(args) != 1:
-        msg = "Batch inputs must annotate list[BatchItem[T]]"
-        raise PluginDefinitionError(msg)
-    return args[0]
-
-
-def _input_field(input_: Input) -> FieldInfo:
-    return Field(
-        description=input_.description,
-        examples=input_.examples,
-        json_schema_extra=input_.json_schema_extra,
-        gt=input_.gt,
-        ge=input_.ge,
-        lt=input_.lt,
-        le=input_.le,
-        multiple_of=input_.multiple_of,
-        min_length=input_.min_length,
-        max_length=input_.max_length,
-        pattern=input_.pattern,
-        strict=input_.strict,
-    )
-
-
-def _reject_field_metadata(annotation: PythonAnnotation, *, location: str) -> None:
-    _base, metadata = _unwrap_annotated(annotation)
-    if any(isinstance(value, FieldInfo) for value in metadata):
-        msg = (
-            f"{location} contains Field metadata; move descriptions, examples, "
-            "and constraints to the @metric inputs mapping"
-        )
-        raise PluginDefinitionError(msg)
-
-
-def _input_spec(
-    annotation: PythonAnnotation,
-    *,
-    declaration: Input | BatchInput | None,
-    default: JsonValue | type,
-) -> tuple[InputSpecV4, BatchInput | None, PythonAnnotation]:
-    _reject_field_metadata(annotation, location="metric input annotation")
-    spatial = _spatial_marker(annotation)
-
-    if spatial is not None:
-        if declaration is not None:
-            msg = "spatial input metadata is owned by Lyra; remove its declaration"
-            raise PluginDefinitionError(msg)
-        if default is not _MISSING:
-            msg = "spatial metric inputs cannot define defaults"
-            raise PluginDefinitionError(msg)
-        if spatial.kind == "location":
-            return LocationInputV4(kind="location"), None, annotation
-        return BoundsInputV4(kind="bounds"), None, annotation
-
-    if isinstance(declaration, BatchInput):
-        if default is not _MISSING:
-            msg = "batch metric inputs cannot define defaults"
-            raise PluginDefinitionError(msg)
-        value_annotation = _batch_value_annotation(annotation)
-        _reject_field_metadata(
-            value_annotation,
-            location="BatchItem value annotation",
-        )
-        effective_value_annotation = _with_annotation_metadata(
-            value_annotation,
-            _input_field(declaration.items),
-        )
-        batch_item_annotation = BatchItem.__class_getitem__(
-            cast("type[Any]", effective_value_annotation)
-        )
-        effective_annotation = types.GenericAlias(list, batch_item_annotation)
-        value_spec = _normal_input_spec(
-            effective_value_annotation,
-            default=_MISSING,
-        )
-        return (
-            BatchInputV4(
-                kind="batch",
-                max_items=declaration.max_items,
-                value=value_spec,
-                label=declaration.allow_labels,
-            ),
-            declaration,
-            effective_annotation,
-        )
-    if declaration is None:
-        msg = "plugin-owned metric inputs must define an Input declaration"
-        raise PluginDefinitionError(msg)
-    try:
-        _batch_value_annotation(annotation)
-    except PluginDefinitionError:
-        pass
-    else:
-        msg = "list[BatchItem[T]] inputs must use BatchInput, not Input"
-        raise PluginDefinitionError(msg)
-    effective_annotation = _with_annotation_metadata(
-        annotation,
-        _input_field(declaration),
-    )
-    return (
-        _normal_input_spec(effective_annotation, default=default),
-        None,
-        effective_annotation,
-    )
-
-
-def _build_metric_definition(
-    *,
-    name: str,
-    description: str,
-    output: OutputSpecV4,
-    function: Callable[..., ResultT],
-    input_declarations: dict[str, Input | BatchInput],
-) -> _MetricDefinition[ResultT]:
-    _validate_public_name(name, kind="metric name")
-    signature = inspect.signature(function)
-    try:
-        hints = get_type_hints(function, include_extras=True)
-    except (NameError, TypeError) as exc:
-        msg = f"Could not resolve annotations for metric {name!r}: {exc}"
-        raise PluginDefinitionError(msg) from exc
-
-    resolved_parameters = _resolve_metric_parameters(
-        name=name,
-        signature=signature,
-        hints=hints,
-    )
-    _validate_input_declaration_names(
-        name=name,
-        function=function,
-        resolved_parameters=resolved_parameters,
-        input_declarations=input_declarations,
-    )
-
-    inputs: dict[str, InputSpecV4] = {}
-    parameters: list[_MetricParameter] = []
-    accepts_context = False
-    for parameter, annotation in resolved_parameters:
-        if parameter.name == "context":
-            accepts_context = True
-            continue
-        _validate_public_name(parameter.name, kind="root input name")
-        declaration = input_declarations.get(parameter.name)
-        try:
-            input_spec, batch, effective_annotation = _input_spec(
-                annotation,
-                declaration=declaration,
-                default=parameter.default,
-            )
-            adapter = TypeAdapter(effective_annotation)
-        except (TypeError, ValueError) as exc:
-            msg = (
-                f"Metric {name!r} parameter {parameter.name!r} could not be "
-                f"compiled from annotation {annotation!r} and declaration "
-                f"{declaration!r}: {exc}\n"
-                f"Handler: {_format_function_signature(function)}"
-            )
-            raise PluginDefinitionError(msg) from exc
-        inputs[parameter.name] = input_spec
-        parameters.append(
-            _MetricParameter(
-                name=parameter.name,
-                adapter=adapter,
-                default=parameter.default,
-                batch=batch,
-            )
-        )
-
-    return _MetricDefinition(
-        name=name,
-        description=description,
-        output=output,
-        function=function,
-        inputs=inputs,
-        parameters=tuple(parameters),
-        accepts_context=accepts_context,
-    )
-
-
-def _resolve_metric_parameters(
-    *,
-    name: str,
-    signature: inspect.Signature,
-    hints: dict[str, Any],
-) -> list[tuple[inspect.Parameter, Any]]:
-    resolved_parameters: list[tuple[inspect.Parameter, Any]] = []
-    for parameter in signature.parameters.values():
-        if parameter.kind in {
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        }:
-            msg = (
-                f"Metric {name!r} parameter {parameter.name!r} must be "
-                "positional-or-keyword or keyword-only"
-            )
-            raise PluginDefinitionError(msg)
-        annotation = hints.get(parameter.name, _MISSING)
-        if parameter.name == "context":
-            if parameter.kind is not inspect.Parameter.KEYWORD_ONLY:
-                msg = f"Metric {name!r} context must be keyword-only"
-                raise PluginDefinitionError(msg)
-            if annotation is not RunContext:
-                msg = f"Metric {name!r} context must be annotated as RunContext"
-                raise PluginDefinitionError(msg)
-            resolved_parameters.append((parameter, annotation))
-            continue
-        if annotation is _MISSING:
-            msg = f"Metric {name!r} input {parameter.name!r} must have an annotation"
-            raise PluginDefinitionError(msg)
-        resolved_parameters.append((parameter, annotation))
-    return resolved_parameters
-
-
-def _validate_input_declaration_names(
-    *,
-    name: str,
-    function: Callable[..., Any],
-    resolved_parameters: list[tuple[inspect.Parameter, Any]],
-    input_declarations: dict[str, Input | BatchInput],
-) -> None:
-    parameter_names = {parameter.name for parameter, _annotation in resolved_parameters}
-    spatial_names = {
-        parameter.name
-        for parameter, annotation in resolved_parameters
-        if parameter.name != "context" and _spatial_marker(annotation) is not None
-    }
-    author_owned_names = parameter_names - spatial_names - {"context"}
-    declaration_names = set(input_declarations)
-    unknown_names = sorted(declaration_names - parameter_names)
-    lyra_owned_names = sorted(declaration_names & (spatial_names | {"context"}))
-    missing_names = sorted(author_owned_names - declaration_names)
-    if unknown_names or lyra_owned_names or missing_names:
-        problems: list[str] = []
-        if unknown_names:
-            problems.append(f"unknown declaration(s): {', '.join(unknown_names)}")
-        if lyra_owned_names:
-            problems.append(
-                "Lyra-owned input(s) must not be declared: "
-                + ", ".join(lyra_owned_names)
-            )
-        if missing_names:
-            problems.append(f"missing declaration(s): {', '.join(missing_names)}")
-        details = "\n- ".join(problems)
-        msg = (
-            f"Metric {name!r} input declaration mismatch:\n- {details}\n"
-            f"Handler: {_format_function_signature(function)}"
-        )
-        raise PluginDefinitionError(msg)
-
-
-def _validate_batch_runtime_value(
-    metric_name: str,
-    field_name: str,
-    value: JsonValue,
-    batch: BatchInput,
-) -> None:
-    if not isinstance(value, list) or not 1 <= len(value) <= batch.max_items:
-        msg = (
-            f"Metric {metric_name!r} batch input {field_name!r} must contain "
-            f"between 1 and {batch.max_items} item(s)"
-        )
-        raise PluginDefinitionError(msg)
-    seen_keys: set[str] = set()
-    for item in value:
-        if not isinstance(item, Mapping):
-            msg = (
-                f"Metric {metric_name!r} batch input {field_name!r} "
-                "must contain objects"
-            )
-            raise PluginDefinitionError(msg)
-        if not batch.allow_labels and "label" in item:
-            msg = (
-                f"Metric {metric_name!r} batch input {field_name!r} does not "
-                "accept labels"
-            )
-            raise PluginDefinitionError(msg)
-        key = item.get("key")
-        if isinstance(key, str):
-            if key in seen_keys:
-                msg = (
-                    f"Metric {metric_name!r} batch input {field_name!r} contains "
-                    f"duplicate key {key!r}"
-                )
-                raise PluginDefinitionError(msg)
-            seen_keys.add(key)
-    identities = [json.dumps(item, sort_keys=True) for item in value]
-    if len(identities) != len(set(identities)):
-        msg = f"Metric {metric_name!r} batch input {field_name!r} contains duplicates"
-        raise PluginDefinitionError(msg)
-
-
-def _format_function_signature(function: Callable[..., Any]) -> str:
-    signature = inspect.signature(function)
-    parts: list[str] = []
-    added_keyword_separator = False
-    for parameter in signature.parameters.values():
-        if (
-            parameter.kind is inspect.Parameter.KEYWORD_ONLY
-            and not added_keyword_separator
+        schema = definition.manifest.request_schema
+        properties = schema["properties"]
+        if not isinstance(properties, dict) or not isinstance(
+            properties["parameters"], dict
         ):
-            parts.append("*")
-            added_keyword_separator = True
-        text = parameter.name
-        if parameter.annotation is not _MISSING:
-            text += f": {_format_annotation(parameter.annotation)}"
-        if parameter.default is not _MISSING:
-            text += f" = {parameter.default!r}"
-        parts.append(text)
-    function_name = getattr(function, "__name__", type(function).__name__)
-    rendered = f"{function_name}({', '.join(parts)})"
-    if signature.return_annotation is not _MISSING:
-        rendered += f" -> {_format_annotation(signature.return_annotation)}"
-    return rendered
+            raise PluginDefinitionError(
+                _definition_message(name, "parameters schema is missing")
+            )
+        try:
+            check_json_value(value, "parameters")
+            encoded = json.dumps(value, allow_nan=False)
+            subschema_validator(schema, properties["parameters"]).validate(value)
+            return model.model_validate_json(encoded)
+        except SchemaValidationError as exc:
+            path = ".".join(["parameters", *(str(item) for item in exc.path)])
+            raise MetricInputError(name, path, exc.message) from exc
+        except ValidationError as exc:
+            error = exc.errors(include_url=False)[0]
+            path = ".".join(["parameters", *(str(item) for item in error["loc"])])
+            raise MetricInputError(name, path, error["msg"]) from exc
+        except (TypeError, ValueError) as exc:
+            raise MetricInputError(name, "parameters", str(exc)) from exc
 
+    def normalize_result(
+        self,
+        name: str,
+        value: object,
+        **options: Unpack[ResultOptions],
+    ) -> TableJobResult | FileJobResult:
+        """Return a validated terminal success result from a DataFrame or Path."""
+        return normalize_native_result(
+            name, self._get(name).manifest.output, value, **options
+        )
 
-def _format_annotation(annotation: PythonAnnotation) -> str:
-    if isinstance(annotation, str):
-        return annotation
-    spatial = _spatial_marker(annotation)
-    if spatial is not None:
-        return "LocationInput" if spatial.kind == "location" else "BoundsInput"
-    return (
-        inspect.formatannotation(annotation)
-        .replace("typing.", "")
-        .replace("lyra.sdk.plugin.", "")
-    )
+    def __call__(self, job: JobEnvelope, context: RunContext) -> object:
+        """Prepare resolved inputs and invoke a handler, returning its native value.
+
+        Returns:
+            The unnormalized handler result.
+
+        Raises:
+            MetricInputError: If resolved inputs do not match the declared contract.
+        """
+        definition = self._get(job.metric)
+        expected = set(definition.manifest.spatial_inputs)
+        if definition.parameters is not None:
+            expected.add("parameters")
+        if set(job.input) != expected:
+            raise MetricInputError(
+                job.metric, "input", f"expected fields {sorted(expected)}"
+            )
+        arguments: dict[str, Any] = {}
+        if definition.parameters is not None:
+            arguments["parameters"] = self.prepare_parameters(
+                job.metric, job.input["parameters"]
+            )
+        for field in definition.manifest.spatial_inputs:
+            model = GeoJSON if field == "location" else SingleGeoJSON
+            try:
+                arguments[field] = model.model_validate(job.input[field])
+            except ValidationError as exc:
+                raise MetricInputError(job.metric, field, str(exc)) from exc
+        if definition.accepts_context:
+            arguments["context"] = context
+        return definition.function(**arguments)

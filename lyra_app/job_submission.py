@@ -19,7 +19,7 @@ from lyra.sdk.models.job import (
     JobLinks,
     JobRunProvenance,
 )
-from lyra.sdk.models.plugin_v4 import OutputSpecV4, PluginInfoV4, TableOutputV4
+from lyra.sdk.models.plugin import OutputSpec, PluginInfo, TableOutput
 from lyra.utils.geometry import calculate_feature_areas_m2
 from redis.exceptions import RedisError
 
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
     from celery.result import AsyncResult
-    from lyra.sdk.models.plugin_v4 import SpatialInputKindV4
+    from lyra.sdk.models.plugin import SpatialInputKind
     from lyra.sdk.types import JsonObject, JsonValue
 
     from lyra_app.db.connection import ApplicationDatabaseRuntime
@@ -203,7 +203,7 @@ async def _release_failed_submission(
 
 async def _resolve_spatial_input(
     validated_input: JsonObject,
-    spatial_inputs: dict[str, SpatialInputKindV4],
+    spatial_inputs: dict[str, SpatialInputKind],
     database: ApplicationDatabaseRuntime,
 ) -> SpatialInputResolution:
     converter_map = build_converter_map(database.require_spatial_engine())
@@ -215,8 +215,8 @@ async def _resolve_spatial_input(
     )
 
 
-def _requires_location_areas(output: OutputSpecV4) -> bool:
-    return isinstance(output, TableOutputV4) and any(
+def _requires_location_areas(output: OutputSpec) -> bool:
+    return isinstance(output, TableOutput) and any(
         column.derivations for column in output.columns
     )
 
@@ -300,7 +300,7 @@ def _build_submission_records(
     provenance = JobRunProvenance(
         metric=request.metric,
         catalog_fingerprint=entry.catalog_fingerprint,
-        plugin=PluginInfoV4(name=entry.plugin_name, version=entry.plugin_version),
+        plugin=PluginInfo(name=entry.plugin_name, version=entry.plugin_version),
         input=validated_input,
         output=entry.metric.output,
         created_at=datetime.now(UTC),

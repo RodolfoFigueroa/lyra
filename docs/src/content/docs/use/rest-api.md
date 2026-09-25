@@ -37,17 +37,38 @@ Spatial fields are wrapper objects. Supported wrappers are published by
 ```
 
 ```json
-{"data_type":"geojson","value":{"type":"FeatureCollection","features":[]}}
+{"data_type":"geojson","value":{"type":"FeatureCollection","features":[{"type":"Feature","id":"site","geometry":{"type":"Point","coordinates":[-99.1,19.4]},"properties":{}}],"crs":{"type":"name","properties":{"name":"EPSG:4326"}}}}
 ```
 
 Database-backed wrappers are resolved to canonical GeoJSON before dispatch.
+
+Ordinary inputs belong in `input.parameters`; spatial fields remain at the input
+root. For the configured example plugin:
+
+```json
+{
+  "metric": "smoke_table_metric",
+  "input": {
+    "location": {"data_type": "met_zone_code", "value": "09.01"},
+    "parameters": {"value": 7}
+  },
+  "idempotency_key": "example-1"
+}
+```
+
+A declared parameter model requires an object, including `{}` when all fields have
+defaults. A parameterless metric omits `parameters` entirely; sending it is invalid.
+The API rejects schema violations with `422`. Worker-only semantic validation can
+subsequently fail an accepted job with `invalid_input`.
 
 ## Submit safely
 
 `POST /jobs` accepts a metric name, its public input object, and an optional
 idempotency key. Always provide a caller-owned key for work that may be retried.
 The same key and validated request returns the original job; a different request
-with the key returns `409`.
+with the key returns `409`. Defaults are applied only during worker execution;
+omitting a defaulted value and explicitly supplying it are different requests.
+Provenance retains the submitted input without default injection.
 
 New REST and MCP submissions share a fixed-window quota. A `429` response
 includes `Retry-After`; wait, then retry with the same key.

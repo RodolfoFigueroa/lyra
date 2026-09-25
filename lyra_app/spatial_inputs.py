@@ -12,7 +12,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 if TYPE_CHECKING:
-    from lyra.sdk.models.plugin_v4 import SpatialInputKindV4
+    from lyra.sdk.models.plugin import SpatialInputKind
 
 _LOCATION_WRAPPER_ADAPTER = TypeAdapter(LocationReference)
 _BOUNDS_WRAPPER_ADAPTER = TypeAdapter(BoundsReference)
@@ -47,7 +47,7 @@ class SpatialInputResolutionUnavailableError(Exception):
     """Indicate that an external spatial lookup could not be completed."""
 
 
-def _adapter_for_kind(kind: SpatialInputKindV4) -> TypeAdapter[Any]:
+def _adapter_for_kind(kind: SpatialInputKind) -> TypeAdapter[Any]:
     return _LOCATION_WRAPPER_ADAPTER if kind == "location" else _BOUNDS_WRAPPER_ADAPTER
 
 
@@ -67,7 +67,7 @@ def _format_pydantic_errors(
 
 def resolve_spatial_inputs(
     payload: dict[str, Any],
-    spatial_inputs: dict[str, SpatialInputKindV4],
+    spatial_inputs: dict[str, SpatialInputKind],
     *,
     converter_map: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -114,7 +114,7 @@ def resolve_spatial_inputs(
 
 def resolve_spatial_inputs_with_metadata(
     payload: dict[str, Any],
-    spatial_inputs: dict[str, SpatialInputKindV4],
+    spatial_inputs: dict[str, SpatialInputKind],
     *,
     converter_map: dict[str, dict[str, Any]],
 ) -> SpatialInputResolution:

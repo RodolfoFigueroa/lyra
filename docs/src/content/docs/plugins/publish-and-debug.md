@@ -15,9 +15,10 @@ Before publishing:
 - declare every directly imported dependency;
 - configure `[tool.lyra].factory` inside the installed package;
 - generate and commit `lyra.plugin.json`;
-- unit-test decorated functions with typed arguments and a fake `RunContext`;
-- test at least one registry-adapter call with a resolved envelope;
-- assert job IDs, indices, columns, media types, and batch expansion;
+- unit-test decorated functions with parameter models, resolved geometry, and a
+  fake `RunContext` only when declared;
+- exercise `PluginDefinition.prepare_parameters()` and `normalize_result()` locally;
+- assert native DataFrame indices/columns or Path containment and media types;
 - run `lyra-plugin check-manifest` in plugin CI.
 
 ## Source forms
@@ -76,7 +77,8 @@ its startup logs.
 | Job reports unknown metric | API and worker deployments were not restarted together. |
 | Submission returns `422` | Input differs from the live metric schema. |
 | Spatial resolution returns `503` | PostGIS is unavailable or lacks required spatial data. |
-| Worker reports invalid result | Job ID, index, columns, file path, or output kind violates the declaration. |
+| Worker reports `invalid_input` | Python semantic validation rejected structurally valid parameters or defaults before the handler ran. |
+| Worker reports `invalid_result` | Native return type, index, columns, values, or file path violates the declaration. |
 
 Use the admin catalog, routing, worker, and queue views together; the API
 catalog alone cannot prove executable worker state.

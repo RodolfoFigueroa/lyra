@@ -12,11 +12,10 @@ from lyra.sdk.models.job import (
     ResultTablePreview,
     RowIdentityMetadata,
 )
-from lyra.sdk.models.plugin_v4 import (
-    BatchedTableOutputColumnV4,
-    OutputSpecV4,
-    PluginInfoV4,
-    TableOutputColumnV4,
+from lyra.sdk.models.plugin import (
+    OutputSpec,
+    PluginInfo,
+    TableColumn,
 )
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import TypeForm
@@ -137,7 +136,7 @@ class SearchCandidate(MCPContractModel):
     reason: str = Field(min_length=1)
     required_spatial_fields: list[SpatialField]
     output_kind: Literal["table", "file"]
-    relevant_columns: list[TableOutputColumnV4 | BatchedTableOutputColumnV4]
+    relevant_columns: list[TableColumn]
 
 
 class SearchMetricsOutput(MCPContractModel):
@@ -184,7 +183,7 @@ class GetMetricOutput(MCPContractModel):
     description: str
     request_schema: dict[str, Any]
     spatial_inputs: dict[str, Literal["location", "bounds"]]
-    output: OutputSpecV4
+    output: OutputSpec
 
 
 class RunMetricOutput(MCPContractModel):
@@ -210,7 +209,7 @@ class CompactProvenance(MCPContractModel):
 
     metric: str
     catalog_fingerprint: str
-    plugin: PluginInfoV4
+    plugin: PluginInfo
     created_at: datetime
     row_identity: RowIdentityMetadata | None = None
     input: dict[str, Any] | None = None

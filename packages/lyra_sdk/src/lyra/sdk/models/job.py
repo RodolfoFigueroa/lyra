@@ -1,29 +1,24 @@
 """Models for metric job submission, status, and results."""
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from typing import (
     Annotated,
     Any,
     Literal,
     NotRequired,
-    Protocol,
     Self,
-    TypeAlias,
     TypedDict,
-    TypeGuard,
-    TypeVar,
     Unpack,
 )
 
-from lyra.sdk.models.plugin_v4 import (
-    OutputSpecV4,
-    PluginInfoV4,
-    TableOutputColumnV4,
-    TableOutputV4,
-    expand_runner_table_output_columns,
-    expand_table_output_columns,
+from lyra.sdk.models.plugin import (
+    OutputSpec,
+    PluginInfo,
+    TableColumn,
+    TableOutput,
+    effective_table_columns,
 )
 from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.types import JsonValue
@@ -49,55 +44,6 @@ RawResultFormat = Literal["terminal_json", "jsonl"]
 
 DEFAULT_RESULT_PREVIEW_ROWS = 20
 DEFAULT_RESULT_INDEX_FIELD = "_result_index"
-
-
-class _Stringable(Protocol):
-    def __str__(self) -> str: ...
-
-
-class _MatrixLike(Protocol):
-    def tolist(self) -> list[list[JsonValue]]: ...
-
-
-class DataFrameLike(Protocol):
-    """Minimal dataframe interface accepted by table-result constructors."""
-
-    @property
-    def index(self) -> Iterable[_Stringable]:
-        """Row labels in value order."""
-        ...
-
-    @property
-    def columns(self) -> Iterable[_Stringable]:
-        """Column labels in value order."""
-        ...
-
-    def to_numpy(self) -> _MatrixLike:
-        """Return a matrix view of the dataframe values."""
-        ...
-
-
-class SeriesLike(Protocol):
-    """Minimal series interface accepted by table-result constructors."""
-
-    @property
-    def name(self) -> _Stringable | None:
-        """The series label, if present."""
-        ...
-
-    @property
-    def index(self) -> Iterable[_Stringable]:
-        """Row labels in value order."""
-        ...
-
-    def tolist(self) -> list[Any]:
-        """Return series values as a list."""
-        ...
-
-
-MappingValueT = TypeVar("MappingValueT")
-AxisValue: TypeAlias = str | int | float | bool
-"""Scalar value accepted as a table result's input or output index."""
 
 
 class RowIdentityMetadata(StrictBaseModel):
@@ -127,11 +73,11 @@ class JobRunProvenance(StrictBaseModel):
         min_length=1,
         description="Public catalog fingerprint used to validate the submission.",
     )
-    plugin: PluginInfoV4 = Field(description="Plugin identity used for the run.")
+    plugin: PluginInfo = Field(description="Plugin identity used for the run.")
     input: dict[str, Any] = Field(
         description="Validated unresolved public request submitted by the client.",
     )
-    output: OutputSpecV4 = Field(
+    output: OutputSpec = Field(
         description="Metric output declaration used to validate the run.",
     )
     created_at: datetime = Field(description="UTC timestamp when the job was created.")
@@ -139,65 +85,6 @@ class JobRunProvenance(StrictBaseModel):
         default=None,
         description="Authoritative identity for result rows, when known.",
     )
-
-
-def _string_axis_values(values: Iterable[_Stringable], *, axis: str) -> list[str]:
-    string_values = [str(value) for value in values]
-    if len(string_values) != len(set(string_values)):
-        msg = f"table {axis} values must be unique after string conversion"
-        raise ValueError(msg)
-    return string_values
-
-
-def _string_keyed_mapping(
-    values: Mapping[str, MappingValueT],
-    *,
-    axis: str,
-) -> dict[str, MappingValueT]:
-    string_keys = _string_axis_values(values.keys(), axis=axis)
-    return dict(zip(string_keys, values.values(), strict=True))
-
-
-def _is_sequence_values(
-    values: Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
-) -> bool:
-    return isinstance(values, Sequence) and not isinstance(
-        values,
-        str | bytes | bytearray,
-    )
-
-
-def _is_mapping_values(
-    values: Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
-) -> TypeGuard[Mapping[AxisValue, JsonValue]]:
-    return isinstance(values, Mapping)
-
-
-def _mapping_column_values(
-    column: str,
-    column_values: Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
-    input_index: Sequence[AxisValue],
-) -> list[JsonValue]:
-    if _is_mapping_values(column_values):
-        try:
-            return [column_values[feature_id] for feature_id in input_index]
-        except KeyError as exc:
-            msg = (
-                f"values for column {column!r} are missing index value {exc.args[0]!r}"
-            )
-            raise ValueError(msg) from exc
-
-    if not _is_sequence_values(column_values):
-        msg = f"values for column {column!r} must be a mapping or sequence"
-        raise ValueError(msg)
-
-    if len(column_values) != len(input_index):
-        msg = (
-            f"values for column {column!r} must contain exactly "
-            f"{len(input_index)} item(s)"
-        )
-        raise ValueError(msg)
-    return list(column_values)
 
 
 class JobEnvelope(StrictBaseModel):
@@ -296,91 +183,6 @@ class TableJobResult(StrictBaseModel):
         description="Row-major table values.",
     )
 
-    @classmethod
-    def from_dataframe(cls, job_id: str, dataframe: DataFrameLike) -> Self:
-        """Build a table result from a pandas-like DataFrame.
-
-        Returns:
-            A table result containing the frame's index, columns, and values.
-        """
-        return cls(
-            job_id=job_id,
-            index=_string_axis_values(dataframe.index, axis="index"),
-            columns=_string_axis_values(dataframe.columns, axis="column"),
-            data=dataframe.to_numpy().tolist(),
-        )
-
-    @classmethod
-    def from_series(
-        cls,
-        job_id: str,
-        series: SeriesLike,
-        *,
-        name: str | None = None,
-    ) -> Self:
-        """Build a one-column table result from a pandas-like Series.
-
-        Returns:
-            A one-column table result containing the series values.
-        """
-        column_name = name or series.name or "value"
-        return cls(
-            job_id=job_id,
-            index=_string_axis_values(series.index, axis="index"),
-            columns=_string_axis_values([column_name], axis="column"),
-            data=[[value] for value in series.tolist()],
-        )
-
-    @classmethod
-    def from_mapping(
-        cls,
-        job_id: str,
-        input_index: Iterable[AxisValue],
-        columns: Sequence[str],
-        values: Mapping[
-            str,
-            Mapping[AxisValue, JsonValue] | Sequence[JsonValue],
-        ],
-    ) -> Self:
-        """Build a table result from values keyed by the original input index.
-
-        Returns:
-            A table result with values ordered by the supplied index and columns.
-
-        Raises:
-            ValueError: If the supplied value columns do not match ``columns``.
-        """
-        raw_index = list(input_index)
-        result_index = _string_axis_values(raw_index, axis="index")
-        result_columns = _string_axis_values(columns, axis="column")
-        values_by_column = _string_keyed_mapping(values, axis="column")
-
-        expected_columns = set(result_columns)
-        actual_columns = set(values_by_column)
-        if actual_columns != expected_columns:
-            missing = sorted(expected_columns - actual_columns)
-            extra = sorted(actual_columns - expected_columns)
-            details: list[str] = []
-            if missing:
-                details.append(f"missing column value(s): {', '.join(missing)}")
-            if extra:
-                details.append(f"unexpected column value(s): {', '.join(extra)}")
-            msg = "; ".join(details)
-            raise ValueError(msg)
-
-        data_by_column = [
-            _mapping_column_values(column, values_by_column[column], raw_index)
-            for column in result_columns
-        ]
-        data = [list(row) for row in zip(*data_by_column, strict=True)]
-
-        return cls(
-            job_id=job_id,
-            index=result_index,
-            columns=result_columns,
-            data=data,
-        )
-
     @model_validator(mode="after")
     def validate_table_shape(self) -> Self:
         """Validate the table axes and rectangular data shape.
@@ -391,8 +193,10 @@ class TableJobResult(StrictBaseModel):
         Raises:
             ValueError: If row or column dimensions are inconsistent.
         """
-        _string_axis_values(self.index, axis="index")
-        _string_axis_values(self.columns, axis="column")
+        for axis, values in (("index", self.index), ("column", self.columns)):
+            if len(values) != len(set(values)):
+                msg = f"table {axis} values must be unique"
+                raise ValueError(msg)
 
         if len(self.index) != len(self.data):
             msg = "table index length must match data row count"
@@ -559,7 +363,7 @@ class ResultTableMetadata(StrictBaseModel):
     row_count: int = Field(ge=0, description="Total number of rows in the table.")
     column_count: int = Field(ge=0, description="Total number of table columns.")
     columns: list[str] = Field(description="Ordered table column names.")
-    column_contracts: list[TableOutputColumnV4] = Field(
+    column_contracts: list[TableColumn] = Field(
         description=(
             "Ordered concrete column contracts captured for this result table."
         ),
@@ -728,7 +532,7 @@ class ResultDescriptor(StrictBaseModel):
                 msg = "table results must include table metadata"
                 raise ValueError(msg)
             if self.provenance is not None:
-                if not isinstance(self.provenance.output, TableOutputV4):
+                if not isinstance(self.provenance.output, TableOutput):
                     msg = "table result provenance must declare a table output"
                     raise ValueError(msg)
                 if not self.table.column_contracts:
@@ -874,15 +678,13 @@ def build_result_descriptor(
     resolved_lifetime = lifetime or ResultLifetime()
 
     if isinstance(result, TableJobResult):
-        column_contracts: list[TableOutputColumnV4] = []
+        column_contracts: list[TableColumn] = []
         row_identity: RowIdentityMetadata | None = None
         if provenance is not None:
-            if not isinstance(provenance.output, TableOutputV4):
+            if not isinstance(provenance.output, TableOutput):
                 msg = "table result provenance must declare a table output"
                 raise ValueError(msg)
-            column_contracts = expand_table_output_columns(
-                expand_runner_table_output_columns(provenance.output, provenance.input),
-            )
+            column_contracts = effective_table_columns(provenance.output)
             if [column.name for column in column_contracts] != result.columns:
                 msg = (
                     "Terminal table columns must match expanded provenance output "

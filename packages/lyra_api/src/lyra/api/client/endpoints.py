@@ -20,7 +20,7 @@ from lyra.sdk.models.job import (
     TerminalJobResult,
 )
 from lyra.sdk.models.lookups import MetZoneCodeResponse
-from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfo
 from lyra.sdk.models.observability import (
     AdminStatusResponse,
     CatalogSummaryResponse,
@@ -337,12 +337,12 @@ def get_metrics() -> RequestSpec[MetricCatalogResponse]:
     )
 
 
-def get_metric(metric_name: str) -> RequestSpec[MetricInfoV4]:
+def get_metric(metric_name: str) -> RequestSpec[MetricInfo]:
     """Return the request specification to fetch metric."""
     return RequestSpec(
         "GET",
         f"metrics/{metric_name}",
         "fetch metric",
-        TypeAdapter(MetricInfoV4),
+        TypeAdapter(MetricInfo),
         authenticated=False,
     )

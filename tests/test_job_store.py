@@ -186,7 +186,7 @@ def _provenance() -> JobRunProvenance:
             "plugin": {"name": "fake-plugin", "version": "1.0.0"},
             "input": {
                 "location": {"data_type": "met_zone_code", "value": "09.01"},
-                "value": 1,
+                "parameters": {"value": 1},
             },
             "output": {
                 "kind": "table",
@@ -521,7 +521,7 @@ def test_table_result_descriptor_builds_preview_and_numeric_summary() -> None:
     assert json.loads(redis.values[job_store.result_key("job-1")]) == payload
 
 
-def test_table_descriptor_captures_static_and_batched_provenance(
+def test_table_descriptor_captures_static_columns_and_list_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = FakeRedisSync()
@@ -533,14 +533,7 @@ def test_table_descriptor_captures_static_and_batched_provenance(
         {
             "input": {
                 "location": {"data_type": "met_zone_code", "value": "09.01"},
-                "sector_filters": [
-                    {
-                        "key": "retail",
-                        "value": "^46.*",
-                        "label": "Retail jobs",
-                    },
-                    {"key": "health", "value": "^62.*"},
-                ],
+                "parameters": {"sector_filters": ["^46.*", "^62.*"]},
             },
             "output": {
                 "kind": "table",
@@ -552,18 +545,26 @@ def test_table_descriptor_captures_static_and_batched_provenance(
                         "description": "Resident population.",
                     }
                 ],
-                "batched_columns": [
-                    {
-                        "source": "sector_filters",
-                        "name": "accessibility_{key}",
-                        "type": "number",
-                        "unit": "jobs",
-                        "description": "Accessibility for {label}.",
-                        "nullable": True,
-                    }
-                ],
             },
         }
+    )
+    provenance_payload["output"]["columns"].extend(
+        [
+            {
+                "name": "accessibility_retail",
+                "type": "number",
+                "unit": "jobs",
+                "description": "Accessibility for Retail jobs.",
+                "nullable": True,
+            },
+            {
+                "name": "accessibility_health",
+                "type": "number",
+                "unit": "jobs",
+                "description": "Accessibility for health.",
+                "nullable": True,
+            },
+        ]
     )
     provenance = JobRunProvenance.model_validate(provenance_payload)
     job = JobEnvelope(job_id="job-1", metric=provenance.metric, input={})
@@ -662,9 +663,9 @@ def test_file_descriptor_retains_run_provenance_without_table_columns(
     assert descriptor.file.media_type == "image/tiff"
 
 
-@pytest.mark.parametrize("with_batch", [False, True])
+@pytest.mark.parametrize("with_extra_column", [False, True])
 def test_table_descriptor_expands_fractional_area_column_contract(
-    *, with_batch: bool
+    *, with_extra_column: bool
 ) -> None:
     redis = FakeRedisSync()
     provenance_payload = _provenance().model_dump()
@@ -686,21 +687,20 @@ def test_table_descriptor_expands_fractional_area_column_contract(
             }
         ],
     }
-    if with_batch:
-        provenance_payload["input"]["filters"] = [{"key": "retail", "value": "46"}]
-        provenance_payload["output"]["batched_columns"] = [
+    if with_extra_column:
+        provenance_payload["input"]["parameters"] = {"filters": ["46"]}
+        provenance_payload["output"]["columns"] += [
             {
-                "source": "filters",
-                "name": "jobs_{key}",
+                "name": "jobs_retail",
                 "type": "integer",
                 "unit": "jobs",
-                "description": "Jobs for {key}.",
+                "description": "Jobs for retail.",
             }
         ]
     columns = ["covered_area_m2", "covered_area_fraction"] + (
-        ["jobs_retail"] if with_batch else []
+        ["jobs_retail"] if with_extra_column else []
     )
-    data = [[25.0, 0.25, 3]] if with_batch else [[25.0, 0.25]]
+    data = [[25.0, 0.25, 3]] if with_extra_column else [[25.0, 0.25]]
     provenance = JobRunProvenance.model_validate(provenance_payload)
     job_store.create_job(
         JobEnvelope(job_id="job-area", metric=provenance.metric, input={}),
@@ -728,7 +728,7 @@ def test_table_descriptor_expands_fractional_area_column_contract(
     assert contracts[1].unit == "ratio"
     assert descriptor.preview.rows[0]["covered_area_fraction"] == pytest.approx(0.25)
     assert [column.name for column in descriptor.summary.columns] == columns
-    if with_batch:
+    if with_extra_column:
         assert contracts[-1].description == "Jobs for retail."
         assert descriptor.preview.rows[0]["jobs_retail"] == 3
 

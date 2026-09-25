@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
     from lyra.sdk.models.data_types import DataTypesResponse
     from lyra.sdk.models.lookups import MetZoneCodeResponse
-    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfoV4
+    from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfo
     from lyra.sdk.models.observability import (
         AdminStatusResponse,
         CatalogSummaryResponse,
@@ -383,7 +383,7 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
     async def get_metrics(self) -> MetricCatalogResponse:
         return await self._request(endpoints.get_metrics())
 
-    async def get_metric(self, metric_name: str) -> MetricInfoV4:
+    async def get_metric(self, metric_name: str) -> MetricInfo:
         return await self._request(endpoints.get_metric(metric_name))
 
 
@@ -416,7 +416,7 @@ class _CatalogResource:
     async def metrics(self) -> MetricCatalogResponse:
         return await self._transport.get_metrics()
 
-    async def metric(self, name: str) -> MetricInfoV4:
+    async def metric(self, name: str) -> MetricInfo:
         return await self._transport.get_metric(name)
 
 

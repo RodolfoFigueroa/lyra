@@ -1,0 +1,6 @@
+[project]
+name = "contract-plugin"
+version = "1.0.0"
+
+[tool.lyra]
+factory = "tests.fixtures.contract_plugin.plugin:create_plugin"

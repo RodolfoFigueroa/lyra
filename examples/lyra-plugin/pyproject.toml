@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "lyra-sdk",
+    "pandas>=2.3.3",
 ]
 
 [tool.lyra]

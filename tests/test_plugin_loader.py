@@ -4,15 +4,15 @@ from types import SimpleNamespace
 
 import pytest
 from lyra.sdk import LocationInput, PluginDefinition, metric
-from lyra.sdk.models.plugin_v4 import TableOutputColumnV4, TableOutputV4
+from lyra.sdk.models.plugin import TableColumn, TableOutput
 from lyra.sdk.plugin_loader import PluginLoadError, load_plugin_definition
 
 
-def _output() -> TableOutputV4:
-    return TableOutputV4(
+def _output() -> TableOutput:
+    return TableOutput(
         kind="table",
         columns=[
-            TableOutputColumnV4(
+            TableColumn(
                 name="value",
                 type="integer",
                 unit="count",

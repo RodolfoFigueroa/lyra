@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import create_autospec
@@ -102,20 +101,18 @@ def test_file_specimen(
         plugin.prepare_parameters("feature_report", {})
 
 
-def test_all_documented_requests(plugin: PluginDefinition) -> None:
-    text = Path("docs/design/plugin-contract/examples.md").read_text(encoding="utf-8")
-    requests = [
-        json.loads(block) for block in re.findall(r"```json\n(.*?)```", text, re.DOTALL)
-    ]
+def test_contract_request_examples(plugin: PluginDefinition) -> None:
+    fixture = Path(__file__).parent / "fixtures/contract_plugin/requests.json"
+    requests = json.loads(fixture.read_text(encoding="utf-8"))
     expected = [True, True, False, False, False, False, True, True, True, True, True]
     manifest = plugin.manifest(
         plugin=PluginInfo(name="test", version="1"), factory="example:create_plugin"
     )
     schemas = {item.name: item.request_schema for item in manifest.metrics}
-    for request, valid in zip(requests[:11], expected, strict=True):
+    for request, valid in zip(requests, expected, strict=True):
         validator = Draft202012Validator(schemas[request["metric"]])
         assert validator.is_valid(request["input"]) is valid, request
-    # E6's semantic condition deliberately is not part of request JSON Schema.
+    # Interval ordering deliberately is not part of request JSON Schema.
     with pytest.raises(MetricInputError, match="lower must not exceed upper"):
         plugin.prepare_parameters("interval_width", {"lower": 10, "upper": 3})
 

@@ -1,0 +1,139 @@
+[
+  {
+    "metric": "capacity",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {
+        "units": 5
+      }
+    },
+    "idempotency_key": "capacity-example-1"
+  },
+  {
+    "metric": "capacity",
+    "input": {
+      "location": {
+        "data_type": "cvegeo_list",
+        "value": [
+          "09002"
+        ]
+      },
+      "parameters": {}
+    }
+  },
+  {
+    "metric": "capacity",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {
+        "untis": 5
+      }
+    }
+  },
+  {
+    "metric": "capacity",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      }
+    }
+  },
+  {
+    "metric": "capacity",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {
+        "units": "5"
+      }
+    }
+  },
+  {
+    "metric": "capacity",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {
+        "units": 0
+      }
+    }
+  },
+  {
+    "metric": "reused_capacity",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {}
+    }
+  },
+  {
+    "metric": "selection_size",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {
+        "selection": {
+          "activity_codes": [
+            "311",
+            "312"
+          ]
+        },
+        "threshold": null
+      }
+    }
+  },
+  {
+    "metric": "bounded_features",
+    "input": {
+      "location": {
+        "data_type": "cvegeo_list",
+        "value": [
+          "09002"
+        ]
+      },
+      "bounds": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      }
+    }
+  },
+  {
+    "metric": "feature_report",
+    "input": {
+      "location": {
+        "data_type": "cvegeo_list",
+        "value": [
+          "09002"
+        ]
+      }
+    }
+  },
+  {
+    "metric": "interval_width",
+    "input": {
+      "location": {
+        "data_type": "met_zone_code",
+        "value": "09.01"
+      },
+      "parameters": {
+        "lower": 20,
+        "upper": 10
+      }
+    }
+  }
+]

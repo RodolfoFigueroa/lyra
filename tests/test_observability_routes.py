@@ -19,7 +19,6 @@ from tests.config_helpers import load_test_config
 from tests.smoke_plugin_helpers import (
     SMOKE_METRIC_QUEUES,
     SMOKE_PLUGIN_DIR,
-    smoke_plugin_uri,
 )
 
 
@@ -77,10 +76,10 @@ def _configure_admin(
     monkeypatch: pytest.MonkeyPatch,
     *,
     metric_queues: dict[str, str] | None = None,
-    repos: list[str] | None = None,
+    plugins: list[Path] | None = None,
 ) -> None:
-    load_test_config(tmp_path, metric_queues=metric_queues, repos=repos)
-    if metric_queues and repos is None:
+    load_test_config(tmp_path, metric_queues=metric_queues, plugins=plugins)
+    if metric_queues and plugins is None:
         monkeypatch.setattr(admin, "get_loaded_metric_queues", lambda: metric_queues)
 
 
@@ -205,7 +204,6 @@ def test_config_summary_excludes_secrets(
     payload = response.model_dump_json()
 
     assert response.default_queue == "interactive"
-    assert response.plugin_catalog_dir == str(tmp_path / "plugins" / "catalog")
     assert "admin-secret" not in payload
     assert "postgres-secret" not in payload
     assert "service-account" not in payload
@@ -222,7 +220,7 @@ def test_catalog_metadata_reports_empty_catalog(
 
     assert response.metric_count == 0
     assert response.metric_names == []
-    assert response.plugin_sources == []
+    assert response.installed_plugins == []
     assert response.metric_queues == {}
 
 
@@ -234,7 +232,7 @@ def test_catalog_metadata_reports_smoke_directory_plugin(
         tmp_path,
         monkeypatch,
         metric_queues=SMOKE_METRIC_QUEUES,
-        repos=[smoke_plugin_uri()],
+        plugins=[SMOKE_PLUGIN_DIR],
     )
     initialize_catalog()
 
@@ -246,8 +244,8 @@ def test_catalog_metadata_reports_smoke_directory_plugin(
         "smoke_file_metric",
         "smoke_table_metric",
     ]
-    assert response.plugin_sources[0].source_kind == "directory"
-    assert response.plugin_sources[0].source == smoke_plugin_uri()
+    assert response.installed_plugins[0].distribution == "lyra-smoke-plugin"
+    assert response.installed_plugins[0].version == "0.1.0"
     assert response.metric_queues == SMOKE_METRIC_QUEUES
     assert response.catalog_fingerprint
     assert SMOKE_PLUGIN_DIR.exists()

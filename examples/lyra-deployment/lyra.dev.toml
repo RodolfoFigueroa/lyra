@@ -20,7 +20,7 @@ forwarded_allow_ips = ["127.0.0.1"]
 # The checked-in value targets docker/docker-compose-dev.yml.
 # For a production Compose service named lyra-redis, use redis://lyra-redis:6379/0.
 # For direct local processes, use redis://localhost:6379/0.
-url = "redis://lyra-redis-dev:6379/0"
+url = "redis://redis:6379/0"
 
 [database]
 host = "replace-with-reachable-postgis-host"
@@ -84,14 +84,9 @@ mount_path = "/mcp"
 [plugins]
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
-# Install plugins when building the deployment image, then select them here.
-# [[plugins.installed]]
-# distribution = "lyra-smoke-plugin"
-# enabled = true
-# Development only: read the manifest from the mounted editable checkout.
-# manifest_path = "/workspace/lyra/examples/lyra-plugin/lyra.plugin.json"
-# [plugins.installed.routing]
-# "smoke_file_metric" = "batch"
+[[plugins.installed]]
+distribution = "lyra-smoke-plugin"
+manifest_path = "/workspace/lyra/examples/lyra-plugin/lyra.plugin.json"
 
 [workers.interactive]
 queues = ["interactive"]

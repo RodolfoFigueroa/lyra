@@ -49,7 +49,7 @@ def _valid_toml(
     secrets = _write_secret_files(base)
     return (
         f"""
-schema_version = 2
+schema_version = 3
 
 [api]
 host = "0.0.0.0"
@@ -80,15 +80,12 @@ limit = 10
 window_seconds = 60
 
 [plugins]
-catalog_dir = {_q(base / "plugins" / "catalog")}
-runner_base_dir = {_q(base / "plugins" / "runners")}
 default_queue = "interactive"
 allowed_queues = ["interactive", "batch"]
 
 [workers.{_q(worker_name)}]
 queues = ["interactive"]
 concurrency = 32
-install_dir = {_q(base / "plugins" / "runners" / worker_name)}
 temp_dir = {_q(base / "cache" / "jobs" / worker_name)}
 """.strip()
         + "\n"
@@ -126,7 +123,7 @@ def test_load_config_reads_toml_and_validates_secret_references(
     assert config.agent_submission_limit.window_seconds == 60
     assert config.earth_engine.service_account_file.exists()
     assert config.plugins.allowed_queues == ["interactive", "batch"]
-    assert config.plugins.repos == []
+    assert config.plugins.installed == []
 
 
 def test_load_config_reads_read_only_config_file_mount_shape(
@@ -282,9 +279,6 @@ def test_ensure_runtime_directories_creates_non_secret_layout(
     expected_dirs = [
         tmp_path / "config",
         tmp_path / "cache" / "jobs" / "interactive",
-        tmp_path / "plugins" / "catalog",
-        tmp_path / "plugins" / "runners",
-        tmp_path / "plugins" / "runners" / "interactive",
         tmp_path / "logs",
     ]
     assert all(path.is_dir() for path in expected_dirs)

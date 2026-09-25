@@ -86,7 +86,8 @@ uv run python -c "from smoke_plugin.plugin import create_plugin; print(create_pl
 uv run pytest
 ```
 
-Push the repository, add it through `/admin/plugin-repos`, refresh the catalog,
-and restart workers when the refresh response recommends it. The
-[publishing guide](../publish-and-debug/) covers source forms, queues, and
-failure diagnosis.
+Include the manifest as package shared data, as shown in the example
+`pyproject.toml`. Add the package to your deployment project, lock its dependencies,
+and rebuild the image. Select its distribution under `[[plugins.installed]]` in
+`lyra.toml`, then recreate the API and workers together. The
+[publishing guide](../publish-and-debug/) covers packaging, queues, and diagnosis.

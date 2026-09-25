@@ -30,11 +30,9 @@ REFRESH: dict[str, JsonValue] = {
     "workers_restart_recommended": True,
 }
 REPO: dict[str, JsonValue] = {
-    "id": "repo",
-    "source": "owner/plugin@main",
-    "ref": "main",
+    "distribution": "lyra-smoke-plugin",
+    "version": "0.1.0",
     "enabled": True,
-    "resolved_ref": None,
 }
 METADATA: dict[str, JsonValue] = {
     "observed_at": None,
@@ -103,8 +101,6 @@ CASES = (
             "default_queue": "batch",
             "workers": [],
             "result_retention_seconds": 600,
-            "plugin_catalog_dir": "/lyra_data/plugins/catalog",
-            "plugin_runner_base_dir": "/lyra_data/plugins/runners",
         },
     ),
     Case(
@@ -159,7 +155,7 @@ CASES = (
             ],
         },
     ),
-    Case("repos list", "GET", "admin/plugin-repos", {"repos": [REPO]}),
+    Case("plugins list", "GET", "admin/plugins", {"plugins": [REPO]}),
     Case(
         "catalog show",
         "GET",
@@ -170,7 +166,7 @@ CASES = (
             "catalog_fingerprint": "catalog",
             "catalog_available": True,
             "catalog_error": None,
-            "plugin_sources": [],
+            "installed_plugins": [],
             "metric_queues": {"metric": "batch"},
         },
     ),
@@ -312,7 +308,7 @@ def test_interactive_confirmation(
         ["jobs", "list", "--limit", "101"],
         ["jobs", "list", "--limit", "x"],
         ["jobs", "list", "--status", "invalid"],
-        ["repos", "update", "repo"],
+        ["plugins", "update", "repo"],
         ["workers", "restart", "--restart-timeout", "-1", "--yes"],
         ["routing", "set", "", "batch", "--yes"],
     ],
@@ -334,7 +330,7 @@ def test_credentials_and_connection_options(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    http.payload = {"repos": []}
+    http.payload = {"plugins": []}
     assert (
         admin_cli.main(
             [
@@ -345,18 +341,18 @@ def test_credentials_and_connection_options(
                 "8",
                 "--admin-api-key",
                 "explicit",
-                "repos",
+                "plugins",
                 "list",
             ]
         )
         == 0
     )
     _, url, options = http.calls.pop()
-    assert url == "https://example.test:444/prefix/admin/plugin-repos"
+    assert url == "https://example.test:444/prefix/admin/plugins"
     assert options["headers"] == {"Authorization": "Bearer explicit"}
     assert options["timeout"] == pytest.approx(8.0)
     monkeypatch.delenv("LYRA_ADMIN_API_KEY")
-    assert admin_cli.main(["repos", "list"]) == 2
+    assert admin_cli.main(["plugins", "list"]) == 2
     assert http.calls == []
     http.payload = READINESS
     assert admin_cli.main(["health"]) == 0
@@ -384,7 +380,7 @@ def test_http_failures_are_reported_once(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     http.status = status
-    assert admin_cli.main(["--json", "repos", "list"]) == 1
+    assert admin_cli.main(["--json", "plugins", "list"]) == 1
     output = capsys.readouterr()
     assert not output.out
     assert json.loads(output.err)["error"]["kind"] == "request"
@@ -414,7 +410,7 @@ def test_request_exceptions_do_not_retry_mutations(
 
 def test_malformed_response(http: HTTPStub, capsys: pytest.CaptureFixture[str]) -> None:
     http.payload = {"unexpected": "data"}
-    assert admin_cli.main(["--json", "repos", "list"]) == 1
+    assert admin_cli.main(["--json", "plugins", "list"]) == 1
     assert json.loads(capsys.readouterr().err)["error"]["kind"] == "request"
 
 
@@ -503,6 +499,6 @@ def test_human_output_shows_unknown_depth_and_stale_inspection(
 def test_empty_collection_is_explicit(
     http: HTTPStub, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    http.payload = {"repos": []}
-    assert admin_cli.main(["repos", "list"]) == 0
-    assert capsys.readouterr().out == "Repos: (none)\n"
+    http.payload = {"plugins": []}
+    assert admin_cli.main(["plugins", "list"]) == 0
+    assert capsys.readouterr().out == "Plugins: (none)\n"

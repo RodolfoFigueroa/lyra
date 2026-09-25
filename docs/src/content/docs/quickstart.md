@@ -56,18 +56,19 @@ Redis and PostGIS are reachable and the plugin catalog initialized successfully.
 
 ## Configure plugins
 
-Declare sources in the TOML before startup:
+Enable the plugin included in the development image before startup:
 
 ```toml
-[[plugins.repos]]
-id = "example"
-source = "owner/plugin-repository"
-ref = "main"
+[[plugins.installed]]
+distribution = "lyra-smoke-plugin"
+manifest_path = "/workspace/lyra/examples/lyra-plugin/lyra.plugin.json"
 ```
 
-For local development, use `source = "dir:///absolute/path/to/plugin"` and make
-that path visible inside the API container. The API captures it for workers.
-Git sources accept branches, tags, or commits in the separate `ref` field.
+The development image installs the example plugin editably and mounts its source
+into every process. After implementation edits, restart the workers. After contract
+edits, regenerate the manifest and restart the API and workers. Dependency changes
+require updating the deployment lockfiles and rebuilding the image. For production
+images and additional plugins, see [Deployment](../operate/deployment/).
 
 Validate with `uv run lyra-admin config validate lyra_data/config/lyra.toml`.
 After editing a running deployment, follow the [drain and restart procedure](../operate/deployment/#updates).

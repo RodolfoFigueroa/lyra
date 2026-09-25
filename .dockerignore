@@ -42,3 +42,7 @@
 **/docs/
 tests/
 service-account.json
+
+lyra_data/
+secrets/
+**/service-account.json

@@ -4,20 +4,18 @@ from lyra.sdk.models.strict import StrictBaseModel
 from pydantic import Field
 
 
-class PluginRepoResponse(StrictBaseModel):
-    """Configured plugin repository details."""
+class InstalledPluginResponse(StrictBaseModel):
+    """Configured installed plugin details."""
 
-    id: str = Field(min_length=1)
-    source: str = Field(min_length=1)
-    ref: str | None = None
-    resolved_ref: str | None = None
+    distribution: str = Field(min_length=1)
+    version: str | None = None
     enabled: bool
 
 
-class PluginRepoListResponse(StrictBaseModel):
-    """Collection of configured plugin repositories."""
+class InstalledPluginListResponse(StrictBaseModel):
+    """Collection of configured installed plugins."""
 
-    repos: list[PluginRepoResponse]
+    plugins: list[InstalledPluginResponse]
 
 
 class PluginRoutingResponse(StrictBaseModel):
@@ -25,6 +23,6 @@ class PluginRoutingResponse(StrictBaseModel):
 
     metric_queues: dict[str, str]
     overrides: dict[str, dict[str, str]] = Field(default_factory=dict)
-    disabled_repos: list[str] = Field(default_factory=list)
+    disabled_plugins: list[str] = Field(default_factory=list)
     allowed_queues: list[str] = Field(min_length=1)
     default_queue: str = Field(min_length=1)

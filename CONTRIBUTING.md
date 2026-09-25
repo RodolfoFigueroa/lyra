@@ -29,8 +29,8 @@ uv sync
 ```
 
 For direct processes, provide `/lyra_data/config/lyra.toml`, the Earth Engine
-service-account file, every `LYRA_POSTGRES_*` variable, and both API keys. Start
-the API before workers so plugin state and routing exist:
+service-account file, `LYRA_POSTGRES_PASSWORD`, and both API keys. Install selected
+plugins in the process environment. API and workers can start independently:
 
 ```bash
 uv run python -m lyra_app.main
@@ -42,6 +42,10 @@ The development Compose stack is the preferred integration environment:
 ```bash
 docker compose -f docker/docker-compose-dev.yml up --build
 ```
+
+For editable plugin development, dependency changes, and multiple plugin checkouts,
+see [the deployment example](examples/lyra-deployment/README.md). Source edits need
+a manual process restart; contract edits also need manifest regeneration.
 
 ## Required verification
 
@@ -78,7 +82,7 @@ editing generated Markdown or JSON.
 ## Change discipline
 
 - Keep API catalog behavior separate from worker code execution. API processes
-  read manifests; workers install and import trusted plugin code.
+  read installed manifests; workers import trusted plugin code.
 - Update SDK models, routes, clients, tests, and docs together when a public
   contract changes.
 - Keep one authoritative example or explanation and link to it elsewhere.

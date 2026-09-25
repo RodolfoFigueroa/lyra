@@ -27,7 +27,6 @@ def _local_worker_dirs(config: LyraConfig, base: Path) -> LyraConfig:
     for worker_name, worker in config.workers.items():
         workers[worker_name] = worker.model_copy(
             update={
-                "install_dir": base / "plugins" / "runners" / worker_name,
                 "temp_dir": base / "cache" / "jobs" / worker_name,
             },
         )
@@ -133,7 +132,6 @@ def test_launch_worker_prepares_dirs_refreshes_registry_and_starts_celery(
     assert database_probes == [config]
     assert refreshed == [("interactive", config)]
     assert launched == [worker_launcher.build_celery_worker_args(config, "interactive")]
-    assert (tmp_path / "plugins" / "catalog").is_dir()
     assert (tmp_path / "cache" / "jobs" / "interactive").is_dir()
     assert not (tmp_path / "secrets" / "generated_secret").exists()
 

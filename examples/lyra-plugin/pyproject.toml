@@ -16,3 +16,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["smoke_plugin"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"lyra.plugin.json" = "share/lyra/plugins/lyra-smoke-plugin/lyra.plugin.json"
+
+[tool.hatch.build.targets.sdist]
+include = ["smoke_plugin", "lyra.plugin.json", "pyproject.toml"]

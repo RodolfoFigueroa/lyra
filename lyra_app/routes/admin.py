@@ -6,10 +6,10 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from lyra.sdk.config import PluginRepoConfig
+from lyra.sdk.config import InstalledPluginConfig
 from lyra.sdk.models.admin import (
-    PluginRepoListResponse,
-    PluginRepoResponse,
+    InstalledPluginListResponse,
+    InstalledPluginResponse,
     PluginRoutingResponse,
 )
 from lyra.sdk.models.job import (
@@ -22,7 +22,7 @@ from lyra.sdk.models.observability import (
     AdminStatusResponse,
     CatalogSummaryResponse,
     ConfigSummaryResponse,
-    PluginSourceSummary,
+    InstalledPluginSummary,
     QueuesResponse,
     QueueSummary,
     RedisHealth,
@@ -37,13 +37,13 @@ from redis.exceptions import RedisError
 
 from lyra_app import job_store
 from lyra_app.config import ConfigLoadError, ConfigSecretError, LyraConfig, get_config
+from lyra_app.plugins import installed_version
 from lyra_app.registry import (
     catalog_error,
     get_loaded_catalog_fingerprint,
     get_loaded_metric_names,
     get_loaded_metric_queues,
     is_catalog_loaded,
-    resolved_source_refs,
 )
 from lyra_app.version import APP_VERSION
 from lyra_app.worker_control import (
@@ -116,13 +116,11 @@ def _load_config() -> LyraConfig:
         ) from exc
 
 
-def _repo_response(repo: PluginRepoConfig) -> PluginRepoResponse:
-    return PluginRepoResponse(
-        id=repo.id,
-        source=repo.source,
-        ref=repo.ref,
-        enabled=repo.enabled,
-        resolved_ref=resolved_source_refs().get(repo.id),
+def _plugin_response(plugin: InstalledPluginConfig) -> InstalledPluginResponse:
+    return InstalledPluginResponse(
+        distribution=plugin.distribution,
+        version=installed_version(plugin.distribution),
+        enabled=plugin.enabled,
     )
 
 
@@ -140,19 +138,15 @@ def _worker_config_summary(config: LyraConfig, worker_name: str) -> WorkerConfig
         name=worker_name,
         queues=worker.queues,
         concurrency=worker.concurrency,
-        install_dir=str(config.worker_install_dir(worker_name)),
         temp_dir=str(config.worker_temp_dir(worker_name)),
     )
 
 
-def _plugin_source_summary(repo: PluginRepoConfig) -> PluginSourceSummary:
-    return PluginSourceSummary(
-        id=repo.id,
-        source=repo.source,
-        source_kind=repo.source_kind,
-        ref=repo.ref,
-        enabled=repo.enabled,
-        resolved_ref=resolved_source_refs().get(repo.id),
+def _installed_plugin_summary(plugin: InstalledPluginConfig) -> InstalledPluginSummary:
+    return InstalledPluginSummary(
+        distribution=plugin.distribution,
+        version=installed_version(plugin.distribution),
+        enabled=plugin.enabled,
     )
 
 
@@ -299,16 +293,16 @@ def _all_worker_names(config: LyraConfig, snapshot: WorkerInspectSnapshot) -> li
     return sorted(set(config.workers) | _observed_worker_names(config, snapshot))
 
 
-@router.get("/plugin-repos")
-def list_plugin_repos() -> PluginRepoListResponse:
-    """List all configured plugin repository records.
+@router.get("/plugins")
+def list_plugins() -> InstalledPluginListResponse:
+    """List configured installed plugins.
 
     Returns:
-        Repository metadata in persisted order.
+        Installed distribution metadata in configuration order.
     """
     config = _load_config()
-    return PluginRepoListResponse(
-        repos=[_repo_response(repo) for repo in config.plugins.repos]
+    return InstalledPluginListResponse(
+        plugins=[_plugin_response(plugin) for plugin in config.plugins.installed]
     )
 
 
@@ -352,17 +346,15 @@ def get_config_summary() -> ConfigSummaryResponse:
             for worker_name in sorted(config.workers)
         ],
         result_retention_seconds=config.job_store.result_retention_seconds,
-        plugin_catalog_dir=str(config.plugins.catalog_dir),
-        plugin_runner_base_dir=str(config.plugins.runner_base_dir),
     )
 
 
 @router.get("/catalog")
 def get_catalog() -> CatalogSummaryResponse:
-    """Summarize the loaded catalog, plugin sources, and metric routing.
+    """Summarize the loaded catalog, installed plugins, and metric routing.
 
     Returns:
-        Catalog identity, metric names, sources, and effective queue assignments.
+        Catalog identity, metric names, distributions, and effective queues.
     """
     config = _load_config()
     metric_names = get_loaded_metric_names()
@@ -372,7 +364,9 @@ def get_catalog() -> CatalogSummaryResponse:
         catalog_fingerprint=get_loaded_catalog_fingerprint(),
         catalog_available=is_catalog_loaded(),
         catalog_error=catalog_error(),
-        plugin_sources=[_plugin_source_summary(repo) for repo in config.plugins.repos],
+        installed_plugins=[
+            _installed_plugin_summary(plugin) for plugin in config.plugins.installed
+        ],
         metric_queues=get_loaded_metric_queues(),
     )
 
@@ -540,8 +534,14 @@ def list_plugin_routing() -> PluginRoutingResponse:
     config = _load_config()
     return PluginRoutingResponse(
         metric_queues=get_loaded_metric_queues(),
-        overrides={repo.id: repo.routing for repo in config.plugins.repos},
-        disabled_repos=[repo.id for repo in config.plugins.repos if not repo.enabled],
+        overrides={
+            plugin.distribution: plugin.routing for plugin in config.plugins.installed
+        },
+        disabled_plugins=[
+            plugin.distribution
+            for plugin in config.plugins.installed
+            if not plugin.enabled
+        ],
         allowed_queues=config.plugins.allowed_queues,
         default_queue=config.plugins.default_queue,
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from lyra.sdk.config import PluginRepoConfig
+from lyra.sdk.config import InstalledPluginConfig
 
 from lyra_app.config import (
     LYRA_ADMIN_API_KEY_ENV,
@@ -14,6 +14,7 @@ from lyra_app.config import (
     get_config,
 )
 from tests.config_serialization import save_config
+from tests.plugin_helpers import plugin_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,14 +43,14 @@ def _set_config_env() -> None:
     )
 
 
-DEFAULT_TEST_PLUGIN_REPO = "owner/repo"
+DEFAULT_TEST_PLUGIN = "test-plugin"
 
 
 def load_test_config(
     base: Path,
     *,
     metric_queues: dict[str, str] | None = None,
-    repos: list[str] | None = None,
+    plugins: list[Path] | None = None,
 ) -> LyraConfig:
     secrets = _write_secret_files(base)
     _set_config_env()
@@ -59,7 +60,7 @@ def load_test_config(
         | assigned_queues
     )
     raw_config = {
-        "schema_version": 2,
+        "schema_version": 3,
         "api": {"public_base_url": "http://127.0.0.1:5219"},
         "redis": {"url": "redis://redis:6379/0"},
         "database": {"host": "postgres", "port": 5432, "name": "lyra", "user": "lyra"},
@@ -71,8 +72,6 @@ def load_test_config(
         "job_store": {},
         "agent_submission_limit": {},
         "plugins": {
-            "catalog_dir": str(base / "plugins" / "catalog"),
-            "runner_base_dir": str(base / "plugins" / "runners"),
             "default_queue": "interactive",
             "allowed_queues": allowed_queues,
         },
@@ -84,20 +83,15 @@ def load_test_config(
             "priority": {"queues": ["priority-lane"]},
         },
     }
-    declarations = list(repos) if repos is not None else []
-    if metric_queues and not declarations:
-        declarations = [DEFAULT_TEST_PLUGIN_REPO]
-    records = []
-    for index, source in enumerate(declarations):
-        records.append(
-            PluginRepoConfig(
-                id=f"repo-{index}",
-                source=source,
-                routing=metric_queues or {} if not records else {},
+    records = [plugin_config(path, routing=metric_queues) for path in (plugins or [])]
+    if metric_queues and not records:
+        records = [
+            InstalledPluginConfig(
+                distribution=DEFAULT_TEST_PLUGIN, routing=metric_queues
             )
-        )
+        ]
     config = LyraConfig.model_validate(raw_config)
-    config.plugins.repos = records
+    config.plugins.installed = records
     config_path = base / "config" / "lyra.toml"
     save_config(config, config_path)
     clear_config_cache()

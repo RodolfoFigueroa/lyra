@@ -7,20 +7,21 @@ Lyra separates public contracts from trusted execution.
 
 ## Catalog path
 
-1. Operators configure plugin sources and queue assignments in the authoritative `lyra.toml`.
-2. At startup the API captures enabled sources and their exact Git commits.
-3. It parses committed format-5 manifests without importing Python code.
+1. The deployment image installs Lyra and its plugins from a locked dependency set.
+2. Operators select installed distributions and queue assignments in `lyra.toml`.
+3. At startup the API reads installed format-5 manifests without importing plugin code.
 4. The registry validates the generated request schemas and spatial metadata
    directly; there is no second compiled manifest.
 5. `/metrics` publishes only client-facing names, descriptions, schemas, spatial
    mappings, outputs, and a contract fingerprint.
 
-The public fingerprint excludes repository IDs, factories, queues, and job
+The public fingerprint excludes distribution names, factories, queues, and job
 state.
 
-Source syntax is validated by the SDK's shared offline parser. Every startup
-captures fresh source trees; it does not compare against previous checkouts.
-Captured content hashes let workers verify source integrity before installation.
+API and workers independently validate installed distribution versions and manifests.
+Workers import factories only for plugins serving their queues and compare the live
+definitions with those manifests. They can start before the API. No shared catalog
+files or runtime package installation are needed.
 
 ## Job path
 
@@ -44,14 +45,14 @@ Captured content hashes let workers verify source integrity before installation.
 | FastAPI application | Discovery, validation, resolution, submission, result access, and administration. |
 | `lyra-sdk` | Shared plugin, geometry, catalog, job, and runtime contracts. |
 | `lyra-api` | Sync and async HTTP clients. |
-| Celery workers | Trusted plugin installation, import, execution, and result validation. |
+| Celery workers | Trusted plugin import, execution, and result validation. |
 | Redis | Celery transport plus retained job status, events, provenance, and results. |
 | PostGIS | Readiness and database-backed spatial resolution. |
 | MCP adapter | Strict agent tools over the same submission and result services. |
 
 API and worker processes deliberately have different trust boundaries. A valid
 catalog entry proves a manifest is readable; it does not prove a worker can
-install or execute the plugin.
+import or execute the plugin.
 
 The API owns one database runtime, starts it during application lifespan, and
 closes it during shutdown or startup failure. REST dependencies and the in-process

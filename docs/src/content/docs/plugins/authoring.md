@@ -283,4 +283,4 @@ input compilation in the API.
 `describe` reads the canonical contract. `check-manifest` rejects a stale artifact.
 The API reads manifests without importing plugin code; worker startup checks that
 the live definition matches. See [Publish and debug](../publish-and-debug/) for
-source capture and deployment.
+packaging and deployment.

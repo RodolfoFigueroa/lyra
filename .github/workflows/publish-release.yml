@@ -95,7 +95,7 @@ jobs:
           uv run python -c "import lyra.sdk; import lyra.api; import lyra.utils; import lyra_app"
           uv run lyra-plugin --help
           uv run lyra-admin --help
-          uv run lyra-admin repos list --help
+          uv run lyra-admin plugins list --help
 
   tag-components:
     needs:

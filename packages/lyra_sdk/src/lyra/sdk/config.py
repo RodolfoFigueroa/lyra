@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import tomllib
 from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlparse, urlsplit
 
-from lyra.sdk.plugin_sources import PluginSource, PluginSourceKind, parse_plugin_source
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 LYRA_DATA_DIR = Path("/lyra_data")
@@ -27,8 +27,6 @@ DEFAULT_LOG_DIR = LYRA_DATA_DIR / "logs"
 DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE = (
     LYRA_DATA_DIR / "secrets" / "service-account.json"
 )
-DEFAULT_PLUGIN_CATALOG_DIR = LYRA_DATA_DIR / "plugins" / "catalog"
-DEFAULT_PLUGIN_RUNNER_BASE_DIR = LYRA_DATA_DIR / "plugins" / "runners"
 DEFAULT_MCP_MOUNT_PATH = "/mcp"
 
 _ALLOWED_REDIS_SCHEMES = frozenset({"redis", "rediss"})
@@ -469,99 +467,76 @@ class AgentSubmissionLimitConfig(StrictConfigModel):
     )
 
 
-class PluginRepoConfig(StrictConfigModel):
-    """Declare one plugin source and its optional metric routing overrides."""
+def normalize_distribution_name(value: str) -> str:
+    """Validate and normalize a Python distribution name.
 
-    id: str = Field(
-        min_length=1,
-        pattern=r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$",
-        description="Stable repository identifier.",
-    )
-    source: str = Field(
-        min_length=1,
-        description=(
-            "GitHub owner/repository or HTTPS URL, absolute file:// Git repository, "
-            "or absolute dir:// directory. Revisions belong in ref."
-        ),
-    )
-    ref: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Git branch, tag, or commit; omitted selects the default branch.",
-    )
+    Returns:
+        The lowercase name with runs of punctuation replaced by a dash.
+
+    Raises:
+        ValueError: If the value is not a Python distribution name.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?", value):
+        msg = "distribution must be a valid Python package name"
+        raise ValueError(msg)
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+class InstalledPluginConfig(StrictConfigModel):
+    """Select an installed plugin and its optional metric routing overrides."""
+
+    distribution: str = Field(description="Installed Python distribution name.")
     enabled: bool = Field(
-        default=True, description="Include this repository in the startup catalog."
+        default=True, description="Include this plugin in the catalog."
     )
     routing: dict[str, str] = Field(
-        default_factory=dict,
-        description="Metric names mapped to explicit queues within this repository.",
+        default_factory=dict, description="Per-metric queue overrides."
+    )
+    manifest_path: Path | None = Field(
+        default=None,
+        description=(
+            "Absolute development manifest path; omitted uses installed shared data."
+        ),
     )
 
-    @property
-    def parsed_source(self) -> PluginSource:
-        """The source interpreted by the shared offline parser."""
-        return parse_plugin_source(self.source)
+    @field_validator("distribution")
+    @classmethod
+    def normalize_distribution(cls, value: str) -> str:
+        """Return the normalized Python distribution name."""
+        return normalize_distribution_name(value)
 
-    @property
-    def source_kind(self) -> PluginSourceKind:
-        """The source transport inferred without accessing the source."""
-        return self.parsed_source.kind
+    @field_validator("manifest_path")
+    @classmethod
+    def validate_manifest_path(cls, value: Path | None) -> Path | None:
+        """Return an absolute development manifest path."""
+        return _validate_absolute_path(value)
 
-    @model_validator(mode="after")
-    def validate_source(self) -> Self:
-        """Validate source syntax and routing strings without filesystem access.
+    @field_validator("routing")
+    @classmethod
+    def validate_routing(cls, value: dict[str, str]) -> dict[str, str]:
+        """Validate metric names and queues without loading installed plugins.
 
         Returns:
-            The validated repository declaration.
+            The validated routing overrides.
 
         Raises:
-            ValueError: If a source, revision, or routing value is invalid.
+            ValueError: If a name is blank or has surrounding whitespace.
         """
-        if self.id != self.id.strip():
-            msg = "repository IDs must not contain surrounding whitespace"
-            raise ValueError(msg)
-        source = self.parsed_source
-        self.source = source.canonical
-        if source.kind == "directory" and self.ref is not None:
-            msg = "directory sources cannot specify ref"
-            raise ValueError(msg)
-        if self.ref is not None and (
-            not self.ref.strip()
-            or self.ref != self.ref.strip()
-            or self.ref.startswith("-")
-            or any(c.isspace() for c in self.ref)
-        ):
-            msg = (
-                "ref must be a nonblank Git revision without whitespace "
-                "or a leading dash"
-            )
-            raise ValueError(msg)
-        for metric, queue in self.routing.items():
-            if (
-                not metric.strip()
-                or metric != metric.strip()
-                or not queue.strip()
-                or queue != queue.strip()
+        for metric, queue in value.items():
+            if any(
+                not name.strip() or name != name.strip() for name in (metric, queue)
             ):
                 msg = (
-                    "routing metric names and queues must be nonblank without "
-                    "surrounding whitespace"
+                    "routing metric names and queues must be nonblank "
+                    "without surrounding whitespace"
                 )
                 raise ValueError(msg)
-        return self
+        return value
 
 
 class PluginsConfig(StrictConfigModel):
-    """Configure plugin storage locations, sources, and routing queues."""
+    """Configure installed plugins and routing queues."""
 
-    catalog_dir: Path = Field(
-        default=DEFAULT_PLUGIN_CATALOG_DIR,
-        description="Absolute directory for API-side plugin catalog snapshots.",
-    )
-    runner_base_dir: Path = Field(
-        default=DEFAULT_PLUGIN_RUNNER_BASE_DIR,
-        description="Absolute parent directory for worker plugin installs.",
-    )
     default_queue: str = Field(
         min_length=1,
         description="Queue assigned to newly discovered metrics.",
@@ -570,31 +545,26 @@ class PluginsConfig(StrictConfigModel):
         min_length=1,
         description="Complete set of queues permitted in metric routing.",
     )
-    repos: list[PluginRepoConfig] = Field(
-        default_factory=list,
-        description="Authoritative plugin declarations and per-repository routing.",
+    installed: list[InstalledPluginConfig] = Field(
+        default_factory=list, description="Explicitly selected installed plugins."
     )
 
     @model_validator(mode="after")
-    def validate_repositories(self) -> Self:
-        """Check repository identities and override queues.
+    def validate_plugins(self) -> Self:
+        """Require unique distribution names and declared routing queues.
 
         Returns:
             The validated plugin configuration.
 
         Raises:
-            ValueError: If identities, sources, or queue assignments conflict.
+            ValueError: If distributions repeat or queues are undeclared.
         """
-        ids: set[str] = set()
-        sources: set[str] = set()
-        for repo in self.repos:
-            if repo.id in ids or (repo.enabled and repo.source in sources):
-                msg = "repository IDs and enabled sources must be unique"
-                raise ValueError(msg)
-            ids.add(repo.id)
-            if repo.enabled:
-                sources.add(repo.source)
-            if set(repo.routing.values()) - set(self.allowed_queues):
+        names = [plugin.distribution for plugin in self.installed]
+        if len(names) != len(set(names)):
+            msg = "installed plugin distributions must be unique"
+            raise ValueError(msg)
+        for plugin in self.installed:
+            if set(plugin.routing.values()) - set(self.allowed_queues):
                 msg = "routing queues must appear in plugins.allowed_queues"
                 raise ValueError(msg)
         return self
@@ -608,23 +578,6 @@ class PluginsConfig(StrictConfigModel):
             Normalized queue names.
         """
         return _strip_string_list(value)
-
-    @field_validator("catalog_dir", "runner_base_dir")
-    @classmethod
-    def validate_paths(cls, value: Path) -> Path:
-        """Require plugin catalog and runner directories to be absolute.
-
-        Returns:
-            The validated absolute directory path.
-
-        Raises:
-            ValueError: If a required plugin directory is absent.
-        """
-        path = _validate_absolute_path(value)
-        if path is None:
-            msg = "plugin path fields are required"
-            raise ValueError(msg)
-        return path
 
     @field_validator("default_queue")
     @classmethod
@@ -666,10 +619,6 @@ class WorkerConfig(StrictConfigModel):
         gt=0,
         description="Celery child processes in this worker pool.",
     )
-    install_dir: Path | None = Field(
-        default=None,
-        description="Optional absolute plugin install directory for this worker.",
-    )
     temp_dir: Path | None = Field(
         default=None,
         description="Optional absolute per-job temporary-file parent directory.",
@@ -685,7 +634,7 @@ class WorkerConfig(StrictConfigModel):
         """
         return _strip_string_list(value)
 
-    @field_validator("install_dir", "temp_dir")
+    @field_validator("temp_dir")
     @classmethod
     def validate_paths(cls, value: Path | None) -> Path | None:
         """Require optional worker directories to be absolute.
@@ -699,7 +648,7 @@ class WorkerConfig(StrictConfigModel):
 class LyraConfig(StrictConfigModel):
     """Represent the complete validated runtime configuration for Lyra."""
 
-    schema_version: Literal[2] = Field(
+    schema_version: Literal[3] = Field(
         description="Server configuration schema version."
     )
     api: ApiConfig = Field(description="API bind and public URL settings.")
@@ -724,7 +673,9 @@ class LyraConfig(StrictConfigModel):
         default_factory=AgentSubmissionLimitConfig,
         description="Shared REST and MCP submission limit.",
     )
-    plugins: PluginsConfig = Field(description="Plugin source and routing defaults.")
+    plugins: PluginsConfig = Field(
+        description="Installed plugin selection and routing defaults."
+    )
     workers: dict[str, WorkerConfig] = Field(
         min_length=1,
         description="Named worker pool definitions.",
@@ -776,16 +727,6 @@ class LyraConfig(StrictConfigModel):
         except KeyError as exc:
             msg = f"unknown worker config: {worker_name}"
             raise KeyError(msg) from exc
-
-    def worker_install_dir(self, name: str) -> Path:
-        """Resolve the effective plugin installation directory for a worker.
-
-        Returns:
-            The worker-specific override or its directory below the runner base.
-        """
-        worker_name = _strip_required_string(name)
-        worker = self.get_worker(worker_name)
-        return worker.install_dir or self.plugins.runner_base_dir / worker_name
 
     def worker_temp_dir(self, name: str) -> Path:
         """Resolve the effective per-job temporary directory for a worker.

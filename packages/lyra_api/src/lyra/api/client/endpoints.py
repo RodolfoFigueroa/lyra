@@ -8,7 +8,7 @@ from typing import Any, Generic, TypeVar
 
 from lyra.api.client.base import parse_retry_after, service_unavailable_error
 from lyra.api.exceptions import DownloadError
-from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
+from lyra.sdk.models.admin import InstalledPluginListResponse, PluginRoutingResponse
 from lyra.sdk.models.data_types import DataTypesResponse
 from lyra.sdk.models.job import (
     JobCancelResponse,
@@ -223,13 +223,13 @@ def cancel_admin_job(job_id: str) -> RequestSpec[JobCancelResponse]:
     )
 
 
-def list_plugin_repos() -> RequestSpec[PluginRepoListResponse]:
-    """Return the request specification to list plugin repos."""
+def list_plugins() -> RequestSpec[InstalledPluginListResponse]:
+    """Return the request specification to list installed plugins."""
     return RequestSpec(
         "GET",
-        "admin/plugin-repos",
-        "list plugin repos",
-        TypeAdapter(PluginRepoListResponse),
+        "admin/plugins",
+        "list installed plugins",
+        TypeAdapter(InstalledPluginListResponse),
     )
 
 

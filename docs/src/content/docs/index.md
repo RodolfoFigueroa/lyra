@@ -22,7 +22,7 @@ time.
 ## Core model
 
 API processes read generated plugin manifests without importing plugin code.
-Workers install trusted plugin packages, import their `PluginDefinition`, and
+Images contain installed plugin packages. Workers import their `PluginDefinition` and
 execute typed functions through the single `lyra.run_metric` task. Redis carries
 Celery traffic and retained job state; PostGIS resolves database-backed spatial
 wrappers.

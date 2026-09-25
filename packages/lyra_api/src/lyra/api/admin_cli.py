@@ -82,12 +82,10 @@ _COMMANDS = (
         "Inspect queues and worker coverage.",
         lambda c, _: c.queues.list(),
     ),
-    _Command(
-        "repos list", "List plugin repositories.", lambda c, _: c.plugin_repos.list()
-    ),
+    _Command("plugins list", "List installed plugins.", lambda c, _: c.plugins.list()),
     _Command(
         "catalog show",
-        "Show catalog contents, sources, and routing.",
+        "Show catalog contents, installed plugins, and routing.",
         lambda c, _: c.catalog.summary(),
     ),
     _Command(

@@ -15,8 +15,6 @@ from lyra_app.config import (
     DEFAULT_FORWARDED_ALLOW_IPS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MCP_MOUNT_PATH,
-    DEFAULT_PLUGIN_CATALOG_DIR,
-    DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     DEFAULT_RESULT_RETENTION_SECONDS,
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_AGENT_API_KEY_ENV,
@@ -44,7 +42,7 @@ def _write_secrets(base: Path) -> dict[str, Path]:
 def _valid_config(base: Path) -> dict[str, Any]:
     secret_paths = _write_secrets(base)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "database": {"host": "postgres", "port": 5432, "name": "lyra", "user": "lyra"},
         "api": {
             "host": DEFAULT_API_HOST,
@@ -70,8 +68,6 @@ def _valid_config(base: Path) -> dict[str, Any]:
             "window_seconds": 60,
         },
         "plugins": {
-            "catalog_dir": str(base / "plugins" / "catalog"),
-            "runner_base_dir": str(base / "plugins" / "runners"),
             "default_queue": "interactive",
             "allowed_queues": ["interactive", "batch"],
         },
@@ -79,13 +75,11 @@ def _valid_config(base: Path) -> dict[str, Any]:
             "interactive": {
                 "queues": ["interactive"],
                 "concurrency": 32,
-                "install_dir": str(base / "plugins" / "runners" / "interactive"),
                 "temp_dir": str(base / "cache" / "jobs" / "interactive"),
             },
             "batch": {
                 "queues": ["batch"],
                 "concurrency": 8,
-                "install_dir": str(base / "plugins" / "runners" / "batch"),
                 "temp_dir": str(base / "cache" / "jobs" / "batch"),
             },
         },
@@ -112,7 +106,7 @@ def _runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_config_contract_accepts_complete_schema(tmp_path: Path) -> None:
     config = LyraConfig.model_validate(_valid_config(tmp_path))
 
-    assert config.schema_version == 2
+    assert config.schema_version == 3
     assert config.api.host == DEFAULT_API_HOST
     assert config.api.port == 5219
     assert config.api.public_base_url == "https://lyra.example.test"
@@ -146,8 +140,6 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
     raw["logging"] = {}
     raw["job_store"] = {}
     raw["agent_submission_limit"] = {}
-    del raw["plugins"]["catalog_dir"]
-    del raw["plugins"]["runner_base_dir"]
     raw["workers"]["interactive"] = {"queues": ["interactive"]}
 
     config = LyraConfig.model_validate(raw)
@@ -176,12 +168,7 @@ def test_config_contract_applies_documented_field_defaults(tmp_path: Path) -> No
         config.agent_submission_limit.window_seconds
         == DEFAULT_AGENT_SUBMISSION_WINDOW_SECONDS
     )
-    assert config.plugins.catalog_dir == DEFAULT_PLUGIN_CATALOG_DIR
-    assert config.plugins.runner_base_dir == DEFAULT_PLUGIN_RUNNER_BASE_DIR
     assert config.get_worker("interactive").concurrency == 1
-    assert config.worker_install_dir("interactive") == (
-        DEFAULT_PLUGIN_RUNNER_BASE_DIR / "interactive"
-    )
     assert config.worker_temp_dir("interactive") == (
         LYRA_DATA_DIR / "cache" / "jobs" / "interactive"
     )
@@ -259,7 +246,7 @@ def test_config_contract_requires_known_schema_version(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
     raw["schema_version"] = 1
 
-    _assert_invalid(raw, "Input should be 2")
+    _assert_invalid(raw, "Input should be 3")
 
 
 @pytest.mark.parametrize(
@@ -353,8 +340,6 @@ def test_config_contract_rejects_blank_forwarded_allow_ip(tmp_path: Path) -> Non
     [
         ("earth_engine", "service_account_file"),
         ("logging", "file"),
-        ("plugins", "catalog_dir"),
-        ("plugins", "runner_base_dir"),
     ],
 )
 def test_config_contract_requires_absolute_paths(
@@ -381,9 +366,9 @@ def test_config_contract_trims_queues(tmp_path: Path) -> None:
     assert sorted(config.workers) == ["interactive"]
 
 
-def test_config_contract_rejects_plugin_repos_field(tmp_path: Path) -> None:
+def test_config_contract_rejects_plugins_field(tmp_path: Path) -> None:
     raw = _valid_config(tmp_path)
-    raw["plugins"]["repos"] = ["owner/plugin-a"]
+    raw["plugins"]["installed"] = ["plugin-a"]
 
     _assert_invalid(raw, "valid dictionary")
 

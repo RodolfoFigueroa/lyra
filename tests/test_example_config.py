@@ -5,8 +5,6 @@ import pytest
 
 from lyra_app.config import (
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
-    DEFAULT_PLUGIN_CATALOG_DIR,
-    DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     LYRA_ADMIN_API_KEY_ENV,
     LYRA_AGENT_API_KEY_ENV,
     LYRA_POSTGRES_PASSWORD_ENV,
@@ -42,8 +40,6 @@ def test_example_config_matches_config_contract(
         DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE
     )
     assert config.logging.file is None
-    assert config.plugins.catalog_dir == DEFAULT_PLUGIN_CATALOG_DIR
-    assert config.plugins.runner_base_dir == DEFAULT_PLUGIN_RUNNER_BASE_DIR
     assert set(config.workers) == {"batch", "interactive"}
 
     rendered = render_config_toml(config)

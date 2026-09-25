@@ -9,9 +9,9 @@ from fastapi import HTTPException, Response
 
 from lyra_app import registry
 from lyra_app.config import clear_config_cache
-from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
+from lyra_app.plugins import MANIFEST_FILENAME
 from lyra_app.routes import metrics
-from tests.catalog_helpers import configure_catalog_sources
+from tests.catalog_helpers import configure_catalog_plugins
 from tests.config_helpers import load_test_config
 from tests.contract_helpers import FilterParameters, metric_manifest, plugin_manifest
 
@@ -38,11 +38,11 @@ def reset_catalog(tmp_path: Path) -> Iterator[None]:
 
 
 def _use_repo(repo: Path, _monkeypatch: pytest.MonkeyPatch) -> None:
-    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
+    configure_catalog_plugins([repo])
 
 
 def test_metrics_route_returns_empty_catalog() -> None:
-    configure_catalog_sources([])
+    configure_catalog_plugins([])
     response_context = Response()
 
     response = asyncio.run(metrics.list_metrics(response_context))

@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
     from lyra.api.options import RunOptions, SubmitOptions
-    from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
+    from lyra.sdk.models.admin import InstalledPluginListResponse, PluginRoutingResponse
     from lyra.sdk.models.data_types import DataTypesResponse
     from lyra.sdk.models.lookups import MetZoneCodeResponse
     from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfo
@@ -265,8 +265,8 @@ class _SyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] --
     def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
         return self._request(endpoints.cancel_admin_job(job_id))
 
-    def list_plugin_repos(self) -> PluginRepoListResponse:
-        return self._request(endpoints.list_plugin_repos())
+    def list_plugins(self) -> InstalledPluginListResponse:
+        return self._request(endpoints.list_plugins())
 
     def list_plugin_routing(self) -> PluginRoutingResponse:
         return self._request(endpoints.list_plugin_routing())
@@ -521,12 +521,12 @@ class _AdminJobsResource:
         return self._transport.cancel_admin_job(job_id)
 
 
-class _AdminPluginReposResource:
+class _AdminPluginsResource:
     def __init__(self, transport: _SyncTransport) -> None:
         self._transport = transport
 
-    def list(self) -> PluginRepoListResponse:
-        return self._transport.list_plugin_repos()
+    def list(self) -> InstalledPluginListResponse:
+        return self._transport.list_plugins()
 
 
 class _AdminCatalogResource:
@@ -644,7 +644,7 @@ class LyraAdminClient:
     Attributes:
         health: Liveness and readiness endpoints.
         jobs: Administrative job listing and cancellation endpoints.
-        plugin_repos: Plugin repository inspection endpoints.
+        plugins: Installed plugin inspection endpoints.
         catalog: Administrative catalog summary endpoints.
         workers: Worker inspection endpoints.
         queues: Queue inspection endpoints.
@@ -678,8 +678,8 @@ class LyraAdminClient:
         """Liveness and readiness endpoints."""
         self.jobs = _AdminJobsResource(transport)
         """Administrative job listing and cancellation endpoints."""
-        self.plugin_repos = _AdminPluginReposResource(transport)
-        """Plugin repository inspection endpoints."""
+        self.plugins = _AdminPluginsResource(transport)
+        """Installed plugin inspection endpoints."""
         self.catalog = _AdminCatalogResource(transport)
         """Administrative catalog summary endpoints."""
         self.workers = _AdminWorkersResource(transport)

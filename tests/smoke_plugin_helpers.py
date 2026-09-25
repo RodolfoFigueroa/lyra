@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 SMOKE_PLUGIN_DIR = Path(__file__).parents[1] / "examples" / "lyra-plugin"
 SMOKE_METRIC_QUEUES = {
@@ -10,14 +9,6 @@ SMOKE_METRIC_QUEUES = {
     "smoke_file_metric": "interactive",
     "smoke_cancel_metric": "interactive",
 }
-
-
-def directory_uri(path: Path) -> str:
-    return f"dir://{quote(path.resolve().as_posix(), safe='/')}"
-
-
-def smoke_plugin_uri(path: Path = SMOKE_PLUGIN_DIR) -> str:
-    return directory_uri(path)
 
 
 def feature_collection(feature_ids: tuple[str, ...] = ("area-1",)) -> dict[str, Any]:

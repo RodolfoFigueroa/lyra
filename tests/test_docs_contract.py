@@ -131,7 +131,7 @@ def test_cli_reference_includes_nested_admin_help(
     reference = (tmp_path / "cli.md").read_text()
 
     assert "## lyra-admin\n" in reference
-    assert "## lyra-admin repos list\n" in reference
+    assert "## lyra-admin plugins list\n" in reference
     assert "## lyra-admin config validate\n" in reference
     assert "## lyra-admin workers restart\n" not in reference
     assert "--restart-timeout" not in reference

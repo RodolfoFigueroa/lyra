@@ -29,8 +29,6 @@ DEFAULT_FORWARDED_ALLOW_IPS = _sdk_config.DEFAULT_FORWARDED_ALLOW_IPS
 DEFAULT_RESULT_RETENTION_SECONDS = _sdk_config.DEFAULT_RESULT_RETENTION_SECONDS
 DEFAULT_LOG_LEVEL = _sdk_config.DEFAULT_LOG_LEVEL
 DEFAULT_MCP_MOUNT_PATH = _sdk_config.DEFAULT_MCP_MOUNT_PATH
-DEFAULT_PLUGIN_CATALOG_DIR = _sdk_config.DEFAULT_PLUGIN_CATALOG_DIR
-DEFAULT_PLUGIN_RUNNER_BASE_DIR = _sdk_config.DEFAULT_PLUGIN_RUNNER_BASE_DIR
 DatabasePoolConfig = _sdk_config.DatabasePoolConfig
 EarthEngineConfig = _sdk_config.EarthEngineConfig
 JobProgressConfig = _sdk_config.JobProgressConfig
@@ -258,13 +256,11 @@ def validate_config_secret_references(config: LyraConfig) -> None:
 
 def ensure_runtime_directories(config: LyraConfig) -> None:
     """Create non-secret runtime directories declared by the server config."""
-    paths = {config.plugins.catalog_dir, config.plugins.runner_base_dir}
+    paths: set[Path] = set()
     if config.logging.file is not None:
         paths.add(config.logging.file.parent)
 
-    for worker_name in config.workers:
-        paths.add(config.worker_install_dir(worker_name))
-        paths.add(config.worker_temp_dir(worker_name))
+    paths.update(config.worker_temp_dir(worker_name) for worker_name in config.workers)
 
     for path in paths:
         path.mkdir(parents=True, exist_ok=True)

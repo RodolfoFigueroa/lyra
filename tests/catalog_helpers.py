@@ -1,40 +1,38 @@
-"""Helpers to start a real catalog using test-owned directory sources."""
+"""Helpers to start a real catalog using installed plugin metadata doubles."""
 
 from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
 
-from lyra.sdk.config import PluginRepoConfig
-
 from lyra_app import registry
 from lyra_app.config import get_config
+from tests.plugin_helpers import plugin_config
 
 if TYPE_CHECKING:
-    from lyra_app.plugins import PluginLocation
+    from pathlib import Path
 
 
-def configure_catalog_sources(sources: list[PluginLocation]) -> None:
+def configure_catalog_plugins(paths: list[Path]) -> None:
     config = get_config()
     overrides = {
         name: queue
-        for repo in config.plugins.repos
-        for name, queue in repo.routing.items()
+        for plugin in config.plugins.installed
+        for name, queue in plugin.routing.items()
     }
-    repos = []
-    for source in sources:
-        raw = json.loads((source.path / "lyra.plugin.json").read_text())
+    plugins = []
+    for path in paths:
+        raw = json.loads((path / "lyra.plugin.json").read_text())
         names = {metric.get("name") for metric in raw.get("metrics", [])}
-        repos.append(
-            PluginRepoConfig(
-                id=source.repo_id,
-                source=f"dir://{source.path}",
+        plugins.append(
+            plugin_config(
+                path,
                 routing={
                     name: queue for name, queue in overrides.items() if name in names
                 },
             )
         )
-    config.plugins.repos = repos
+    config.plugins.installed = plugins
     registry.initialize_catalog(config)
 
 

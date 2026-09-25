@@ -49,7 +49,6 @@ class WorkerConfigSummary(StrictBaseModel):
     name: str = Field(min_length=1)
     queues: list[str] = Field(min_length=1)
     concurrency: int = Field(gt=0)
-    install_dir: str
     temp_dir: str
 
 
@@ -62,18 +61,13 @@ class ConfigSummaryResponse(StrictBaseModel):
     default_queue: str = Field(min_length=1)
     workers: list[WorkerConfigSummary]
     result_retention_seconds: int = Field(gt=0)
-    plugin_catalog_dir: str
-    plugin_runner_base_dir: str
 
 
-class PluginSourceSummary(StrictBaseModel):
-    """Configured source of plugin definitions."""
+class InstalledPluginSummary(StrictBaseModel):
+    """Configured installed plugin metadata."""
 
-    id: str = Field(min_length=1)
-    source: str = Field(min_length=1)
-    source_kind: Literal["github", "local", "directory"]
-    ref: str | None = None
-    resolved_ref: str | None = None
+    distribution: str = Field(min_length=1)
+    version: str | None = None
     enabled: bool
 
 
@@ -85,7 +79,7 @@ class CatalogSummaryResponse(StrictBaseModel):
     catalog_fingerprint: str
     catalog_available: bool
     catalog_error: str | None = None
-    plugin_sources: list[PluginSourceSummary]
+    installed_plugins: list[InstalledPluginSummary]
     metric_queues: dict[str, str]
 
 

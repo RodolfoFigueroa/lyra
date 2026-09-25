@@ -2,6 +2,10 @@ x-lyra-app-volumes: &lyra-app-volumes
   - lyra_data:/lyra_data
   - ${LYRA_CONFIG_FILE}:/lyra_data/config/lyra.toml:ro
   - ${LYRA_SERVICE_ACCOUNT_FILE}:/lyra_data/secrets/service-account.json:ro
+  - ../lyra_app:/workspace/lyra/lyra_app:ro
+  - ../packages/lyra_sdk/src:/workspace/lyra/packages/lyra_sdk/src:ro
+  - ../packages/lyra_utils/src:/workspace/lyra/packages/lyra_utils/src:ro
+  - ../examples/lyra-plugin:/workspace/lyra/examples/lyra-plugin:ro
 
 x-lyra-app-environment: &lyra-app-environment
   LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}
@@ -31,19 +35,12 @@ services:
       timeout: 3s
       retries: 20
       start_period: 5s
-    build: ..
-    develop:
-      watch:
-        - action: sync+restart
-          path: ..
-          target: /app
-          ignore:
-            - .git/
-            - __pycache__/
-            - .venv/
-            - venv/
-            - "*.env"
-            - "*.ipynb"
+    build:
+      context: ../examples/lyra-deployment
+      target: development
+      additional_contexts:
+        lyra: ..
+        smoke: ../examples/lyra-plugin
 
   lyra-redis-dev:
     image: redis:alpine
@@ -64,21 +61,12 @@ services:
     depends_on:
       lyra-redis-dev:
         condition: service_started
-      lyra-dev:
-        condition: service_healthy
-    build: ..
-    develop:
-      watch:
-        - action: sync+restart
-          path: ..
-          target: /app
-          ignore:
-            - .git/
-            - __pycache__/
-            - .venv/
-            - venv/
-            - "*.env"
-            - "*.ipynb"
+    build:
+      context: ../examples/lyra-deployment
+      target: development
+      additional_contexts:
+        lyra: ..
+        smoke: ../examples/lyra-plugin
 
   lyra-celery-worker-batch-dev:
     image: lyra-dev:latest
@@ -92,21 +80,12 @@ services:
     depends_on:
       lyra-redis-dev:
         condition: service_started
-      lyra-dev:
-        condition: service_healthy
-    build: ..
-    develop:
-      watch:
-        - action: sync+restart
-          path: ..
-          target: /app
-          ignore:
-            - .git/
-            - __pycache__/
-            - .venv/
-            - venv/
-            - "*.env"
-            - "*.ipynb"
+    build:
+      context: ../examples/lyra-deployment
+      target: development
+      additional_contexts:
+        lyra: ..
+        smoke: ../examples/lyra-plugin
 
 networks:
   lyra_net:

@@ -36,9 +36,9 @@ from lyra_app.converters import map as converter_map
 from lyra_app.db import connection
 from lyra_app.db.connection import ApplicationDatabaseRuntime
 from lyra_app.mcp.tools import InProcessLyraBackend, ToolCallError
-from lyra_app.plugins import MANIFEST_FILENAME, PluginLocation
+from lyra_app.plugins import MANIFEST_FILENAME
 from lyra_app.routes import admin, data_types, health, jobs, metrics
-from tests.catalog_helpers import configure_catalog_sources, restart_catalog
+from tests.catalog_helpers import configure_catalog_plugins, restart_catalog
 from tests.config_helpers import load_test_config
 from tests.contract_helpers import FilterParameters, metric_manifest, plugin_manifest
 from tests.fixtures.contract_plugin.plugin import create_plugin
@@ -333,7 +333,7 @@ def _use_repo(
         json.dumps(manifest or _manifest()),
         encoding="utf-8",
     )
-    configure_catalog_sources([PluginLocation(repo_id="repo", path=repo)])
+    configure_catalog_plugins([repo])
     restart_catalog()
 
 
@@ -1073,7 +1073,7 @@ def test_create_job_rejects_unknown_metric(
     database: ApplicationDatabaseRuntime,
 ) -> None:
     _patch_redis(monkeypatch, FakeRedisAsync())
-    configure_catalog_sources([])
+    configure_catalog_plugins([])
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -1304,6 +1304,7 @@ def test_stored_provenance_survives_catalog_refresh(
         json.dumps(changed_manifest),
         encoding="utf-8",
     )
+    configure_catalog_plugins([tmp_path / "repo"])
     restart_catalog()
 
     new_entry = registry.get_metric_entry("heavy_metric")

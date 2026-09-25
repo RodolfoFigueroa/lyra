@@ -206,13 +206,10 @@ def _config_summary_response() -> dict[str, Any]:
                 "name": "interactive",
                 "queues": ["interactive"],
                 "concurrency": 1,
-                "install_dir": "/lyra_data/plugins/runners/interactive",
                 "temp_dir": "/lyra_data/cache/jobs/interactive",
             }
         ],
         "result_retention_seconds": 86400,
-        "plugin_catalog_dir": "/lyra_data/plugins/catalog",
-        "plugin_runner_base_dir": "/lyra_data/plugins/runners",
     }
 
 
@@ -222,12 +219,10 @@ def _catalog_summary_response() -> dict[str, Any]:
         "metric_count": 1,
         "metric_names": ["smoke_table_metric"],
         "catalog_fingerprint": "abc",
-        "plugin_sources": [
+        "installed_plugins": [
             {
-                "id": "smoke",
-                "source": "dir:///plugins/smoke",
-                "source_kind": "directory",
-                "ref": None,
+                "distribution": "lyra-smoke-plugin",
+                "version": "0.1.0",
                 "enabled": True,
             }
         ],
@@ -303,15 +298,14 @@ def _met_zone_response() -> dict[str, Any]:
 
 def _plugin_repo_response() -> dict[str, Any]:
     return {
-        "id": "smoke",
-        "source": "dir:///plugins/smoke",
-        "ref": None,
+        "distribution": "lyra-smoke-plugin",
+        "version": "0.1.0",
         "enabled": True,
     }
 
 
 def _plugin_repo_list_response() -> dict[str, Any]:
-    return {"repos": [_plugin_repo_response()]}
+    return {"plugins": [_plugin_repo_response()]}
 
 
 def _plugin_routing_response() -> dict[str, Any]:
@@ -675,7 +669,7 @@ def test_sync_client_uses_observability_routes(
     assert readiness.database.status == "ok"
     assert status.metric_count == 1
     assert config.workers[0].name == "interactive"
-    assert catalog.plugin_sources[0].source_kind == "directory"
+    assert catalog.installed_plugins[0].distribution == "lyra-smoke-plugin"
     assert workers.workers[0].status == "online"
     assert workers.inspect_metadata.stale is False
     assert worker.active_tasks[0].id == "job-1"
@@ -734,7 +728,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
         "example.test/", secure=False, timeout=12.0, admin_api_key="admin-secret"
     )
     met_zone = client.lookups.met_zone_code("Valle de Mexico")
-    repos = admin.plugin_repos.list()
+    repos = admin.plugins.list()
     routing = admin.routing.list()
     assert requests_seen == [
         {
@@ -747,7 +741,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
         },
         {
             "method": "GET",
-            "url": "http://example.test/admin/plugin-repos",
+            "url": "http://example.test/admin/plugins",
             "params": None,
             "json": None,
             "timeout": 12.0,
@@ -763,7 +757,7 @@ def test_sync_client_uses_lookup_plugin_and_routing_routes(
         },
     ]
     assert met_zone.cve_met == "0901"
-    assert repos.repos[0].source == "dir:///plugins/smoke"
+    assert repos.plugins[0].distribution == "lyra-smoke-plugin"
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
 
 
@@ -781,9 +775,9 @@ def test_sync_client_reports_operator_route_errors(
 
     with pytest.raises(
         DownloadError,
-        match=r"Failed to list plugin repos\. HTTP 409: plugin disabled",
+        match=r"Failed to list installed plugins\. HTTP 409: plugin disabled",
     ):
-        LyraAdminClient("example.test", secure=False).plugin_repos.list()
+        LyraAdminClient("example.test", secure=False).plugins.list()
 
 
 def test_sync_client_returns_grouped_data_type_schemas(
@@ -1357,7 +1351,7 @@ def test_async_client_uses_observability_routes(
     assert readiness.status == "ready"
     assert status.metric_count == 1
     assert config.workers[0].name == "interactive"
-    assert catalog.plugin_sources[0].source_kind == "directory"
+    assert catalog.installed_plugins[0].distribution == "lyra-smoke-plugin"
     assert workers.workers[0].status == "online"
     assert workers.inspect_metadata.stale is False
     assert worker.active_tasks[0].id == "job-1"
@@ -1416,7 +1410,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
     async def run_requests() -> tuple[Any, ...]:
         return (
             await client.lookups.met_zone_code("Valle de Mexico"),
-            await admin.plugin_repos.list(),
+            await admin.plugins.list(),
             await admin.routing.list(),
         )
 
@@ -1431,7 +1425,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
             },
         },
         {
-            "args": ("GET", "http://example.test/admin/plugin-repos"),
+            "args": ("GET", "http://example.test/admin/plugins"),
             "kwargs": {
                 "params": None,
                 "json": None,
@@ -1448,7 +1442,7 @@ def test_async_client_uses_lookup_plugin_and_routing_routes(
         },
     ]
     assert met_zone.cve_met == "0901"
-    assert repos.repos[0].source == "dir:///plugins/smoke"
+    assert repos.plugins[0].distribution == "lyra-smoke-plugin"
     assert routing.metric_queues == {"smoke_table_metric": "interactive"}
 
 
@@ -1468,11 +1462,9 @@ def test_async_client_reports_operator_route_errors(
 
     with pytest.raises(
         DownloadError,
-        match=r"Failed to list plugin repos\. HTTP 409: plugin disabled",
+        match=r"Failed to list installed plugins\. HTTP 409: plugin disabled",
     ):
-        asyncio.run(
-            AsyncLyraAdminClient("example.test", secure=False).plugin_repos.list()
-        )
+        asyncio.run(AsyncLyraAdminClient("example.test", secure=False).plugins.list())
 
 
 def test_async_client_returns_grouped_data_type_schemas(

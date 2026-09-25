@@ -66,12 +66,12 @@ def test_compose_passes_worker_names_instead_of_queue_env() -> None:
         assert "env_file:" not in contents
 
 
-def test_compose_waits_for_api_catalog_initialization() -> None:
+def test_compose_workers_start_independently_of_api() -> None:
     for compose_file in COMPOSE_FILES:
         contents = _read(compose_file)
 
         assert "healthcheck:" in contents
-        assert "condition: service_healthy" in contents
+        assert "condition: service_healthy" not in contents
         assert "urllib.request.urlopen" in contents
 
 
@@ -98,12 +98,10 @@ def test_dockerfile_declares_lyra_data_volume_only() -> None:
     assert "LYRA_PLUGIN_REPOS" not in contents
 
 
-def test_dockerfile_prioritizes_bundled_workspace_packages() -> None:
+def test_dockerfile_installs_noneditable_packages() -> None:
     contents = _read(ROOT / "Dockerfile")
-
-    assert (
-        "PYTHONPATH=/app/packages/lyra_sdk/src:/app/packages/lyra_utils/src" in contents
-    )
+    assert "--no-editable" in contents
+    assert "PYTHONPATH" not in contents
 
 
 def test_dockerfile_caches_third_party_dependencies_separately() -> None:
@@ -121,8 +119,11 @@ def test_runtime_image_contains_only_runtime_workspace_packages_and_license() ->
     runtime_stage = contents.split("FROM python:3.11-slim", maxsplit=2)[-1]
 
     assert "COPY LICENSE ./LICENSE" in runtime_stage
-    assert "COPY packages/lyra_sdk ./packages/lyra_sdk" in runtime_stage
-    assert "COPY packages/lyra_utils ./packages/lyra_utils" in runtime_stage
+    assert "COPY --from=builder /app/.venv /app/.venv" in runtime_stage
+    assert "COPY packages/lyra_sdk" not in runtime_stage
+    assert "COPY packages/lyra_utils" not in runtime_stage
+    assert "git" not in runtime_stage
+    assert "/uv" not in runtime_stage
     assert "COPY packages ./packages" not in runtime_stage
     assert "COPY packages/lyra_api " not in runtime_stage
 

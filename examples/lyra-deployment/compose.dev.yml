@@ -1,0 +1,18 @@
+x-development: &development
+  image: lyra-deployment-dev:local
+  build:
+    target: development
+  volumes:
+    - ./lyra.dev.toml:/lyra_data/config/lyra.toml:ro
+    - ${LYRA_SOURCE:-../..}/lyra_app:/workspace/lyra/lyra_app:ro
+    - ${LYRA_SOURCE:-../..}/packages/lyra_sdk/src:/workspace/lyra/packages/lyra_sdk/src:ro
+    - ${LYRA_SOURCE:-../..}/packages/lyra_utils/src:/workspace/lyra/packages/lyra_utils/src:ro
+    - ${SMOKE_PLUGIN_SOURCE:-../lyra-plugin}:/workspace/lyra/examples/lyra-plugin:ro
+
+services:
+  api:
+    <<: *development
+  interactive:
+    <<: *development
+  batch:
+    <<: *development

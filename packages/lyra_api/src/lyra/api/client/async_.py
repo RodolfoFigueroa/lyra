@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     import pandas as pd
     from lyra.api.client.endpoints import RequestSpec
     from lyra.api.options import RunOptions, SubmitOptions
-    from lyra.sdk.models.admin import PluginRepoListResponse, PluginRoutingResponse
+    from lyra.sdk.models.admin import InstalledPluginListResponse, PluginRoutingResponse
     from lyra.sdk.models.data_types import DataTypesResponse
     from lyra.sdk.models.lookups import MetZoneCodeResponse
     from lyra.sdk.models.metric import MetricCatalogResponse, MetricInfo
@@ -265,8 +265,8 @@ class _AsyncTransport(BaseTransport):  # ruff: ignore[too-many-public-methods] -
     async def cancel_admin_job(self, job_id: str) -> JobCancelResponse:
         return await self._request(endpoints.cancel_admin_job(job_id))
 
-    async def list_plugin_repos(self) -> PluginRepoListResponse:
-        return await self._request(endpoints.list_plugin_repos())
+    async def list_plugins(self) -> InstalledPluginListResponse:
+        return await self._request(endpoints.list_plugins())
 
     async def list_plugin_routing(self) -> PluginRoutingResponse:
         return await self._request(endpoints.list_plugin_routing())
@@ -555,12 +555,12 @@ class _AdminJobsResource:
         return await self._transport.cancel_admin_job(job_id)
 
 
-class _AdminPluginReposResource:
+class _AdminPluginsResource:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._transport = transport
 
-    async def list(self) -> PluginRepoListResponse:
-        return await self._transport.list_plugin_repos()
+    async def list(self) -> InstalledPluginListResponse:
+        return await self._transport.list_plugins()
 
 
 class _AdminCatalogResource:
@@ -679,7 +679,7 @@ class AsyncLyraAdminClient:
     Attributes:
         health: Asynchronous liveness and readiness endpoints.
         jobs: Asynchronous administrative job listing and cancellation endpoints.
-        plugin_repos: Asynchronous plugin repository inspection endpoints.
+        plugins: Asynchronous installed plugin inspection endpoints.
         catalog: Asynchronous administrative catalog summary endpoints.
         workers: Asynchronous worker inspection endpoints.
         queues: Asynchronous queue inspection endpoints.
@@ -715,8 +715,8 @@ class AsyncLyraAdminClient:
         """Asynchronous liveness and readiness endpoints."""
         self.jobs = _AdminJobsResource(transport)
         """Asynchronous administrative job listing and cancellation endpoints."""
-        self.plugin_repos = _AdminPluginReposResource(transport)
-        """Asynchronous plugin repository inspection endpoints."""
+        self.plugins = _AdminPluginsResource(transport)
+        """Asynchronous installed plugin inspection endpoints."""
         self.catalog = _AdminCatalogResource(transport)
         """Asynchronous administrative catalog summary endpoints."""
         self.workers = _AdminWorkersResource(transport)

@@ -8,7 +8,6 @@ from pathlib import Path
 
 from celery import Task
 from celery.signals import task_failure
-from filelock import FileLock
 from lyra.sdk.db import LyraDB
 from lyra.sdk.errors import MetricInputError, MetricResultError
 from lyra.sdk.models.geometry import GeoJSON
@@ -31,18 +30,7 @@ from lyra_app.config import LyraConfig, get_config
 from lyra_app.db import connection as database_connection
 from lyra_app.db.client import LyraDBImplicit
 from lyra_app.db.connection import is_database_unavailable_error
-from lyra_app.plugin_runtime import (
-    copy_source,
-    read_snapshot,
-    snapshot_path,
-    source_hash,
-)
-from lyra_app.plugins import (
-    MANIFEST_FILENAME,
-    PluginLocation,
-    install_runner_plugins,
-)
-from lyra_app.registry import load_plugin_manifest
+from lyra_app.plugins import MANIFEST_FILENAME, load_installed_plugins
 
 logger = logging.getLogger(__name__)
 
@@ -147,48 +135,6 @@ def _validated_plugin_definition(
     return definition
 
 
-def _runner_snapshot_repos(
-    worker_name: str, config: LyraConfig
-) -> tuple[list[PluginLocation], dict[str, str]]:
-    repos: list[PluginLocation] = []
-    with FileLock(f"{snapshot_path(config)}.lock"):
-        snapshot = read_snapshot(config)
-        for source in snapshot.sources:
-            if source_hash(source.path) != source.content_hash:
-                msg = (
-                    f"Prepared source {source.repo_id!r} no longer matches the "
-                    f"API snapshot."
-                )
-                raise RuntimeError(msg)
-            target = config.worker_install_dir(worker_name) / source.repo_id
-            copy_source(source.path, target)
-            repos.append(
-                PluginLocation(
-                    repo_id=source.repo_id,
-                    path=target,
-                )
-            )
-    return repos, snapshot.metric_queues
-
-
-def _runner_queues(worker_name: str, config: LyraConfig) -> set[str]:
-    return set(config.get_worker(worker_name).queues)
-
-
-def _resolve_metric_queue(
-    metric: MetricManifest,
-    metric_queues: dict[str, str],
-) -> str:
-    try:
-        return metric_queues[metric.name]
-    except KeyError as exc:
-        msg = (
-            f"Metric {metric.name!r} has no queue assignment. Restart the API "
-            "before starting workers."
-        )
-        raise RuntimeError(msg) from exc
-
-
 def load_runner_metric_entries(
     worker_name: str,
     *,
@@ -205,19 +151,17 @@ def load_runner_metric_entries(
     if config is None:
         config = get_config()
 
-    queues = _runner_queues(worker_name, config)
-    repos, metric_queues = _runner_snapshot_repos(worker_name, config)
-    install_runner_plugins(repos)
+    queues = set(config.get_worker(worker_name).queues)
+    plugins = load_installed_plugins(config.plugins)
     entries: dict[str, RunnerMetricEntry] = {}
 
-    for repo in repos:
-        manifest = load_plugin_manifest(repo.path)
-        selected_metrics: list[tuple[MetricManifest, str]] = []
-        for metric in manifest.metrics:
-            queue = _resolve_metric_queue(metric, metric_queues)
-            if queues and queue not in queues:
-                continue
-            selected_metrics.append((metric, queue))
+    for plugin in plugins:
+        manifest = plugin.manifest
+        selected_metrics = [
+            (metric, plugin.metric_queues[metric.name])
+            for metric in manifest.metrics
+            if plugin.metric_queues[metric.name] in queues
+        ]
         if not selected_metrics:
             continue
         definition = _validated_plugin_definition(manifest)

@@ -52,7 +52,7 @@ DEFAULT_OVERRIDES: dict[str, object] = {
     "database.worker.connect_timeout_seconds": 5,
     "database.worker.statement_timeout_ms": 300_000,
     "database.worker.pool_recycle_seconds": 900,
-    "plugins.repos": [],
+    "plugins.installed": [],
 }
 
 ENV_FIELDS = {

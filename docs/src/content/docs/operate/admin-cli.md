@@ -43,9 +43,9 @@ continuous observation is outside this CLI's interface.
 | `workers list` | Worker state and observation metadata. |
 | `workers get NAME` | One worker's tasks, statistics, and observation metadata. |
 | `queues list` | Routing coverage, worker coverage, and queue depth. |
-| `repos list` | Repository identities, sources, requested/resolved refs, and enabled states. |
-| `catalog show` | Catalog fingerprint, metric names, plugin sources, and routing. |
-| `routing list` | Effective routes, per-repository overrides, disabled repositories, and queues. |
+| `plugins list` | Configured distributions, installed versions, and enabled states. |
+| `catalog show` | Catalog fingerprint, metric names, installed plugins, and routing. |
+| `routing list` | Effective routes, per-plugin overrides, disabled plugins, and queues. |
 
 Filter jobs with `--status queued|running|succeeded|failed|cancelled`,
 `--metric NAME`, and `--limit N` (1–100). Retained jobs expire according to the
@@ -67,7 +67,7 @@ uv run lyra-admin --json config validate ./lyra.toml
 This command only reads the specified TOML and validates its schema and internal
 relationships. It requires no server, secrets, network, or writable directories.
 It does not verify plugin manifests or service availability. Successful JSON is
-`{"valid": true, "schema_version": 2}`. Invalid TOML/schema exits `2`; file I/O
+`{"valid": true, "schema_version": 3}`. Invalid TOML/schema exits `2`; file I/O
 failures exit `1`.
 
 Edit the file directly and restart the API and all workers to apply settings.
@@ -118,7 +118,7 @@ configuration files.
 ## Command coverage
 
 The CLI provides health, status, loaded configuration, jobs, workers, queues,
-repositories, catalog, and routing inspection. It also supports job cancellation
+plugins, catalog, and routing inspection. It also supports job cancellation
 and offline configuration validation. Configuration writes, catalog refresh,
 and worker restart commands and HTTP APIs are removed.
 

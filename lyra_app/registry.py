@@ -3,15 +3,11 @@
 import hashlib
 import json
 import logging
-import shutil
-import tempfile
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from operator import itemgetter
-from pathlib import Path
 from typing import Any
 
-from filelock import FileLock
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.protocols import Validator
@@ -24,24 +20,11 @@ from lyra.sdk.models.metric import (
 )
 from lyra.sdk.models.plugin import (
     MetricManifest,
-    PluginManifest,
 )
 from lyra.sdk.types import JsonObject, JsonValue
-from pydantic import ValidationError as PydanticValidationError
 
 from lyra_app.config import LyraConfig, get_config
-from lyra_app.plugin_runtime import (
-    SourceSnapshot,
-    StartupSnapshot,
-    config_fingerprint,
-    publish_snapshot,
-    snapshot_path,
-    source_hash,
-)
-from lyra_app.plugins import (
-    MANIFEST_FILENAME,
-    capture_plugin_source,
-)
+from lyra_app.plugins import InstalledPlugin, load_installed_plugins
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +39,7 @@ class MetricRegistryEntry:
     request_schema: JsonObject
     request_validator: Validator
     queue: str
-    repo_id: str
+    distribution: str
     catalog_fingerprint: str
 
 
@@ -81,7 +64,6 @@ class _CatalogState:
     loaded: bool = False
     fingerprint: str | None = None
     error: str | None = None
-    sources: list[SourceSnapshot] = field(default_factory=list)
 
 
 _catalog = _CatalogState()
@@ -97,46 +79,17 @@ def _fingerprint_payload(payload: object) -> str:
 
 
 def _normalised_manifest_payload(
-    manifests: list[tuple[PluginManifest, Path, str]],
-    metric_queues: dict[str, str],
+    plugins: list[InstalledPlugin],
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
-    for manifest, _path, repo_id in manifests:
-        data = manifest.model_dump(mode="json")
-        data["repo_id"] = repo_id
+    for plugin in plugins:
+        data = plugin.manifest.model_dump(mode="json")
+        data["distribution"] = plugin.distribution
         for metric in data["metrics"]:
-            metric["queue"] = metric_queues[metric["name"]]
+            metric["queue"] = plugin.metric_queues[metric["name"]]
         data["metrics"] = sorted(data["metrics"], key=itemgetter("name"))
         payload.append(data)
-    return sorted(
-        payload,
-        key=lambda item: (item["plugin"]["name"], item["plugin"]["version"]),
-    )
-
-
-def load_plugin_manifest(path: Path) -> PluginManifest:
-    """Load and validate a repository's format-5 plugin manifest.
-
-    Returns:
-        The canonical manifest from the repository root.
-
-    Raises:
-        RuntimeError: If the manifest is missing, malformed, or invalid.
-    """
-    manifest_path = path / MANIFEST_FILENAME
-    if not manifest_path.exists():
-        msg = f"Plugin repo {path} is missing required {MANIFEST_FILENAME}."
-        raise RuntimeError(msg)
-
-    try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return PluginManifest.model_validate(raw)
-    except json.JSONDecodeError as exc:
-        msg = f"Plugin manifest {manifest_path} is not valid JSON."
-        raise RuntimeError(msg) from exc
-    except (PydanticValidationError, ValueError) as exc:
-        msg = f"Plugin manifest {manifest_path} is invalid: {exc}"
-        raise RuntimeError(msg) from exc
+    return sorted(payload, key=itemgetter("distribution"))
 
 
 def _build_request_validator(metric_name: str, schema: JsonObject) -> Validator:
@@ -150,24 +103,24 @@ def _build_request_validator(metric_name: str, schema: JsonObject) -> Validator:
 
 
 def _build_registry(
-    manifests: list[tuple[PluginManifest, Path, str]],
-    metric_queues: dict[str, str],
+    plugins: list[InstalledPlugin],
 ) -> dict[str, MetricRegistryEntry]:
     catalog_fingerprint = public_catalog_fingerprint(
         [
             _metric_info_from_manifest(metric)
-            for manifest, _path, _repo_id in manifests
-            for metric in manifest.metrics
+            for plugin in plugins
+            for metric in plugin.manifest.metrics
         ]
     )
     registry: dict[str, MetricRegistryEntry] = {}
-    for manifest, _path, repo_id in manifests:
+    for plugin in plugins:
+        manifest = plugin.manifest
         for metric in manifest.metrics:
             if metric.name in registry:
                 msg = f"Duplicate metric name in plugin manifests: {metric.name!r}"
                 raise RuntimeError(msg)
             try:
-                queue = metric_queues[metric.name]
+                queue = plugin.metric_queues[metric.name]
             except KeyError as exc:
                 msg = f"Metric {metric.name!r} does not have a queue assignment."
                 raise RuntimeError(msg) from exc
@@ -179,103 +132,30 @@ def _build_registry(
                 request_schema=request_schema,
                 request_validator=_build_request_validator(metric.name, request_schema),
                 queue=queue,
-                repo_id=repo_id,
+                distribution=plugin.distribution,
                 catalog_fingerprint=catalog_fingerprint,
             )
     return registry
 
 
-def _prepare_catalog(
-    config: LyraConfig, temporary: Path
-) -> tuple[dict[str, MetricRegistryEntry], StartupSnapshot]:
-    manifests: list[tuple[PluginManifest, Path, str]] = []
-    sources: list[SourceSnapshot] = []
-    routing: dict[str, str] = {}
-    destination = config.plugins.catalog_dir / "sources"
-    captured = temporary / "captured"
-    captured.mkdir()
-    for repo in config.plugins.repos:
-        if not repo.enabled:
-            continue
-        target = captured / repo.id
-        revision = capture_plugin_source(repo, target)
-        manifest = load_plugin_manifest(target)
-        names = {metric.name for metric in manifest.metrics}
-        unknown = set(repo.routing) - names
-        if unknown:
-            msg = (
-                f"Repository {repo.id!r} has routing overrides for missing "
-                f"metrics: {', '.join(sorted(unknown))}"
-            )
-            raise ValueError(msg)
-        routing.update(
-            {
-                name: repo.routing.get(name, config.plugins.default_queue)
-                for name in names
-            }
-        )
-        manifests.append((manifest, target, repo.id))
-        sources.append(
-            SourceSnapshot(
-                repo_id=repo.id,
-                path=destination / repo.id,
-                resolved_ref=revision,
-                content_hash=source_hash(target),
-            )
-        )
-    registry = _build_registry(manifests, routing)
-    if destination.exists():
-        shutil.rmtree(destination)
-    captured.replace(destination)
-    return registry, StartupSnapshot(
-        status="ready",
-        config_fingerprint=config_fingerprint(config),
-        sources=sources,
-        metric_queues=routing,
-        catalog_fingerprint=_fingerprint_payload(
-            _normalised_manifest_payload(manifests, routing)
-        ),
-    )
-
-
 def initialize_catalog(config: LyraConfig | None = None) -> None:
-    """Prepare and publish the catalog once during API startup.
-
-    Plugin failures leave diagnostics available and the catalog unavailable.
-    """
+    """Read installed manifests once, preserving diagnostics on startup failure."""
     config = get_config() if config is None else config
     reset_catalog()
-    config.plugins.catalog_dir.mkdir(parents=True, exist_ok=True)
-    with FileLock(f"{snapshot_path(config)}.lock"):
-        pending = StartupSnapshot(
-            status="initializing", config_fingerprint=config_fingerprint(config)
+    try:
+        plugins = load_installed_plugins(config.plugins)
+        registry = _build_registry(plugins)
+    except (OSError, ValueError, RuntimeError) as exc:
+        _catalog.error = (
+            f"Plugin initialization failed ({type(exc).__name__}); "
+            "inspect server logs, correct the installed plugins or configuration, "
+            "and restart."
         )
-        publish_snapshot(config, pending)
-        try:
-            with tempfile.TemporaryDirectory(
-                dir=config.plugins.catalog_dir, prefix=".startup-"
-            ) as root:
-                registry, snapshot = _prepare_catalog(config, Path(root))
-            publish_snapshot(config, snapshot)
-        except (
-            OSError,
-            ValueError,
-            RuntimeError,
-        ) as exc:
-            _catalog.error = (
-                f"Plugin initialization failed ({type(exc).__name__}); "
-                "inspect server logs, correct the source or configuration, "
-                "and restart."
-            )
-            logger.exception("Plugin catalog initialization failed")
-            pending.status = "failed"
-            publish_snapshot(config, pending)
-            return
-        TASK_REGISTRY.update(registry)
-        _catalog.sources.extend(snapshot.sources)
-        _catalog.fingerprint = snapshot.catalog_fingerprint
-        _catalog.error = None
-        _catalog.loaded = True
+        logger.exception("Plugin catalog initialization failed")
+        return
+    TASK_REGISTRY.update(registry)
+    _catalog.fingerprint = _fingerprint_payload(_normalised_manifest_payload(plugins))
+    _catalog.loaded = True
 
 
 def catalog_error() -> str | None:
@@ -285,15 +165,6 @@ def catalog_error() -> str | None:
         The failure message or ``None``.
     """
     return _catalog.error
-
-
-def resolved_source_refs() -> dict[str, str | None]:
-    """Expose resolved Git commits for the loaded source snapshots.
-
-    Returns:
-        Repository IDs mapped to captured Git revisions.
-    """
-    return {source.repo_id: source.resolved_ref for source in _catalog.sources}
 
 
 def ensure_catalog_loaded() -> None:
@@ -478,5 +349,4 @@ def reset_catalog() -> None:
     TASK_REGISTRY.clear()
     _catalog.fingerprint = None
     _catalog.loaded = False
-    _catalog.sources.clear()
     _catalog.error = None

@@ -20,65 +20,68 @@ writable `/lyra_data` volume.
 Use the generated [configuration reference](../../reference/generated/configuration/)
 for exact fields, defaults, constraints, and environment ownership.
 
-## Process order
+## Build the deployment image
 
-Start Redis and PostGIS first. Start the API and wait for `/ready`; initial API
-startup captures enabled plugin sources, validates manifests and routing, and
-publishes a derived snapshot. Start workers only after readiness; they verify
-the configuration fingerprint and source hashes, then install private copies
-of the exact sources prepared by the API. The API does not import plugin code.
+The root image contains the framework. A deployment project adds your selected
+plugins and owns its dependency lockfile. The repository includes a complete
+[deployment example](https://github.com/RodolfoFigueroa/lyra/tree/main/examples/lyra-deployment)
+with production and editable development targets. Use the repository's
+`examples/lyra-deployment/README.md` for commands and checkout layout.
 
-Each worker launcher receives a name from `[workers.<name>]`. That table controls
-queues and concurrency; optional paths default below `/lyra_data`. Every metric
-executes through `lyra.run_metric` on its server-assigned queue.
+Install all dependencies during the image build using `uv sync --locked --no-dev
+--no-editable`. Run API and every worker from the same resulting image. Runtime
+containers need neither Git nor uv. Pin Git dependencies to commits and commit the
+deployment lockfile; changing a package requires rebuilding the image.
 
-Before loading plugins or starting Celery, each worker opens a temporary database
-connection and executes `SELECT 1` with its worker pool configuration. A failed
-probe terminates startup so the process supervisor can retry it. Engines used by
-metric execution are still created inside worker processes; a database outage
-after startup is recorded as a retryable `database_unavailable` job failure.
+## Startup and files
 
-## State and files
+Start Redis and PostGIS first. API and workers then start independently. Each reads
+installed distribution metadata and manifests. The API publishes a catalog without
+importing plugin Python code; workers import factories for plugins serving their
+queues and check the live definition against its manifest.
+
+Each worker launcher receives a name from `[workers.<name>]`, which controls queues
+and concurrency. Before loading plugins or starting Celery, each worker probes
+PostGIS with `SELECT 1`. A failed probe terminates startup. Metric execution engines
+are created inside worker processes; later database outages produce retryable
+`database_unavailable` job failures.
 
 ```text
 /lyra_data/
   config/lyra.toml
   secrets/service-account.json
   cache/jobs/
-  plugins/catalog/startup.json
-  plugins/catalog/sources/
-  plugins/runners/
   logs/
 ```
 
-The catalog descriptor, captured sources, worker installs, and job caches are
-derived artifacts. Do not edit or transfer them as configuration. Run one API
-catalog writer per shared volume; multiple API replicas sharing this directory
-are unsupported. A failed startup marks the descriptor unavailable, so workers
-cannot silently reuse a previous catalog.
+There is no shared catalog directory or worker installation directory. Plugin
+manifests live in the image's Python environment below
+`share/lyra/plugins/<normalized-distribution>/lyra.plugin.json`.
 
 ## Plugin configuration
 
+Configuration uses `schema_version = 3`:
+
 ```toml
-[[plugins.repos]]
-id = "analysis"
-source = "owner/plugin-repository"
-ref = "main"
+[[plugins.installed]]
+distribution = "my-plugin"
 enabled = true
 
-[plugins.repos.routing]
+[plugins.installed.routing]
 expensive_metric = "batch"
 ```
 
-Git refs accept branches, tags, and commit IDs. Omitting `ref` selects the default
-branch. Branches and tags resolve again at each API startup; use full commit IDs
-for reproducible source versions. Exact dependency reproducibility also requires
-controlling package dependencies and the runtime image.
+Unspecified metrics use `plugins.default_queue`. An enabled plugin's routing
+must name metrics in its manifest. All queues must appear in
+`plugins.allowed_queues`. Disabled distributions are not loaded.
 
-Unspecified metrics use `plugins.default_queue`. An enabled repository's routing
-overrides must name metrics present in its manifest. Disabled repositories are
-not fetched or installed; their overrides are retained and checked when enabled.
-All configured queues must appear in `plugins.allowed_queues`.
+For development, use editable installs, mount each checkout into API and worker
+containers at the path used during installation, and set an absolute
+`manifest_path` on its installed-plugin entry. The development Compose override in
+the example supports independent checkouts through named build contexts. Python
+source edits need manual worker restarts; contract edits also need manifest
+regeneration and an API restart. Dependency and version edits need a lock update
+and image rebuild. Keep the container environment separate from host environments.
 
 ## Public URL and reverse proxy
 
@@ -105,32 +108,29 @@ uv run lyra-admin --json config validate ./lyra_data/config/lyra.toml
 ```
 
 Validation is offline and does not need credentials or server dependencies. It
-checks TOML syntax, schema, repository declarations, and queue relationships;
-it does not contact services, fetch manifests, import plugins, or install packages.
+checks TOML syntax, schema, distribution declarations, and queue relationships;
+it does not contact services, read manifests, import plugins, or install packages.
 
 To reproduce a deployment, copy the TOML, provision the referenced external
 secrets and services, and start the same runtime image. Adjust host-specific
-paths and endpoints as needed. No first-run registration or interactive setup
-is required. Local development sources must be available to the API; workers
-consume the shared captured snapshot.
+paths and endpoints as needed. No first-run registration or interactive setup is required.
 
 ## Updates
 
 1. Stop new submissions at your proxy or deployment boundary.
 2. Drain all queued, reserved, and running jobs before changing routing or plugins.
 3. Stop the API and every worker pool using your process supervisor or Compose.
-4. Edit and validate the authoritative TOML.
-5. Start the API and wait for readiness, then start every worker pool.
+4. Update and validate the TOML; update locks and rebuild for package changes.
+5. Recreate API and workers with the same image and config, then wait for readiness.
 6. Inspect worker and queue coverage before reopening submissions.
 
-For Compose, after draining, `docker compose -f docker/docker-compose-dev.yml down`
-followed by `docker compose -f docker/docker-compose-dev.yml up -d --build` recreates
-all processes and reapplies the API readiness dependency. Preserve the data volume.
-Do not rely on `docker compose restart` to rerun dependency readiness gates.
+Use `docker compose up -d --build --force-recreate` in the deployment example after
+draining. Preserve the data volume. For development source-only edits, manual
+`docker compose restart` is sufficient; there is no automatic reload by default.
 
 File edits have no effect on a running process. Config summaries describe the
 loaded configuration. There is no hot reload, config writer, config history, or
-runtime plugin mutation API. Worker installation or import failures stop that
+runtime plugin mutation API. Worker import or manifest failures stop that
 worker; inspect its logs and correct the package or config before restarting.
 Invalid TOML or missing credentials stop startup. Plugin catalog failures leave
 liveness and admin diagnostics available, but readiness and new submissions fail.

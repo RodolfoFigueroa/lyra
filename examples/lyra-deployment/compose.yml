@@ -1,0 +1,41 @@
+x-app: &app
+  image: lyra-deployment:local
+  build:
+    context: .
+    target: production
+    additional_contexts:
+      lyra: ${LYRA_SOURCE:-../..}
+      smoke: ${SMOKE_PLUGIN_SOURCE:-../lyra-plugin}
+  volumes:
+    - lyra_data:/lyra_data
+    - ${LYRA_CONFIG_FILE:-./lyra.toml}:/lyra_data/config/lyra.toml:ro
+    - ${LYRA_SERVICE_ACCOUNT_FILE:-./secrets/service-account.json}:/lyra_data/secrets/service-account.json:ro
+  environment:
+    LYRA_POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD}
+    LYRA_AGENT_API_KEY: ${LYRA_AGENT_API_KEY}
+    LYRA_ADMIN_API_KEY: ${LYRA_ADMIN_API_KEY}
+  depends_on:
+    redis:
+      condition: service_started
+
+services:
+  api:
+    <<: *app
+    ports:
+      - "5219:5219"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5219/ready', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  interactive:
+    <<: *app
+    command: python -m lyra_app.worker_launcher interactive
+  batch:
+    <<: *app
+    command: python -m lyra_app.worker_launcher batch
+  redis:
+    image: redis:alpine
+
+volumes:
+  lyra_data:

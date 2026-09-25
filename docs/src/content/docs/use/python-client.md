@@ -208,6 +208,6 @@ workers = admin.workers.list()
 ```
 
 Use `AsyncLyraAdminClient` for the equivalent asynchronous interface. Both
-administrator clients expose `health`, `jobs`, `plugin_repos`, `catalog`,
+administrator clients expose `health`, `jobs`, `plugins`, `catalog`,
 `workers`, `queues`, and `routing`. Consumer and administrator credentials are
 accepted by their respective client types.

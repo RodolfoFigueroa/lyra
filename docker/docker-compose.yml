@@ -49,8 +49,6 @@ services:
     depends_on:
       lyra-redis:
         condition: service_started
-      lyra:
-        condition: service_healthy
 
   celery_worker_batch:
     image: ghcr.io/rodolfofigueroa/lyra:latest
@@ -63,8 +61,6 @@ services:
     depends_on:
       lyra-redis:
         condition: service_started
-      lyra:
-        condition: service_healthy
 
 
 networks:

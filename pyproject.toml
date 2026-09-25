@@ -12,7 +12,6 @@ dependencies = [
     "lyra-utils>=0.2.0",
     "jsonschema>=4.26.0",
     "mcp>=1,<2",
-    "filelock>=3.29.4",
     "psycopg[binary]>=3.3.2",
     "sqlalchemy>=2.0.51",
 ]

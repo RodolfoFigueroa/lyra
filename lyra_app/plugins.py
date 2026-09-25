@@ -1,158 +1,122 @@
-"""Capture plugin sources at startup and install private worker copies."""
+"""Read installed plugin metadata and manifests without importing plugin code."""
 
-import importlib
-import logging
-import shutil
-import site
-import subprocess  # ruff: ignore[suspicious-subprocess-import] -- invokes Git/uv
+from __future__ import annotations
+
 import sys
-import tempfile
-from collections.abc import Iterable
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from lyra.sdk.config import PluginRepoConfig
+from lyra.sdk.config import normalize_distribution_name
+from lyra.sdk.models.plugin import PluginManifest
 
-from lyra_app.plugin_runtime import copy_source
+if TYPE_CHECKING:
+    from lyra.sdk.config import InstalledPluginConfig, PluginsConfig
 
-logger = logging.getLogger(__name__)
 MANIFEST_FILENAME = "lyra.plugin.json"
-_DIRECTORY_IGNORE_PATTERNS = (
-    ".git",
-    "__pycache__",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    ".ty",
-    ".venv",
-    "build",
-    "dist",
-    "*.egg-info",
-    "*.pyc",
-)
-
-
-class PluginCaptureError(RuntimeError):
-    """A configured plugin source could not be captured."""
 
 
 @dataclass(frozen=True)
-class PluginLocation:
-    """Identify a captured repository or its private worker copy."""
+class InstalledPlugin:
+    """Pair a selected distribution with its validated manifest and routing."""
 
-    repo_id: str
-    path: Path
-
-
-def _run_git(*args: str, cwd: Path | None = None) -> str:
-    cmd = ["git"]
-    if cwd is not None:
-        cmd += ["-C", str(cwd)]
-    cmd += list(args)
-    return subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true]
-        cmd,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    distribution: str
+    manifest: PluginManifest
+    metric_queues: dict[str, str]
 
 
-def capture_plugin_source(repo: PluginRepoConfig, target: Path) -> str | None:
-    """Capture a source into a new destination owned by startup staging.
+def installed_version(distribution: str) -> str | None:
+    """Return installed distribution metadata without importing its modules."""
+    try:
+        return metadata.version(distribution)
+    except metadata.PackageNotFoundError:
+        return None
 
-    The caller owns staging cleanup if capture or subsequent validation fails.
+
+def installed_manifest_path(distribution: str) -> Path:
+    """Return the conventional manifest path within the current environment."""
+    return (
+        Path(sys.prefix)
+        / "share"
+        / "lyra"
+        / "plugins"
+        / normalize_distribution_name(distribution)
+        / MANIFEST_FILENAME
+    )
+
+
+def load_plugin_manifest(plugin: InstalledPluginConfig) -> PluginManifest:
+    """Read a manifest and verify its installed distribution identity.
 
     Returns:
-        The exact Git commit, or ``None`` for a directory source.
+        The validated manifest, without importing its factory.
 
     Raises:
-        PluginCaptureError: If the destination is unsafe or capture fails.
+        RuntimeError: If the package or manifest is missing or inconsistent.
     """
+    version = installed_version(plugin.distribution)
+    if version is None:
+        msg = f"Plugin distribution {plugin.distribution!r} is not installed."
+        raise RuntimeError(msg)
+    path = plugin.manifest_path or installed_manifest_path(plugin.distribution)
     try:
-        return _capture_source(repo, target)
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-        msg = f"Could not capture plugin source {repo.id!r}: {exc}"
-        raise PluginCaptureError(msg) from exc
-
-
-def _capture_source(repo: PluginRepoConfig, target: Path) -> str | None:
-    source = repo.parsed_source
-    if target.exists() or target.is_symlink():
-        msg = "Capture destination already exists."
-        raise ValueError(msg)
-    local_path = source.path
-    if local_path is not None:
-        if not local_path.exists():
-            msg = "Local plugin source does not exist."
-            raise ValueError(msg)
-        if not local_path.is_dir():
-            msg = "Local plugin source is not a directory."
-            raise ValueError(msg)
-        if target.resolve().is_relative_to(local_path.resolve()):
-            msg = "Plugin capture directory must not be inside the source directory."
-            raise ValueError(msg)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if source.kind == "directory" and local_path is not None:
-        shutil.copytree(
-            local_path,
-            target,
-            ignore=shutil.ignore_patterns(*_DIRECTORY_IGNORE_PATTERNS),
+        manifest = PluginManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        msg = f"Plugin manifest {path} is missing, unreadable, or invalid: {exc}"
+        raise RuntimeError(msg) from exc
+    if (
+        normalize_distribution_name(manifest.plugin.name) != plugin.distribution
+        or manifest.plugin.version != version
+    ):
+        msg = (
+            f"Plugin manifest {path} identity does not match installed distribution "
+            f"{plugin.distribution!r} version {version!r}."
         )
-        return None
-    with tempfile.TemporaryDirectory(dir=target.parent, prefix=".git-capture-") as root:
-        checkout = Path(root)
-        _run_git("init", str(checkout))
-        _run_git("remote", "add", "origin", source.git_url, cwd=checkout)
-        _run_git("fetch", "--depth=1", "origin", repo.ref or "HEAD", cwd=checkout)
-        revision = _run_git("rev-parse", "FETCH_HEAD", cwd=checkout)
-        _run_git("checkout", "--force", "--detach", revision, cwd=checkout)
-        copy_source(checkout, target)
-    return revision
+        raise RuntimeError(msg)
+    return manifest
 
 
-def _check_compatible(plugin_dir: Path) -> bool:
-    cmd = [
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        sys.executable,
-        "--dry-run",
-        str(plugin_dir),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # ruff:ignore[subprocess-without-shell-equals-true]
-    if result.returncode != 0:
-        logger.warning(
-            "Plugin %s failed compatibility check. Reason: %s.",
-            plugin_dir.name,
-            result.stderr,
-        )
-        return False
-    return True
+def load_installed_plugins(config: PluginsConfig) -> list[InstalledPlugin]:
+    """Load enabled manifests and resolve their queue assignments.
 
-
-def install_plugin(plugin_dir: Path) -> None:
-    """Install one compatible runner plugin editably into the current environment."""
-    logger.info("Installing plugin %s (editable).", plugin_dir.name)
-    subprocess.run(  # ruff:ignore[subprocess-without-shell-equals-true]
-        ["uv", "pip", "install", "--python", sys.executable, "-e", str(plugin_dir)],  # ruff:ignore[start-process-with-partial-path]
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    for site_dir in site.getsitepackages():
-        site.addsitedir(site_dir)
-    importlib.invalidate_caches()
-
-
-def install_runner_plugins(repos: Iterable[PluginLocation]) -> None:
-    """Compatibility-check and install each captured runner plugin.
+    Returns:
+        Validated installed plugins in configuration order.
 
     Raises:
-        RuntimeError: If a required plugin is incompatible.
+        ValueError: If distributions, metrics, or queue overrides conflict.
     """
-    for repo in repos:
-        if not _check_compatible(repo.path):
-            msg = f"Required plugin {repo.repo_id!r} is incompatible."
-            raise RuntimeError(msg)
-        install_plugin(repo.path)
+    plugins: list[InstalledPlugin] = []
+    distributions: set[str] = set()
+    metric_names: set[str] = set()
+    for plugin in config.installed:
+        if plugin.distribution in distributions:
+            msg = f"Duplicate plugin distribution: {plugin.distribution!r}"
+            raise ValueError(msg)
+        distributions.add(plugin.distribution)
+        if not plugin.enabled:
+            continue
+        manifest = load_plugin_manifest(plugin)
+        names = {metric.name for metric in manifest.metrics}
+        duplicates = metric_names & names
+        if duplicates:
+            msg = "Duplicate metric names in plugin manifests: " + ", ".join(
+                sorted(duplicates)
+            )
+            raise ValueError(msg)
+        unknown = set(plugin.routing) - names
+        if unknown:
+            msg = (
+                f"Plugin {plugin.distribution!r} has routing overrides "
+                "for missing metrics: " + ", ".join(sorted(unknown))
+            )
+            raise ValueError(msg)
+        queues = {
+            name: plugin.routing.get(name, config.default_queue) for name in names
+        }
+        if set(queues.values()) - set(config.allowed_queues):
+            msg = "Plugin routing queues must appear in plugins.allowed_queues"
+            raise ValueError(msg)
+        metric_names.update(names)
+        plugins.append(InstalledPlugin(plugin.distribution, manifest, queues))
+    return plugins

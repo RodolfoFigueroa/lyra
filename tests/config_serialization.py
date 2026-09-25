@@ -10,8 +10,6 @@ from lyra_app.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_EARTH_ENGINE_SERVICE_ACCOUNT_FILE,
     DEFAULT_MCP_MOUNT_PATH,
-    DEFAULT_PLUGIN_CATALOG_DIR,
-    DEFAULT_PLUGIN_RUNNER_BASE_DIR,
     AgentSubmissionLimitConfig,
     ApiConfig,
     DatabaseConfig,
@@ -167,26 +165,20 @@ def _append_plugins_section(lines: list[str], plugins: PluginsConfig) -> None:
     lines.append("[plugins]")
     _append_key(lines, "default_queue", plugins.default_queue)
     _append_key(lines, "allowed_queues", plugins.allowed_queues)
-    if plugins.catalog_dir != DEFAULT_PLUGIN_CATALOG_DIR:
-        _append_key(lines, "catalog_dir", plugins.catalog_dir)
-    if plugins.runner_base_dir != DEFAULT_PLUGIN_RUNNER_BASE_DIR:
-        _append_key(lines, "runner_base_dir", plugins.runner_base_dir)
     lines.append("")
-
-    for repo in plugins.repos:
+    for plugin in plugins.installed:
         lines.extend(
             [
-                "[[plugins.repos]]",
-                f"id = {_toml_string(repo.id)}",
-                f"source = {_toml_string(repo.source)}",
-                f"enabled = {str(repo.enabled).lower()}",
+                "[[plugins.installed]]",
+                f"distribution = {_toml_string(plugin.distribution)}",
+                f"enabled = {str(plugin.enabled).lower()}",
             ]
         )
-        if repo.ref is not None:
-            lines.append(f"ref = {_toml_string(repo.ref)}")
-        if repo.routing:
-            lines.append("[plugins.repos.routing]")
-            for metric, queue in repo.routing.items():
+        if plugin.manifest_path is not None:
+            lines.append(f"manifest_path = {_toml_string(plugin.manifest_path)}")
+        if plugin.routing:
+            lines.append("[plugins.installed.routing]")
+            for metric, queue in plugin.routing.items():
                 lines.append(f"{_toml_key(metric)} = {_toml_string(queue)}")
         lines.append("")
 
@@ -199,8 +191,6 @@ def _append_workers_section(
         lines.append(f"[workers.{_toml_key(worker_name)}]")
         _append_key(lines, "queues", worker.queues)
         _append_key(lines, "concurrency", worker.concurrency)
-        if worker.install_dir is not None:
-            _append_key(lines, "install_dir", worker.install_dir)
         if worker.temp_dir is not None:
             _append_key(lines, "temp_dir", worker.temp_dir)
         lines.append("")
@@ -212,7 +202,7 @@ def render_config_toml(config: LyraConfig) -> str:
     Returns:
         A deterministic TOML document ending in a newline.
     """
-    lines: list[str] = ["schema_version = 2", ""]
+    lines: list[str] = ["schema_version = 3", ""]
     _append_api_section(lines, config.api)
     _append_redis_section(lines, config.redis)
     _append_database_section(lines, config.database)

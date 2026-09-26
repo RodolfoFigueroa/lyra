@@ -9,6 +9,9 @@ A plugin is an installable Python package with one `PluginDefinition`, decorated
 metric functions, and a generated root `lyra.plugin.json`. Python definitions
 are authoritative; never edit the manifest directly.
 
+To adapt an existing workflow with a coding agent, use the portable skill described
+in [Agent-assisted authoring](../agent-assisted-authoring/).
+
 ## Start from the executable example
 
 The repository's `examples/lyra-plugin` package is used by this guide and by the
@@ -30,9 +33,9 @@ Its project metadata declares the SDK and the zero-argument factory workers load
 
 ## Declare a metric
 
-The decorator combines clean Python annotations with its structured `inputs`
-mapping to produce manifest inputs. The output declaration describes the
-successful result:
+The decorator infers ordinary inputs from the model annotated on `parameters`
+and spatial inputs from the handler's annotations. The output declaration
+describes the successful result:
 
 <CodeExample
   path="examples/lyra-plugin/smoke_plugin/metrics.py"

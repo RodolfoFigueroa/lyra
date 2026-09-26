@@ -13,6 +13,7 @@ the same change contract as code.
 | `packages/lyra_api/` | HTTP clients and the administrative CLI. |
 | `packages/lyra_utils/` | Optional geospatial, date, and Earth Engine helpers. |
 | `examples/lyra-plugin/` | Executable plugin used by the docs and integration tests. |
+| `skills/lyra-metric/` | Portable agent instructions and bundled references for adapting workflows into metrics. |
 | `tests/` | Unit, contract, route, client, worker, and documentation tests. |
 | `docs/` | Astro Starlight site and generated-reference tooling. |
 
@@ -86,6 +87,14 @@ editing generated Markdown or JSON.
 - Update SDK models, routes, clients, tests, and docs together when a public
   contract changes.
 - Keep one authoritative example or explanation and link to it elsewhere.
+- When SDK authoring contracts change, review `skills/lyra-metric/`, its documented
+  compatibility baseline, and the agent-assisted authoring guide in the same
+  change. Keep essential guidance usable outside this checkout. Review and rerun
+  the [skill evaluations](tests/fixtures/skill_workflows/scenarios/README.md)
+  for calculation preservation, plugin extension, missing
+  information, contract conflicts, and file outputs; check that ambiguous cases
+  produce questions before dependent implementation. Behavioral trials provide
+  evidence of compliance, not a mechanical guarantee.
 - Use Conventional Commit titles. Release Please versions the application,
   SDK, API client (including the CLI), and utilities independently.
 - Product release tags (`lyra-vX.Y.Z`) define stable documentation versions.

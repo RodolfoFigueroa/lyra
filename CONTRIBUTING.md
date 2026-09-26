@@ -87,9 +87,9 @@ editing generated Markdown or JSON.
 - Update SDK models, routes, clients, tests, and docs together when a public
   contract changes.
 - Keep one authoritative example or explanation and link to it elsewhere.
-- When SDK authoring contracts change, review `skills/lyra-metric/`, its documented
-  compatibility baseline, and the agent-assisted authoring guide in the same
-  change. Keep essential guidance usable outside this checkout. Review and rerun
+- When SDK authoring contracts change, review `skills/lyra-metric/`, its bundled
+  reference, compatibility helper and tests, documented contract revision, and
+  the agent-assisted authoring guide in the same change. Keep essential guidance usable outside this checkout. Review and rerun
   the [skill evaluations](tests/fixtures/skill_workflows/scenarios/README.md)
   for calculation preservation, plugin extension, missing
   information, contract conflicts, and file outputs; check that ambiguous cases

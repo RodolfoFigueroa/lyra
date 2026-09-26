@@ -24,19 +24,37 @@ lyra-metric/
   SKILL.md
   references/
     authoring.md
+  scripts/
+    __init__.py
+    check_compatibility.py
 ```
 
 Follow your coding agent's documented skill installation mechanism to install
-that directory. Keep the references alongside `SKILL.md`; installing only the
-instruction file leaves the bundled authoring guidance unavailable. The skill
-works from an external workflow or plugin repository without a Lyra checkout.
+that directory. Keep the references and scripts alongside `SKILL.md`; installing only the
+instruction file leaves the bundled guidance and compatibility check unavailable.
+The skill works from an external workflow or plugin repository without a Lyra checkout.
 
 The skill is versioned with this repository. Installed copies do not update
 automatically. Record the source revision and replace the complete directory
-when upgrading. This revision describes the current authoring contract and
-**manifest format 5**. The agent must inspect the installed spatial schemas
-and matching documentation, then ask about unresolved incompatibilities before
-adapting the workflow or changing versions.
+when upgrading. The bundled **lyra-authoring-1** reference teaches the public
+contract, including **manifest format 5**. From the target project, the agent runs:
+
+```sh
+uv run python <skill-directory>/scripts/check_compatibility.py
+```
+
+Replace `<skill-directory>` with the installed skill's directory. The helper uses
+the existing environment and reports its SDK version plus a concise compatibility
+result. Exit codes are 0 for passing checks, 1 for a contract mismatch, and 2 when
+the check cannot complete. It does not import the target plugin, execute metrics,
+write files, or connect to services. Version numbers do not determine acceptance.
+
+Agents use the reference and helper instead of routinely reading installed Lyra
+source or loading entire schemas. A specific unresolved error may justify targeted
+source inspection. Unresolved incompatibilities require clarification rather than
+automatic upgrades. Passing checks cover the tested baseline; actual adapter tests,
+manifest generation, metric inspection, and freshness checks remain required.
+The helper cannot verify application responsibilities or deployment readiness.
 
 ## Prepare the development environment
 

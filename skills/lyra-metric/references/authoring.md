@@ -1,8 +1,13 @@
 # Lyra authoring contract
 
-This reference covers the current authoring contract and **manifest format 5**.
-Inspect the installed spatial schemas and matching documentation to identify
-the target contract. Do not infer compatibility from version ordering.
+This reference defines **lyra-authoring-1**, the bundled authoring baseline,
+and **manifest format 5**. Use it to learn the public contract. Run the bundled
+compatibility helper in the target environment to check spatial and authoring
+behavior; its SDK version report is diagnostic, not a release allowlist.
+The baseline revision identifies this reference and its checks, not an SDK or
+application release. Passing checks do not certify every SDK behavior, scientific
+correctness, or deployment readiness. Earth Engine initialization below is an
+application responsibility and cannot be established by the SDK helper.
 This reference is bundled so an external workflow repository can be adapted
 without a Lyra checkout.
 

@@ -18,11 +18,20 @@ dependency declarations, and existing plugin factory. Determine whether the user
 wants a new plugin or a metric added to the existing one. Preserve existing
 registrations, package layout, build backend, and unrelated configuration.
 
-Identify the target SDK version from the project environment and dependency
-configuration. The bundled reference covers the current authoring contract and
-**manifest format 5**. Inspect the target's spatial schemas and matching
-documentation, not just its version number. Ask about unresolved incompatibilities;
-do not upgrade the SDK automatically.
+Use the bundled reference as the authoring contract. Before implementing, run
+`uv run python <skill-directory>/scripts/check_compatibility.py` from the target
+project, replacing `<skill-directory>` with this installed skill's directory.
+Execute the helper without reading its source into context. It reports the SDK
+version and checks the **lyra-authoring-1** baseline, including manifest format 5.
+A passing check permits authoring; it does not replace validation of the adapter.
+SDK versions are diagnostic information, not a release allowlist.
+
+On failure, use the concise diagnostic and relevant version-matched documentation
+to resolve the specific issue. Read a narrowly targeted SDK implementation only
+when a concrete error or contradiction remains unresolved. Do not routinely read
+installed Lyra source or dump complete schemas to learn the contract. Ask about
+unresolved incompatibilities; do not upgrade dependencies automatically. If the
+helper cannot run, report the blocked check and continue only independent work.
 
 Use the platform facts in the reference before asking the user: `location`
 contains Polygon/MultiPolygon features; `bounds` contains exactly one Polygon.

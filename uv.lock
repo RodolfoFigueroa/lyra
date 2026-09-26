@@ -1763,7 +1763,7 @@ wheels = [
 
 [[package]]
 name = "lyra-api"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "packages/lyra_api" }
 dependencies = [
     { name = "aiofiles" },
@@ -1784,7 +1784,7 @@ requires-dist = [
 
 [[package]]
 name = "lyra-app"
-version = "0.19.0"
+version = "0.20.0"
 source = { editable = "." }
 dependencies = [
     { name = "earthengine-api" },
@@ -1853,7 +1853,7 @@ dev = [
 
 [[package]]
 name = "lyra-sdk"
-version = "0.14.0"
+version = "0.15.0"
 source = { editable = "packages/lyra_sdk" }
 dependencies = [
     { name = "jsonschema" },
@@ -1870,7 +1870,7 @@ requires-dist = [
 
 [[package]]
 name = "lyra-utils"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "packages/lyra_utils" }
 dependencies = [
     { name = "earthengine-api" },

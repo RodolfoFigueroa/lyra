@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.11.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.10.0...lyra-api-v0.11.0) (2026-09-26)
+
+
+### Features
+
+* Add CLI ([93c6dc0](https://github.com/RodolfoFigueroa/lyra/commit/93c6dc024e656e47235148afc8f445bd0e80a21e))
+* Improve config handling and revamp doc generation ([0544f43](https://github.com/RodolfoFigueroa/lyra/commit/0544f43da68b4842399443bb59ba246bb2802f60))
+* Migrate to rq ([65fed23](https://github.com/RodolfoFigueroa/lyra/commit/65fed23b7ce80be2d258b97e3d0c5b573a39f731))
+* Refactor clients ([6b5540f](https://github.com/RodolfoFigueroa/lyra/commit/6b5540fb0759e020d5f76c26a89bac5d2cec70e8))
+* Replace streaming with polling ([a6f3b3e](https://github.com/RodolfoFigueroa/lyra/commit/a6f3b3e4cf58521fbc52d3efe77d556909d26598))
+* Simplify exports and doc generation ([c085cc9](https://github.com/RodolfoFigueroa/lyra/commit/c085cc9cd45a9fffed915e3248db14d5928368b5))
+* Simplify plugin loading ([0887d1d](https://github.com/RodolfoFigueroa/lyra/commit/0887d1d9a7c9c733da267efd7c992032ba5eb9e2))
+* Simplify plugin representation ([1621ead](https://github.com/RodolfoFigueroa/lyra/commit/1621eadc9744335a42d3333f543e058f2f4106e1))
+
+
+### Bug Fixes
+
+* Normalize client behavior ([c6a971a](https://github.com/RodolfoFigueroa/lyra/commit/c6a971ac768a149c861aece86106d5043e245af5))
+
 ## [0.10.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-api-v0.9.0...lyra-api-v0.10.0) (2026-07-21)
 
 

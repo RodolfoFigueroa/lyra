@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.15.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.14.0...lyra-sdk-v0.15.0) (2026-09-26)
+
+
+### Features
+
+* Improve config handling and revamp doc generation ([0544f43](https://github.com/RodolfoFigueroa/lyra/commit/0544f43da68b4842399443bb59ba246bb2802f60))
+* Migrate to rq ([65fed23](https://github.com/RodolfoFigueroa/lyra/commit/65fed23b7ce80be2d258b97e3d0c5b573a39f731))
+* Replace streaming with polling ([a6f3b3e](https://github.com/RodolfoFigueroa/lyra/commit/a6f3b3e4cf58521fbc52d3efe77d556909d26598))
+* Simplify exports and doc generation ([c085cc9](https://github.com/RodolfoFigueroa/lyra/commit/c085cc9cd45a9fffed915e3248db14d5928368b5))
+* Simplify plugin loading ([0887d1d](https://github.com/RodolfoFigueroa/lyra/commit/0887d1d9a7c9c733da267efd7c992032ba5eb9e2))
+* Simplify plugin parsing ([ae54705](https://github.com/RodolfoFigueroa/lyra/commit/ae5470562ee3995db38f0c9a77cbf42a837e9c42))
+* Simplify plugin representation ([1621ead](https://github.com/RodolfoFigueroa/lyra/commit/1621eadc9744335a42d3333f543e058f2f4106e1))
+
+
+### Bug Fixes
+
+* Add units and metadata guidance ([7d7b7e8](https://github.com/RodolfoFigueroa/lyra/commit/7d7b7e86335522fd1156e3ebf6137f0b8dfd65fa))
+* Clarify skill instructions. Narrow geometry types ([cb6c739](https://github.com/RodolfoFigueroa/lyra/commit/cb6c739d783e55319c370d61be0028b5c6091af7))
+* Remove redundant table expansion ([127f9b0](https://github.com/RodolfoFigueroa/lyra/commit/127f9b0dbd6e137fcf920de0eb094f68801247bb))
+
 ## [0.14.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-sdk-v0.13.1...lyra-sdk-v0.14.0) (2026-07-28)
 
 

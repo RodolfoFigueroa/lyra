@@ -21,7 +21,9 @@ def _feature(
     geometry_type: str = "Polygon",
 ) -> dict[str, Any]:
     coordinates: Any
-    if geometry_type == "MultiPolygon":
+    if geometry_type == "Point":
+        coordinates = [-99.2, 19.3]
+    elif geometry_type == "MultiPolygon":
         coordinates = [
             [
                 [
@@ -125,3 +127,18 @@ def test_bounds_geojson_schema_requires_one_non_multipolygon_feature() -> None:
         validate(invalid_multiple_features, schema)
     with pytest.raises(ValidationError):
         validate(invalid_multipolygon, schema)
+
+
+@pytest.mark.parametrize("kind", ["location", "bounds"])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_spatial_geojson_schema_rejects_points(kind: str, *, mixed: bool) -> None:
+    response = asyncio.run(list_data_types())
+    entries = response.location if kind == "location" else response.bounds
+    schema = _entry_by_data_type(entries, "geojson").wrapper_schema
+    features = [_feature("point", geometry_type="Point")]
+    if mixed:
+        features.append(_feature("polygon"))
+    with pytest.raises(ValidationError):
+        validate(
+            {"data_type": "geojson", "value": _feature_collection(features)}, schema
+        )

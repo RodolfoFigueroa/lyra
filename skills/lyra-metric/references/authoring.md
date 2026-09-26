@@ -1,9 +1,12 @@
 # Lyra authoring contract
 
-Verified against **lyra-sdk 0.14.0** and **manifest format 5**. This reference is
-bundled so an external workflow repository can be adapted without a Lyra checkout.
-For another SDK version, inspect that version's installed interfaces and
-documentation before proceeding. Do not infer compatibility from version ordering.
+This reference covers **manifest format 5** and the **polygon-only development
+contract after lyra-sdk 0.14.0**. Released 0.14.0 accepted Point features as well;
+the development checkout may still report 0.14.0 until release automation assigns
+a version. Inspect the installed spatial schemas and matching documentation to
+identify the actual contract. Do not infer compatibility from version ordering.
+This reference is bundled so an external workflow repository can be adapted
+without a Lyra checkout.
 
 ## Parameters and handlers
 
@@ -22,9 +25,11 @@ async handlers, and generators are rejected.
   unions, and nested models. Do not use aliases, `Any`, sets, tuples, datetimes,
   recursive models, default factories, custom serializers, computed fields, or
   custom schema overrides. Consult version-matched documentation for other types.
-- `location: LocationInput` receives resolved GeoJSON features, with string IDs
-  and a declared CRS. `bounds: BoundsInput` receives one resolved geometry. Every
-  metric needs at least one spatial argument; tables require `location`.
+- `location: LocationInput` receives one or more Polygon/MultiPolygon GeoJSON
+  features, with string IDs and a declared CRS. `bounds: BoundsInput` receives
+  exactly one Polygon feature. Neither accepts Point; bounds also exclude
+  MultiPolygon. Every metric needs at least one spatial argument; tables require
+  `location`. Bounds need not be rectangular.
 - Optional `context: RunContext` supplies a database client, logger, temporary
   directory, and `report_progress(...)`. Declare it only when needed. Spatial
   arguments cannot be nullable or defaulted.
@@ -33,8 +38,57 @@ async handlers, and generators are rejected.
 feature properties, order, and feature IDs as the GeoDataFrame index. It does not
 reproject or create workflow-specific attributes. Resolved administrative zones
 are not guaranteed to contain arbitrary attributes required by a calculation.
+Inputs are not universally EPSG:4326. Preserve reprojection already performed by
+the calculation; do not restrict the incoming CRS to its internal working CRS.
+The platform's region selection does not establish a dataset's geographic
+coverage or a metric's scientific applicability. Distinguish region size or
+administrative level from raster reduction resolution. Report undocumented
+applicability without claiming unlimited validity or inventing a restriction.
 
 Metric names match `^[a-z][a-z0-9_]*$` and cannot start with `lyra_`.
+
+## Earth Engine lifecycle
+
+The normal Lyra worker launcher initializes Earth Engine **before importing
+plugin factories**. Deployment configuration supplies `earth_engine.project` and
+`earth_engine.service_account_file`; Lyra reads the service-account credentials
+and calls `ee.Initialize` with that project. A plugin author does not need to
+choose a credential source or project ID for normal worker execution.
+
+Handlers use the already initialized `ee` environment. Do not call
+`ee.Authenticate` or `ee.Initialize` from a handler or factory, add credential or
+project parameters to a metric, or import application configuration from
+`lyra_app`. Access to a particular private asset is a separate deployment
+requirement; platform initialization does not guarantee asset permissions.
+
+Manifest generation imports plugins without starting Lyra. Importing `ee` is
+allowed, but do not construct initialization-dependent images, collections,
+reducers, or other objects at module scope or in the factory. Construct them
+during calculation execution. Avoid Earth Engine expressions as function defaults
+or parameter defaults, which execute during import.
+
+Direct Python calls, SDK helpers, and standalone scripts do not initialize Earth
+Engine. Offline tests should fake or mock the workflow's Earth Engine boundary;
+make authentication and initialization fail if called during import or manifest
+generation. An authorized live test or standalone script needs a separate setup
+harness using its configured environment. Ask about local credentials only when
+such a live execution is requested and the setup is unknown; ordinary plugin
+authoring and offline validation do not require that question.
+
+`lyra.utils.ee.reduce_ee_image_over_gdf` already reprojects a copy of the geometry
+to EPSG:4326 and passes its `scale` argument as reduction resolution in metres.
+Preserve an existing workflow's dataset, reducer, resolution, reprojection, and
+feature mapping. These choices are evidence from the calculation, not new
+platform defaults. Real computation may return unavailable values or require
+asset access; establish handling from the workflow or ask if a decision is needed.
+
+## Updating existing plugins
+
+Removing Point is a breaking spatial-contract change; manifest format remains 5.
+Regenerate manifests with the updated SDK and deploy matching plugin, API, and
+worker environments. Old manifests no longer match live definitions, and Point
+requests or previously queued Point jobs fail the new validation. Do not silently
+buffer or otherwise transform points into polygons to preserve acceptance.
 
 ## Example: a documented existing calculation
 

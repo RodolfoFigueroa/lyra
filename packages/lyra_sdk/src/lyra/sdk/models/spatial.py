@@ -74,17 +74,18 @@ class CVEGEOList(_SpatialReference):
 class GeoJSONLocation(_SpatialReference):
     """A GeoJSON feature collection accepted as a location."""
 
-    DATA_TYPE_DESCRIPTION: ClassVar[str] = "A GeoDataFrame in GeoJSON format."
+    DATA_TYPE_DESCRIPTION: ClassVar[str] = (
+        "A GeoDataFrame in GeoJSON format containing Polygon or MultiPolygon features."
+    )
     data_type: Literal["geojson"] = "geojson"
     value: geometry.GeoJSON
 
 
 class GeoJSONBounds(_SpatialReference):
-    """A single GeoJSON geometry accepted as analysis bounds."""
+    """A single GeoJSON polygon accepted as analysis bounds."""
 
     DATA_TYPE_DESCRIPTION: ClassVar[str] = (
-        "A GeoDataFrame in GeoJSON format containing a single geometry. "
-        "Does not support MultiPolygon or GeometryCollection."
+        "A GeoDataFrame in GeoJSON format containing exactly one Polygon feature."
     )
     data_type: Literal["geojson"] = "geojson"
     value: geometry.SingleGeoJSON

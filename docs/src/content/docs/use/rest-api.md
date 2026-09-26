@@ -37,10 +37,13 @@ Spatial fields are wrapper objects. Supported wrappers are published by
 ```
 
 ```json
-{"data_type":"geojson","value":{"type":"FeatureCollection","features":[{"type":"Feature","id":"site","geometry":{"type":"Point","coordinates":[-99.1,19.4]},"properties":{}}],"crs":{"type":"name","properties":{"name":"EPSG:4326"}}}}
+{"data_type":"geojson","value":{"type":"FeatureCollection","features":[{"type":"Feature","id":"area","geometry":{"type":"Polygon","coordinates":[[[-99.2,19.3],[-99.1,19.3],[-99.1,19.4],[-99.2,19.3]]]},"properties":{}}],"crs":{"type":"name","properties":{"name":"EPSG:4326"}}}}
 ```
 
 Database-backed wrappers are resolved to canonical GeoJSON before dispatch.
+Locations accept one or more Polygon/MultiPolygon features. Bounds accept exactly
+one Polygon feature. Neither accepts Point; bounds also reject MultiPolygon.
+Inputs carry their declared CRS and are not automatically reprojected to EPSG:4326.
 
 Ordinary inputs belong in `input.parameters`; spatial fields remain at the input
 root. For the configured example plugin:

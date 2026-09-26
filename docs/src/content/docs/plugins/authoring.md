@@ -78,14 +78,29 @@ argument defaults, async handlers, and generators are rejected.
 
 - `parameters` is a concrete Pydantic model. Omit this argument for a metric with
   no ordinary inputs. Put defaults on model fields, never on handler arguments.
-- `location: LocationInput` receives a resolved `GeoJSON` feature collection.
-- `bounds: BoundsInput` receives a resolved `SingleGeoJSON` geometry.
+- `location: LocationInput` receives a resolved `GeoJSON` feature collection of
+  one or more Polygon/MultiPolygon features.
+- `bounds: BoundsInput` receives a resolved `SingleGeoJSON` collection containing
+  exactly one Polygon feature; it need not be rectangular.
 - `context: RunContext` is optional. Declare it only when using platform services.
 
 Every metric needs at least one spatial argument. Table metrics require `location`;
 a metric may also declare `bounds`. Spatial arguments cannot be nullable or have
 defaults. Lyra owns their schemas and descriptions. Return annotations are optional;
 the explicit output declaration governs runtime validation.
+
+Neither spatial argument accepts Point features; bounds also exclude MultiPolygon.
+This is a breaking development change after lyra-sdk 0.14.0, which accepted points.
+Manifest format remains 5. Regenerate plugin manifests with the updated SDK and
+deploy matching API, worker, and plugin environments. Old manifests will not
+match updated live definitions. Point requests and previously queued Point jobs
+fail validation; Lyra does not convert them into polygons automatically.
+
+Both inputs carry their declared CRS. GeoDataFrame conversion preserves it rather
+than universally projecting to EPSG:4326. Keep reprojection required by the
+calculation, and distinguish a region's size from a raster's reduction resolution.
+Supported platform geometries do not establish dataset coverage or scientific
+applicability at every scale.
 
 Metric names must match `^[a-z][a-z0-9_]*$` and cannot start with `lyra_`.
 Parameter fields use normal Pydantic names without aliases.
@@ -247,6 +262,29 @@ supply `temp_dir`; for area derivations, supply `location_areas_m2`. Neither hel
 requires API, Redis, RQ, PostGIS, or Earth Engine connections.
 
 ## Runtime context
+
+### Earth Engine
+
+The normal worker launcher initializes Earth Engine before loading plugins.
+Deployment settings `earth_engine.project` and `earth_engine.service_account_file`
+provide the project and service-account credentials. Metrics use this initialized
+environment; handlers and factories should not authenticate, initialize Earth
+Engine, read application configuration, or expose credential/project parameters.
+Private asset permissions remain a deployment requirement.
+
+Importing a plugin and generating its manifest must work without Earth Engine
+initialization. Import `ee` normally, but create initialization-dependent images,
+collections, reducers, and expressions during calculation execution, not at module
+scope, in function defaults, or in the factory.
+
+Standalone scripts and direct SDK calls do not run worker initialization. Use
+mocks for offline tests and a separate setup harness for authorized live tests.
+The helper `lyra.utils.ee.reduce_ee_image_over_gdf` reprojects geometry to
+EPSG:4326; its `scale` argument is reduction resolution in metres. Preserve the
+workflow's existing dataset, reducer, and resolution rather than inventing new
+defaults.
+
+### Job services
 
 `RunContext` supplies database access, a logger, a job temporary directory
 and best-effort progress reporting.

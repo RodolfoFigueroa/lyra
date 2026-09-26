@@ -19,10 +19,19 @@ wants a new plugin or a metric added to the existing one. Preserve existing
 registrations, package layout, build backend, and unrelated configuration.
 
 Identify the target SDK version from the project environment and dependency
-configuration. The bundled reference is verified against **lyra-sdk 0.14.0,
-manifest format 5**. For another version, inspect its public interfaces and
-matching documentation before using this reference. Ask about unresolved
-incompatibilities; do not upgrade the SDK automatically.
+configuration. The bundled reference covers **manifest format 5** and the
+**polygon-only development contract after lyra-sdk 0.14.0**. Released 0.14.0
+also accepted points; development checkouts may still report that version before
+release automation runs. Inspect the target's spatial schemas and matching
+documentation, not just its version number. Ask about unresolved incompatibilities;
+do not upgrade the SDK automatically.
+
+Use the platform facts in the reference before asking the user: `location`
+contains Polygon/MultiPolygon features; `bounds` contains exactly one Polygon.
+Both carry a declared CRS. The normal Lyra worker initializes Earth Engine from
+deployment configuration before loading plugins. These are integration facts,
+not choices each metric author must make. A workflow's narrower requirements
+still need evidence.
 
 Trace ordinary parameters, spatial requirements, returned values, and external
 data or services through the implementation and tests. Establish which facts are
@@ -32,8 +41,10 @@ across regions and scales.
 
 ## Ask rather than guess
 
-Ask the user whenever missing or conflicting information could affect the
-calculation, its public contract, or interpretation of results. In particular:
+Ask the user when missing or conflicting information requires a decision that
+affects the calculation, its public contract, or interpretation of results.
+First consult the bundled platform contract and inspect workflow evidence.
+The following are subjects to investigate, not a questionnaire to ask verbatim:
 
 - Parameter meanings, defaults, valid ranges, and list semantics.
 - CRS and reprojection requirements, geometry types, required zone attributes,
@@ -41,6 +52,21 @@ calculation, its public contract, or interpretation of results. In particular:
 - Output meanings, units, column types, nullability, and the correspondence
   between returned rows and input features.
 - Required datasets, credentials, services, and intended handling of missing data.
+
+Do not ask whether ordinary Lyra workers provide Earth Engine authentication or
+whether the platform accepts point locations/bounds: the reference answers both.
+Keep existing reprojection to EPSG:4326 without asking the user to reconfirm code
+that already establishes it. Do not add a restriction requiring incoming geometry
+to already be EPSG:4326 when the workflow handles reprojection.
+
+Separate the size or administrative level of an input region from the raster
+resolution used in a calculation. Inspect the chosen datasets and any available
+matching documentation for actual limitations. Missing documentation of geographic
+coverage or valid region sizes does not by itself require a new restriction or
+block the adapter. State that applicability is undocumented or unverified; do not
+claim universal coverage or scientific validity at all scales. Ask if a concrete
+decision remains, such as choosing an unspecified reduction resolution or deciding
+how to handle regions without source data. Continue otherwise.
 
 Read available evidence first, but do not silently resolve contradictions between
 code, documentation, tests, and user requirements. Explain the conflict and ask.
@@ -82,6 +108,12 @@ fill missing results, relabel rows by position, or impose arbitrary output colum
    each adds and whether existing dependencies suffice. Do not presume packages
    are available from a public index: use the project's configured package source
    or ask for the intended source.
+   For Earth Engine workflows, use the runtime's initialized environment without
+   adding authentication, credential discovery, project-ID parameters, or imports
+   from `lyra_app`. Keep imports and factories usable without Earth Engine
+   initialization; create initialization-dependent objects during execution.
+   Preserve standalone initialization in a separate script or test harness when
+   needed, rather than invoking it from plugin imports or handlers.
 5. Generate `lyra.plugin.json` with `lyra-plugin build-manifest`; never author or
    patch its schema manually. Include installation metadata, but do not publish,
    deploy, commit, or install into a user's agent configuration as part of authoring

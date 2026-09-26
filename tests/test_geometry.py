@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.utils.geometry import calculate_feature_areas_m2
+from pydantic import ValidationError
 
 
 def _feature_collection(
@@ -86,24 +87,27 @@ def test_calculate_feature_areas_m2_rejects_unknown_source_crs() -> None:
 
 
 @pytest.mark.parametrize(
-    ("geometry", "match"),
+    ("geometry", "error_type", "match"),
     [
         (
             {"type": "Point", "coordinates": [-99.1, 19.4]},
-            "require polygon geometry",
+            ValidationError,
+            r"PolygonGeometry\.type",
         ),
         (
             {
                 "type": "Polygon",
                 "coordinates": [[[0, 0], [2, 2], [0, 2], [2, 0], [0, 0]]],
             },
+            ValueError,
             "require valid polygon geometry",
         ),
     ],
 )
 def test_calculate_feature_areas_m2_rejects_non_area_geometry(
     geometry: dict[str, Any],
+    error_type: type[ValueError],
     match: str,
 ) -> None:
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(error_type, match=match):
         calculate_feature_areas_m2(_feature_collection(geometry))

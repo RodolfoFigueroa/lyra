@@ -37,7 +37,12 @@ def location() -> GeoJSON:
                 {
                     "type": "Feature",
                     "id": name,
-                    "geometry": {"type": "Point", "coordinates": [-99.1, 19.4]},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [
+                            [[-99.2, 19.3], [-99.1, 19.3], [-99.1, 19.4], [-99.2, 19.3]]
+                        ],
+                    },
                     "properties": {},
                 }
                 for name in ["area_a", "area_b"]
@@ -81,7 +86,7 @@ def test_six_specimens_and_direct_calls(
         "bounded_features", frame, job_id="local", location=location
     )
     assert isinstance(result, TableJobResult)
-    assert result.data == [["Point"], ["Point"]]
+    assert result.data == [["Polygon"], ["Polygon"]]
 
 
 def test_file_specimen(

@@ -78,13 +78,10 @@
           },
           "Feature": {
             "additionalProperties": false,
-            "description": "GeoJSON feature that may contain point, polygon, or multi-polygon geometry.",
+            "description": "GeoJSON feature that contains polygon or multi-polygon geometry.",
             "properties": {
               "geometry": {
                 "anyOf": [
-                  {
-                    "$ref": "#/$defs/PointGeometry"
-                  },
                   {
                     "$ref": "#/$defs/PolygonGeometry"
                   },
@@ -132,7 +129,7 @@
                 "description": "Coordinate reference system for all features."
               },
               "features": {
-                "description": "One or more GeoJSON features.",
+                "description": "One or more polygon or multi-polygon GeoJSON features.",
                 "items": {
                   "$ref": "#/$defs/Feature"
                 },
@@ -230,32 +227,6 @@
               "coordinates"
             ],
             "title": "MultiPolygonGeometry",
-            "type": "object"
-          },
-          "PointGeometry": {
-            "additionalProperties": false,
-            "description": "GeoJSON point geometry.",
-            "properties": {
-              "coordinates": {
-                "description": "Point coordinate pair.",
-                "items": {
-                  "type": "number"
-                },
-                "title": "Coordinates",
-                "type": "array"
-              },
-              "type": {
-                "const": "Point",
-                "description": "GeoJSON geometry type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "coordinates"
-            ],
-            "title": "PointGeometry",
             "type": "object"
           },
           "PolygonGeometry": {
@@ -410,13 +381,10 @@
           },
           "Feature": {
             "additionalProperties": false,
-            "description": "GeoJSON feature that may contain point, polygon, or multi-polygon geometry.",
+            "description": "GeoJSON feature that contains polygon or multi-polygon geometry.",
             "properties": {
               "geometry": {
                 "anyOf": [
-                  {
-                    "$ref": "#/$defs/PointGeometry"
-                  },
                   {
                     "$ref": "#/$defs/PolygonGeometry"
                   },
@@ -464,7 +432,7 @@
                 "description": "Coordinate reference system for all features."
               },
               "features": {
-                "description": "One or more GeoJSON features.",
+                "description": "One or more polygon or multi-polygon GeoJSON features.",
                 "items": {
                   "$ref": "#/$defs/Feature"
                 },
@@ -578,32 +546,6 @@
               "value"
             ],
             "title": "Parameters",
-            "type": "object"
-          },
-          "PointGeometry": {
-            "additionalProperties": false,
-            "description": "GeoJSON point geometry.",
-            "properties": {
-              "coordinates": {
-                "description": "Point coordinate pair.",
-                "items": {
-                  "type": "number"
-                },
-                "title": "Coordinates",
-                "type": "array"
-              },
-              "type": {
-                "const": "Point",
-                "description": "GeoJSON geometry type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "coordinates"
-            ],
-            "title": "PointGeometry",
             "type": "object"
           },
           "PolygonGeometry": {
@@ -762,13 +704,10 @@
           },
           "Feature": {
             "additionalProperties": false,
-            "description": "GeoJSON feature that may contain point, polygon, or multi-polygon geometry.",
+            "description": "GeoJSON feature that contains polygon or multi-polygon geometry.",
             "properties": {
               "geometry": {
                 "anyOf": [
-                  {
-                    "$ref": "#/$defs/PointGeometry"
-                  },
                   {
                     "$ref": "#/$defs/PolygonGeometry"
                   },
@@ -816,7 +755,7 @@
                 "description": "Coordinate reference system for all features."
               },
               "features": {
-                "description": "One or more GeoJSON features.",
+                "description": "One or more polygon or multi-polygon GeoJSON features.",
                 "items": {
                   "$ref": "#/$defs/Feature"
                 },
@@ -930,32 +869,6 @@
               "value"
             ],
             "title": "Parameters",
-            "type": "object"
-          },
-          "PointGeometry": {
-            "additionalProperties": false,
-            "description": "GeoJSON point geometry.",
-            "properties": {
-              "coordinates": {
-                "description": "Point coordinate pair.",
-                "items": {
-                  "type": "number"
-                },
-                "title": "Coordinates",
-                "type": "array"
-              },
-              "type": {
-                "const": "Point",
-                "description": "GeoJSON geometry type.",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "coordinates"
-            ],
-            "title": "PointGeometry",
             "type": "object"
           },
           "PolygonGeometry": {

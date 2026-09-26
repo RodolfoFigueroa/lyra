@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import geopandas
 import pytest
 from lyra.sdk.models.plugin import SpatialInputKind
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 from sqlalchemy import Connection, create_engine
 
 from lyra_app import spatial_inputs
@@ -26,7 +26,9 @@ def test_spatial_resolution_uses_bound_converters_and_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     geometry = geopandas.GeoDataFrame(
-        geometry=[Point(1, 2)], index=["09002"], crs="EPSG:6372"
+        geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 0)])],
+        index=["09002"],
+        crs="EPSG:6372",
     )
     geojson = json.loads(geometry.to_json())
     value = {"geojson": geojson, "cvegeo_list": ["09002"], "met_zone_code": "09.01"}[
@@ -95,3 +97,37 @@ def test_spatial_resolution_uses_bound_converters_and_executor(
             },
         }
         assert resolution.row_identity.model_dump(exclude_none=True) == expected[source]
+
+
+@pytest.mark.parametrize("kind", ["location", "bounds"])
+@pytest.mark.parametrize("source", ["geojson", "cvegeo_list", "met_zone_code"])
+def test_spatial_resolution_rejects_points(
+    kind: SpatialInputKind,
+    source: Literal["geojson", "cvegeo_list", "met_zone_code"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    geometry = geopandas.GeoDataFrame(
+        geometry=[Point(1, 2)], index=["09002"], crs="EPSG:6372"
+    )
+    values = {
+        "geojson": json.loads(geometry.to_json()),
+        "cvegeo_list": ["09002"],
+        "met_zone_code": "09.01",
+    }
+    module = location if kind == "location" else bounds
+    prefix = "load_geometries" if kind == "location" else "load_bounds"
+    lookup = Mock(return_value=geometry)
+    monkeypatch.setattr(module, f"{prefix}_from_cvegeos", lookup)
+    monkeypatch.setattr(module, f"{prefix}_from_met_zone_code", lookup)
+    engine = create_engine("sqlite://")
+    try:
+        with pytest.raises(spatial_inputs.SpatialInputValidationError) as exc:
+            spatial_inputs.resolve_spatial_inputs(
+                {kind: {"data_type": source, "value": values[source]}},
+                {kind: kind},
+                converter_map=build_converter_map(engine),
+            )
+        assert all(error["loc"][0] == kind for error in exc.value.errors)
+        assert lookup.call_count == (0 if source == "geojson" else 1)
+    finally:
+        engine.dispose()

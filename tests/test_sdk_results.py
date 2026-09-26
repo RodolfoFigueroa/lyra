@@ -31,7 +31,10 @@ def location() -> GeoJSON:
                 {
                     "type": "Feature",
                     "id": "a",
-                    "geometry": {"type": "Point", "coordinates": [0, 0]},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]],
+                    },
                     "properties": {},
                 }
             ],

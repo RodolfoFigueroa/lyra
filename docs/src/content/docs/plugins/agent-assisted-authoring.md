@@ -33,10 +33,12 @@ works from an external workflow or plugin repository without a Lyra checkout.
 
 The skill is versioned with this repository. Installed copies do not update
 automatically. Record the source revision and replace the complete directory
-when upgrading. Its initial contract baseline is **lyra-sdk 0.14.0 and manifest
-format 5**. When targeting another SDK version, the agent must inspect that
-version's contracts and matching documentation, then ask about unresolved
-incompatibilities before adapting the workflow or changing versions.
+when upgrading. This revision describes **manifest format 5** and the
+**polygon-only development contract after lyra-sdk 0.14.0**. Released 0.14.0 also
+accepted points; a development checkout may still report that version before
+release automation runs. The agent must inspect the installed spatial schemas
+and matching documentation, then ask about unresolved incompatibilities before
+adapting the workflow or changing versions.
 
 ## Prepare the development environment
 
@@ -49,6 +51,13 @@ Local parameter preparation and result normalization do not require a running
 API, Redis, or PostGIS. The calculation itself may still require data, credentials,
 or services. Tell the agent about those requirements and the checks it can run.
 See the [authoring guide](../authoring/) for the SDK contracts and local helpers.
+
+Normal Lyra workers initialize Earth Engine before loading plugins, using
+`earth_engine.project` and `earth_engine.service_account_file` from deployment
+configuration. The skill explains this responsibility; the agent should not ask
+you to choose authentication ownership or add credential/project parameters to a
+metric. Standalone live tests require separate setup, while offline tests use
+mocks. Imports and factories must remain usable without initializing Earth Engine.
 
 ## Create a new plugin
 
@@ -78,10 +87,21 @@ regenerates the manifest. Existing registrations and behavior are retained.
 
 The skill requires the agent to use code, documentation, tests, and your answers
 as evidence. It must ask when a choice could change the calculation, its public
-contract, or the interpretation of results. This includes undocumented units,
-parameter constraints, CRS requirements, supported scales, and output-to-feature
-mapping. It must also ask when sources disagree or a workflow does not fit Lyra's
-contracts, such as producing parameter-dependent table columns.
+contract, or the interpretation of results. It first uses the bundled platform
+contract: locations contain Polygon/MultiPolygon features and bounds contain one
+Polygon, both with a declared CRS. It then inspects the workflow for parameter
+semantics, units, required properties, reprojection, datasets, resolution, and
+output-to-feature mapping. It must ask when a material decision remains, sources
+disagree, or a workflow does not fit Lyra's contracts, such as producing
+parameter-dependent table columns.
+
+Existing reprojection to EPSG:4326 does not need reconfirmation and does not mean
+incoming geometry must already use that CRS. Missing documentation about coverage
+or region sizes can be reported as an unverified limitation without blocking the
+adapter or asserting universal scientific validity. Choosing an unspecified
+raster reduction resolution or missing-data behavior still requires evidence or
+a user decision. The agent should ask targeted questions, not repeat a checklist
+of platform facts and hypothetical uncertainties.
 
 Dependent work stays pending until you answer. Silence does not authorize a
 guess. The agent may continue independent work and make routine internal naming

@@ -26,7 +26,10 @@ def test_launcher_initializes_and_runs_native_pool(
         monkeypatch.setattr(
             worker_launcher, name, lambda _config, name=name: calls.append(name)
         )
-    refresh = Mock()
+    refresh = Mock(
+        side_effect=lambda *_args, **_kwargs: calls.append("refresh_runner_registry")
+    )
+    pool.start.side_effect = lambda **_kwargs: calls.append("start_pool")
     monkeypatch.setattr(worker_launcher, "refresh_runner_registry", refresh)
     monkeypatch.setattr(worker_launcher, "WorkerPool", pool_factory)
     worker_launcher.launch_worker("interactive", config=config)
@@ -36,6 +39,8 @@ def test_launcher_initializes_and_runs_native_pool(
         "configure_redis",
         "probe_worker_database",
         "initialize_earth_engine",
+        "refresh_runner_registry",
+        "start_pool",
     ]
     refresh.assert_called_once_with("interactive", config=config)
     assert pool_factory.call_args.kwargs["num_workers"] == 5

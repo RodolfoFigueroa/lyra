@@ -45,22 +45,22 @@ class MultiPolygonGeometry(StrictBaseModel):
 
 
 class Feature(StrictBaseModel):
-    """GeoJSON feature that may contain point, polygon, or multi-polygon geometry."""
+    """GeoJSON feature that contains polygon or multi-polygon geometry."""
 
     id: str = Field(min_length=1, description="Stable feature identifier.")
     type: Literal["Feature"] = Field(description="GeoJSON feature type.")
-    geometry: PointGeometry | PolygonGeometry | MultiPolygonGeometry = Field(
+    geometry: PolygonGeometry | MultiPolygonGeometry = Field(
         description="Feature geometry.",
     )
     properties: dict[str, Any] = Field(description="Feature properties.")
 
 
 class FeatureNoMultiPolygon(StrictBaseModel):
-    """GeoJSON feature that excludes multi-polygon geometry."""
+    """GeoJSON feature containing polygon geometry."""
 
     id: str = Field(min_length=1, description="Stable feature identifier.")
     type: Literal["Feature"] = Field(description="GeoJSON feature type.")
-    geometry: PointGeometry | PolygonGeometry = Field(description="Feature geometry.")
+    geometry: PolygonGeometry = Field(description="Feature geometry.")
     properties: dict[str, Any] = Field(description="Feature properties.")
 
 
@@ -70,18 +70,18 @@ class GeoJSON(StrictBaseModel):
     type: Literal["FeatureCollection"] = Field(description="GeoJSON collection type.")
     features: list[Feature] = Field(
         min_length=1,
-        description="One or more GeoJSON features.",
+        description="One or more polygon or multi-polygon GeoJSON features.",
     )
     crs: CRS = Field(description="Coordinate reference system for all features.")
 
 
 class SingleGeoJSON(StrictBaseModel):
-    """GeoJSON FeatureCollection constrained to one non-multi-polygon feature."""
+    """GeoJSON FeatureCollection constrained to one polygon feature."""
 
     type: Literal["FeatureCollection"] = Field(description="GeoJSON collection type.")
     features: list[FeatureNoMultiPolygon] = Field(
         min_length=1,
         max_length=1,
-        description="Exactly one point or polygon feature.",
+        description="Exactly one polygon feature.",
     )
     crs: CRS = Field(description="Coordinate reference system for the feature.")

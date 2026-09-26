@@ -71,9 +71,10 @@ Separate the size or administrative level of an input region from the raster
 resolution used in a calculation. Inspect the chosen datasets and any available
 matching documentation for actual limitations. Missing documentation of geographic
 coverage or valid region sizes does not by itself require a new restriction or
-block the adapter. State that applicability is undocumented or unverified; do not
-claim universal coverage or scientific validity at all scales. Ask if a concrete
-decision remains, such as choosing an unspecified reduction resolution or deciding
+block the adapter or warrant a generic disclaimer in metric metadata. Do not
+claim universal coverage or scientific validity at all scales. Report incomplete
+validation in the handoff, and keep known consumer-relevant limitations in metadata.
+Ask if a concrete decision remains, such as choosing an unspecified reduction resolution or deciding
 how to handle regions without source data. Continue otherwise.
 
 Read available evidence first, but do not silently resolve contradictions between
@@ -111,9 +112,10 @@ fill missing results, relabel rows by position, or impose arbitrary output colum
    mapping, explain the mismatch and ask how to adapt it. File outputs must use
    the job temporary directory. Unsupported async or generator workflows need
    an agreed adaptation, not a silent algorithm rewrite.
-   Carry evidenced methodology into the metric, parameter, and column
-   descriptions so consumers can choose and interpret the metric without its
-   README. Follow the reference's [description guidance](references/authoring.md#descriptions-for-independent-consumers);
+   Include evidenced details in metric, parameter, and column descriptions only
+   when they help consumers select the metric, choose inputs, or interpret results
+   without its README. Methodology topics are possibilities, not required fields.
+   Follow the reference's [description guidance](references/authoring.md#descriptions-for-independent-consumers);
    source links supplement the explanation rather than replace it.
 3. Register the adapter in the plugin factory. For a new project, provide package
    metadata and manifest packaging configuration. For an existing project,
@@ -155,7 +157,9 @@ services; the underlying workflow may require them.
 Review the generated manifest and `lyra-plugin describe` without relying on the
 README. Can a consumer select the metric, supply meaningful inputs, and interpret
 its results and limitations? Compare the metadata with the workflow evidence;
-restore omitted consequential details and resolve contradictions before handoff.
+restore omitted consequential details, remove details that do not affect consumer
+decisions, and resolve contradictions before handoff. Keep implementation inventories
+and generic validation caveats out of descriptions.
 This is a semantic review, not a description-length check.
 
 If data, tools, or services are unavailable, report the exact blocked check and

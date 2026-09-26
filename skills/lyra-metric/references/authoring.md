@@ -44,58 +44,60 @@ Inputs are not universally EPSG:4326. Preserve reprojection already performed by
 the calculation; do not restrict the incoming CRS to its internal working CRS.
 The platform's region selection does not establish a dataset's geographic
 coverage or a metric's scientific applicability. Distinguish region size or
-administrative level from raster reduction resolution. Report undocumented
-applicability without claiming unlimited validity or inventing a restriction.
+administrative level from raster reduction resolution. Do not infer unlimited
+validity or invent restrictions from missing documentation. Report incomplete
+validation in the handoff rather than adding generic metadata caveats.
 
 Metric names match `^[a-z][a-z0-9_]*$` and cannot start with `lyra_`.
 
 ## Descriptions for independent consumers
 
-Treat manifest metadata as the consumer-facing explanation of a metric. Consumers
-such as MCP clients do not have the plugin README. Transfer relevant methodology
-from the workflow's documentation, implementation, tests, and user answers into
-the descriptions; keep claims traceable to that evidence.
+Describe what consumers need to understand about the metric. Include an evidenced
+detail only when it helps them select the metric, choose inputs, or interpret
+results. Consumers such as MCP clients do not have the plugin README, so essential
+interpretation must be self-contained. Keep claims grounded in the workflow's
+documentation, implementation, tests, and user answers.
 
-Start the metric description with a useful summary sentence identifying the
-quantity and operation. Follow it with proportionate detail about source datasets
-and versions when known, aggregation, consequential thresholds, temporal meaning,
-reduction resolution, missing-data behavior, and documented limitations. Include
-only applicable details: a property-based score need not have a raster resolution
-or external dataset. Distinguish computational resolution from scientific spatial
-validity, and measured quantities from proxies or estimates.
+Begin with a useful summary of the quantity and operation. Sources, aggregation,
+formulas, thresholds, temporal meaning, resolution, and limitations are possible
+content, not a checklist to complete. For each detail, ask what consumer decision
+or interpretation would change without it. There is no required paragraph count
+or minimum length.
 
-Distribute the explanation without unnecessary duplication:
+Keep overall meaning in the metric description, input choices and their effects
+in parameter descriptions, and individual output meanings and scales in column
+descriptions. Avoid repeating the same explanation across these fields. Explain
+established missing-value semantics when useful, rather than merely saying nulls
+remain null. Describe the temporal meaning of a result when known, rather than
+listing absent date filters or year-selection features.
 
-- Metric descriptions explain overall methodology, interpretation, and limitations.
-- Parameter descriptions explain choices, units or scales, temporal conventions,
-  and their effects on the calculation.
-- Column descriptions explain individual outputs, workflow-defined score scales,
-  and what zero or null means when relevant. `nullable=True` alone does not explain
-  why a result can be missing.
+Omit routine reprojection, internal band names, scaling and unit-conversion
+formulas, unused attributes, and error propagation unless they affect consumer
+decisions. Preserve actual input requirements. A formula defining a custom index
+can be essential even when a routine sensor conversion formula is not.
 
-Use readable sentences and paragraphs. Source identifiers and links support the
-explanation but do not replace essential interpretation. Leave repository setup,
-installation, and unrelated implementation details in repository documentation.
+Keep known coverage restrictions and consequential interpretation limits in
+metadata. For example, a first qualifying five-year epoch is not an exact date of
+urban development. Incomplete checks and the agent's validation status belong in
+the handoff; deployment access requirements belong in operational documentation.
+Do not turn missing documentation into generic warnings about unverified regional
+availability or scientifically valid polygon sizes, and do not imply universal
+validity. Ask about material ambiguity or conflicting evidence before finalizing
+dependent metadata; missing documentation alone does not require a question.
+
+Source links support the explanation but cannot replace essential interpretation.
 MCP catalog listings abbreviate descriptions; individual metric inspection exposes
-the complete metadata, so put the useful summary first. There is no required
-paragraph count or minimum length.
+the complete metadata, so put the useful summary first. Review the generated
+metadata without the README for both missing essential context and unnecessary
+detail. Do not inventory everything the implementation does or the agent checked.
 
-Do not invent methodology, scientific validity, or missing-data semantics to fill
-out a description. Ask about material ambiguity or conflicting evidence before
-finalizing dependent metadata. Undocumented applicability can be reported as
-unverified without inventing a restriction or automatically blocking authoring.
-Review the generated metadata without the README: it should support selecting the
-metric, supplying meaningful inputs, and interpreting the results.
-
-For example, the documented offline Earth Engine evaluation workflow supports:
-“Mean elevation per input polygon from the elevation band of USGS/SRTMGL1_003.
-The calculation reprojects polygons to EPSG:4326 and applies a spatial mean at a
-30-metre reduction resolution. Results are in metres; missing source pixels
-produce null results, never zero. Geographic applicability limits have not been
-established by this workflow.” Its output description can identify the nullable
-mean elevation and its missing-data meaning. These facts belong to that fixture;
-do not apply them to another workflow without evidence or interpret the offline
-test as live data validation.
+For example, the documented Earth Engine evaluation fixture supports:
+“Mean elevation per input polygon from the SRTM dataset (USGS/SRTMGL1_003).”
+Its column description can say: “Mean elevation in metres; null when source data
+are unavailable.” These facts belong to that fixture, not every Earth Engine
+workflow. Preserve its computational resolution and reprojection in the adapter
+without automatically describing those operations in consumer metadata. Report
+that validation used offline mocks in the handoff, not in the metric description.
 
 ## Earth Engine lifecycle
 
@@ -175,11 +177,8 @@ class Parameters(MetricParameters):
         "Compute a synthetic property-based score for each input zone.\n\n"
         "For categories selected by parameter_3, calculate base_value * "
         "parameter_1 + parameter_2; return zero for other categories. "
-        "Each zone must supply a finite numeric base_value and string category. "
-        "The workflow accepts EPSG:4326 polygons and multipolygons and uses "
-        "their properties, not geometric measurements or external datasets.\n\n"
-        "Return one finite, non-null score per input feature. This illustrative "
-        "score has no established real-world interpretation or calibrated scale."
+        "Inputs must be EPSG:4326 polygons or multipolygons with a finite numeric "
+        "base_value and string category property."
     ),
     output=TableOutput(
         columns=[
@@ -188,11 +187,8 @@ class Parameters(MetricParameters):
                 type="number",
                 unit=Unit.SCORE,
                 description=(
-                    "Synthetic score in workflow-defined score units: base_value * "
-                    "parameter_1 + parameter_2 for selected categories, otherwise "
-                    "zero. Zero is a computed result, not a missing-data marker; "
-                    "selected categories can also compute to zero. No calibrated "
-                    "range or real-world interpretation is established."
+                    "Synthetic score; zero can result from either the formula "
+                    "or an unselected category."
                 ),
                 nullable=False,
             )

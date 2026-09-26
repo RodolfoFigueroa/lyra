@@ -55,7 +55,8 @@ these scenarios against the polygon-only development contract.
   inputs accept points. The adapter preserves workflow reprojection and the
   30-metre reduction scale. It must not assume input CRS is EPSG:4326 or request
   confirmation of already evidenced reprojection. Undocumented geographic
-  applicability is reported without inventing coverage or blocking the adapter.
+  applicability does not generate generic metadata caveats or block the adapter.
+  Report incomplete validation in the handoff without inventing coverage claims.
   Expected output is nullable numeric `mean_elevation`, unit `m`, ordered by
   input feature IDs. Fakes return `124.5` and `None` for two polygon features in
   a projected CRS; expect `124.5` and null after normalization. Verify polygon
@@ -89,10 +90,13 @@ headings do not establish quality.
 - For the documented score workflow, expect the selection rule, multiply/add
   formula, required properties, zero behavior, and synthetic score interpretation.
   No external dataset, calibrated score range, or scientific meaning is supported.
-- For the documented Earth Engine fixture, expect its source and band, spatial
-  mean, 30-metre reduction, metre-valued output, null semantics, and unverified
-  geographic applicability. The metadata must not claim a validated minimum zone
-  size or live-service verification. Dataset facts must come from the fixture.
+- For the documented Earth Engine fixture, expect meaningful source identification,
+  spatial mean, metre-valued output, and established missing-value meaning. Routine
+  reprojection, internal band names, and reduction resolution need not appear
+  in metadata; preserve the calculation itself. Generic regional-availability
+  or polygon-size caveats and offline-validation disclaimers belong outside
+  consumer descriptions. Do not claim a validated minimum zone size or live
+  verification. Dataset facts must come from the fixture.
 - For ambiguous workflow meanings, metadata dependent on the answer stays pending.
   After the staged answer, it should incorporate that answer without adding
   unrelated claims or requiring the consumer to locate the conversation.
@@ -105,6 +109,12 @@ headings do not establish quality.
 
 Assess metric, parameter, and column descriptions together. Essential interpretation
 must be present in metadata rather than only in a link or README. Preserve concise
-opening summaries, and do not require irrelevant methodology fields for simple
-calculations. Record this review separately from transport-preservation tests:
-those tests cannot guarantee agent behavior or scientific completeness.
+opening summaries. Include a detail only if its absence changes selection, input
+choices, or interpretation; do not reward filling a methodology checklist.
+Retain known restrictions and meaningful limits (for example, an epoch estimate
+rather than an exact event date). Do not reward speculative warnings, inventories
+of unused functionality, or repetitive synthetic-score disclaimers. Verify actual
+input requirements and defining formulas remain clear. Keep validation status in
+the handoff and access requirements in operational documentation. Record this review
+separately from transport-preservation tests: those tests cannot guarantee agent
+behavior or scientific completeness.

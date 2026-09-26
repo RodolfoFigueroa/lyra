@@ -72,32 +72,38 @@ a GeoDataFrame. The underlying library does not need to accept Lyra objects.
 
 ## Describe the metric for consumers
 
-Manifest metadata must let a consumer select a metric, supply meaningful inputs,
-and interpret its results without reading the plugin README. Begin `description`
-with a useful summary sentence, then add methodological detail in proportion to
-the calculation: source datasets and versions when known, aggregation, thresholds,
-temporal interpretation, reduction resolution, missing-data behavior, and
-documented limitations. Distinguish estimates from direct measurements and raster
-reduction resolution from scientifically valid region sizes.
+Manifest metadata must let a consumer select a metric, choose meaningful inputs,
+and interpret results without reading the README. Begin with a useful summary.
+Include a detail only if it changes one of those decisions or interpretations.
+Sources, formulas, thresholds, temporal meaning, resolution, and limitations are
+possible content, not required categories.
 
-Keep overall methodology in the metric description, choices and their effects in
-parameter descriptions, and individual output meanings and score scales in column
-descriptions. Explain consequential zero and null meanings; a nullable declaration
-alone does not explain missing data. Source identifiers and links support this
-explanation but cannot replace it. Keep setup and installation instructions in the
-repository documentation.
+Keep overall meaning in the metric description, input choices and their effects
+in parameter descriptions, and individual output meanings and scales in column
+descriptions. Explain established missing-value meanings when useful, rather than
+saying nulls remain null. Describe temporal meaning when known instead of listing
+absent date filters. Source links support essential interpretation but cannot
+replace it. Avoid repeating the explanation across fields.
 
-Use evidence from the workflow, its documentation, tests, and author answers.
-Resolve material contradictions or ambiguity before finalizing the description.
-Report undocumented applicability as unverified without inventing restrictions or
-claims. There is no minimum description length or mandatory number of paragraphs;
-simple metrics can have short descriptions.
+Omit routine reprojection, internal band names, scaling formulas, unused
+attributes, and error propagation unless they affect consumer decisions. Preserve
+actual input requirements and formulas that define the indicator itself.
+
+Keep known coverage restrictions and consequential interpretation limits, such as
+an epoch estimate rather than an exact event date. Put incomplete validation and
+the agent's verification status in the handoff, and deployment access requirements
+in operational documentation. Missing documentation alone does not justify a
+restriction, a generic unverified-applicability disclaimer, or a blocking question.
+Do not infer universal validity either. Resolve material ambiguity or conflicting
+evidence before finalizing dependent metadata. There is no minimum length or
+mandatory number of paragraphs.
 
 MCP catalog listings abbreviate descriptions, while individual metric inspection
 returns the complete metadata. Put the summary first and retain necessary detail
 for inspection. Before handoff, review the generated manifest and
 `lyra-plugin describe` without the README and compare their explanations with the
-workflow evidence. The [agent-assisted authoring guide](../agent-assisted-authoring/)
+workflow evidence. Check for missing essential context and remove details that do
+not affect consumer decisions. The [agent-assisted authoring guide](../agent-assisted-authoring/)
 explains how the skill applies this review.
 
 ## Handler conventions

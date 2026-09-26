@@ -113,8 +113,9 @@ parameter-dependent table columns.
 
 Existing reprojection to EPSG:4326 does not need reconfirmation and does not mean
 incoming geometry must already use that CRS. Missing documentation about coverage
-or region sizes can be reported as an unverified limitation without blocking the
-adapter or asserting universal scientific validity. Choosing an unspecified
+or region sizes does not itself justify a restriction, generic metadata caveat,
+or blocking question. Incomplete validation belongs in the handoff; known
+consumer-relevant limitations belong in metadata. Do not infer universal validity. Choosing an unspecified
 raster reduction resolution or missing-data behavior still requires evidence or
 a user decision. The agent should ask targeted questions, not repeat a checklist
 of platform facts and hypothetical uncertainties.
@@ -124,17 +125,21 @@ guess. The agent may continue independent work and make routine internal naming
 or layout choices that do not affect behavior. Skill instructions guide behavior;
 they do not mechanically guarantee that an agent will comply.
 
-The agent also transfers evidenced methodology into the manifest's metric,
-parameter, and output descriptions. Consumers should be able to select the metric,
-supply meaningful inputs, and interpret its results without the README. The metric
-summary comes first, followed by relevant source, aggregation, temporal,
-resolution, missing-data, and limitation details. Parameter and column descriptions
-explain their own choices and meanings without repeating the entire methodology.
-Links supplement this explanation; they do not replace it.
+The agent includes evidenced details in metric, parameter, and output descriptions
+only when they help consumers select the metric, choose inputs, or interpret
+results without the README. Methodology topics are possibilities, not a checklist.
+Keep a useful opening summary, explain input choices and output meanings in their
+own fields, and avoid duplication. Links supplement essential interpretation.
+
+Routine implementation details, inventories of absent features, and generic
+validation caveats do not belong in descriptions. Preserve actual input
+requirements, indicator-defining formulas, and known interpretation limits.
+Deployment access requirements belong in operational documentation; the agent's
+verification status belongs in the handoff.
 
 The final review uses the generated manifest and `lyra-plugin describe`, compares
-them with workflow evidence, and checks for omitted consequential details or
-unsupported claims. MCP catalog listings remain brief while individual metric
+them with workflow evidence, and checks for omitted essential context, unnecessary
+detail, and unsupported claims. MCP catalog listings remain brief while individual metric
 inspection exposes the complete metadata. This review evaluates meaning rather
 than word count; automated validation cannot establish scientific completeness.
 See [description guidance](../authoring/#describe-the-metric-for-consumers).

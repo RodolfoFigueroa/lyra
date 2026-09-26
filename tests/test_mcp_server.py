@@ -1030,11 +1030,12 @@ def test_mcp_get_metric_returns_public_contract() -> None:
 def test_mcp_preserves_methodology_for_inspection_and_search() -> None:
     description = (
         "Count the observations supplied for each input polygon.\n\n"
-        "This synthetic example copies the required integer parameter value to "
-        "every feature, without spatial aggregation, external datasets, or "
-        "an inferred observation period. Zero is a valid count, not a marker "
-        "for missing data.\n\n"
-        "Calibration and scientific applicability have not been established."
+        "This synthetic example repeats the supplied integer count for every "
+        "input feature. The value parameter specifies the count, and the output "
+        "contains one row for each polygon, preserving feature identifiers. "
+        "Zero represents a count of zero.\n\n"
+        "Interpret each row independently: summing rows repeats the same "
+        "supplied count rather than measuring a combined total."
     )
     metric = _table_metric("observation_count", description)
     parameter_description = (
@@ -1079,11 +1080,11 @@ def test_mcp_preserves_methodology_for_inspection_and_search() -> None:
         ]
         == parameter_description
     )
-    assert "Calibration" not in compact
+    assert "independently" not in compact
     search = _tool_payload(
         client.post(
             "/",
-            json=_tool_call_payload("lyra_search_metrics", {"query": "calibration"}),
+            json=_tool_call_payload("lyra_search_metrics", {"query": "independently"}),
             headers=_mcp_headers(),
         )
     )

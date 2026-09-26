@@ -33,10 +33,8 @@ works from an external workflow or plugin repository without a Lyra checkout.
 
 The skill is versioned with this repository. Installed copies do not update
 automatically. Record the source revision and replace the complete directory
-when upgrading. This revision describes **manifest format 5** and the
-**polygon-only development contract after lyra-sdk 0.14.0**. Released 0.14.0 also
-accepted points; a development checkout may still report that version before
-release automation runs. The agent must inspect the installed spatial schemas
+when upgrading. This revision describes the current authoring contract and
+**manifest format 5**. The agent must inspect the installed spatial schemas
 and matching documentation, then ask about unresolved incompatibilities before
 adapting the workflow or changing versions.
 

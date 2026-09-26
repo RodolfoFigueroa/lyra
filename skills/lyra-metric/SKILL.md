@@ -19,10 +19,8 @@ wants a new plugin or a metric added to the existing one. Preserve existing
 registrations, package layout, build backend, and unrelated configuration.
 
 Identify the target SDK version from the project environment and dependency
-configuration. The bundled reference covers **manifest format 5** and the
-**polygon-only development contract after lyra-sdk 0.14.0**. Released 0.14.0
-also accepted points; development checkouts may still report that version before
-release automation runs. Inspect the target's spatial schemas and matching
+configuration. The bundled reference covers the current authoring contract and
+**manifest format 5**. Inspect the target's spatial schemas and matching
 documentation, not just its version number. Ask about unresolved incompatibilities;
 do not upgrade the SDK automatically.
 
@@ -53,8 +51,8 @@ The following are subjects to investigate, not a questionnaire to ask verbatim:
   between returned rows and input features.
 - Required datasets, credentials, services, and intended handling of missing data.
 
-Do not ask whether ordinary Lyra workers provide Earth Engine authentication or
-whether the platform accepts point locations/bounds: the reference answers both.
+Use the reference's spatial-input and Earth Engine initialization contracts
+without asking the user to reconfirm these platform facts.
 Keep existing reprojection to EPSG:4326 without asking the user to reconfirm code
 that already establishes it. Do not add a restriction requiring incoming geometry
 to already be EPSG:4326 when the workflow handles reprojection.

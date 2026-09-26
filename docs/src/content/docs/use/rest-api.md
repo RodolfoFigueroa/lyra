@@ -42,7 +42,7 @@ Spatial fields are wrapper objects. Supported wrappers are published by
 
 Database-backed wrappers are resolved to canonical GeoJSON before dispatch.
 Locations accept one or more Polygon/MultiPolygon features. Bounds accept exactly
-one Polygon feature. Neither accepts Point; bounds also reject MultiPolygon.
+one Polygon feature.
 Inputs carry their declared CRS and are not automatically reprojected to EPSG:4326.
 
 Ordinary inputs belong in `input.parameters`; spatial fields remain at the input

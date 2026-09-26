@@ -89,13 +89,6 @@ a metric may also declare `bounds`. Spatial arguments cannot be nullable or have
 defaults. Lyra owns their schemas and descriptions. Return annotations are optional;
 the explicit output declaration governs runtime validation.
 
-Neither spatial argument accepts Point features; bounds also exclude MultiPolygon.
-This is a breaking development change after lyra-sdk 0.14.0, which accepted points.
-Manifest format remains 5. Regenerate plugin manifests with the updated SDK and
-deploy matching API, worker, and plugin environments. Old manifests will not
-match updated live definitions. Point requests and previously queued Point jobs
-fail validation; Lyra does not convert them into polygons automatically.
-
 Both inputs carry their declared CRS. GeoDataFrame conversion preserves it rather
 than universally projecting to EPSG:4326. Keep reprojection required by the
 calculation, and distinguish a region's size from a raster's reduction resolution.
@@ -117,11 +110,11 @@ optional. Supported values are strings, booleans, integers, finite floats, null,
 homogeneous scalar `Literal` enums, lists, string-keyed dictionaries, unions, and
 nested models. Typed dictionaries are intentionally open mappings.
 
-Use ordinary lists with fixed output columns. There is no keyed batch protocol
-or request-dependent column template. Independent parameter sweeps can be separate
-jobs; a plugin may process a list internally and return its declared fixed columns.
+Use ordinary lists with fixed output columns. Independent parameter sweeps can be
+separate jobs; a plugin may process a list internally and return its declared
+fixed columns.
 
-The initial contract excludes `Any`, arbitrary classes, root/recursive/unresolved
+The parameter contract excludes `Any`, arbitrary classes, root/recursive/unresolved
 generic models, sets, tuples, bytes, datetimes, decimals, non-string dictionary
 keys, aliases, default factories, custom serializers, computed fields, and custom
 JSON Schema hooks or structural overrides. Registration errors identify the metric
@@ -200,7 +193,7 @@ Each column declares a scalar type, unit, description, and nullability. Integer
 columns reject floats and booleans. Nullable cells accept `None` and floating NaN
 as JSON null; infinity, pandas NA/NaT, and nested objects are rejected.
 
-Static `FractionOfLocationArea` derivations remain supported. Return source columns;
+Use static `FractionOfLocationArea` derivations for area ratios. Return source columns;
 Lyra appends derived ratios using API-calculated areas. Local normalization requires
 explicit area metadata and does not query a database.
 
@@ -210,10 +203,9 @@ are resolved against that directory. Missing files, paths outside it, escaping
 symlinks, and unsupported suffixes fail normalization. The example's
 `smoke_file_metric` demonstrates this workflow.
 
-Lyra attaches job IDs and constructs terminal transport models. A Series,
-dictionary, or job-bearing terminal model is not an accepted plugin return.
-API clients still receive `TableJobResult` or `FileJobResult`; those describe
-transported results, not what an adapter returns.
+Handlers return the native DataFrame or Path specified by their output declaration.
+Lyra attaches job IDs and constructs `TableJobResult` or `FileJobResult` for API
+clients.
 
 ## Register and test locally
 
@@ -312,8 +304,7 @@ uv run lyra-plugin check-manifest
 Commit the generated `lyra.plugin.json`; never edit it manually. Format 5 contains
 plugin identity, the factory, metric identity, a complete Draft 2020-12 request
 schema, spatial metadata, and static output declarations. Generation reads project
-metadata and the live factory. There is one manifest representation and no semantic
-input compilation in the API.
+metadata and the live factory.
 
 `describe` reads the canonical contract. `check-manifest` rejects a stale artifact.
 The API reads manifests without importing plugin code; worker startup checks that

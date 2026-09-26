@@ -1,5 +1,15 @@
 # Agent instructions
 
+## Authoring guidance
+
+Skills, bundled references, and plugin authoring guides must describe the current
+supported contract. When removing a capability, remove its author-facing prose
+and examples instead of adding historical comparisons, lists of retired features,
+or migration notes. State supported behavior directly. Include historical or
+migration guidance only when the user explicitly requests it; keep it separate
+from the instructions agents use to author plugins. Preserve necessary current
+validation rules and operational guidance.
+
 ## Verification scope
 
 Do not perform wheel or package-distribution smoke checks unless the user

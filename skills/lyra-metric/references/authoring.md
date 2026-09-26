@@ -1,10 +1,8 @@
 # Lyra authoring contract
 
-This reference covers **manifest format 5** and the **polygon-only development
-contract after lyra-sdk 0.14.0**. Released 0.14.0 accepted Point features as well;
-the development checkout may still report 0.14.0 until release automation assigns
-a version. Inspect the installed spatial schemas and matching documentation to
-identify the actual contract. Do not infer compatibility from version ordering.
+This reference covers the current authoring contract and **manifest format 5**.
+Inspect the installed spatial schemas and matching documentation to identify
+the target contract. Do not infer compatibility from version ordering.
 This reference is bundled so an external workflow repository can be adapted
 without a Lyra checkout.
 
@@ -27,9 +25,8 @@ async handlers, and generators are rejected.
   custom schema overrides. Consult version-matched documentation for other types.
 - `location: LocationInput` receives one or more Polygon/MultiPolygon GeoJSON
   features, with string IDs and a declared CRS. `bounds: BoundsInput` receives
-  exactly one Polygon feature. Neither accepts Point; bounds also exclude
-  MultiPolygon. Every metric needs at least one spatial argument; tables require
-  `location`. Bounds need not be rectangular.
+  exactly one Polygon feature. Every metric needs at least one spatial argument;
+  tables require `location`. Bounds need not be rectangular.
 - Optional `context: RunContext` supplies a database client, logger, temporary
   directory, and `report_progress(...)`. Declare it only when needed. Spatial
   arguments cannot be nullable or defaulted.
@@ -81,14 +78,6 @@ Preserve an existing workflow's dataset, reducer, resolution, reprojection, and
 feature mapping. These choices are evidence from the calculation, not new
 platform defaults. Real computation may return unavailable values or require
 asset access; establish handling from the workflow or ask if a decision is needed.
-
-## Updating existing plugins
-
-Removing Point is a breaking spatial-contract change; manifest format remains 5.
-Regenerate manifests with the updated SDK and deploy matching plugin, API, and
-worker environments. Old manifests no longer match live definitions, and Point
-requests or previously queued Point jobs fail the new validation. Do not silently
-buffer or otherwise transform points into polygons to preserve acceptance.
 
 ## Example: a documented existing calculation
 
@@ -184,7 +173,7 @@ For `FileOutput(media_type=..., extensions=[...])`, return a `pathlib.Path` to a
 existing file beneath `context.temp_dir`. Relative paths resolve beneath that
 directory. Escaping paths or symlinks and undeclared suffixes are rejected. Preserve
 the original file contents and format, adapting its output destination as needed.
-Do not return a Series, dictionary, or transport/job result model from a handler.
+Handlers return the native DataFrame or Path specified by their output declaration.
 
 ## Package and generate
 

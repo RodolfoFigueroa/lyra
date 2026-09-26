@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.20.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.19.0...lyra-v0.20.0) (2026-09-26)
+
+
+### Features
+
+* Add agent skill ([d035f27](https://github.com/RodolfoFigueroa/lyra/commit/d035f2738493c3c9ddd7c8e044d96dca1d7a95aa))
+* Add CLI ([93c6dc0](https://github.com/RodolfoFigueroa/lyra/commit/93c6dc024e656e47235148afc8f445bd0e80a21e))
+* Cleanup route dependencies ([994d705](https://github.com/RodolfoFigueroa/lyra/commit/994d7055c11772905e7fbc176875d9314f0edb82))
+* Improve config handling and revamp doc generation ([0544f43](https://github.com/RodolfoFigueroa/lyra/commit/0544f43da68b4842399443bb59ba246bb2802f60))
+* Migrate to rq ([65fed23](https://github.com/RodolfoFigueroa/lyra/commit/65fed23b7ce80be2d258b97e3d0c5b573a39f731))
+* Refactor clients ([6b5540f](https://github.com/RodolfoFigueroa/lyra/commit/6b5540fb0759e020d5f76c26a89bac5d2cec70e8))
+* Remove TUI ([42c5f49](https://github.com/RodolfoFigueroa/lyra/commit/42c5f49cad7e83fb6009e40d8fea5ce276ef0abb))
+* Replace streaming with polling ([a6f3b3e](https://github.com/RodolfoFigueroa/lyra/commit/a6f3b3e4cf58521fbc52d3efe77d556909d26598))
+* Simplify exports and doc generation ([c085cc9](https://github.com/RodolfoFigueroa/lyra/commit/c085cc9cd45a9fffed915e3248db14d5928368b5))
+* Simplify plugin loading ([0887d1d](https://github.com/RodolfoFigueroa/lyra/commit/0887d1d9a7c9c733da267efd7c992032ba5eb9e2))
+* Simplify plugin parsing ([ae54705](https://github.com/RodolfoFigueroa/lyra/commit/ae5470562ee3995db38f0c9a77cbf42a837e9c42))
+* Simplify plugin representation ([1621ead](https://github.com/RodolfoFigueroa/lyra/commit/1621eadc9744335a42d3333f543e058f2f4106e1))
+* Update MCP contracts ([f484f87](https://github.com/RodolfoFigueroa/lyra/commit/f484f8736309591126849e83843fc024c1fe9d4e))
+
+
+### Bug Fixes
+
+* Add units and metadata guidance ([7d7b7e8](https://github.com/RodolfoFigueroa/lyra/commit/7d7b7e86335522fd1156e3ebf6137f0b8dfd65fa))
+* Clarify skill instructions. Narrow geometry types ([cb6c739](https://github.com/RodolfoFigueroa/lyra/commit/cb6c739d783e55319c370d61be0028b5c6091af7))
+* Fix blocking release-please PR ([866ac4f](https://github.com/RodolfoFigueroa/lyra/commit/866ac4fd74f4ea45b9afbaeb7952eeb63c832a47))
+* Fix some failing tests ([f5c16ce](https://github.com/RodolfoFigueroa/lyra/commit/f5c16ce26b1cdb185be697c12c910df04b88d8ee))
+* Fix stale imports ([f2f557b](https://github.com/RodolfoFigueroa/lyra/commit/f2f557b1e4e27e65c7c0f2c8df0e9de722836255))
+* Narrow skill requirements ([dfe79b5](https://github.com/RodolfoFigueroa/lyra/commit/dfe79b579b7b06e4e7a2ec39c021674d54933fa4))
+* Normalize client behavior ([c6a971a](https://github.com/RodolfoFigueroa/lyra/commit/c6a971ac768a149c861aece86106d5043e245af5))
+* Remove historical references from skill definitions ([8bc744a](https://github.com/RodolfoFigueroa/lyra/commit/8bc744a4dbe99600382164d2e685c0f5af65008e))
+* Remove redundant table expansion ([127f9b0](https://github.com/RodolfoFigueroa/lyra/commit/127f9b0dbd6e137fcf920de0eb094f68801247bb))
+* Remove some stale code and tests ([bdd2c0f](https://github.com/RodolfoFigueroa/lyra/commit/bdd2c0f095b515284b3cc97e3422f057a39734af))
+* Simplify utility reducer ([daa60c6](https://github.com/RodolfoFigueroa/lyra/commit/daa60c6f8ef3bb556c3a22dc9dabbc72806f2135))
+
 ## [0.19.0](https://github.com/RodolfoFigueroa/lyra/compare/lyra-v0.18.1...lyra-v0.19.0) (2026-07-28)
 
 

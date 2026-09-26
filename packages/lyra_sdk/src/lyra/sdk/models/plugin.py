@@ -6,6 +6,7 @@ from typing import Annotated, Literal, Self
 from lyra.sdk.models.strict import StrictBaseModel
 from lyra.sdk.schema import check_request_schema
 from lyra.sdk.types import JsonObject
+from lyra.sdk.units import Unit
 from pydantic import Field, field_validator, model_validator
 
 SpatialInputKind = Literal["location", "bounds"]
@@ -51,7 +52,11 @@ class TableColumn(StrictBaseModel):
 
     name: str = Field(min_length=1)
     type: OutputColumnType
-    unit: str = Field(min_length=1)
+    unit: Unit | None = Field(
+        description=(
+            "Canonical output unit; explicit null means not applicable, not unknown."
+        )
+    )
     description: str = Field(min_length=1)
     nullable: bool = False
     derivations: list[FractionOfLocationArea] = Field(
@@ -71,7 +76,7 @@ class TableColumn(StrictBaseModel):
             ValueError: If the source has the wrong unit or type.
         """
         if self.derivations and (
-            self.type not in {"integer", "number"} or self.unit != "m2"
+            self.type not in {"integer", "number"} or self.unit != Unit.SQUARE_METRE
         ):
             msg = "Area fractions require a numeric source column with unit 'm2'."
             raise ValueError(msg)
@@ -114,7 +119,7 @@ def effective_table_columns(output: TableOutput) -> list[TableColumn]:
             TableColumn(
                 name=item.name,
                 type="number",
-                unit="ratio",
+                unit=Unit.RATIO,
                 description=item.description,
                 nullable=source.nullable,
             )

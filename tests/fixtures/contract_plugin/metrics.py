@@ -10,6 +10,7 @@ from lyra.sdk import (
     RunContext,
     TableColumn,
     TableOutput,
+    Unit,
     metric,
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -32,7 +33,7 @@ CAPACITY_OUTPUT = TableOutput(
         TableColumn(
             name="capacity",
             type="integer",
-            unit="units",
+            unit=Unit.COUNT,
             description="Capacity of the selected feature.",
         )
     ]
@@ -95,7 +96,7 @@ class SelectionParameters(MetricParameters):
             TableColumn(
                 name="selected_count",
                 type="integer",
-                unit="codes",
+                unit=Unit.COUNT,
                 description="Number of selected codes passing the threshold.",
             )
         ]
@@ -121,7 +122,7 @@ def selection_size(
             TableColumn(
                 name="bounds_type",
                 type="string",
-                unit="geometry_type",
+                unit=None,
                 description="Geometry type of the supplied bounding feature.",
             )
         ]
@@ -168,7 +169,7 @@ class IntervalParameters(MetricParameters):
             TableColumn(
                 name="width",
                 type="integer",
-                unit="units",
+                unit=Unit.DIMENSIONLESS,
                 description="Difference between the upper and lower boundary.",
             )
         ]

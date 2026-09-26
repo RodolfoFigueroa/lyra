@@ -14,6 +14,7 @@ from lyra.sdk import (
     PluginDefinition,
     TableColumn,
     TableOutput,
+    Unit,
     metric,
 )
 from lyra.sdk.models.job import TableJobResult
@@ -53,7 +54,11 @@ def definition(output: TableOutput | FileOutput) -> PluginDefinition:
 
 def column(name: str = "value", *, nullable: bool = False) -> TableColumn:
     return TableColumn(
-        name=name, type="integer", description="Value", unit="count", nullable=nullable
+        name=name,
+        type="integer",
+        description="Value",
+        unit=Unit.COUNT,
+        nullable=nullable,
     )
 
 
@@ -97,7 +102,7 @@ def test_mixed_columns_preserve_types(location: GeoJSON) -> None:
         columns=[
             column(),
             TableColumn(
-                name="fraction", type="number", description="Fraction", unit="ratio"
+                name="fraction", type="number", description="Fraction", unit=Unit.RATIO
             ),
         ]
     )
@@ -140,7 +145,7 @@ def area_plugin() -> PluginDefinition:
                 TableColumn(
                     name="area",
                     type="number",
-                    unit="m2",
+                    unit=Unit.SQUARE_METRE,
                     description="Area",
                     nullable=True,
                     derivations=[

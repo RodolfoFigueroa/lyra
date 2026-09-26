@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import re
 import shutil
 import sys
@@ -13,7 +14,7 @@ import pytest
 from lyra.sdk import MetricInputError, MetricResultError, PluginDefinition, RunContext
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.job import FileJobResult, TableJobResult
-from lyra.sdk.plugin_cli import build_manifest, check_manifest
+from lyra.sdk.plugin_cli import build_manifest, check_manifest, render_description
 from lyra.utils.geometry import convert_geojson_to_gdf
 from ruamel.yaml import YAML
 
@@ -138,6 +139,38 @@ def test_reference_rejects_result_contract_drift(
         result = result.rename(columns={"score": "unknown"})
     with pytest.raises(MetricResultError):
         plugin.normalize_result("zone_score", result, job_id="trial", location=location)
+
+
+def test_reference_metadata_survives_manifest_and_inspection(
+    adapted: tuple[ModuleType, Path],
+) -> None:
+    module, project = adapted
+    description = module.create_plugin().describe("zone_score")
+    assert "\n\n" in description.description
+    generated = json.loads(build_manifest(project).read_text(encoding="utf-8"))
+    inspected = json.loads(render_description(project, "zone_score", json_output=True))
+    assert generated["metrics"][0] == description.model_dump(
+        mode="json", exclude={"handler", "signature"}, exclude_unset=True
+    )
+    assert inspected["metrics"][0] == description.model_dump(
+        mode="json", exclude_unset=True
+    )
+    parameter_schema = description.request_schema["properties"]["parameters"]
+    while "$ref" in parameter_schema:
+        reference = parameter_schema["$ref"]
+        assert reference.startswith("#/")
+        parameter_schema = description.request_schema
+        for key in reference[2:].split("/"):
+            parameter_schema = parameter_schema[
+                key.replace("~1", "/").replace("~0", "~")
+            ]
+    for name, field in module.Parameters.model_fields.items():
+        assert parameter_schema["properties"][name]["description"] == field.description
+    assert (
+        generated["metrics"][0]["output"]["columns"][0]["description"]
+        == description.output.columns[0].description
+    )
+    assert description.description in render_description(project, "zone_score")
 
 
 def test_reference_manifest_generation_and_drift(

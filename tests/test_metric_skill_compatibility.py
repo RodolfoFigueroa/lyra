@@ -205,3 +205,15 @@ def test_copied_skill_without_checkout_or_services(
     assert result.value.code == 0
     assert "PASS:" in capsys.readouterr().out
     assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == before
+
+
+def test_unit_contract_mismatch(
+    checker: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    schema = sdk.TableColumn.model_json_schema()
+    schema["required"].remove("unit")
+    monkeypatch.setattr(sdk.TableColumn, "model_json_schema", lambda: schema)
+    assert checker.main() == 1
+    assert "units: expected a required unit field" in capsys.readouterr().out

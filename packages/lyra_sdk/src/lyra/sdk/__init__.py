@@ -16,3 +16,4 @@ from lyra.sdk.plugin import LocationInput as LocationInput
 from lyra.sdk.plugin import MetricDescription as MetricDescription
 from lyra.sdk.plugin import PluginDefinition as PluginDefinition
 from lyra.sdk.plugin import metric as metric
+from lyra.sdk.units import Unit as Unit

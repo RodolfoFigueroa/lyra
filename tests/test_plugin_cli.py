@@ -40,7 +40,7 @@ factory = "example_plugin:create_plugin"
     (project / "example_plugin.py").write_text(
         """
 from pydantic import Field
-from lyra.sdk import MetricParameters, LocationInput, PluginDefinition, metric
+from lyra.sdk import MetricParameters, LocationInput, PluginDefinition, Unit, metric
 from lyra.sdk.models.plugin import TableColumn, TableOutput
 
 class Parameters(MetricParameters):
@@ -54,7 +54,7 @@ class Parameters(MetricParameters):
         columns=[TableColumn(
             name="value",
             type="integer",
-            unit="count",
+            unit=Unit.COUNT,
             description="Example value.",
         )],
     ),
@@ -293,3 +293,15 @@ def test_describe_cli_reports_unknown_metrics(
 
     assert main(["describe", "missing", "--project", str(tmp_path)]) == 2
     assert "available metrics: example" in capsys.readouterr().err
+
+
+def test_manifest_generation_preserves_explicit_null_unit(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    source = tmp_path / "example_plugin.py"
+    source.write_text(source.read_text().replace("unit=Unit.COUNT", "unit=None"))
+    sys.modules.pop("example_plugin", None)
+    path = build_manifest(tmp_path)
+    manifest = json.loads(path.read_text())
+    assert manifest["metrics"][0]["output"]["columns"][0]["unit"] is None
+    assert check_manifest(tmp_path) == (True, "")
+    sys.modules.pop("example_plugin", None)

@@ -455,7 +455,7 @@ def _metric_response() -> dict[str, Any]:
                 {
                     "name": "job_accessibility",
                     "type": "number",
-                    "unit": "jobs",
+                    "unit": "count",
                     "description": "Job accessibility.",
                     "nullable": False,
                 }
@@ -911,8 +911,10 @@ def test_result_ref_parser_accepts_refs_and_raw_job_ids() -> None:
         parse_result_ref("https://example.test/results/job-1")
 
 
+@pytest.mark.parametrize("unit", ["count", None])
 def test_sync_client_fetches_result_descriptor_from_ref(
     monkeypatch: pytest.MonkeyPatch,
+    unit: str | None,
 ) -> None:
     seen: list[str] = []
 
@@ -923,7 +925,9 @@ def test_sync_client_fetches_result_descriptor_from_ref(
     ) -> FakeSyncResponse:
         seen.append(f"{method} {url}")
         assert options["headers"] == {"Authorization": "Bearer agent-secret"}
-        return FakeSyncResponse(payload=_result_descriptor_response())
+        payload = _result_descriptor_response()
+        payload["table"]["column_contracts"][0]["unit"] = unit
+        return FakeSyncResponse(payload=payload)
 
     monkeypatch.setattr("lyra.api.client.sync.requests.request", request)
 
@@ -937,7 +941,7 @@ def test_sync_client_fetches_result_descriptor_from_ref(
     assert descriptor.result_ref == "lyra://results/job-1"
     assert descriptor.table is not None
     assert descriptor.table.columns == ["value"]
-    assert descriptor.table.column_contracts[0].unit == "count"
+    assert descriptor.table.column_contracts[0].unit == unit
     assert descriptor.provenance is not None
     assert descriptor.provenance.plugin.version == "1.0.0"
     assert descriptor.preview.rows == [{"_result_index": "area-1", "value": 6}]

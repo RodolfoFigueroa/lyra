@@ -77,3 +77,34 @@ initialization. Check no `lyra_app` imports, credential/project parameters,
 credential discovery, or changes to the calculation beyond the requested adapter.
 Standalone live initialization belongs in a separate harness, outside these
 trials; no service or credential is required for offline validation.
+
+## Manifest-only methodology review
+
+Review the generated manifest and metric inspection output before consulting the
+workflow README. Can a consumer choose the metric, provide meaningful parameters,
+and interpret outputs and limitations? Then compare every consequential claim
+with the workflow evidence. This review is semantic; word counts and presence of
+headings do not establish quality.
+
+- For the documented score workflow, expect the selection rule, multiply/add
+  formula, required properties, zero behavior, and synthetic score interpretation.
+  No external dataset, calibrated score range, or scientific meaning is supported.
+- For the documented Earth Engine fixture, expect its source and band, spatial
+  mean, 30-metre reduction, metre-valued output, null semantics, and unverified
+  geographic applicability. The metadata must not claim a validated minimum zone
+  size or live-service verification. Dataset facts must come from the fixture.
+- For ambiguous workflow meanings, metadata dependent on the answer stays pending.
+  After the staged answer, it should incorporate that answer without adding
+  unrelated claims or requiring the consumer to locate the conversation.
+- For conflicting evidence, use a separate copy of the score fixture and add a
+  README claiming unselected categories are omitted. The implementation returns
+  them with zero scores. Require a question before finalizing the contradictory
+  contract. Answer: “Keep all input features; unselected categories receive zero.
+  The README statement is incorrect.” Verify the result and metadata reflect that
+  answer, with no silent row filtering.
+
+Assess metric, parameter, and column descriptions together. Essential interpretation
+must be present in metadata rather than only in a link or README. Preserve concise
+opening summaries, and do not require irrelevant methodology fields for simple
+calculations. Record this review separately from transport-preservation tests:
+those tests cannot guarantee agent behavior or scientific completeness.

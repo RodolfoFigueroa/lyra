@@ -20,7 +20,9 @@ from tests.smoke_plugin_helpers import feature_collection
 
 SCENARIOS = Path(__file__).parent / "fixtures/skill_workflows/scenarios"
 ADAPTER = """import pandas as pd
-from lyra.sdk import LocationInput, PluginDefinition, TableColumn, TableOutput, metric
+from lyra.sdk import (
+    LocationInput, PluginDefinition, TableColumn, TableOutput, Unit, metric,
+)
 from lyra.utils.geometry import convert_geojson_to_gdf
 from ee_trial_workflow import calculate_metric
 
@@ -28,7 +30,7 @@ from ee_trial_workflow import calculate_metric
     name="mean_elevation",
     description="Mean SRTM elevation at 30 metre reduction resolution.",
     output=TableOutput(columns=[TableColumn(
-        name="mean_elevation", type="number", unit="m", nullable=True,
+        name="mean_elevation", type="number", unit=Unit.METRE, nullable=True,
         description="Mean elevation; null when no source pixels are available."
     )]),
 )

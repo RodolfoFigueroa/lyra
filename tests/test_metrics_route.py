@@ -150,3 +150,24 @@ def test_metric_route_returns_404_for_unknown_metric(
         asyncio.run(metrics.get_metric("missing"))
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize("unit", ["m2", None])
+def test_metric_catalog_preserves_unit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unit: str | None,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifest = _manifest()
+    manifest["metrics"][0]["output"]["columns"][0]["unit"] = unit
+    (repo / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+    _use_repo(repo, monkeypatch)
+    metric = asyncio.run(metrics.get_metric("light_metric"))
+    assert metric.model_dump(mode="json")["output"]["columns"][0]["unit"] == unit
+    catalog = asyncio.run(metrics.list_metrics(Response()))
+    assert (
+        catalog.model_dump(mode="json")["metrics"][0]["output"]["columns"][0]["unit"]
+        == unit
+    )

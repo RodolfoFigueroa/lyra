@@ -51,6 +51,7 @@ def test_models_and_utilities_are_available_from_owning_modules() -> None:
         ("FractionOfLocationArea", "models.plugin"),
         ("TableColumn", "models.plugin"),
         ("TableOutput", "models.plugin"),
+        ("Unit", "units"),
         ("BoundsInput", "plugin"),
         ("LocationInput", "plugin"),
         ("MetricDescription", "plugin"),

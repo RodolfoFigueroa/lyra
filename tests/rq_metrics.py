@@ -12,6 +12,7 @@ from lyra.sdk import (
     RunContext,
     TableColumn,
     TableOutput,
+    Unit,
     metric,
 )
 from lyra.sdk.models.plugin import FractionOfLocationArea
@@ -49,7 +50,7 @@ class WorkParameters(MetricParameters):
             TableColumn(
                 name="area",
                 type="number",
-                unit="m2",
+                unit=Unit.SQUARE_METRE,
                 description="Area fraction.",
                 derivations=[
                     FractionOfLocationArea(

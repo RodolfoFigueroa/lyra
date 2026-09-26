@@ -1,6 +1,6 @@
 # Lyra authoring contract
 
-This reference defines **lyra-authoring-1**, the bundled authoring baseline,
+This reference defines **lyra-authoring-2**, the bundled authoring baseline,
 and **manifest format 5**. Use it to learn the public contract. Run the bundled
 compatibility helper in the target environment to check spatial and authoring
 behavior; its SDK version report is diagnostic, not a release allowlist.
@@ -48,6 +48,54 @@ administrative level from raster reduction resolution. Report undocumented
 applicability without claiming unlimited validity or inventing a restriction.
 
 Metric names match `^[a-z][a-z0-9_]*$` and cannot start with `lyra_`.
+
+## Descriptions for independent consumers
+
+Treat manifest metadata as the consumer-facing explanation of a metric. Consumers
+such as MCP clients do not have the plugin README. Transfer relevant methodology
+from the workflow's documentation, implementation, tests, and user answers into
+the descriptions; keep claims traceable to that evidence.
+
+Start the metric description with a useful summary sentence identifying the
+quantity and operation. Follow it with proportionate detail about source datasets
+and versions when known, aggregation, consequential thresholds, temporal meaning,
+reduction resolution, missing-data behavior, and documented limitations. Include
+only applicable details: a property-based score need not have a raster resolution
+or external dataset. Distinguish computational resolution from scientific spatial
+validity, and measured quantities from proxies or estimates.
+
+Distribute the explanation without unnecessary duplication:
+
+- Metric descriptions explain overall methodology, interpretation, and limitations.
+- Parameter descriptions explain choices, units or scales, temporal conventions,
+  and their effects on the calculation.
+- Column descriptions explain individual outputs, workflow-defined score scales,
+  and what zero or null means when relevant. `nullable=True` alone does not explain
+  why a result can be missing.
+
+Use readable sentences and paragraphs. Source identifiers and links support the
+explanation but do not replace essential interpretation. Leave repository setup,
+installation, and unrelated implementation details in repository documentation.
+MCP catalog listings abbreviate descriptions; individual metric inspection exposes
+the complete metadata, so put the useful summary first. There is no required
+paragraph count or minimum length.
+
+Do not invent methodology, scientific validity, or missing-data semantics to fill
+out a description. Ask about material ambiguity or conflicting evidence before
+finalizing dependent metadata. Undocumented applicability can be reported as
+unverified without inventing a restriction or automatically blocking authoring.
+Review the generated metadata without the README: it should support selecting the
+metric, supplying meaningful inputs, and interpreting the results.
+
+For example, the documented offline Earth Engine evaluation workflow supports:
+“Mean elevation per input polygon from the elevation band of USGS/SRTMGL1_003.
+The calculation reprojects polygons to EPSG:4326 and applies a spatial mean at a
+30-metre reduction resolution. Results are in metres; missing source pixels
+produce null results, never zero. Geographic applicability limits have not been
+established by this workflow.” Its output description can identify the nullable
+mean elevation and its missing-data meaning. These facts belong to that fixture;
+do not apply them to another workflow without evidence or interpret the offline
+test as live data validation.
 
 ## Earth Engine lifecycle
 
@@ -103,6 +151,7 @@ from lyra.sdk import (
     PluginDefinition,
     TableColumn,
     TableOutput,
+    Unit,
     metric,
 )
 from lyra.utils.geometry import convert_geojson_to_gdf
@@ -122,14 +171,29 @@ class Parameters(MetricParameters):
 
 @metric(
     name="zone_score",
-    description="Calculate the existing score for each selected zone category.",
+    description=(
+        "Compute a synthetic property-based score for each input zone.\n\n"
+        "For categories selected by parameter_3, calculate base_value * "
+        "parameter_1 + parameter_2; return zero for other categories. "
+        "Each zone must supply a finite numeric base_value and string category. "
+        "The workflow accepts EPSG:4326 polygons and multipolygons and uses "
+        "their properties, not geometric measurements or external datasets.\n\n"
+        "Return one finite, non-null score per input feature. This illustrative "
+        "score has no established real-world interpretation or calibrated scale."
+    ),
     output=TableOutput(
         columns=[
             TableColumn(
                 name="score",
                 type="number",
-                unit="score",
-                description="Selected zone score.",
+                unit=Unit.SCORE,
+                description=(
+                    "Synthetic score in workflow-defined score units: base_value * "
+                    "parameter_1 + parameter_2 for selected categories, otherwise "
+                    "zero. Zero is a computed result, not a missing-data marker; "
+                    "selected categories can also compute to zero. No calibrated "
+                    "range or real-world interpretation is established."
+                ),
                 nullable=False,
             )
         ]
@@ -179,6 +243,44 @@ existing file beneath `context.temp_dir`. Relative paths resolve beneath that
 directory. Escaping paths or symlinks and undeclared suffixes are rejected. Preserve
 the original file contents and format, adapting its output destination as needed.
 Handlers return the native DataFrame or Path specified by their output declaration.
+
+### Output units
+
+Import `Unit` from `lyra.sdk` and declare, for example, `unit=Unit.SQUARE_METRE`.
+Every column must explicitly supply `unit`: a `Unit` member, an exact canonical
+string, or `None` when no unit applies. JSON uses canonical strings or `null`.
+Labels, identifiers, and booleans normally use `None`; numeric identifiers can
+also have no applicable unit. Omission, unknown values, aliases, and incorrect
+casing are rejected.
+
+| Enum member | Value | Meaning |
+| --- | --- | --- |
+| `MILLIMETRE` | `mm` | Millimetres of length. |
+| `METRE` | `m` | Metres of length. |
+| `KILOMETRE` | `km` | Kilometres of length. |
+| `SQUARE_METRE` | `m2` | Square metres of area. |
+| `SQUARE_KILOMETRE` | `km2` | Square kilometres of area. |
+| `HECTARE` | `ha` | Hectares of area. |
+| `DEGREE_CELSIUS` | `degC` | Temperature in degrees Celsius. |
+| `KELVIN` | `K` | Temperature in kelvins. |
+| `SECOND` | `s` | Duration in seconds. |
+| `DAY` | `day` | Duration in days. |
+| `YEAR` | `year` | Duration in years; document the workflow's year convention. |
+| `CALENDAR_YEAR` | `calendar_year` | Calendar-year value, not an elapsed duration. |
+| `COUNT` | `count` | Number of entities; describe what is counted. |
+| `RATIO` | `ratio` | Quotient; describe its numerator and denominator. |
+| `PERCENT` | `percent` | Value expressed per hundred (50 means 50%). |
+| `SCORE` | `score` | Workflow-defined scale; describe its meaning and interpretation. |
+| `DIMENSIONLESS` | `dimensionless` | Known unitless quantity without a more specific applicable unit. |
+
+Units declare meaning; they do not convert values or impose numeric ranges or
+column-type restrictions. A ratio is not automatically restricted to 0–1.
+`None` means not applicable, never unknown. Establish the unit from the workflow
+before selecting an identifier. Do not substitute dimensionless, score, or null
+for missing scientific information. If the required unit is absent from this
+vocabulary, ask the user about adding it to the SDK; do not invent an identifier
+or silently convert the calculation. Progress-reporting units are separate
+human-readable labels.
 
 ## Package and generate
 

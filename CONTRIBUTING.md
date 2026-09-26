@@ -89,7 +89,10 @@ editing generated Markdown or JSON.
 - Keep one authoritative example or explanation and link to it elsewhere.
 - When SDK authoring contracts change, review `skills/lyra-metric/`, its bundled
   reference, compatibility helper and tests, documented contract revision, and
-  the agent-assisted authoring guide in the same change. Keep essential guidance usable outside this checkout. Review and rerun
+  the agent-assisted authoring guide in the same change.
+  Unit vocabulary changes require reviewing the SDK enum, authoring unit tables,
+  generated schemas, and skill compatibility checks together. Keep essential
+  guidance usable outside this checkout. Review and rerun
   the [skill evaluations](tests/fixtures/skill_workflows/scenarios/README.md)
   for calculation preservation, plugin extension, missing
   information, contract conflicts, and file outputs; check that ambiguous cases

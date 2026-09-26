@@ -161,7 +161,7 @@ async def get_job_result(job_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Result expired or not found")
 
     result = parse_job_result(payload)
-    return JSONResponse(content=result.model_dump(mode="json", exclude_none=True))
+    return JSONResponse(content=result.model_dump(mode="json"))
 
 
 @router.get("/jobs/{job_id}/result/descriptor", response_model=None)
@@ -177,7 +177,7 @@ async def get_job_result_descriptor(job_id: str) -> JSONResponse:
     descriptor = await job_store.get_job_result_descriptor_async(job_id)
     if descriptor is not None:
         return JSONResponse(
-            content=descriptor.model_dump(mode="json", exclude_none=True),
+            content=descriptor.model_dump(mode="json"),
         )
 
     snapshot = await _get_observed_job_status(job_id)
@@ -185,7 +185,7 @@ async def get_job_result_descriptor(job_id: str) -> JSONResponse:
         descriptor = await job_store.get_job_result_descriptor_async(job_id)
         if descriptor is not None:
             return JSONResponse(
-                content=descriptor.model_dump(mode="json", exclude_none=True),
+                content=descriptor.model_dump(mode="json"),
             )
     if snapshot is None or snapshot.status == "succeeded":
         raise HTTPException(status_code=404, detail="Result expired or not found")

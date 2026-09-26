@@ -11,6 +11,7 @@ from lyra.sdk import (
     RunContext,
     TableColumn,
     TableOutput,
+    Unit,
     metric,
 )
 from lyra.sdk.models.geometry import GeoJSON, PointGeometry, SingleGeoJSON
@@ -78,7 +79,7 @@ def test_sdk_rejects_resolved_points_before_handler(field: str) -> None:
         output=TableOutput(
             columns=[
                 TableColumn(
-                    name="value", type="integer", unit="count", description="Count."
+                    name="value", type="integer", unit=Unit.COUNT, description="Count."
                 )
             ]
         ),

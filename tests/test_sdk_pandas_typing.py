@@ -1,4 +1,5 @@
 import pandas as pd
+from lyra.sdk import Unit
 from lyra.sdk.models.geometry import GeoJSON
 from lyra.sdk.models.job import TableJobResult
 from lyra.sdk.models.plugin import TableColumn, TableOutput
@@ -27,10 +28,10 @@ def test_native_dataframe_accepts_pandas_and_preserves_column_types() -> None:
     output = TableOutput(
         columns=[
             TableColumn(
-                name="integer", type="integer", unit="count", description="Count."
+                name="integer", type="integer", unit=Unit.COUNT, description="Count."
             ),
             TableColumn(
-                name="number", type="number", unit="ratio", description="Ratio."
+                name="number", type="number", unit=Unit.RATIO, description="Ratio."
             ),
         ]
     )

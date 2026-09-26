@@ -29,6 +29,7 @@ from lyra.sdk import (
     RunContext,
     TableColumn,
     TableOutput,
+    Unit,
     metric,
 )
 
@@ -45,7 +46,7 @@ class Parameters(MetricParameters):
             TableColumn(
                 name="value",
                 type="integer",
-                unit="count",
+                unit=Unit.COUNT,
                 description="Submitted value.",
             ),
         ]
@@ -68,6 +69,36 @@ def run_table(
 An adapter can instead pass `parameters.value` to an existing calculation. Use
 `lyra.utils.geometry.convert_geojson_to_gdf(location)` if that calculation expects
 a GeoDataFrame. The underlying library does not need to accept Lyra objects.
+
+## Describe the metric for consumers
+
+Manifest metadata must let a consumer select a metric, supply meaningful inputs,
+and interpret its results without reading the plugin README. Begin `description`
+with a useful summary sentence, then add methodological detail in proportion to
+the calculation: source datasets and versions when known, aggregation, thresholds,
+temporal interpretation, reduction resolution, missing-data behavior, and
+documented limitations. Distinguish estimates from direct measurements and raster
+reduction resolution from scientifically valid region sizes.
+
+Keep overall methodology in the metric description, choices and their effects in
+parameter descriptions, and individual output meanings and score scales in column
+descriptions. Explain consequential zero and null meanings; a nullable declaration
+alone does not explain missing data. Source identifiers and links support this
+explanation but cannot replace it. Keep setup and installation instructions in the
+repository documentation.
+
+Use evidence from the workflow, its documentation, tests, and author answers.
+Resolve material contradictions or ambiguity before finalizing the description.
+Report undocumented applicability as unverified without inventing restrictions or
+claims. There is no minimum description length or mandatory number of paragraphs;
+simple metrics can have short descriptions.
+
+MCP catalog listings abbreviate descriptions, while individual metric inspection
+returns the complete metadata. Put the summary first and retain necessary detail
+for inspection. Before handoff, review the generated manifest and
+`lyra-plugin describe` without the README and compare their explanations with the
+workflow evidence. The [agent-assisted authoring guide](../agent-assisted-authoring/)
+explains how the skill applies this review.
 
 ## Handler conventions
 
@@ -206,6 +237,44 @@ symlinks, and unsupported suffixes fail normalization. The example's
 Handlers return the native DataFrame or Path specified by their output declaration.
 Lyra attaches job IDs and constructs `TableJobResult` or `FileJobResult` for API
 clients.
+
+### Output units
+
+Import `Unit` from `lyra.sdk` and declare, for example, `unit=Unit.SQUARE_METRE`.
+Every column must explicitly supply `unit`: a `Unit` member, an exact canonical
+string, or `None` when no unit applies. JSON uses canonical strings or `null`.
+Labels, identifiers, and booleans normally use `None`; numeric identifiers can
+also have no applicable unit. Omission, unknown values, aliases, and incorrect
+casing are rejected.
+
+| Enum member | Value | Meaning |
+| --- | --- | --- |
+| `MILLIMETRE` | `mm` | Millimetres of length. |
+| `METRE` | `m` | Metres of length. |
+| `KILOMETRE` | `km` | Kilometres of length. |
+| `SQUARE_METRE` | `m2` | Square metres of area. |
+| `SQUARE_KILOMETRE` | `km2` | Square kilometres of area. |
+| `HECTARE` | `ha` | Hectares of area. |
+| `DEGREE_CELSIUS` | `degC` | Temperature in degrees Celsius. |
+| `KELVIN` | `K` | Temperature in kelvins. |
+| `SECOND` | `s` | Duration in seconds. |
+| `DAY` | `day` | Duration in days. |
+| `YEAR` | `year` | Duration in years; document the workflow's year convention. |
+| `CALENDAR_YEAR` | `calendar_year` | Calendar-year value, not an elapsed duration. |
+| `COUNT` | `count` | Number of entities; describe what is counted. |
+| `RATIO` | `ratio` | Quotient; describe its numerator and denominator. |
+| `PERCENT` | `percent` | Value expressed per hundred (50 means 50%). |
+| `SCORE` | `score` | Workflow-defined scale; describe its meaning and interpretation. |
+| `DIMENSIONLESS` | `dimensionless` | Known unitless quantity without a more specific applicable unit. |
+
+Units declare meaning; they do not convert values or impose numeric ranges or
+column-type restrictions. A ratio is not automatically restricted to 0–1.
+`None` means not applicable, never unknown. Establish the unit from the workflow
+before selecting an identifier. Do not substitute dimensionless, score, or null
+for missing scientific information. If the required unit is absent from this
+vocabulary, ask the user about adding it to the SDK; do not invent an identifier
+or silently convert the calculation. Progress-reporting units are separate
+human-readable labels.
 
 ## Register and test locally
 

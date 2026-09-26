@@ -714,7 +714,7 @@ def _raise_invalid_metric_cursor(
 
 def _model_dump(value: BaseModel | Mapping[str, JsonValue]) -> JsonObject:
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json", exclude_none=True)
+        return value.model_dump(mode="json")
     return dict(value)
 
 

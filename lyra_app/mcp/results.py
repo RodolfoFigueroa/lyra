@@ -279,7 +279,6 @@ def _project_table(
                 column.derivations = []
                 truncation.omitted_sections.append("table.column_contracts.derivations")
             column.description = _display(column.description, truncation)
-            column.unit = _display(column.unit, truncation)
             contracts.append(column)
     output.table = ResultTableMetadata(
         row_count=len(result.index),

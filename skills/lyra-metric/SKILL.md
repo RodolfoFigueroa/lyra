@@ -22,9 +22,10 @@ Use the bundled reference as the authoring contract. Before implementing, run
 `uv run python <skill-directory>/scripts/check_compatibility.py` from the target
 project, replacing `<skill-directory>` with this installed skill's directory.
 Execute the helper without reading its source into context. It reports the SDK
-version and checks the **lyra-authoring-1** baseline, including manifest format 5.
+version and checks the **lyra-authoring-2** baseline, including manifest format 5.
 A passing check permits authoring; it does not replace validation of the adapter.
-SDK versions are diagnostic information, not a release allowlist.
+SDK versions are diagnostic information, not a release allowlist. The helper also
+checks the documented unit vocabulary and explicit null-unit behavior.
 
 On failure, use the concise diagnostic and relevant version-matched documentation
 to resolve the specific issue. Read a narrowly targeted SDK implementation only
@@ -101,11 +102,19 @@ fill missing results, relabel rows by position, or impose arbitrary output colum
    compatible parameter model, and use the SDK's resolved spatial arguments.
    Convert geometry for the existing callable without changing its CRS or
    attributes unless the workflow explicitly requires that transformation.
-2. Declare the evidenced output contract. Table columns are fixed; if the
+2. Declare the evidenced output contract. Select output units from the reference
+   using `Unit`; explicitly use `None` only when no unit applies. Ask when a unit
+   is unknown or unavailable, and explain workflow-defined score scales in column
+   descriptions. Never substitute a generic unit to bypass missing information.
+   Table columns are fixed; if the
    calculation produces parameter-dependent columns or lacks a reliable row
    mapping, explain the mismatch and ask how to adapt it. File outputs must use
    the job temporary directory. Unsupported async or generator workflows need
    an agreed adaptation, not a silent algorithm rewrite.
+   Carry evidenced methodology into the metric, parameter, and column
+   descriptions so consumers can choose and interpret the metric without its
+   README. Follow the reference's [description guidance](references/authoring.md#descriptions-for-independent-consumers);
+   source links supplement the explanation rather than replace it.
 3. Register the adapter in the plugin factory. For a new project, provide package
    metadata and manifest packaging configuration. For an existing project,
    extend its factory and configuration without replacing other metrics.
@@ -142,6 +151,12 @@ environment. Do not perform wheel or package-installation smoke checks unless
 requested. Do not start production jobs or expensive data retrieval to validate
 an adapter without authorization. Local SDK validation does not require platform
 services; the underlying workflow may require them.
+
+Review the generated manifest and `lyra-plugin describe` without relying on the
+README. Can a consumer select the metric, supply meaningful inputs, and interpret
+its results and limitations? Compare the metadata with the workflow evidence;
+restore omitted consequential details and resolve contradictions before handoff.
+This is a semantic review, not a description-length check.
 
 If data, tools, or services are unavailable, report the exact blocked check and
 what is still unverified. Do not fabricate fixtures with scientific assumptions

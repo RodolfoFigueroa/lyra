@@ -11,13 +11,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from types import ModuleType
 
-CONTRACT_REVISION = "lyra-authoring-1"
+CONTRACT_REVISION = "lyra-authoring-2"
 REQUIRED_EXPORTS = (
     "LocationInput",
     "BoundsInput",
     "MetricParameters",
     "PluginDefinition",
     "TableColumn",
+    "Unit",
     "TableOutput",
     "FileOutput",
     "FractionOfLocationArea",
@@ -147,12 +148,67 @@ def spatial_checks(sdk: ModuleType, pydantic: ModuleType) -> None:
             raise ContractMismatchError(msg)
 
 
+def unit_checks(sdk: ModuleType, pydantic: ModuleType) -> None:
+    """Check the unit vocabulary and required, nullable column declarations.
+
+    Raises:
+        ContractMismatchError: An invalid or missing unit is accepted.
+    """
+    expected = {
+        "mm",
+        "m",
+        "km",
+        "m2",
+        "km2",
+        "ha",
+        "degC",
+        "K",
+        "s",
+        "day",
+        "year",
+        "calendar_year",
+        "count",
+        "ratio",
+        "percent",
+        "score",
+        "dimensionless",
+    }
+    require(
+        expected <= {item.value for item in sdk.Unit},
+        "units: expected the documented canonical vocabulary",
+    )
+    base = {"name": "value", "type": "number", "description": "Synthetic value."}
+    require(
+        "unit" in sdk.TableColumn.model_json_schema().get("required", []),
+        "units: expected a required unit field",
+    )
+    for unit in [*sorted(expected), None]:
+        column = sdk.TableColumn.model_validate({**base, "unit": unit})
+        payload = sdk.TableOutput(columns=[column]).model_dump(mode="json")
+        require(
+            "unit" in payload["columns"][0] and payload["columns"][0]["unit"] == unit,
+            "units: expected canonical strings and explicit null in output",
+        )
+    for payload in (
+        base,
+        {**base, "unit": "unrecognized_unit"},
+        {**base, "unit": "M2"},
+    ):
+        try:
+            sdk.TableColumn.model_validate(payload)
+        except pydantic.ValidationError:
+            continue
+        msg = "units: expected missing and noncanonical units to be rejected"
+        raise ContractMismatchError(msg)
+
+
 def authoring_checks(sdk: ModuleType, pydantic: ModuleType) -> None:
     """Exercise registration, parameters, description, and manifest creation.
 
     Raises:
         ContractMismatchError: Invalid parameters are accepted.
     """
+    unit_checks(sdk, pydantic)
     parameters = pydantic.create_model(
         "CompatibilityParameters",
         __base__=sdk.MetricParameters,
@@ -177,7 +233,7 @@ def authoring_checks(sdk: ModuleType, pydantic: ModuleType) -> None:
                 sdk.TableColumn(
                     name="value",
                     type="integer",
-                    unit="dimensionless",
+                    unit=sdk.Unit.DIMENSIONLESS,
                     description="Synthetic check value.",
                     nullable=False,
                 )
@@ -249,7 +305,7 @@ def main() -> int:
         require(not missing, f"public authoring exports missing: {', '.join(missing)}")
         stage = "spatial validation"
         spatial_checks(sdk, pydantic)
-        stage = "metric registration, parameters, and manifest"
+        stage = "units, metric registration, parameters, and manifest"
         authoring_checks(sdk, pydantic)
     except ContractMismatchError as error:
         emit(f"MISMATCH: {error}")

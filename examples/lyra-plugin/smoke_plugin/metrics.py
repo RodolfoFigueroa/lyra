@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from lyra.sdk import LocationInput, MetricParameters, RunContext, metric
+from lyra.sdk import LocationInput, MetricParameters, RunContext, Unit, metric
 from lyra.sdk.models.plugin import (
     FileOutput,
     TableColumn,
@@ -34,7 +34,7 @@ def _value_output() -> TableOutput:
             TableColumn(
                 name="value",
                 type="integer",
-                unit="count",
+                unit=Unit.COUNT,
                 description="Submitted value.",
             )
         ],

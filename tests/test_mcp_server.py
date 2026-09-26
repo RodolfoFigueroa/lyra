@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import Request
 from jsonschema import validate
+from lyra.sdk import Unit
 from lyra.sdk.models.job import (
     FailedJobResult,
     FileJobResult,
@@ -375,7 +376,7 @@ def _table_metric(
                 TableColumn(
                     name="value",
                     type="integer",
-                    unit="count",
+                    unit=Unit.COUNT,
                     description="Submitted value.",
                 )
             ],
@@ -1026,6 +1027,70 @@ def test_mcp_get_metric_returns_public_contract() -> None:
     assert payload["output"]["kind"] == "table"
 
 
+def test_mcp_preserves_methodology_for_inspection_and_search() -> None:
+    description = (
+        "Count the observations supplied for each input polygon.\n\n"
+        "This synthetic example copies the required integer parameter value to "
+        "every feature, without spatial aggregation, external datasets, or "
+        "an inferred observation period. Zero is a valid count, not a marker "
+        "for missing data.\n\n"
+        "Calibration and scientific applicability have not been established."
+    )
+    metric = _table_metric("observation_count", description)
+    parameter_description = (
+        "Observation count to repeat for each polygon.\n"
+        "Zero represents an observed count of zero."
+    )
+    column_description = "Supplied count per polygon.\nZero does not mean missing."
+    value_schema = metric.request_schema
+    for key in ("properties", "parameters", "properties", "value"):
+        nested = value_schema[key]
+        assert isinstance(nested, dict)
+        value_schema = nested
+    value_schema["description"] = parameter_description
+    assert isinstance(metric.output, TableOutput)
+    metric.output.columns[0].description = column_description
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=FakeMCPBackend([metric]))
+    )
+    inventory = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_list_metrics", {}),
+            headers=_mcp_headers(),
+        )
+    )
+    compact = inventory["metrics"][0]["description"]
+    assert len(compact) == 240
+    assert compact.startswith(description.split("\n", maxsplit=1)[0])
+    assert compact.endswith("…")
+    detail = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_get_metric", {"metric": metric.name}),
+            headers=_mcp_headers(),
+        )
+    )
+    assert detail["description"] == description
+    assert detail["output"]["columns"][0]["description"] == column_description
+    assert (
+        detail["request_schema"]["properties"]["parameters"]["properties"]["value"][
+            "description"
+        ]
+        == parameter_description
+    )
+    assert "Calibration" not in compact
+    search = _tool_payload(
+        client.post(
+            "/",
+            json=_tool_call_payload("lyra_search_metrics", {"query": "calibration"}),
+            headers=_mcp_headers(),
+        )
+    )
+    assert [candidate["metric"] for candidate in search["candidates"]] == [metric.name]
+    assert search["candidates"][0]["description"] == description
+
+
 def test_mcp_run_metric_translates_location_met_zone_and_returns_submission() -> None:
     backend = FakeMCPBackend([_table_metric("smoke_table_metric", "Return a table.")])
     client = _ManagedTestClient(
@@ -1632,7 +1697,7 @@ def test_compact_provenance_contracts_and_progress_are_schema_valid() -> None:
         TableColumn(
             name=f"v{i}",
             type="number",
-            unit="count",
+            unit=Unit.COUNT,
             description="x" * 600,
             nullable=False,
         )
@@ -1772,7 +1837,7 @@ def test_budget_trims_column_bundles_in_order() -> None:
         TableColumn(
             name=f"value_{i}_" + "界" * 450,
             type="number",
-            unit="count",
+            unit=Unit.COUNT,
             description="界" * 500,
             nullable=False,
         )
@@ -1983,3 +2048,58 @@ def test_mcp_keeps_declared_parameters_nested(parameters: dict[str, Any]) -> Non
             "parameters": parameters,
         }
     ]
+
+
+@pytest.mark.parametrize("unit", [Unit.COUNT, None])
+def test_mcp_discovery_and_result_preserve_canonical_or_null_units(
+    unit: Unit | None,
+) -> None:
+    metric = _table_metric("quantity", "Test quantity")
+    metric.output = TableOutput(
+        columns=[
+            TableColumn(
+                name="value",
+                type="integer",
+                unit=unit,
+                description="Test quantity.",
+            )
+        ]
+    )
+    backend = FakeMCPBackend([metric])
+    client = _ManagedTestClient(
+        create_mcp_app(agent_api_key="agent-secret", backend=backend)
+    )
+    for name, arguments in [
+        ("lyra_get_metric", {"metric": "quantity"}),
+        ("lyra_search_metrics", {"query": "quantity"}),
+    ]:
+        response = client.post(
+            "/",
+            json=_tool_call_payload(name, arguments),
+            headers=_mcp_headers(),
+        )
+        payload = _tool_payload(response)
+        validate(payload, TOOL_CONTRACTS_BY_NAME[name].output_schema)
+        columns = (
+            payload["output"]["columns"]
+            if name == "lyra_get_metric"
+            else payload["candidates"][0]["relevant_columns"]
+        )
+        assert columns[0]["unit"] == unit
+    backend.observations["job-1"] = JobObservation(
+        provenance=JobRunProvenance.model_validate(
+            {
+                "metric": "quantity",
+                "catalog_fingerprint": "catalog",
+                "plugin": {"name": "plugin", "version": "1"},
+                "created_at": _COMPLETED_AT,
+                "output": metric.output,
+                "input": {},
+            }
+        ),
+        result=TableJobResult(
+            job_id="job-1", columns=["value"], index=["row"], data=[[2]]
+        ),
+    )
+    payload = _inspect(backend)["structuredContent"]
+    assert payload["table"]["column_contracts"][0]["unit"] == unit

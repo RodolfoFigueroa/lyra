@@ -36,7 +36,7 @@ The skill works from an external workflow or plugin repository without a Lyra ch
 
 The skill is versioned with this repository. Installed copies do not update
 automatically. Record the source revision and replace the complete directory
-when upgrading. The bundled **lyra-authoring-1** reference teaches the public
+when upgrading. The bundled **lyra-authoring-2** reference teaches the public
 contract, including **manifest format 5**. From the target project, the agent runs:
 
 ```sh
@@ -123,6 +123,21 @@ Dependent work stays pending until you answer. Silence does not authorize a
 guess. The agent may continue independent work and make routine internal naming
 or layout choices that do not affect behavior. Skill instructions guide behavior;
 they do not mechanically guarantee that an agent will comply.
+
+The agent also transfers evidenced methodology into the manifest's metric,
+parameter, and output descriptions. Consumers should be able to select the metric,
+supply meaningful inputs, and interpret its results without the README. The metric
+summary comes first, followed by relevant source, aggregation, temporal,
+resolution, missing-data, and limitation details. Parameter and column descriptions
+explain their own choices and meanings without repeating the entire methodology.
+Links supplement this explanation; they do not replace it.
+
+The final review uses the generated manifest and `lyra-plugin describe`, compares
+them with workflow evidence, and checks for omitted consequential details or
+unsupported claims. MCP catalog listings remain brief while individual metric
+inspection exposes the complete metadata. This review evaluates meaning rather
+than word count; automated validation cannot establish scientific completeness.
+See [description guidance](../authoring/#describe-the-metric-for-consumers).
 
 The handoff should identify changed files, validation commands and results,
 unresolved questions, and checks blocked by unavailable data or services. Review
